@@ -152,7 +152,7 @@ The CRA establishes horizontal cybersecurity requirements for products with digi
 
 ### Part I - Product Requirements
 
-| Ref | Obligation | Regulation Reference | Policy/Process Required |
+| Ref | Requirement | Regulation Reference | Policy/Process Required |
 |-----|------------|-------------------|------------------------|
 | PRD-01 | Products designed, developed, produced to ensure appropriate level of cybersecurity based on risks | Art IX-I(1) | Risk-Based Security Design Policy |
 | PRD-02 | Products made available without known exploitable vulnerabilities | Art IX-I(1)(a) | Pre-Release Vulnerability Validation Process |
@@ -173,7 +173,7 @@ The CRA establishes horizontal cybersecurity requirements for products with digi
 
 ### Part II - Vulnerability Handling Requirements
 
-| Ref | Obligation | Regulation Reference | Policy/Process Required |
+| Ref | Requirement | Regulation Reference | Policy/Process Required |
 |-----|------------|-------------------|------------------------|
 | VULN-01 | Identify and document vulnerabilities and components contained in products including by drawing up software bill of materials in commonly used machine-readable format covering at least top-level dependencies | Art IX-II(1) | Software Bill of Materials (SBOM) Generation Procedure |
 | VULN-02 | Address and remediate vulnerabilities without delay including by providing security updates; where technically feasible new security updates provided separately from functionality updates | Art IX-II(2) | Vulnerability Remediation SLA and Update Separation Standard |
