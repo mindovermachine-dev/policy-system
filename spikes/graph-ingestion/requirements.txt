@@ -1,0 +1,3 @@
+beautifulsoup4>=4.12.0
+redisgraph>=2.4.0
+pytest>=8.0.0
