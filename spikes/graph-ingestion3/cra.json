@@ -1,0 +1,6094 @@
+{
+  "graph_name": "policy_system",
+  "_comment": "CRA (Cyber Resilience Act, Regulation (EU) 2024/2847) extraction from spikes/eu-regulations/CRA.md, formatted per docs/artifacts/ps-domain-concepts.md for generic loading by graph-ingestion3/load_graph.py. Scope: Art. 3 (role definitions), Art. 13-24 (economic-operator and open-source-steward obligations, including the manufacturer-deeming provisions in Art. 21-22 and the traceability duty in Art. 23), and Annex I Parts I-II (essential cybersecurity requirements). Institutional/procedural articles (market surveillance powers, notified bodies, penalties, committee procedure, delegated/implementing act mechanics) are out of scope, as are two sub-provisions that are permissive rather than mandatory (Art. 13(10)'s optional compliance mechanism for modified software versions) or purely institutional within an otherwise-included article (Art. 13(24)-(25) Commission/ADCO powers, Art. 14(5) definitional, Art. 14(7) submission-routing mechanics, Art. 14(9)-(10) delegated/implementing act powers, Art. 18(1)-(2) mandate-formation mechanics). Extraction is at paragraph/sub-point granularity: each numbered paragraph or lettered sub-point imposing a distinct 'shall' duty has its own Requirement and Obligation node. The one deliberate merge is Annex I Part II point (5), which Art. 13(8) already expresses by direct cross-reference -- see CRA-1.0_req_art_13.8c. Capability nodes are shared across Roles and across Articles/Annex points wherever the underlying capacity converges (e.g. Conformity Assessment & Certification is REQUIRES'd by Manufacturer, Importer and Distributor obligations; Security Logging reuses the same node id as policy_system_graph.json's worked example, cap_security_logging_c4d9e2, demonstrating convergence across both data files). Obligation is 1:1 with Role per the domain model, so where the same duty text recurs for two Roles (e.g. importer/distributor escalating a vulnerability, or the Art. 21/22 manufacturer-deeming provisions), each Role gets its own distinct Obligation node rather than sharing one. Extraction stops at Capability; Policy/Standard/Control are organisation-internal governance layers not defined by the CRA itself.",
+  "nodes": [
+    {
+      "label": "Regulation",
+      "id": "CRA-1.0",
+      "properties": {
+        "id": "CRA-1.0",
+        "title": "Cyber Resilience Act",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "effective_date": "2027-12-11",
+        "version": "1.0",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_manufacturer_a1b2c3",
+      "properties": {
+        "id": "role_manufacturer_a1b2c3",
+        "name": "Manufacturer",
+        "description": "A natural or legal person who develops or manufactures products with digital elements, or has such products designed, developed or manufactured, and markets them under its own name or trademark."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_open_source_software_steward_f6afb4",
+      "properties": {
+        "id": "role_open_source_software_steward_f6afb4",
+        "name": "Open-source software steward",
+        "description": "A legal person, other than a manufacturer, that systematically provides support on a sustained basis for the development of specific free and open-source products with digital elements intended for commercial activities, and ensures the viability of those products."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_authorised_representative_7f8405",
+      "properties": {
+        "id": "role_authorised_representative_7f8405",
+        "name": "Authorised representative",
+        "description": "A natural or legal person established within the Union who has received a written mandate from a manufacturer to act on its behalf in relation to specified tasks."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_importer_b6090d",
+      "properties": {
+        "id": "role_importer_b6090d",
+        "name": "Importer",
+        "description": "A natural or legal person established in the Union who places on the market a product with digital elements that bears the name or trademark of a natural or legal person established outside the Union."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_distributor_7e9386",
+      "properties": {
+        "id": "role_distributor_7e9386",
+        "name": "Distributor",
+        "description": "A natural or legal person in the supply chain, other than the manufacturer or the importer, that makes a product with digital elements available on the Union market without affecting its properties."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_substantial_modifier_50b985",
+      "properties": {
+        "id": "role_substantial_modifier_50b985",
+        "name": "Substantial modifier",
+        "description": "A natural or legal person, other than the manufacturer, importer or distributor, that carries out a substantial modification of a product with digital elements and makes it available on the market."
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_development_lifecycle_9f3224",
+      "properties": {
+        "id": "cap_secure_development_lifecycle_9f3224",
+        "name": "Secure Development Lifecycle",
+        "description": "Capacity to design, develop and produce products so that they achieve an appropriate, risk-based level of cybersecurity by default.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_cybersecurity_risk_assessment_process_ce1a2f",
+      "properties": {
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f",
+        "name": "Cybersecurity Risk Assessment Process",
+        "description": "Capacity to identify, document and keep current a structured assessment of cybersecurity risks associated with a product across its lifecycle.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_management_55d0c4",
+      "properties": {
+        "id": "cap_vulnerability_management_55d0c4",
+        "name": "Vulnerability Management",
+        "description": "Capacity to identify, triage, and remediate vulnerabilities in a product and its components on an ongoing basis.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_incident_reporting_449fa4",
+      "properties": {
+        "id": "cap_security_incident_reporting_449fa4",
+        "name": "Security Incident Reporting",
+        "description": "Capacity to detect, assess and report actively exploited vulnerabilities and severe security incidents to competent authorities within mandated timeframes.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_conformity_assessment_certification_92c522",
+      "properties": {
+        "id": "cap_conformity_assessment_certification_92c522",
+        "name": "Conformity Assessment & Certification",
+        "description": "Capacity to assess, verify and formally attest that a product and its accompanying processes meet essential cybersecurity requirements.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_reporting_user_communication_3865f4",
+      "properties": {
+        "id": "cap_vulnerability_reporting_user_communication_3865f4",
+        "name": "Vulnerability Reporting & User Communication",
+        "description": "Capacity to operate a reachable point of contact for vulnerability reports and to communicate security-relevant information to users and third parties.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_product_recall_corrective_action_management_e90915",
+      "properties": {
+        "id": "cap_product_recall_corrective_action_management_e90915",
+        "name": "Product Recall & Corrective Action Management",
+        "description": "Capacity to identify non-conforming products already on the market and execute corrective measures, withdrawal or recall.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_compliance_documentation_management_a87281",
+      "properties": {
+        "id": "cap_compliance_documentation_management_a87281",
+        "name": "Compliance Documentation Management",
+        "description": "Capacity to create, retain and make available technical documentation and declarations of conformity to market surveillance authorities.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_free_release_assurance_209f58",
+      "properties": {
+        "id": "cap_vulnerability_free_release_assurance_209f58",
+        "name": "Vulnerability-Free Release Assurance",
+        "description": "Capacity to ensure products are made available on the market without known exploitable vulnerabilities.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_default_configuration_3bfba6",
+      "properties": {
+        "id": "cap_secure_default_configuration_3bfba6",
+        "name": "Secure Default Configuration",
+        "description": "Capacity to ship products with a secure-by-default configuration, including the ability to reset to that state.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_update_delivery_mechanism_7696af",
+      "properties": {
+        "id": "cap_security_update_delivery_mechanism_7696af",
+        "name": "Security Update Delivery Mechanism",
+        "description": "Capacity to deliver, notify and, where applicable, automatically install security updates, and to keep past updates available.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_access_control_authentication_151816",
+      "properties": {
+        "id": "cap_access_control_authentication_151816",
+        "name": "Access Control & Authentication",
+        "description": "Capacity to prevent unauthorised access via authentication and identity/access management, and to report on unauthorised access attempts.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_data_encryption_0e50d3",
+      "properties": {
+        "id": "cap_data_encryption_0e50d3",
+        "name": "Data Encryption",
+        "description": "Capacity to protect the confidentiality of stored, transmitted or processed data using state-of-the-art encryption.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_data_configuration_integrity_protection_882f84",
+      "properties": {
+        "id": "cap_data_configuration_integrity_protection_882f84",
+        "name": "Data & Configuration Integrity Protection",
+        "description": "Capacity to protect data, commands, programs and configuration against unauthorised manipulation, and to report corruption.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_data_minimisation_61664b",
+      "properties": {
+        "id": "cap_data_minimisation_61664b",
+        "name": "Data Minimisation",
+        "description": "Capacity to limit data processing to what is adequate, relevant and necessary for the product's intended purpose.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_availability_resilience_7caf2b",
+      "properties": {
+        "id": "cap_availability_resilience_7caf2b",
+        "name": "Availability & Resilience",
+        "description": "Capacity to protect the availability of essential and basic functions, including resilience against denial-of-service attacks.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_network_impact_minimisation_092169",
+      "properties": {
+        "id": "cap_network_impact_minimisation_092169",
+        "name": "Network Impact Minimisation",
+        "description": "Capacity to limit the negative impact a product or connected devices have on the availability of other devices' or networks' services.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_attack_surface_minimisation_846d21",
+      "properties": {
+        "id": "cap_attack_surface_minimisation_846d21",
+        "name": "Attack Surface Minimisation",
+        "description": "Capacity to design and produce products so as to limit attack surfaces, including external interfaces.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_exploitation_mitigation_07f70d",
+      "properties": {
+        "id": "cap_exploitation_mitigation_07f70d",
+        "name": "Exploitation Mitigation",
+        "description": "Capacity to reduce the impact of an incident through exploitation mitigation mechanisms and techniques.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_logging_c4d9e2",
+      "properties": {
+        "id": "cap_security_logging_c4d9e2",
+        "name": "Security Logging",
+        "description": "Capacity to capture, retain, and review security-relevant log data across systems.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_data_removal_portability_3d7885",
+      "properties": {
+        "id": "cap_secure_data_removal_portability_3d7885",
+        "name": "Secure Data Removal & Portability",
+        "description": "Capacity to let users securely and permanently remove product data and settings, and to transfer data to other products or systems securely.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_component_inventory_sbom_management_b5223c",
+      "properties": {
+        "id": "cap_component_inventory_sbom_management_b5223c",
+        "name": "Component Inventory & SBOM Management",
+        "description": "Capacity to identify, document and maintain a machine-readable software bill of materials covering a product's components.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_testing_review_7cc1ec",
+      "properties": {
+        "id": "cap_security_testing_review_7cc1ec",
+        "name": "Security Testing & Review",
+        "description": "Capacity to apply effective and regular tests and reviews of a product's security.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_disclosure_publication_4fb243",
+      "properties": {
+        "id": "cap_vulnerability_disclosure_publication_4fb243",
+        "name": "Vulnerability Disclosure Publication",
+        "description": "Capacity to publicly disclose information about fixed vulnerabilities once remediation is available.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_coordinated_vulnerability_disclosure_policy_c23221",
+      "properties": {
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221",
+        "name": "Coordinated Vulnerability Disclosure Policy",
+        "description": "Capacity to maintain and enforce a documented policy governing coordinated vulnerability disclosure.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_product_labelling_identification_8fb20d",
+      "properties": {
+        "id": "cap_product_labelling_identification_8fb20d",
+        "name": "Product Labelling & Identification",
+        "description": "Capacity to mark products, packaging or accompanying documents with identification numbers and manufacturer contact details.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_regulatory_cooperation_796f59",
+      "properties": {
+        "id": "cap_regulatory_cooperation_796f59",
+        "name": "Regulatory Cooperation",
+        "description": "Capacity to respond to reasoned requests from market surveillance authorities and cooperate on risk-elimination measures.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_business_continuity_notification_d67b9c",
+      "properties": {
+        "id": "cap_business_continuity_notification_d67b9c",
+        "name": "Business Continuity Notification",
+        "description": "Capacity to notify authorities and users in the event of a cessation of operations affecting regulatory compliance.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_supply_chain_traceability_records_fd07d2",
+      "properties": {
+        "id": "cap_supply_chain_traceability_records_fd07d2",
+        "name": "Supply-Chain Traceability Records",
+        "description": "Capacity to record and retain the identity of upstream suppliers and downstream recipients of a product.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.1",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.1",
+        "text": "Manufacturers shall ensure that a product with digital elements is designed, developed and produced in accordance with the essential cybersecurity requirements set out in Part I of Annex I.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_secure_product_design_and_development_c56d3c",
+      "properties": {
+        "id": "obl_ensure_secure_product_design_and_development_c56d3c",
+        "text": "Ensure Secure Product Design and Development",
+        "confidence": 0.95,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.2",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.2",
+        "text": "Manufacturers shall undertake a cybersecurity risk assessment of the product, document it, keep it updated during the support period, and use it to determine how the essential requirements of Annex I are implemented.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_conduct_and_document_cybersecurity_risk_assessment_5f0fa8",
+      "properties": {
+        "id": "obl_conduct_and_document_cybersecurity_risk_assessment_5f0fa8",
+        "text": "Conduct and Document Cybersecurity Risk Assessment",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.4",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.4",
+        "text": "Manufacturers shall include the cybersecurity risk assessment in the technical documentation required under Article 31 and Annex VII, and shall include a clear justification where an essential cybersecurity requirement is not applicable to the product.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_document_risk_assessment_and_justify_non_applicable_requirements_eafb6d",
+      "properties": {
+        "id": "obl_document_risk_assessment_and_justify_non_applicable_requirements_eafb6d",
+        "text": "Document Risk Assessment and Justify Non-Applicable Requirements",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.5",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.5",
+        "text": "Manufacturers shall exercise due diligence when integrating components sourced from third parties, including free and open-source components, so that those components do not compromise the product's cybersecurity.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_exercise_due_diligence_on_third_party_and_open_source_components_e505f1",
+      "properties": {
+        "id": "obl_exercise_due_diligence_on_third_party_and_open_source_components_e505f1",
+        "text": "Exercise Due Diligence on Third-Party and Open-Source Components",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.6",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.6",
+        "text": "Upon identifying a vulnerability in an integrated component, including an open-source component, manufacturers shall report it to the person or entity manufacturing or maintaining that component, address and remediate it per Part II of Annex I, and share any resulting fix with that person or entity.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_and_remediate_vulnerabilities_in_integrated_components_0cd616",
+      "properties": {
+        "id": "obl_report_and_remediate_vulnerabilities_in_integrated_components_0cd616",
+        "text": "Report and Remediate Vulnerabilities in Integrated Components",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.7",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.7",
+        "text": "Manufacturers shall systematically document, proportionately to the nature and cybersecurity risks involved, relevant cybersecurity aspects concerning the product, including vulnerabilities they become aware of and relevant third-party information, updating the risk assessment where applicable.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_systematically_document_cybersecurity_aspects_and_vulnerabilities_64caa9",
+      "properties": {
+        "id": "obl_systematically_document_cybersecurity_aspects_and_vulnerabilities_64caa9",
+        "text": "Systematically Document Cybersecurity Aspects and Vulnerabilities",
+        "confidence": 0.87,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.8a",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.8a",
+        "text": "Manufacturers shall ensure that, for the support period, vulnerabilities of the product, including its components, are handled effectively and in accordance with the essential cybersecurity requirements set out in Part II of Annex I.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_handle_vulnerabilities_effectively_throughout_the_support_period_90e755",
+      "properties": {
+        "id": "obl_handle_vulnerabilities_effectively_throughout_the_support_period_90e755",
+        "text": "Handle Vulnerabilities Effectively Throughout the Support Period",
+        "confidence": 0.93,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.8b",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.8b",
+        "text": "Manufacturers shall determine a support period reflecting the product's expected length of use, of at least five years unless the expected use is shorter, and shall document the factors taken into account in the technical documentation.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_determine_and_document_the_product_support_period_5d7aa9",
+      "properties": {
+        "id": "obl_determine_and_document_the_product_support_period_5d7aa9",
+        "text": "Determine and Document the Product Support Period",
+        "confidence": 0.92,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.8c",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.8c",
+        "text": "Manufacturers shall have appropriate policies and procedures, including a coordinated vulnerability disclosure policy, to process and remediate potential vulnerabilities reported from internal or external sources.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_a_coordinated_vulnerability_disclosure_policy_c182fe",
+      "properties": {
+        "id": "obl_maintain_a_coordinated_vulnerability_disclosure_policy_c182fe",
+        "text": "Maintain a Coordinated Vulnerability Disclosure Policy",
+        "confidence": 0.92,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.9",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.9",
+        "text": "Manufacturers shall ensure that each security update made available during the support period remains available after issuance for at least 10 years, or for the remainder of the support period, whichever is longer.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_retain_availability_of_issued_security_updates_3921f5",
+      "properties": {
+        "id": "obl_retain_availability_of_issued_security_updates_3921f5",
+        "text": "Retain Availability of Issued Security Updates",
+        "confidence": 0.88,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.11",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.11",
+        "text": "Where manufacturers maintain public software archives enhancing user access to historical versions, they shall clearly inform users, in an easily accessible manner, about the risks of using unsupported software.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_inform_users_of_risks_when_maintaining_public_software_archives_23a88e",
+      "properties": {
+        "id": "obl_inform_users_of_risks_when_maintaining_public_software_archives_23a88e",
+        "text": "Inform Users of Risks When Maintaining Public Software Archives",
+        "confidence": 0.75,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.12a",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.12a",
+        "text": "Before placing a product on the market, manufacturers shall draw up the technical documentation referred to in Article 31 and carry out the chosen conformity assessment procedures referred to in Article 32, or have them carried out.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_prepare_technical_documentation_and_carry_out_conformity_assessment_9e1840",
+      "properties": {
+        "id": "obl_prepare_technical_documentation_and_carry_out_conformity_assessment_9e1840",
+        "text": "Prepare Technical Documentation and Carry Out Conformity Assessment",
+        "confidence": 0.93,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.12b",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.12b",
+        "text": "Where the conformity assessment procedure demonstrates compliance with the essential cybersecurity requirements, manufacturers shall draw up the EU declaration of conformity and affix the CE marking.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_draw_up_eu_declaration_of_conformity_and_affix_ce_marking_108726",
+      "properties": {
+        "id": "obl_draw_up_eu_declaration_of_conformity_and_affix_ce_marking_108726",
+        "text": "Draw Up EU Declaration of Conformity and Affix CE Marking",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.13",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.13",
+        "text": "Manufacturers shall keep the technical documentation and the EU declaration of conformity at the disposal of market surveillance authorities for at least 10 years after the product has been placed on the market or for the support period, whichever is longer.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_retain_technical_documentation_and_declaration_of_conformity_eca719",
+      "properties": {
+        "id": "obl_retain_technical_documentation_and_declaration_of_conformity_eca719",
+        "text": "Retain Technical Documentation and Declaration of Conformity",
+        "confidence": 0.93,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.14",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.14",
+        "text": "Manufacturers shall ensure that procedures are in place for products that are part of a series of production to remain in conformity, taking into account changes in the development, production or design process and in applicable harmonised standards or common specifications.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_series_production_conformity_procedures_025397",
+      "properties": {
+        "id": "obl_maintain_series_production_conformity_procedures_025397",
+        "text": "Maintain Series-Production Conformity Procedures",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.15_16",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.15_16",
+        "text": "Manufacturers shall ensure products bear a type, batch or serial number or other identifying element, and shall indicate their name, registered trademark and contact details on the product, its packaging or an accompanying document.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_mark_products_with_identification_and_manufacturer_contact_details_d20a97",
+      "properties": {
+        "id": "obl_mark_products_with_identification_and_manufacturer_contact_details_d20a97",
+        "text": "Mark Products with Identification and Manufacturer Contact Details",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.17",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.17",
+        "text": "Manufacturers shall designate a single point of contact allowing users to communicate directly and rapidly with them, including to report vulnerabilities, and shall ensure it is easily identifiable and not limited to automated tools.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_a_single_point_of_contact_for_vulnerability_reporting_496a7f",
+      "properties": {
+        "id": "obl_provide_a_single_point_of_contact_for_vulnerability_reporting_496a7f",
+        "text": "Provide a Single Point of Contact for Vulnerability Reporting",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.18",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.18",
+        "text": "Manufacturers shall ensure products are accompanied by clear, understandable information and instructions to the user as set out in Annex II, kept available for at least 10 years after placing on the market or for the support period, whichever is longer.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_and_retain_user_information_and_instructions_a93681",
+      "properties": {
+        "id": "obl_provide_and_retain_user_information_and_instructions_a93681",
+        "text": "Provide and Retain User Information and Instructions",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.19",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.19",
+        "text": "Manufacturers shall ensure the end date of the support period is clearly specified at the time of purchase and, where technically feasible, shall notify users when the product reaches the end of its support period.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_disclose_support_period_end_date_to_users_baf4b7",
+      "properties": {
+        "id": "obl_disclose_support_period_end_date_to_users_baf4b7",
+        "text": "Disclose Support Period End Date to Users",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.20",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.20",
+        "text": "Manufacturers shall either provide a copy of the EU declaration of conformity, or a simplified version containing the exact internet address at which the full declaration can be accessed, with the product.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_eu_declaration_of_conformity_with_the_product_19dbeb",
+      "properties": {
+        "id": "obl_provide_eu_declaration_of_conformity_with_the_product_19dbeb",
+        "text": "Provide EU Declaration of Conformity with the Product",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.21",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.21",
+        "text": "Manufacturers who know or have reason to believe that a product or their processes are not in conformity with the essential cybersecurity requirements shall immediately take the corrective measures necessary, or withdraw or recall the product, as appropriate.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_take_corrective_action_for_non_conforming_products_2abebb",
+      "properties": {
+        "id": "obl_take_corrective_action_for_non_conforming_products_2abebb",
+        "text": "Take Corrective Action for Non-Conforming Products",
+        "confidence": 0.92,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.22",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.22",
+        "text": "Manufacturers shall, upon a reasoned request from a market surveillance authority, provide all information and documentation necessary to demonstrate conformity, and shall cooperate on any measures taken to eliminate cybersecurity risks.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_cooperate_with_market_surveillance_authority_requests_as_manufacturer_d7da90",
+      "properties": {
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_manufacturer_d7da90",
+        "text": "Cooperate with Market Surveillance Authority Requests as Manufacturer",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_13.23",
+      "properties": {
+        "id": "CRA-1.0_req_art_13.23",
+        "text": "A manufacturer that ceases its operations and is, as a result, unable to comply with this Regulation shall inform the relevant market surveillance authorities and, to the extent possible, the users of the products placed on the market, before the cessation takes effect.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_own_cessation_of_operations_to_authorities_and_users_070697",
+      "properties": {
+        "id": "obl_notify_own_cessation_of_operations_to_authorities_and_users_070697",
+        "text": "Notify Own Cessation of Operations to Authorities and Users",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_14.1",
+      "properties": {
+        "id": "CRA-1.0_req_art_14.1",
+        "text": "A manufacturer shall notify any actively exploited vulnerability it becomes aware of to the CSIRT designated as coordinator and to ENISA via the single reporting platform, submitting an early warning within 24 hours, a vulnerability notification within 72 hours, and a final report within 14 days of a corrective measure becoming available.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_actively_exploited_vulnerabilities_8fd384",
+      "properties": {
+        "id": "obl_report_actively_exploited_vulnerabilities_8fd384",
+        "text": "Report Actively Exploited Vulnerabilities",
+        "confidence": 0.94,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_14.3",
+      "properties": {
+        "id": "CRA-1.0_req_art_14.3",
+        "text": "A manufacturer shall notify any severe incident having an impact on the security of the product to the CSIRT designated as coordinator and to ENISA via the single reporting platform, submitting an early warning within 24 hours, an incident notification within 72 hours, and a final report within one month of the incident notification.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_severe_security_incidents_5bc4e7",
+      "properties": {
+        "id": "obl_report_severe_security_incidents_5bc4e7",
+        "text": "Report Severe Security Incidents",
+        "confidence": 0.94,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_14.6",
+      "properties": {
+        "id": "CRA-1.0_req_art_14.6",
+        "text": "Where necessary, the CSIRT designated as coordinator may request the manufacturer to provide an intermediate report on relevant status updates about a notified actively exploited vulnerability or severe incident.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_intermediate_status_reports_on_request_8e5c3f",
+      "properties": {
+        "id": "obl_provide_intermediate_status_reports_on_request_8e5c3f",
+        "text": "Provide Intermediate Status Reports on Request",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_14.8",
+      "properties": {
+        "id": "CRA-1.0_req_art_14.8",
+        "text": "After becoming aware of an actively exploited vulnerability or severe incident, the manufacturer shall inform impacted users, and where appropriate all users, of the vulnerability or incident and of any risk mitigation or corrective measures they can deploy.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_inform_impacted_users_of_vulnerabilities_and_incidents_ae9328",
+      "properties": {
+        "id": "obl_inform_impacted_users_of_vulnerabilities_and_incidents_ae9328",
+        "text": "Inform Impacted Users of Vulnerabilities and Incidents",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_18.3_chapeau",
+      "properties": {
+        "id": "CRA-1.0_req_art_18.3_chapeau",
+        "text": "An authorised representative shall perform the tasks specified in the written mandate received from the manufacturer and shall provide a copy of the mandate to market surveillance authorities upon request.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_perform_mandated_tasks_and_provide_mandate_to_authorities_on_request_1889f5",
+      "properties": {
+        "id": "obl_perform_mandated_tasks_and_provide_mandate_to_authorities_on_request_1889f5",
+        "text": "Perform Mandated Tasks and Provide Mandate to Authorities on Request",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_18.3a",
+      "properties": {
+        "id": "CRA-1.0_req_art_18.3a",
+        "text": "The mandate shall allow the authorised representative to keep the EU declaration of conformity and the technical documentation at the disposal of market surveillance authorities for at least 10 years after the product has been placed on the market or for the support period, whichever is longer.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_mandated_compliance_documentation_on_manufacturer_s_behalf_7a0477",
+      "properties": {
+        "id": "obl_maintain_mandated_compliance_documentation_on_manufacturer_s_behalf_7a0477",
+        "text": "Maintain Mandated Compliance Documentation on Manufacturer's Behalf",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_18.3b",
+      "properties": {
+        "id": "CRA-1.0_req_art_18.3b",
+        "text": "The mandate shall allow the authorised representative, further to a reasoned request from a market surveillance authority, to provide that authority with all information and documentation necessary to demonstrate the product's conformity.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_conformity_information_to_authorities_on_reasoned_request_480b0d",
+      "properties": {
+        "id": "obl_provide_conformity_information_to_authorities_on_reasoned_request_480b0d",
+        "text": "Provide Conformity Information to Authorities on Reasoned Request",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_18.3c",
+      "properties": {
+        "id": "CRA-1.0_req_art_18.3c",
+        "text": "The mandate shall allow the authorised representative to cooperate with market surveillance authorities, at their request, on any action taken to eliminate the risks posed by a product covered by the mandate.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_cooperate_with_authorities_on_risk_elimination_actions_8e0e4d",
+      "properties": {
+        "id": "obl_cooperate_with_authorities_on_risk_elimination_actions_8e0e4d",
+        "text": "Cooperate with Authorities on Risk-Elimination Actions",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.1_2",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.1_2",
+        "text": "Importers shall place on the market only products that comply with the essential cybersecurity requirements, verifying before placing on the market that the manufacturer has carried out the conformity assessment, drawn up the technical documentation, affixed the CE marking, and complied with Article 13(15), (16) and (19).",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_verify_manufacturer_conformity_before_placing_on_market_f1382c",
+      "properties": {
+        "id": "obl_verify_manufacturer_conformity_before_placing_on_market_f1382c",
+        "text": "Verify Manufacturer Conformity Before Placing on Market",
+        "confidence": 0.92,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.3a",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.3a",
+        "text": "Where an importer considers or has reason to believe that a product or the manufacturer's processes are not in conformity, the importer shall not place the product on the market until conformity is achieved, and shall inform the manufacturer and market surveillance authorities where the product presents a significant cybersecurity risk.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_withhold_non_conforming_products_from_the_market_e11234",
+      "properties": {
+        "id": "obl_withhold_non_conforming_products_from_the_market_e11234",
+        "text": "Withhold Non-Conforming Products from the Market",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.3b",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.3b",
+        "text": "Where an importer has reason to believe a product may present a significant cybersecurity risk in light of non-technical risk factors, the importer shall inform the market surveillance authorities to that effect.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_significant_risk_arising_from_non_technical_factors_e630b0",
+      "properties": {
+        "id": "obl_report_significant_risk_arising_from_non_technical_factors_e630b0",
+        "text": "Report Significant Risk Arising from Non-Technical Factors",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.4",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.4",
+        "text": "Importers shall indicate their name, registered trademark and contact details on the product, its packaging or an accompanying document, in a language easily understood by users and market surveillance authorities.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_mark_products_with_importer_contact_details_ac90cf",
+      "properties": {
+        "id": "obl_mark_products_with_importer_contact_details_ac90cf",
+        "text": "Mark Products with Importer Contact Details",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.5a",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.5a",
+        "text": "Importers who know or have reason to believe that a product they have placed on the market is not in conformity shall immediately take the corrective measures necessary to bring it into conformity, or withdraw or recall it, if appropriate.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_withdraw_or_recall_non_conforming_imported_products_2d557f",
+      "properties": {
+        "id": "obl_withdraw_or_recall_non_conforming_imported_products_2d557f",
+        "text": "Withdraw or Recall Non-Conforming Imported Products",
+        "confidence": 0.91,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.5b",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.5b",
+        "text": "Upon becoming aware of a vulnerability in the product, importers shall inform the manufacturer without undue delay, and shall immediately inform market surveillance authorities where the product presents a significant cybersecurity risk.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_importers_7e03d9",
+      "properties": {
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_importers_7e03d9",
+        "text": "Escalate Vulnerabilities and Significant Risks Identified by Importers",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.6",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.6",
+        "text": "Importers shall, for at least 10 years after the product has been placed on the market or for the support period, whichever is longer, keep a copy of the EU declaration of conformity and ensure the technical documentation can be made available to market surveillance authorities on request.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_and_provide_import_compliance_documentation_08651a",
+      "properties": {
+        "id": "obl_maintain_and_provide_import_compliance_documentation_08651a",
+        "text": "Maintain and Provide Import Compliance Documentation",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.7",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.7",
+        "text": "Importers shall, further to a reasoned request from a market surveillance authority, provide all information and documentation necessary to demonstrate conformity, and shall cooperate on any measures taken to eliminate cybersecurity risks.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_cooperate_with_market_surveillance_authority_requests_as_importer_651c43",
+      "properties": {
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_importer_651c43",
+        "text": "Cooperate with Market Surveillance Authority Requests as Importer",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_19.8",
+      "properties": {
+        "id": "CRA-1.0_req_art_19.8",
+        "text": "Where an importer becomes aware that the manufacturer has ceased its operations and is, as a result, unable to comply with this Regulation, the importer shall inform the relevant market surveillance authorities and, to the extent possible, the users of the products placed on the market.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_manufacturer_cessation_of_operations_as_importer_d22f01",
+      "properties": {
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_importer_d22f01",
+        "text": "Notify Manufacturer Cessation of Operations as Importer",
+        "confidence": 0.82,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.1",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.1",
+        "text": "When making a product available on the market, distributors shall act with due care in relation to the requirements set out in this Regulation.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_act_with_due_care_regarding_regulatory_compliance_40310b",
+      "properties": {
+        "id": "obl_act_with_due_care_regarding_regulatory_compliance_40310b",
+        "text": "Act with Due Care Regarding Regulatory Compliance",
+        "confidence": 0.75,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.2",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.2",
+        "text": "Before making a product available on the market, distributors shall verify that it bears the CE marking and that the manufacturer and the importer have complied with their respective labelling and documentation obligations and provided the necessary documents.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_verify_ce_marking_and_upstream_compliance_before_distribution_0ceb15",
+      "properties": {
+        "id": "obl_verify_ce_marking_and_upstream_compliance_before_distribution_0ceb15",
+        "text": "Verify CE Marking and Upstream Compliance Before Distribution",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.3",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.3",
+        "text": "Where a distributor considers or has reason to believe that a product or the manufacturer's processes are not in conformity with the essential cybersecurity requirements, the distributor shall not make the product available on the market until conformity is achieved, and shall inform the manufacturer and market surveillance authorities without undue delay where the product poses a significant cybersecurity risk.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_withhold_non_conforming_products_from_distribution_67319f",
+      "properties": {
+        "id": "obl_withhold_non_conforming_products_from_distribution_67319f",
+        "text": "Withhold Non-Conforming Products from Distribution",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.4a",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.4a",
+        "text": "Distributors who know or have reason to believe that a product they have made available on the market, or its manufacturer's processes, are not in conformity shall ensure that the corrective measures necessary to bring it into conformity are taken, or that the product is withdrawn or recalled, if appropriate.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_withdraw_or_recall_non_conforming_distributed_products_b74819",
+      "properties": {
+        "id": "obl_withdraw_or_recall_non_conforming_distributed_products_b74819",
+        "text": "Withdraw or Recall Non-Conforming Distributed Products",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.4b",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.4b",
+        "text": "Upon becoming aware of a vulnerability in the product, distributors shall inform the manufacturer without undue delay, and shall immediately inform market surveillance authorities where the product presents a significant cybersecurity risk.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_distributors_2eaf79",
+      "properties": {
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_distributors_2eaf79",
+        "text": "Escalate Vulnerabilities and Significant Risks Identified by Distributors",
+        "confidence": 0.87,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.5",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.5",
+        "text": "Distributors shall, further to a reasoned request from a market surveillance authority, provide all information and documentation necessary to demonstrate conformity, and shall cooperate on any measures taken to eliminate cybersecurity risks.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_cooperate_with_market_surveillance_authority_requests_as_distributor_120315",
+      "properties": {
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_distributor_120315",
+        "text": "Cooperate with Market Surveillance Authority Requests as Distributor",
+        "confidence": 0.87,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_20.6",
+      "properties": {
+        "id": "CRA-1.0_req_art_20.6",
+        "text": "Where a distributor becomes aware that the manufacturer has ceased its operations and is, as a result, unable to comply with this Regulation, the distributor shall inform the relevant market surveillance authorities and, to the extent possible, the users of the products placed on the market.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_manufacturer_cessation_of_operations_as_distributor_935771",
+      "properties": {
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_distributor_935771",
+        "text": "Notify Manufacturer Cessation of Operations as Distributor",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_21",
+      "properties": {
+        "id": "CRA-1.0_req_art_21",
+        "text": "An importer or distributor shall be considered to be a manufacturer, and shall be subject to the obligations laid down in Articles 13 and 14, where it places a product on the market under its own name or trademark, or carries out a substantial modification of a product already placed on the market.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a",
+      "properties": {
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a",
+        "text": "Assume Full Manufacturer Obligations When Rebranding or Substantially Modifying Products as Importer",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45",
+      "properties": {
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45",
+        "text": "Assume Full Manufacturer Obligations When Rebranding or Substantially Modifying Products as Distributor",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_22",
+      "properties": {
+        "id": "CRA-1.0_req_art_22",
+        "text": "A natural or legal person, other than the manufacturer, importer or distributor, that carries out a substantial modification of a product and makes it available on the market shall be considered a manufacturer and subject to the obligations in Articles 13 and 14 for the affected part of the product, or the entire product if the modification affects its cybersecurity as a whole.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68",
+      "properties": {
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68",
+        "text": "Assume Manufacturer Obligations for the Substantially Modified Product",
+        "confidence": 0.82,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_23",
+      "properties": {
+        "id": "CRA-1.0_req_art_23",
+        "text": "Economic operators shall, on request, provide market surveillance authorities with the identity of any economic operator who supplied them with a product and, where available, of any economic operator they supplied a product to, and shall be able to present this information for 10 years after supply.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_manufacturer_82257d",
+      "properties": {
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_manufacturer_82257d",
+        "text": "Maintain and Provide Supply-Chain Traceability Records as Manufacturer",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_authorised_representative_834910",
+      "properties": {
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_authorised_representative_834910",
+        "text": "Maintain and Provide Supply-Chain Traceability Records as Authorised Representative",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_importer_8f5a0f",
+      "properties": {
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_importer_8f5a0f",
+        "text": "Maintain and Provide Supply-Chain Traceability Records as Importer",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_distributor_5c0cfb",
+      "properties": {
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_distributor_5c0cfb",
+        "text": "Maintain and Provide Supply-Chain Traceability Records as Distributor",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_24.1",
+      "properties": {
+        "id": "CRA-1.0_req_art_24.1",
+        "text": "Open-source software stewards shall put in place and document, in a verifiable manner, a cybersecurity policy fostering secure development and effective handling of vulnerabilities by the product's developers, covering documenting, addressing and remediating vulnerabilities.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_a_documented_vulnerability_handling_policy_564e76",
+      "properties": {
+        "id": "obl_maintain_a_documented_vulnerability_handling_policy_564e76",
+        "text": "Maintain a Documented Vulnerability Handling Policy",
+        "confidence": 0.88,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_24.2",
+      "properties": {
+        "id": "CRA-1.0_req_art_24.2",
+        "text": "Open-source software stewards shall cooperate with market surveillance authorities, at their request, to mitigate cybersecurity risks, and shall, further to a reasoned request, provide the documentation referred to in Article 24(1).",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_cooperate_with_market_surveillance_authorities_and_provide_policy_documentation_cc4298",
+      "properties": {
+        "id": "obl_cooperate_with_market_surveillance_authorities_and_provide_policy_documentation_cc4298",
+        "text": "Cooperate with Market Surveillance Authorities and Provide Policy Documentation",
+        "confidence": 0.83,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_24.3a",
+      "properties": {
+        "id": "CRA-1.0_req_art_24.3a",
+        "text": "Open-source software stewards shall report actively exploited vulnerabilities to the extent they are involved in the development of the product with digital elements.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_actively_exploited_vulnerabilities_affecting_supported_development_3218ab",
+      "properties": {
+        "id": "obl_report_actively_exploited_vulnerabilities_affecting_supported_development_3218ab",
+        "text": "Report Actively Exploited Vulnerabilities Affecting Supported Development",
+        "confidence": 0.83,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_art_24.3b",
+      "properties": {
+        "id": "CRA-1.0_req_art_24.3b",
+        "text": "Open-source software stewards shall report and inform users of severe incidents to the extent those incidents affect network and information systems the steward provides for the product's development.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_report_severe_incidents_affecting_development_infrastructure_ec9dcb",
+      "properties": {
+        "id": "obl_report_severe_incidents_affecting_development_infrastructure_ec9dcb",
+        "text": "Report Severe Incidents Affecting Development Infrastructure",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2a",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2a",
+        "text": "Products with digital elements shall be made available on the market without known exploitable vulnerabilities.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_no_known_exploitable_vulnerabilities_at_release_1ae675",
+      "properties": {
+        "id": "obl_ensure_no_known_exploitable_vulnerabilities_at_release_1ae675",
+        "text": "Ensure No Known Exploitable Vulnerabilities at Release",
+        "confidence": 0.92,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2b",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2b",
+        "text": "Products shall be made available with a secure-by-default configuration, including the possibility to reset the product to its original state, unless otherwise agreed for a tailor-made product.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_secure_by_default_configuration_and_reset_capability_5f8044",
+      "properties": {
+        "id": "obl_provide_secure_by_default_configuration_and_reset_capability_5f8044",
+        "text": "Provide Secure-by-Default Configuration and Reset Capability",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2c",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2c",
+        "text": "Products shall ensure vulnerabilities can be addressed through security updates, including automatic updates enabled by default with a clear opt-out, notification of available updates, and the option to postpone them.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_security_update_mechanism_with_notification_and_opt_out_29f680",
+      "properties": {
+        "id": "obl_provide_security_update_mechanism_with_notification_and_opt_out_29f680",
+        "text": "Provide Security Update Mechanism with Notification and Opt-Out",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2d",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2d",
+        "text": "Products shall ensure protection from unauthorised access through appropriate control mechanisms, including authentication and identity or access management, and shall report on possible unauthorised access.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_protect_against_unauthorised_access_ef908f",
+      "properties": {
+        "id": "obl_protect_against_unauthorised_access_ef908f",
+        "text": "Protect Against Unauthorised Access",
+        "confidence": 0.92,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2e",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2e",
+        "text": "Products shall protect the confidentiality of stored, transmitted or otherwise processed data by encrypting relevant data at rest or in transit using state-of-the-art mechanisms.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_protect_data_confidentiality_through_encryption_d77019",
+      "properties": {
+        "id": "obl_protect_data_confidentiality_through_encryption_d77019",
+        "text": "Protect Data Confidentiality Through Encryption",
+        "confidence": 0.92,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2f",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2f",
+        "text": "Products shall protect the integrity of stored, transmitted or processed data, commands, programs and configuration against unauthorised manipulation, and report on corruptions.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_protect_data_and_configuration_integrity_a4f648",
+      "properties": {
+        "id": "obl_protect_data_and_configuration_integrity_a4f648",
+        "text": "Protect Data and Configuration Integrity",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2g",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2g",
+        "text": "Products shall process only data that is adequate, relevant and limited to what is necessary for the product's intended purpose.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_apply_data_minimisation_563d25",
+      "properties": {
+        "id": "obl_apply_data_minimisation_563d25",
+        "text": "Apply Data Minimisation",
+        "confidence": 0.88,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2h",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2h",
+        "text": "Products shall protect the availability of essential and basic functions, including after an incident, through resilience and mitigation measures against denial-of-service attacks.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_availability_and_resilience_of_essential_functions_717e37",
+      "properties": {
+        "id": "obl_ensure_availability_and_resilience_of_essential_functions_717e37",
+        "text": "Ensure Availability and Resilience of Essential Functions",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2i",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2i",
+        "text": "Products shall minimise their negative impact, and that of connected devices, on the availability of services provided by other devices or networks.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_minimise_negative_impact_on_other_devices_and_networks_221efb",
+      "properties": {
+        "id": "obl_minimise_negative_impact_on_other_devices_and_networks_221efb",
+        "text": "Minimise Negative Impact on Other Devices and Networks",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2j",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2j",
+        "text": "Products shall be designed, developed and produced to limit attack surfaces, including external interfaces.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_minimise_attack_surface_8c5f09",
+      "properties": {
+        "id": "obl_minimise_attack_surface_8c5f09",
+        "text": "Minimise Attack Surface",
+        "confidence": 0.88,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2k",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2k",
+        "text": "Products shall be designed, developed and produced to reduce the impact of an incident using appropriate exploitation mitigation mechanisms and techniques.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_apply_exploitation_mitigation_techniques_3c8532",
+      "properties": {
+        "id": "obl_apply_exploitation_mitigation_techniques_3c8532",
+        "text": "Apply Exploitation Mitigation Techniques",
+        "confidence": 0.87,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2l",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2l",
+        "text": "Products shall provide security-related information by recording and monitoring relevant internal activity, including access to or modification of data, services or functions, with a user opt-out mechanism.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_security_logging_c427be",
+      "properties": {
+        "id": "obl_maintain_security_logging_c427be",
+        "text": "Maintain Security Logging",
+        "confidence": 0.93,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt1_2m",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt1_2m",
+        "text": "Products shall let users securely and permanently remove all data and settings, and, where data can be transferred to other products or systems, ensure this is done securely.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_enable_secure_data_removal_and_portability_7ae90d",
+      "properties": {
+        "id": "obl_enable_secure_data_removal_and_portability_7ae90d",
+        "text": "Enable Secure Data Removal and Portability",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_1",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_1",
+        "text": "Manufacturers shall identify and document vulnerabilities and components contained in products, including by drawing up a software bill of materials in a commonly used, machine-readable format covering at least top-level dependencies.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_identify_and_document_components_via_software_bill_of_materials_dcfaae",
+      "properties": {
+        "id": "obl_identify_and_document_components_via_software_bill_of_materials_dcfaae",
+        "text": "Identify and Document Components via Software Bill of Materials",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_2",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_2",
+        "text": "Manufacturers shall address and remediate vulnerabilities without delay, including by providing security updates, which, where technically feasible, shall be provided separately from functionality updates.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_remediate_vulnerabilities_without_delay_via_security_updates_248f5a",
+      "properties": {
+        "id": "obl_remediate_vulnerabilities_without_delay_via_security_updates_248f5a",
+        "text": "Remediate Vulnerabilities Without Delay via Security Updates",
+        "confidence": 0.88,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_3",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_3",
+        "text": "Manufacturers shall apply effective and regular tests and reviews of the security of the product.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_apply_regular_security_testing_and_review_2debf7",
+      "properties": {
+        "id": "obl_apply_regular_security_testing_and_review_2debf7",
+        "text": "Apply Regular Security Testing and Review",
+        "confidence": 0.88,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_4",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_4",
+        "text": "Once a security update has been made available, manufacturers shall share and publicly disclose information about the fixed vulnerability, including a description, affected products, impact, severity and remediation guidance for users.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_publicly_disclose_fixed_vulnerability_information_d83c6b",
+      "properties": {
+        "id": "obl_publicly_disclose_fixed_vulnerability_information_d83c6b",
+        "text": "Publicly Disclose Fixed Vulnerability Information",
+        "confidence": 0.87,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_6",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_6",
+        "text": "Manufacturers shall take measures to facilitate the sharing of information about potential vulnerabilities in their product and in third-party components it contains, including by providing a contact address for reporting.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_facilitate_vulnerability_information_sharing_via_a_contact_address_1d228b",
+      "properties": {
+        "id": "obl_facilitate_vulnerability_information_sharing_via_a_contact_address_1d228b",
+        "text": "Facilitate Vulnerability Information Sharing via a Contact Address",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_7",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_7",
+        "text": "Manufacturers shall provide mechanisms to securely distribute updates for products, ensuring vulnerabilities are fixed or mitigated in a timely, and where applicable automatic, manner.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_provide_mechanisms_for_secure_update_distribution_6ee034",
+      "properties": {
+        "id": "obl_provide_mechanisms_for_secure_update_distribution_6ee034",
+        "text": "Provide Mechanisms for Secure Update Distribution",
+        "confidence": 0.87,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "CRA-1.0_req_annex1_pt2_8",
+      "properties": {
+        "id": "CRA-1.0_req_annex1_pt2_8",
+        "text": "Manufacturers shall ensure that available security updates are disseminated without delay, and, unless otherwise agreed for a tailor-made product, free of charge, accompanied by advisory messages with relevant information for users.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_disseminate_security_updates_without_delay_and_free_of_charge_c130e4",
+      "properties": {
+        "id": "obl_disseminate_security_updates_without_delay_and_free_of_charge_c130e4",
+        "text": "Disseminate Security Updates Without Delay and Free of Charge",
+        "confidence": 0.87,
+        "obligation_type": "technical"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "properties": {
+        "source_ref": "Art. 3(13)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_open_source_software_steward_f6afb4"
+      },
+      "properties": {
+        "source_ref": "Art. 3(14)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "properties": {
+        "source_ref": "Art. 3(15)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "properties": {
+        "source_ref": "Art. 3(16)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "properties": {
+        "source_ref": "Art. 3(17)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_substantial_modifier_50b985"
+      },
+      "properties": {
+        "source_ref": "Art. 22(1)"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.1"
+      },
+      "properties": {
+        "source_ref": "Art. 13(1)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_secure_product_design_and_development_c56d3c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_secure_product_design_and_development_c56d3c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_secure_product_design_and_development_c56d3c"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.2"
+      },
+      "properties": {
+        "source_ref": "Art. 13(2)-(3)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_conduct_and_document_cybersecurity_risk_assessment_5f0fa8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_conduct_and_document_cybersecurity_risk_assessment_5f0fa8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_conduct_and_document_cybersecurity_risk_assessment_5f0fa8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.4"
+      },
+      "properties": {
+        "source_ref": "Art. 13(4)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_document_risk_assessment_and_justify_non_applicable_requirements_eafb6d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_document_risk_assessment_and_justify_non_applicable_requirements_eafb6d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_document_risk_assessment_and_justify_non_applicable_requirements_eafb6d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.5"
+      },
+      "properties": {
+        "source_ref": "Art. 13(5)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_exercise_due_diligence_on_third_party_and_open_source_components_e505f1"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.5"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_exercise_due_diligence_on_third_party_and_open_source_components_e505f1"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_exercise_due_diligence_on_third_party_and_open_source_components_e505f1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.6"
+      },
+      "properties": {
+        "source_ref": "Art. 13(6)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_and_remediate_vulnerabilities_in_integrated_components_0cd616"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_and_remediate_vulnerabilities_in_integrated_components_0cd616"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_and_remediate_vulnerabilities_in_integrated_components_0cd616"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.7"
+      },
+      "properties": {
+        "source_ref": "Art. 13(7)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_systematically_document_cybersecurity_aspects_and_vulnerabilities_64caa9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.7"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_systematically_document_cybersecurity_aspects_and_vulnerabilities_64caa9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_systematically_document_cybersecurity_aspects_and_vulnerabilities_64caa9"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8a"
+      },
+      "properties": {
+        "source_ref": "Art. 13(8), first paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_handle_vulnerabilities_effectively_throughout_the_support_period_90e755"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_handle_vulnerabilities_effectively_throughout_the_support_period_90e755"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_handle_vulnerabilities_effectively_throughout_the_support_period_90e755"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8b"
+      },
+      "properties": {
+        "source_ref": "Art. 13(8), second to fourth paragraphs"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_determine_and_document_the_product_support_period_5d7aa9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_determine_and_document_the_product_support_period_5d7aa9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_determine_and_document_the_product_support_period_5d7aa9"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8c"
+      },
+      "properties": {
+        "source_ref": "Art. 13(8), fifth paragraph; Annex I, Part II, point (5)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_coordinated_vulnerability_disclosure_policy_c182fe"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.8c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_coordinated_vulnerability_disclosure_policy_c182fe"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_coordinated_vulnerability_disclosure_policy_c182fe"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.9"
+      },
+      "properties": {
+        "source_ref": "Art. 13(9)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_retain_availability_of_issued_security_updates_3921f5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.9"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_retain_availability_of_issued_security_updates_3921f5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_retain_availability_of_issued_security_updates_3921f5"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_update_delivery_mechanism_7696af"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.11"
+      },
+      "properties": {
+        "source_ref": "Art. 13(11)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_inform_users_of_risks_when_maintaining_public_software_archives_23a88e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.11"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_inform_users_of_risks_when_maintaining_public_software_archives_23a88e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_inform_users_of_risks_when_maintaining_public_software_archives_23a88e"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.12a"
+      },
+      "properties": {
+        "source_ref": "Art. 13(12), first and second paragraphs"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_prepare_technical_documentation_and_carry_out_conformity_assessment_9e1840"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.12a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_prepare_technical_documentation_and_carry_out_conformity_assessment_9e1840"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_prepare_technical_documentation_and_carry_out_conformity_assessment_9e1840"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.12b"
+      },
+      "properties": {
+        "source_ref": "Art. 13(12), third paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_draw_up_eu_declaration_of_conformity_and_affix_ce_marking_108726"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.12b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_draw_up_eu_declaration_of_conformity_and_affix_ce_marking_108726"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_draw_up_eu_declaration_of_conformity_and_affix_ce_marking_108726"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.13"
+      },
+      "properties": {
+        "source_ref": "Art. 13(13)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_retain_technical_documentation_and_declaration_of_conformity_eca719"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.13"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_retain_technical_documentation_and_declaration_of_conformity_eca719"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_retain_technical_documentation_and_declaration_of_conformity_eca719"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.14"
+      },
+      "properties": {
+        "source_ref": "Art. 13(14)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_series_production_conformity_procedures_025397"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.14"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_series_production_conformity_procedures_025397"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_series_production_conformity_procedures_025397"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.15_16"
+      },
+      "properties": {
+        "source_ref": "Art. 13(15)-(16)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_identification_and_manufacturer_contact_details_d20a97"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.15_16"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_identification_and_manufacturer_contact_details_d20a97"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_identification_and_manufacturer_contact_details_d20a97"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_labelling_identification_8fb20d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.17"
+      },
+      "properties": {
+        "source_ref": "Art. 13(17)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_a_single_point_of_contact_for_vulnerability_reporting_496a7f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.17"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_a_single_point_of_contact_for_vulnerability_reporting_496a7f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_a_single_point_of_contact_for_vulnerability_reporting_496a7f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.18"
+      },
+      "properties": {
+        "source_ref": "Art. 13(18)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_and_retain_user_information_and_instructions_a93681"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.18"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_and_retain_user_information_and_instructions_a93681"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_and_retain_user_information_and_instructions_a93681"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.19"
+      },
+      "properties": {
+        "source_ref": "Art. 13(19)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_disclose_support_period_end_date_to_users_baf4b7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.19"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_disclose_support_period_end_date_to_users_baf4b7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_disclose_support_period_end_date_to_users_baf4b7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.20"
+      },
+      "properties": {
+        "source_ref": "Art. 13(20)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_eu_declaration_of_conformity_with_the_product_19dbeb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.20"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_eu_declaration_of_conformity_with_the_product_19dbeb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_eu_declaration_of_conformity_with_the_product_19dbeb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.21"
+      },
+      "properties": {
+        "source_ref": "Art. 13(21)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_action_for_non_conforming_products_2abebb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.21"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_action_for_non_conforming_products_2abebb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_action_for_non_conforming_products_2abebb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.22"
+      },
+      "properties": {
+        "source_ref": "Art. 13(22)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_manufacturer_d7da90"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.22"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_manufacturer_d7da90"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_manufacturer_d7da90"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.23"
+      },
+      "properties": {
+        "source_ref": "Art. 13(23)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_own_cessation_of_operations_to_authorities_and_users_070697"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_13.23"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_own_cessation_of_operations_to_authorities_and_users_070697"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_own_cessation_of_operations_to_authorities_and_users_070697"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_business_continuity_notification_d67b9c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.1"
+      },
+      "properties": {
+        "source_ref": "Art. 14(1)-(2)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_8fd384"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_8fd384"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_8fd384"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.3"
+      },
+      "properties": {
+        "source_ref": "Art. 14(3)-(4)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_severe_security_incidents_5bc4e7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_severe_security_incidents_5bc4e7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_severe_security_incidents_5bc4e7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.6"
+      },
+      "properties": {
+        "source_ref": "Art. 14(6)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_intermediate_status_reports_on_request_8e5c3f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_intermediate_status_reports_on_request_8e5c3f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_intermediate_status_reports_on_request_8e5c3f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.8"
+      },
+      "properties": {
+        "source_ref": "Art. 14(8)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_inform_impacted_users_of_vulnerabilities_and_incidents_ae9328"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_14.8"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_inform_impacted_users_of_vulnerabilities_and_incidents_ae9328"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_inform_impacted_users_of_vulnerabilities_and_incidents_ae9328"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3_chapeau"
+      },
+      "properties": {
+        "source_ref": "Art. 18(3), chapeau"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_perform_mandated_tasks_and_provide_mandate_to_authorities_on_request_1889f5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3_chapeau"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_perform_mandated_tasks_and_provide_mandate_to_authorities_on_request_1889f5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_perform_mandated_tasks_and_provide_mandate_to_authorities_on_request_1889f5"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3a"
+      },
+      "properties": {
+        "source_ref": "Art. 18(3)(a)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_mandated_compliance_documentation_on_manufacturer_s_behalf_7a0477"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_mandated_compliance_documentation_on_manufacturer_s_behalf_7a0477"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_mandated_compliance_documentation_on_manufacturer_s_behalf_7a0477"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3b"
+      },
+      "properties": {
+        "source_ref": "Art. 18(3)(b)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_conformity_information_to_authorities_on_reasoned_request_480b0d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_conformity_information_to_authorities_on_reasoned_request_480b0d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_conformity_information_to_authorities_on_reasoned_request_480b0d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3c"
+      },
+      "properties": {
+        "source_ref": "Art. 18(3)(c)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_authorities_on_risk_elimination_actions_8e0e4d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_18.3c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_authorities_on_risk_elimination_actions_8e0e4d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_authorities_on_risk_elimination_actions_8e0e4d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.1_2"
+      },
+      "properties": {
+        "source_ref": "Art. 19(1)-(2)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_verify_manufacturer_conformity_before_placing_on_market_f1382c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.1_2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_verify_manufacturer_conformity_before_placing_on_market_f1382c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_verify_manufacturer_conformity_before_placing_on_market_f1382c"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.3a"
+      },
+      "properties": {
+        "source_ref": "Art. 19(3), first paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_the_market_e11234"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.3a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_the_market_e11234"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_the_market_e11234"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.3b"
+      },
+      "properties": {
+        "source_ref": "Art. 19(3), second paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_significant_risk_arising_from_non_technical_factors_e630b0"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.3b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_significant_risk_arising_from_non_technical_factors_e630b0"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_significant_risk_arising_from_non_technical_factors_e630b0"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.4"
+      },
+      "properties": {
+        "source_ref": "Art. 19(4)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_importer_contact_details_ac90cf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_importer_contact_details_ac90cf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_mark_products_with_importer_contact_details_ac90cf"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_labelling_identification_8fb20d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.5a"
+      },
+      "properties": {
+        "source_ref": "Art. 19(5), first paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_imported_products_2d557f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.5a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_imported_products_2d557f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_imported_products_2d557f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.5b"
+      },
+      "properties": {
+        "source_ref": "Art. 19(5), second paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_importers_7e03d9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.5b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_importers_7e03d9"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_importers_7e03d9"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.6"
+      },
+      "properties": {
+        "source_ref": "Art. 19(6)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_import_compliance_documentation_08651a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_import_compliance_documentation_08651a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_import_compliance_documentation_08651a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.7"
+      },
+      "properties": {
+        "source_ref": "Art. 19(7)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_importer_651c43"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.7"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_importer_651c43"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_importer_651c43"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.8"
+      },
+      "properties": {
+        "source_ref": "Art. 19(8)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_importer_d22f01"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_19.8"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_importer_d22f01"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_importer_d22f01"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_business_continuity_notification_d67b9c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.1"
+      },
+      "properties": {
+        "source_ref": "Art. 20(1)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_act_with_due_care_regarding_regulatory_compliance_40310b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_act_with_due_care_regarding_regulatory_compliance_40310b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_act_with_due_care_regarding_regulatory_compliance_40310b"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.2"
+      },
+      "properties": {
+        "source_ref": "Art. 20(2)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_verify_ce_marking_and_upstream_compliance_before_distribution_0ceb15"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_verify_ce_marking_and_upstream_compliance_before_distribution_0ceb15"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_verify_ce_marking_and_upstream_compliance_before_distribution_0ceb15"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.3"
+      },
+      "properties": {
+        "source_ref": "Art. 20(3)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_distribution_67319f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_distribution_67319f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_withhold_non_conforming_products_from_distribution_67319f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.4a"
+      },
+      "properties": {
+        "source_ref": "Art. 20(4), first paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_distributed_products_b74819"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.4a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_distributed_products_b74819"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_withdraw_or_recall_non_conforming_distributed_products_b74819"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.4b"
+      },
+      "properties": {
+        "source_ref": "Art. 20(4), second paragraph"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_distributors_2eaf79"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.4b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_distributors_2eaf79"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_escalate_vulnerabilities_and_significant_risks_identified_by_distributors_2eaf79"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.5"
+      },
+      "properties": {
+        "source_ref": "Art. 20(5)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_distributor_120315"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.5"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_distributor_120315"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authority_requests_as_distributor_120315"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.6"
+      },
+      "properties": {
+        "source_ref": "Art. 20(6)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_distributor_935771"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_20.6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_distributor_935771"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_manufacturer_cessation_of_operations_as_distributor_935771"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_business_continuity_notification_d67b9c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_21"
+      },
+      "properties": {
+        "source_ref": "Art. 21"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_21"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_importer_7a278a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_21"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_full_manufacturer_obligations_when_rebranding_or_substantially_modifying_products_as_distributor_aa4f45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_22"
+      },
+      "properties": {
+        "source_ref": "Art. 22"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_substantial_modifier_50b985"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_22"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_conformity_assessment_certification_92c522"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_product_recall_corrective_action_management_e90915"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assume_manufacturer_obligations_for_the_substantially_modified_product_816a68"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_compliance_documentation_management_a87281"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_23"
+      },
+      "properties": {
+        "source_ref": "Art. 23"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_manufacturer_82257d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_23"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_manufacturer_82257d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_manufacturer_82257d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_traceability_records_fd07d2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_authorised_representative_7f8405"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_authorised_representative_834910"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_23"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_authorised_representative_834910"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_authorised_representative_834910"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_traceability_records_fd07d2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_importer_b6090d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_importer_8f5a0f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_23"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_importer_8f5a0f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_importer_8f5a0f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_traceability_records_fd07d2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_distributor_7e9386"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_distributor_5c0cfb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_23"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_distributor_5c0cfb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_and_provide_supply_chain_traceability_records_as_distributor_5c0cfb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_traceability_records_fd07d2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.1"
+      },
+      "properties": {
+        "source_ref": "Art. 24(1)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_open_source_software_steward_f6afb4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_documented_vulnerability_handling_policy_564e76"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_documented_vulnerability_handling_policy_564e76"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_a_documented_vulnerability_handling_policy_564e76"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.2"
+      },
+      "properties": {
+        "source_ref": "Art. 24(2)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_open_source_software_steward_f6afb4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authorities_and_provide_policy_documentation_cc4298"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authorities_and_provide_policy_documentation_cc4298"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_cooperate_with_market_surveillance_authorities_and_provide_policy_documentation_cc4298"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_cooperation_796f59"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.3a"
+      },
+      "properties": {
+        "source_ref": "Art. 24(3), first sentence"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_open_source_software_steward_f6afb4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_affecting_supported_development_3218ab"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.3a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_affecting_supported_development_3218ab"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_actively_exploited_vulnerabilities_affecting_supported_development_3218ab"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.3b"
+      },
+      "properties": {
+        "source_ref": "Art. 24(3), second sentence"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_open_source_software_steward_f6afb4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_severe_incidents_affecting_development_infrastructure_ec9dcb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_art_24.3b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_report_severe_incidents_affecting_development_infrastructure_ec9dcb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_report_severe_incidents_affecting_development_infrastructure_ec9dcb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2a"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(a)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_no_known_exploitable_vulnerabilities_at_release_1ae675"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_no_known_exploitable_vulnerabilities_at_release_1ae675"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_no_known_exploitable_vulnerabilities_at_release_1ae675"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_free_release_assurance_209f58"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2b"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(b)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_secure_by_default_configuration_and_reset_capability_5f8044"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_secure_by_default_configuration_and_reset_capability_5f8044"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_secure_by_default_configuration_and_reset_capability_5f8044"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_default_configuration_3bfba6"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2c"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(c)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_security_update_mechanism_with_notification_and_opt_out_29f680"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_security_update_mechanism_with_notification_and_opt_out_29f680"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_security_update_mechanism_with_notification_and_opt_out_29f680"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_update_delivery_mechanism_7696af"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2d"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(d)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_against_unauthorised_access_ef908f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_against_unauthorised_access_ef908f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_protect_against_unauthorised_access_ef908f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_access_control_authentication_151816"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2e"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(e)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_data_confidentiality_through_encryption_d77019"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2e"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_data_confidentiality_through_encryption_d77019"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_protect_data_confidentiality_through_encryption_d77019"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_data_encryption_0e50d3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2f"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(f)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_data_and_configuration_integrity_a4f648"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2f"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_protect_data_and_configuration_integrity_a4f648"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_protect_data_and_configuration_integrity_a4f648"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_data_configuration_integrity_protection_882f84"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2g"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(g)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_data_minimisation_563d25"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2g"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_data_minimisation_563d25"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_apply_data_minimisation_563d25"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_data_minimisation_61664b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2h"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(h)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_availability_and_resilience_of_essential_functions_717e37"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2h"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_availability_and_resilience_of_essential_functions_717e37"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_availability_and_resilience_of_essential_functions_717e37"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_availability_resilience_7caf2b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2i"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(i)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_minimise_negative_impact_on_other_devices_and_networks_221efb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2i"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_minimise_negative_impact_on_other_devices_and_networks_221efb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_minimise_negative_impact_on_other_devices_and_networks_221efb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_network_impact_minimisation_092169"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2j"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(j)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_minimise_attack_surface_8c5f09"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2j"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_minimise_attack_surface_8c5f09"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_minimise_attack_surface_8c5f09"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_attack_surface_minimisation_846d21"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2k"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(k)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_exploitation_mitigation_techniques_3c8532"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2k"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_exploitation_mitigation_techniques_3c8532"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_apply_exploitation_mitigation_techniques_3c8532"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_exploitation_mitigation_07f70d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2l"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(l)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_security_logging_c427be"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2l"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_security_logging_c427be"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_security_logging_c427be"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_logging_c4d9e2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2m"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part I, point (2)(m)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_enable_secure_data_removal_and_portability_7ae90d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt1_2m"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_enable_secure_data_removal_and_portability_7ae90d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_enable_secure_data_removal_and_portability_7ae90d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_data_removal_portability_3d7885"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_1"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (1)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_identify_and_document_components_via_software_bill_of_materials_dcfaae"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_identify_and_document_components_via_software_bill_of_materials_dcfaae"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_identify_and_document_components_via_software_bill_of_materials_dcfaae"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_component_inventory_sbom_management_b5223c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_2"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (2)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_remediate_vulnerabilities_without_delay_via_security_updates_248f5a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_remediate_vulnerabilities_without_delay_via_security_updates_248f5a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_remediate_vulnerabilities_without_delay_via_security_updates_248f5a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_3"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (3)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_regular_security_testing_and_review_2debf7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_apply_regular_security_testing_and_review_2debf7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_apply_regular_security_testing_and_review_2debf7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_testing_review_7cc1ec"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_4"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (4)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_publicly_disclose_fixed_vulnerability_information_d83c6b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_publicly_disclose_fixed_vulnerability_information_d83c6b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_publicly_disclose_fixed_vulnerability_information_d83c6b"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_disclosure_publication_4fb243"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_6"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (6)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_facilitate_vulnerability_information_sharing_via_a_contact_address_1d228b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_facilitate_vulnerability_information_sharing_via_a_contact_address_1d228b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_facilitate_vulnerability_information_sharing_via_a_contact_address_1d228b"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_7"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (7)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_mechanisms_for_secure_update_distribution_6ee034"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_7"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_provide_mechanisms_for_secure_update_distribution_6ee034"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_provide_mechanisms_for_secure_update_distribution_6ee034"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_update_delivery_mechanism_7696af"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "CRA-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_8"
+      },
+      "properties": {
+        "source_ref": "Annex I, Part II, point (8)"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_manufacturer_a1b2c3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_disseminate_security_updates_without_delay_and_free_of_charge_c130e4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "CRA-1.0_req_annex1_pt2_8"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_disseminate_security_updates_without_delay_and_free_of_charge_c130e4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_disseminate_security_updates_without_delay_and_free_of_charge_c130e4"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_update_delivery_mechanism_7696af"
+      },
+      "properties": {}
+    }
+  ]
+}
