@@ -492,6 +492,98 @@ worth stating plainly since it's a easy mistake to make by analogy. One
 controlled comparison, not a powered study — but it argues against
 assuming the grounding fix generalizes, not for it.
 
+### Citation completeness as a deterministic post-check (`experiment_citation_completeness.py`)
+
+The cheaper alternative flagged in "Next" item 3: instead of another LLM
+call, a regex extracts every real entity id (`role_`/`cap_`/`obl_`/`pol_`/
+`std_`/`ctrl_` prefixes, plus Regulation/Requirement ids) out of a tool
+result, and a set-difference against the final answer text reports which
+ids never got mentioned — the same "annotate structurally, don't leave it
+to prose" move `_annotate_trust()` and the direction corrector already
+represent, at zero added LLM cost. Tested in two phases before any adoption
+call, per this doc's own standard: 6 synthetic self-tests against real ids
+pulled from `golden-answers.md` (extraction/comparison logic proven correct
+in isolation first), then a live re-run of the exact same 7 (question,
+model) trials `direction-correction.md`'s empirical re-run already used,
+under three scoping variants — naive (last tool call of any kind),
+run_cypher-only (last call), and run_cypher-union (every id across every
+`run_cypher` call in the trace).
+
+**One clean true positive, and it required the union variant, not the
+literal "last tool result" spec.** H11/`qwen3-coder-next` cited 5 of the 7
+real obligations in its final answer; the run_cypher-union check correctly
+flagged the 2 missing ones (`obl_maintain_human_resources_security_
+access_control_and_asset_m_644c45`/`..._40eba8`) — ids the model had
+genuinely retrieved earlier in its 9-call trace and then dropped at
+synthesis time, exactly the failure class this check targets. The
+"last tool result" scoping literally proposed in "Next" item 3 would have
+missed this entirely: this trial's last call already had 2/2 cited, giving
+a false-clean read.
+
+**"Last tool result" is an unreliable proxy for a multi-call trace, and
+this is now evidenced rather than assumed.** H1/`qwen3-coder-next` made 7
+`run_cypher` calls; its actual last one turned out to be an unrelated
+tangent querying draft-Policy data (M14-shaped ids —
+`cap_clinical_trial_data_integrity_f28d55`,
+`pol_clinical_data_integrity_policy_e1a539` — nothing to do with Article
+32). Checking against only the last call flags those irrelevant ids as
+"missing" and says nothing useful about the actual Article 32 chain the
+question was about. The union-across-the-trace variant is the one that
+produces a signal connected to the question at all here.
+
+**The naive variant (any tool type) false-positives hard on
+`whole_graph_stats`-routed questions, confirmed live, not just in the
+synthetic self-test.** H13 routed through `whole_graph_stats` only (no
+`run_cypher` calls); its answer is a grounded-in-counts narrative that
+never needed to name individual control/policy ids at all — exactly what
+its golden rubric asks for. The naive check flagged all 8 incidental ids in
+that pre-computed aggregate as "missing," a false alarm on an otherwise
+reasonable answer. Scoping strictly to `run_cypher` (which SYSTEM_PROMPT's
+rule 6 — "when a query returns multiple rows, your answer must account for
+all of them" — is actually about) correctly abstains here instead.
+
+**Exact-substring matching over-flags legitimate citations, and this is
+the check's deepest problem.** SYSTEM_PROMPT rule 4 explicitly permits
+citing "real ids/names," not ids exclusively. Both H1 runs cite entities by
+descriptive name (*"Pseudonymisation/Encryption"*) or abbreviated form
+(*"art_32.1a"* instead of `GDPR-1.0_req_art_32.1a`;
+`cap_access_control_authentication` with the hash suffix silently dropped)
+rather than the literal id string — legitimate per the prompt's own rules,
+invisible to a substring check. H1/`qwen3:14b` flags 29 of 41 ids
+"missing" this way, most of them not real defects, though the noise does
+contain one genuine finding: `GDPR-1.0_req_art_32.1`, the umbrella clause
+`golden-answers.md`'s own correction (2026-08-06) documents as the
+recurring miss, is genuinely never mentioned in that answer at all — a real
+signal, just buried in a lot of false alarm.
+
+**Two real failure classes in this same re-run are entirely outside what
+this check can see.** H11/`qwen3:14b`'s single `run_cypher` call returned
+zero rows (a property/mapping miss, not a dropped citation) — there is no
+evidence to check citation against when retrieval itself already failed,
+so the check stays silent on a genuinely wrong answer. H1/`qwen3-coder-next`
+correctly *names* `cap_cybersecurity_risk_management_program_50601b` and
+`cap_security_control_effectiveness_assessment_627623` but asserts they're
+"governed by approved policies" when `golden-answers.md` confirms both are
+entirely ungoverned — a wrong claim about a cited id, which a
+presence/absence check cannot catch by construction; it checks whether an
+id was *mentioned*, not whether what's said about it is true.
+
+**Call: don't adopt this as built, and it doesn't compete with union-of-N
+even in a refined form.** The literal spec (last tool result, any tool
+type, substring match) has real problems on all three axes tested here
+(wrong scope of tool, wrong scope of trace, wrong matching strategy). A
+corrected version — `run_cypher`-only, unioned across the full trace, with
+some form of name/abbreviation resolution instead of raw substring
+matching — has exactly one clean piece of positive evidence behind it
+(H11/`qwen3-coder-next`) against union-of-N's 7/7 on its own test question,
+and structurally can't reach two of the failure classes documented in this
+same re-run (wrong retrieval, wrong claims about cited data). It's a
+narrower, noisier tool aimed at a narrower slice of the problem — worth
+revisiting later as a candidate cost-reduction heuristic (e.g., skip extra
+union-of-N samples when a single run's citation set already looks complete)
+once union-of-N's cost is a real problem worth optimizing against, not a
+substitute for building it.
+
 ### What this changes about the recommendation
 
 Of the four ideas tested, **plain union-of-N with mechanical (regex,
@@ -545,7 +637,12 @@ usefully:
    actually checking it after one tool call; H11 cited 3 of 7 real
    obligations in one run, 7/7 in another, 0/7 in a third — see "Further
    experiments" below, which tested three fixes for exactly this rather
-   than proposing them speculatively. Union-of-N has real, evidenced payoff;
+   than proposing them speculatively. Union-of-N has real, evidenced payoff
+   — **now wired into `query_mechanism_v2.py` itself and empirically
+   re-verified, see `union-of-n.md`**, including a genuinely new finding
+   that re-run surfaced: sampling 3x can turn a single model's reliable (if
+   flawed) convergence into a 0-for-3 total failure on a demanding question,
+   a real cost the standalone experiment's synthetic test didn't expose;
    a validator-as-detector layer is promising but its auto-revise loop needs
    a redesign (its own turn budget, not one shared with the original
    exploration) before it's worth adopting; lowering temperature made things
@@ -554,13 +651,18 @@ usefully:
    still need to check — either check it, or state plainly you're stopping
    short and why" prompt instruction, cheaper than any of the three tested
    ideas and not yet tried.
-3. Failure mode (b) from the original 14B results — correct data, wrong
+3. ~~Failure mode (b) from the original 14B results — correct data, wrong
    synthesis (H13's hallucinated count, H11 attempt 1's dropped rows) —
    likely needs a programmatic check (verify the final answer text
    references every distinct primary key from the last tool result) rather
    than a prompt instruction alone, the same "annotate structurally, don't
    leave it to prose" lesson `_annotate_trust()` already encodes for the
-   trust flag in `query_mechanism_v1.py`.
+   trust flag in `query_mechanism_v1.py`.~~ Tested: see "Citation
+   completeness as a deterministic post-check" above. One real catch, but
+   the literal spec (last result, any tool, substring match) needed
+   correcting on all three axes, still can't reach two of the failure
+   classes documented in this same pass, and isn't a substitute for
+   union-of-N's already-unambiguous evidence.
 4. `MAX_AGENT_TURNS`'s default (8) may need less raising than the earlier
    16-turn failure suggested — `qwen3-coder-next` converged on H11 in 7
    turns once grounding was fixed, well under even the default. Worth
@@ -601,3 +703,6 @@ not done — 5 of 13 were sampled, not all — and remains the next step.
   the three tools, the agent loop, and the fallback-to-v1 wrapper.
 - `test_query_mechanism_v2.py` — tool-level tests against live data plus
   scripted-agent plumbing tests, per the test plan above.
+- `experiment_citation_completeness.py` — standalone, not wired in; tests
+  "Next" item 3's deterministic citation-completeness post-check, see the
+  "Citation completeness as a deterministic post-check" section above.

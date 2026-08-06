@@ -12,7 +12,12 @@ correctly. That needs a real API key and is out of scope here, same
 disclosure q-approach1.md already made for its own scoping decision.
 """
 
+import re
+
+import query_mechanism_v2 as v2_module
 from query_mechanism_v2 import (
+    GRAPH_SCHEMA,
+    SCHEMA_RELATIONSHIP_DIRECTIONS,
     AgentTurnLimitExceeded,
     LLMTurn,
     NoLLMConfigured,
@@ -20,6 +25,8 @@ from query_mechanism_v2 import (
     ReadOnlyViolation,
     ToolCall,
     _assert_read_only,
+    correct_relationship_directions,
+    extract_entity_ids,
 )
 
 
@@ -117,12 +124,122 @@ def main() -> int:
     except ReadOnlyViolation:
         record(check("ToolBox.run_cypher enforces read-only", True))
 
+    # -- deterministic relationship-direction correction (q-approach3.md) ----
+    # Real H1 failure shape (q-approach2.md's "Result" table): `pol` bound to
+    # Policy in an earlier MATCH, SUPPORTED_BY reversed in a later one.
+    h1_query = (
+        "MATCH (pol:Policy {id:'pol_data_protection_security_policy_8e4c18'}) "
+        "MATCH (pol)<-[:SUPPORTED_BY]-(:Standard) RETURN pol.id"
+    )
+    corrected, corrections = correct_relationship_directions(h1_query)
+    record(check("direction corrector fixes the real H1 reversed SUPPORTED_BY",
+                  "(pol)-[:SUPPORTED_BY]->(:Standard)" in corrected and len(corrections) == 1,
+                  note=f"(corrected={corrected!r})"))
+
+    # Real H11 failure shape: reversed DEFINES, both nodes labeled inline.
+    h11_query = "MATCH (reg:Regulation {id:'CRA-1.0'})<-[:DEFINES]-(role:Role) RETURN role.name"
+    corrected, corrections = correct_relationship_directions(h11_query)
+    record(check("direction corrector fixes the real H11 reversed DEFINES",
+                  "(reg:Regulation {id:'CRA-1.0'})-[:DEFINES]->(role:Role)" in corrected and len(corrections) == 1,
+                  note=f"(corrected={corrected!r})"))
+
+    # Already-correct multi-hop chain (the exact shape whole_graph_stats.py's
+    # GDPR-chain query uses) -- must be left byte-for-byte untouched.
+    correct_chain = (
+        "MATCH (req:Requirement)-[:SATISFIED_BY]->(o:Obligation)-[:REQUIRES]->(c:Capability)"
+        "-[:GOVERNED_BY]->(p:Policy)-[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->(ctrl:Control) RETURN ctrl.id"
+    )
+    corrected, corrections = correct_relationship_directions(correct_chain)
+    record(check("direction corrector leaves an already-correct 5-hop chain untouched",
+                  corrected == correct_chain and corrections == []))
+
+    # Correct backward traversal (Control back to Standard, arrow already
+    # right) -- legitimate reverse-order querying, not a mistake, must not be
+    # touched.
+    backward_correct = "MATCH (ctrl:Control {id:'x'})<-[:IMPLEMENTED_BY]-(s:Standard) RETURN s.id"
+    corrected, corrections = correct_relationship_directions(backward_correct)
+    record(check("direction corrector leaves a correct backward traversal untouched",
+                  corrected == backward_correct and corrections == []))
+
+    # Unresolvable labels -- no basis to correct, left alone even though reversed.
+    reversed_no_labels = "MATCH (a)<-[:SUPPORTED_BY]-(b) RETURN a, b"
+    corrected, corrections = correct_relationship_directions(reversed_no_labels)
+    record(check("direction corrector leaves an unresolvable (unlabeled) hop untouched",
+                  corrected == reversed_no_labels and corrections == []))
+
+    # Undirected relationship -- already matches both directions, nothing to fix.
+    undirected = "MATCH (p:Policy)-[:SUPPORTED_BY]-(s:Standard) RETURN p, s"
+    corrected, corrections = correct_relationship_directions(undirected)
+    record(check("direction corrector leaves an undirected relationship untouched",
+                  corrected == undirected and corrections == []))
+
+    # Multi-type and variable-length patterns -- explicitly out of scope (see
+    # module docstring), left untouched even when reversed.
+    multi_type = "MATCH (p:Policy)<-[:SUPPORTED_BY|OTHER]-(s:Standard) RETURN p, s"
+    corrected, corrections = correct_relationship_directions(multi_type)
+    record(check("direction corrector leaves a multi-type relationship untouched",
+                  corrected == multi_type and corrections == []))
+
+    var_length = "MATCH (p:Policy)<-[:SUPPORTED_BY*1..2]-(s:Standard) RETURN p, s"
+    corrected, corrections = correct_relationship_directions(var_length)
+    record(check("direction corrector leaves a variable-length relationship untouched",
+                  corrected == var_length and corrections == []))
+
+    # Same-label relationship (SUPERSEDED_BY: Regulation->Regulation) -- labels
+    # alone can't tell "from" from "to", so this is left alone even reversed.
+    superseded = "MATCH (a:Regulation)<-[:SUPERSEDED_BY]-(b:Regulation) RETURN a, b"
+    corrected, corrections = correct_relationship_directions(superseded)
+    record(check("direction corrector leaves a same-label (SUPERSEDED_BY) relationship untouched",
+                  corrected == superseded and corrections == []))
+
+    # A stray function-call token shaped like a node pattern (count(s)) must
+    # not trigger a false-positive correction elsewhere in the query.
+    with_function_call = (
+        "MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard) "
+        "WITH p, count(s) AS n WHERE n > 0 RETURN p.id, n"
+    )
+    corrected, corrections = correct_relationship_directions(with_function_call)
+    record(check("direction corrector unaffected by a count(...) call elsewhere in the query",
+                  corrected == with_function_call and corrections == []))
+
+    # SCHEMA_RELATIONSHIP_DIRECTIONS (structured, what the corrector checks
+    # against) must stay in sync with GRAPH_SCHEMA's prose (what the model
+    # reads) -- every canonical pair below must appear as a forward arrow
+    # somewhere in the prose, whitespace/line-wrapping aside.
+    schema_prose_compact = re.sub(r"\s+", "", GRAPH_SCHEMA)
+    schema_prose_ok = all(
+        f"(:{frm})-[:{rel}]->(:{to})" in schema_prose_compact
+        for rel, (frm, to) in SCHEMA_RELATIONSHIP_DIRECTIONS.items()
+    )
+    record(check("SCHEMA_RELATIONSHIP_DIRECTIONS matches every relationship named in GRAPH_SCHEMA's prose",
+                  schema_prose_ok))
+
+    # -- direction correction wired into ToolBox.run_cypher, against live data --
+    corrected_live = mech.tools.run_cypher(
+        "MATCH (pol:Policy {id:'pol_data_protection_security_policy_8e4c18'}) "
+        "MATCH (pol)<-[:SUPPORTED_BY]-(s:Standard) RETURN s.id ORDER BY s.id"
+    )
+    direct_live = mech.tools.run_cypher(
+        "MATCH (pol:Policy {id:'pol_data_protection_security_policy_8e4c18'})-[:SUPPORTED_BY]->(s:Standard) "
+        "RETURN s.id ORDER BY s.id"
+    )
+    record(check("ToolBox.run_cypher: a reversed live SUPPORTED_BY query is corrected and matches the direct query's rows",
+                  corrected_live["rows"] == direct_live["rows"] and len(corrected_live["rows"]) == 3
+                  and "direction_corrected" in corrected_live,
+                  note=f"(rows={corrected_live['rows']}, note={corrected_live.get('direction_corrected')})"))
+    record(check("ToolBox.run_cypher: an already-correct live query has no direction_corrected key",
+                  "direction_corrected" not in direct_live))
+
     # -- agent loop plumbing, scripted (H9-shaped: no match -> honest refusal) --
+    # union_runs=1 throughout this block: these tests isolate single-round-trip
+    # plumbing (tool call -> tool result -> final answer, error surfacing, turn
+    # limit), which is orthogonal to union-of-N's combination logic (tested
+    # separately below) -- pinning it keeps scripted turn counts exact.
     fake = FakeLLMClient([
         LLMTurn(tool_calls=[ToolCall(id="1", name="list_entities", arguments={"label": "Capability"})]),
         LLMTurn(text="No capability in the graph resembles rate-limiting or throttling; I can't determine a blocking verdict."),
     ])
-    v2 = QueryMechanismV2(llm=fake)
+    v2 = QueryMechanismV2(llm=fake, union_runs=1)
     r = v2.ask("Does missing rate-limiting block a GDPR-relevant control?")
     record(check("agent loop: tool call -> tool result fed back -> final answer",
                   r.mechanism == "v2-agent" and "rate-limiting" in r.answer.lower() and len(r.tool_calls_made) == 1,
@@ -134,7 +251,7 @@ def main() -> int:
         LLMTurn(tool_calls=[ToolCall(id="1", name="run_cypher", arguments={"query": "MATCH (n) DELETE n"})]),
         LLMTurn(text="I can't run that query; it isn't read-only."),
     ])
-    v2b = QueryMechanismV2(llm=fake2)
+    v2b = QueryMechanismV2(llm=fake2, union_runs=1)
     r = v2b.ask("some open question with no template match")
     record(check("agent loop: a rejected tool call surfaces as an error, loop continues",
                   r.mechanism == "v2-agent" and "read-only" in r.answer.lower()))
@@ -143,12 +260,76 @@ def main() -> int:
     endless = FakeLLMClient([
         LLMTurn(tool_calls=[ToolCall(id=str(i), name="whole_graph_stats", arguments={})]) for i in range(20)
     ])
-    v2c = QueryMechanismV2(llm=endless)
+    v2c = QueryMechanismV2(llm=endless, union_runs=1)
     try:
         v2c.ask("another open question")
         record(check("agent loop: turn limit enforced", False))
     except AgentTurnLimitExceeded:
         record(check("agent loop: turn limit enforced", True))
+
+    # -- extract_entity_ids: prefixed and Regulation/Requirement id shapes ----
+    ids = extract_entity_ids(
+        "See obl_deploy_multi_factor_authentication_and_secured_communication_138a1f "
+        "under GDPR-1.0_req_art_32.1a, unrelated to CRA-1.0."
+    )
+    record(check("extract_entity_ids finds a prefixed id and a requirement id, not the bare regulation id twice",
+                  ids == {"obl_deploy_multi_factor_authentication_and_secured_communication_138a1f",
+                          "GDPR-1.0_req_art_32.1a", "CRA-1.0"},
+                  note=f"(got {ids})"))
+    record(check("extract_entity_ids on plain prose with no ids returns empty",
+                  extract_entity_ids("Several obligations require this.") == set()))
+
+    # -- union-of-N: best-coverage run kept verbatim, gaps appended mechanically --
+    # Real ids not required here -- extract_entity_ids only cares about shape,
+    # per the module docstring above.
+    ALPHA, BETA, GAMMA = "obl_test_alpha_aaaaaa", "obl_test_beta_bbbbbb", "obl_test_gamma_cccccc"
+    union_fake = FakeLLMClient([
+        LLMTurn(text=f"Affected: {ALPHA}, {BETA}."),  # run 1: 2/3 -- best individual coverage
+        LLMTurn(text=f"Affected: {GAMMA}."),  # run 2: 1/3, but the only run with GAMMA
+        LLMTurn(text=f"Affected: {ALPHA}."),  # run 3: 1/3
+    ])
+    v2d = QueryMechanismV2(llm=union_fake, union_runs=3)
+    r = v2d.ask("some open union-of-N question")
+    record(check("union-of-N: samples the model union_runs times", union_fake.complete_calls == 3))
+    record(check("union-of-N: reports all 3 runs converged", r.runs_sampled == 3))
+    record(check("union-of-N: keeps the best-coverage run's answer verbatim as the primary text",
+                  r.answer.startswith(f"Affected: {ALPHA}, {BETA}."), note=f"(answer={r.answer!r})"))
+    record(check("union-of-N: mechanically appends the id only a lower-coverage run found",
+                  r.union_ids_added == [GAMMA] and GAMMA in r.answer, note=f"(union_ids_added={r.union_ids_added})"))
+    record(check("union-of-N: doesn't re-append what the primary run already cited",
+                  ALPHA not in r.union_ids_added and BETA not in r.union_ids_added))
+
+    # -- union-of-N: a non-converging run is dropped, not a hard failure -----
+    # Lower MAX_AGENT_TURNS so the non-converging run's endless tool-call loop
+    # only costs 2 scripted turns instead of the real default's 8.
+    original_max_turns = v2_module.MAX_AGENT_TURNS
+    v2_module.MAX_AGENT_TURNS = 2
+    try:
+        partial_fake = FakeLLMClient([
+            LLMTurn(tool_calls=[ToolCall(id="1", name="whole_graph_stats", arguments={})]),  # run 1: never finalizes
+            LLMTurn(tool_calls=[ToolCall(id="2", name="whole_graph_stats", arguments={})]),
+            LLMTurn(text=f"Affected: {ALPHA}."),  # run 2: converges
+            LLMTurn(text=f"Affected: {ALPHA}, {BETA}."),  # run 3: converges, best coverage
+        ])
+        v2e = QueryMechanismV2(llm=partial_fake, union_runs=3)
+        r = v2e.ask("some open union-of-N question with one non-convergent sample")
+        record(check("union-of-N: a non-converging sample is excluded, not a hard failure",
+                      r.runs_sampled == 2, note=f"(runs_sampled={r.runs_sampled})"))
+        record(check("union-of-N: still picks the best-coverage surviving run",
+                      r.answer.startswith(f"Affected: {ALPHA}, {BETA}.")))
+
+        # -- union-of-N: if EVERY sample fails to converge, that propagates --
+        all_fail_fake = FakeLLMClient([
+            LLMTurn(tool_calls=[ToolCall(id=str(i), name="whole_graph_stats", arguments={})]) for i in range(6)
+        ])
+        v2f = QueryMechanismV2(llm=all_fail_fake, union_runs=3)
+        try:
+            v2f.ask("some open question where every sample times out")
+            record(check("union-of-N: raises when every sampled run fails to converge", False))
+        except AgentTurnLimitExceeded:
+            record(check("union-of-N: raises when every sampled run fails to converge", True))
+    finally:
+        v2_module.MAX_AGENT_TURNS = original_max_turns
 
     total = passed + failed
     print(f"\n{passed}/{total} passed")

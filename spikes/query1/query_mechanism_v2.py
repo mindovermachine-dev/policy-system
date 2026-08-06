@@ -23,14 +23,26 @@ rather than silently returning nothing, so that gap is never hidden behind
 a vague error.
 """
 
+import json
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from query_mechanism_v1 import FIXTURE_ANCHOR_DATE, NoTemplateMatch, QueryMechanismV1
 
 MAX_AGENT_TURNS = 8
+
+# Sample the agent this many times per question and mechanically combine, per
+# q-approach2.md's "Further experiments" section: of four combination ideas
+# tested (self-consistency/union, temperature, generator+validator loop, union
+# + validator synthesis), plain union-of-N with regex-extracted cited ids was
+# the only one with unambiguous positive evidence (7/7 on the test question in
+# experiment_self_consistency.py, vs. 0/7 for strict consensus). The honest
+# tradeoff, also noted there: this multiplies LLM calls per v2-agent-routed
+# question by UNION_RUNS_DEFAULT -- v1's template path is unaffected, it never
+# reaches this.
+UNION_RUNS_DEFAULT = 3
 
 # Anything other than a pure read is refused before it ever reaches FalkorDB.
 # Deliberately blunt (keyword match, not a Cypher parser) -- same "fail
@@ -48,6 +60,183 @@ class ReadOnlyViolation(Exception):
 def _assert_read_only(query: str) -> None:
     if _WRITE_KEYWORDS.search(query):
         raise ReadOnlyViolation(query)
+
+
+# --------------------------------------------------------------------------
+# Deterministic relationship-direction correction
+# --------------------------------------------------------------------------
+#
+# Per q-approach3.md: relationship-direction reversal (`(pol)<-[:SUPPORTED_BY]-
+# (:Standard)` instead of the schema's `Policy-[:SUPPORTED_BY]->Standard`, seen
+# for real on H1 and H11 -- see q-approach2.md's "Result" table) is a solved
+# problem, and not by better prompting. There's a public competition for
+# exactly this (github.com/tomasonjo/cypher-direction-competition) and its
+# winning approach ships in LangChain as `CypherQueryCorrector`: parse the
+# generated query, compare relationship directions against the schema,
+# correct them where a query's own node labels make the correct direction
+# unambiguous. No model judgment -- the same category of fix `_annotate_trust`
+# above already represents elsewhere in this codebase (move a decision out of
+# prose and into deterministic Python).
+#
+# Single source of truth for canonical (from_label, to_label) per relationship
+# type -- every edge in this schema has exactly one valid direction regardless
+# of which node is written first, so the type name alone determines it once
+# both endpoint labels are known. Kept in sync with GRAPH_SCHEMA's prose below
+# by test_query_mechanism_v2.py.
+SCHEMA_RELATIONSHIP_DIRECTIONS: dict[str, tuple[str, str]] = {
+    "DEFINES": ("Regulation", "Role"),
+    "HAS": ("Role", "Obligation"),
+    "REQUIRES": ("Obligation", "Capability"),
+    "GOVERNED_BY": ("Capability", "Policy"),
+    "SUPPORTED_BY": ("Policy", "Standard"),
+    "IMPLEMENTED_BY": ("Standard", "Control"),
+    "EXPRESSES": ("Regulation", "Requirement"),
+    "SATISFIED_BY": ("Requirement", "Obligation"),
+    "SUPERSEDED_BY": ("Regulation", "Regulation"),
+}
+
+# A node pattern: `(`, optional variable, optional `:Label`, anything else
+# that isn't a paren (property map, more labels, whitespace), `)`. Deliberately
+# permissive -- it also matches non-path parenthesized text (`count(ctrl)`,
+# `IN ('a','b')`), but those false positives are harmless: correction below
+# only fires when *both* sides of a hop resolve to a label that matches the
+# schema's pair for that relationship type, which a stray function-call token
+# essentially never does.
+_NODE_PATTERN = re.compile(
+    r"\(\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)?\s*(?::(?P<label>[A-Za-z_][A-Za-z0-9_]*))?[^()]*\)"
+)
+# What can sit between two node patterns for it to be a single-type,
+# fixed-length relationship arrow. Multi-type (`[:A|B]`) and variable-length
+# (`[:R*1..3]`) patterns intentionally fall outside this and are left alone --
+# same "can't correct what it can't verify" instinct as the label check below.
+_REL_ARROW = re.compile(r"(?P<left_arrow><)?-\[(?P<rel_body>[^\]]*)\]-(?P<right_arrow>>)?")
+# Anchored at the start of rel_body: optional variable, then `:TYPE`. The
+# trailing group catches a `|` (multi-type, `[:A|B]`) or `*` (variable-length,
+# `[:R*1..3]`) immediately following the type name, so those can be rejected
+# by the caller rather than mis-corrected.
+_REL_TYPE = re.compile(r"^\s*(?:[A-Za-z_]\w*\s*)?:\s*([A-Za-z_]\w*)\s*([|*]?)")
+
+
+def _single_rel_type(rel_body: str) -> Optional[str]:
+    m = _REL_TYPE.match(rel_body)
+    if not m or m.group(2):
+        return None
+    return m.group(1)
+
+
+@dataclass
+class DirectionCorrection:
+    relationship: str
+    original: str
+    corrected: str
+
+
+def correct_relationship_directions(query: str) -> tuple[str, list[DirectionCorrection]]:
+    """Parse `query` for `(a)-[:REL]->(b)` / `(a)<-[:REL]-(b)` hops and flip
+    any arrow that runs backwards relative to `SCHEMA_RELATIONSHIP_DIRECTIONS`,
+    wherever both endpoints' labels are known (inline, or bound earlier in the
+    same query text) and unambiguously identify which orientation is correct.
+    Node write order and everything outside the arrow itself is left
+    untouched -- a query legitimately traversing Control back to Standard
+    with a correct backward arrow is not touched, only a reversed one is.
+
+    Returns the (possibly rewritten) query and a list of corrections made, so
+    callers can log/surface what changed rather than silently rewriting.
+    """
+    var_labels: dict[str, str] = {}
+    for m in _NODE_PATTERN.finditer(query):
+        if m.group("var") and m.group("label"):
+            var_labels[m.group("var")] = m.group("label")
+
+    node_matches = list(_NODE_PATTERN.finditer(query))
+    corrections: list[DirectionCorrection] = []
+    replacements: list[tuple[int, int, str]] = []
+
+    for left, right in zip(node_matches, node_matches[1:]):
+        between = query[left.end() : right.start()]
+        rel_match = _REL_ARROW.fullmatch(between.strip())
+        if not rel_match:
+            continue
+
+        rel_type = _single_rel_type(rel_match.group("rel_body"))
+        if rel_type is None:
+            continue
+        canonical = SCHEMA_RELATIONSHIP_DIRECTIONS.get(rel_type)
+        if canonical is None or canonical[0] == canonical[1]:
+            # Same label both ends (SUPERSEDED_BY: Regulation->Regulation) --
+            # labels alone can't tell "from" from "to", so this can't be
+            # verified and is left untouched, same as an unresolvable label.
+            continue
+
+        left_label = left.group("label") or var_labels.get(left.group("var"))
+        right_label = right.group("label") or var_labels.get(right.group("var"))
+        if left_label is None or right_label is None:
+            continue
+
+        from_label, to_label = canonical
+        if left_label == from_label and right_label == to_label:
+            wanted_forward = True
+        elif left_label == to_label and right_label == from_label:
+            wanted_forward = False
+        else:
+            continue  # labels don't fit either orientation -- not this function's call
+
+        is_forward = bool(rel_match.group("right_arrow")) and not rel_match.group("left_arrow")
+        is_backward = bool(rel_match.group("left_arrow")) and not rel_match.group("right_arrow")
+        if not (is_forward or is_backward) or is_forward == wanted_forward:
+            continue  # undirected (matches both ways already) or already correct
+
+        rel_body = rel_match.group("rel_body")
+        new_arrow = f"-[{rel_body}]->" if wanted_forward else f"<-[{rel_body}]-"
+        leading_ws = between[: len(between) - len(between.lstrip())]
+        trailing_ws = between[len(between.rstrip()) :]
+        new_between = f"{leading_ws}{new_arrow}{trailing_ws}"
+
+        replacements.append((left.end(), right.start(), new_between))
+        corrections.append(DirectionCorrection(relationship=rel_type, original=between, corrected=new_between))
+
+    if not replacements:
+        return query, []
+
+    result, pos = [], 0
+    for start, end, new_text in replacements:
+        result.append(query[pos:start])
+        result.append(new_text)
+        pos = end
+    result.append(query[pos:])
+    return "".join(result), corrections
+
+
+# --------------------------------------------------------------------------
+# Entity-id extraction, used by union-of-N to score each sampled run's
+# citation coverage. Originally built and evaluated in
+# experiment_citation_completeness.py as a candidate *standalone* completeness
+# gate (q-approach2.md's "Next" item 3) -- that role was rejected there (see
+# q-approach2.md's "Citation completeness as a deterministic post-check"
+# section: too imprecise against exact-id substring matching, blind to
+# several real failure classes, one clean catch against union-of-N's
+# already-unambiguous 7/7). Reused here for a narrower, better-evidenced job:
+# not judging any single run pass/fail, just comparing sampled runs against
+# each other to pick which one covers the union best. Every entity id in this
+# graph is either one of these slugified-name-plus-hash forms
+# (build_helvex_graph.py's `f"{prefix}_{slugify(name)}_{content_hash(...)}"`)
+# or a Regulation/Requirement id (GRAPH_SCHEMA's documented shape).
+# --------------------------------------------------------------------------
+
+_PREFIXED_ID = re.compile(r"\b(?:role|cap|obl|pol|std|ctrl)_[a-z0-9]+(?:_[a-z0-9]+)*\b")
+_REG_OR_REQ_ID = re.compile(r"\b[A-Z][A-Z-]*-\d+\.\d+(?:_req_art_[\d.]+[a-z]?)?\b")
+
+
+def extract_entity_ids(value: Any) -> set[str]:
+    """Pull every real-entity-id-shaped token out of `value` (an answer
+    string, a tool result dict, or anything else JSON-serializable).
+    Serializing to JSON first and running both patterns over the text is
+    deliberately simpler than walking the structure by hand -- ids never
+    legitimately span a JSON delimiter, so this loses nothing a manual
+    recursive walk would catch, for a fraction of the code.
+    """
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return set(_PREFIXED_ID.findall(text)) | set(_REG_OR_REQ_ID.findall(text))
 
 
 # --------------------------------------------------------------------------
@@ -205,10 +394,19 @@ class ToolBox:
 
     def run_cypher(self, query: str) -> dict:
         _assert_read_only(query)
+        query, corrections = correct_relationship_directions(query)
         result = self.graph.query(query)
         columns = [c[1] for c in result.header] if result.header else []
         rows = [list(r) for r in result.result_set]
-        return {"columns": columns, "rows": rows}
+        response = {"columns": columns, "rows": rows}
+        if corrections:
+            # Surfaced to the model, not applied silently -- it should know its
+            # own query had a reversed relationship, the same way it sees a
+            # tool error, not have it invisibly fixed underneath it.
+            response["direction_corrected"] = [
+                f"{c.relationship}: {c.original.strip()!r} -> {c.corrected.strip()!r}" for c in corrections
+            ]
+        return response
 
     def whole_graph_stats(self) -> dict:
         """Pre-computed, deterministic aggregate facts for the genuinely
@@ -408,13 +606,23 @@ class MechanismResult:
     answer: str
     template: Optional[str] = None
     tool_calls_made: list[ToolCall] = field(default_factory=list)
+    runs_sampled: int = 1
+    union_ids_added: list[str] = field(default_factory=list)
 
 
 class QueryMechanismV2:
-    def __init__(self, host="localhost", port=6379, graph_name="policy_system", llm: Optional[LLMClient] = None):
+    def __init__(
+        self,
+        host="localhost",
+        port=6379,
+        graph_name="policy_system",
+        llm: Optional[LLMClient] = None,
+        union_runs: int = UNION_RUNS_DEFAULT,
+    ):
         self.v1 = QueryMechanismV1(host=host, port=port, graph_name=graph_name)
         self.tools = ToolBox(self.v1.graph)
         self.llm = llm or NoLLMConfigured()
+        self.union_runs = union_runs
         self._dispatch = {
             "list_entities": lambda args: self.tools.list_entities(args["label"]),
             "run_cypher": lambda args: self.tools.run_cypher(args["query"]),
@@ -434,7 +642,62 @@ class QueryMechanismV2:
         except NoTemplateMatch:
             pass
 
-        return self._ask_agent(question)
+        return self._ask_agent_union(question)
+
+    def _ask_agent_union(self, question: str) -> MechanismResult:
+        """Sample `self.union_runs` independent agent runs and mechanically
+        combine them -- per q-approach2.md's "Further experiments" finding
+        that regex-extracted-id union beats every tested form of LLM-driven
+        combination (an extra synthesis call lost information a plain union
+        kept; a validator pass didn't reliably catch what synthesis lost).
+        No extra LLM call here either: the run whose own answer already
+        covers the most of the pooled id set is kept verbatim as the answer,
+        and only the ids other runs found that it didn't are appended as a
+        flagged, unverified addendum -- structural combination, not prose
+        re-synthesis.
+
+        `AgentTurnLimitExceeded` on an individual run is treated as "this
+        sample contributed nothing," not a hard failure of the whole
+        question -- self-consistency's real run data (a 0/7, a 7/7, and a
+        non-convergent third) showed one non-converging sample among several
+        working ones is the normal case here, not a rare edge case. Only if
+        every sampled run fails to converge does that propagate.
+        """
+        attempts: list[MechanismResult] = []
+        for _ in range(self.union_runs):
+            try:
+                attempts.append(self._ask_agent(question))
+            except AgentTurnLimitExceeded:
+                continue
+
+        if not attempts:
+            raise AgentTurnLimitExceeded(
+                f"none of {self.union_runs} sampled runs converged for: {question!r}"
+            )
+
+        cited_per_attempt = [extract_entity_ids(a.answer) for a in attempts]
+        union_ids: set[str] = set().union(*cited_per_attempt)
+
+        best_idx = max(range(len(attempts)), key=lambda i: len(cited_per_attempt[i]))
+        best = attempts[best_idx]
+        missing = sorted(union_ids - cited_per_attempt[best_idx])
+
+        answer = best.answer
+        if missing:
+            answer += (
+                "\n\n[Found in other sampled runs but not cited above -- not independently "
+                "re-verified, check before relying on these: " + ", ".join(missing) + "]"
+            )
+
+        all_calls = [c for a in attempts for c in a.tool_calls_made]
+        return MechanismResult(
+            question=question,
+            mechanism="v2-agent",
+            answer=answer,
+            tool_calls_made=all_calls,
+            runs_sampled=len(attempts),
+            union_ids_added=missing,
+        )
 
     def _ask_agent(self, question: str) -> MechanismResult:
         messages: list[dict] = [{"role": "user", "content": question}]
