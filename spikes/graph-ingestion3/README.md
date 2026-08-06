@@ -20,8 +20,15 @@ a single graph.
   `cra-prompt.md` (the extraction prompt) and
   `cra-extraction-methodology.md` (the judgment calls — role/requirement/
   obligation/capability boundaries, granularity, what got excluded and why)
-  for how it was derived. NIS2 and GDPR extractions are expected to follow
-  the same pattern into their own JSON files.
+  for how it was derived.
+- `nis2.json` — the same extraction pattern applied to NIS2 (EU 2022/2555)
+  from `spikes/eu-regulations/NIS2.md`, scoped to Art. 3(1)-(4), 20, 21 and
+  23 (see `nis2-prompt.md`). `nis2-extraction-methodology.md` records the
+  judgment calls, including where it diverges from CRA's (Member-State
+  transposition wrapper stripped from every duty; Capability convergence
+  onto CRA's ids applied directly at extraction time rather than left for
+  the duplicate-finder). GDPR extraction is expected to follow the same
+  pattern, with its own `gdpr-prompt.md` / `gdpr-extraction-methodology.md`.
 - `load_graph.py` — a generic loader. It does not hardcode per-concept
   insert functions; every node is MERGEd on `(label, id)` and every edge is
   MERGEd between the two endpoints it names, so the JSON is the single
