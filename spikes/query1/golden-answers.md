@@ -26,6 +26,12 @@ Every Cypher block below can be run directly:
 `docker exec -i <falkordb-container> redis-cli GRAPH.QUERY policy_system "<query>"`,
 or via the `falkordb` Python client against `localhost:6379`.
 
+**S9–S15/M9–M14/H8–H15 added 2026-08-06**, computed live against the same
+graph, for the Software Engineer / Security Engineer / Engineering Manager
+questions added to `example-questions.md` in its second pass. Two of these
+(H10, H15) resolve to a documented schema gap rather than a golden value —
+recorded as such, not left blank.
+
 ---
 
 ## Simple tier
@@ -87,6 +93,19 @@ MATCH (:Capability {id:"cap_security_logging_c4d9e2"})-[:GOVERNED_BY]->(p:Policy
 MATCH (:Policy {id:"pol_data_protection_security_policy_8e4c18"})-[:SUPPORTED_BY]->(s:Standard) RETURN s.id, s.title, s.implementation_status
 ```
 **Golden:** 3 standards — Encryption-at-Rest & In-Transit (`implemented`), Access Control/MFA & Session (`implemented`), Security Log Retention & SIEM (`reviewed`)
+
+### S9 — "Which Controls exist under the Incident & Vulnerability Response Policy, and what are their statuses?" (set-match)
+```cypher
+MATCH (:Policy {id:"pol_incident_vulnerability_response_policy_9de859"})-[:SUPPORTED_BY]->(:Standard)-[:IMPLEMENTED_BY]->(ctrl:Control)
+RETURN ctrl.id, ctrl.title, ctrl.implementation_status
+```
+**Golden:** 2 controls — `ctrl_std_pol_incident_vulnerability_response_policy_9de859_v1_manual` "Quarterly Incident Triage SLA Review" (`implemented`, but overdue — `next_review_date: 2026-07-20`, before the fixture's `2026-08-01` anchor), `ctrl_std_pol_incident_vulnerability_response_policy_9de859_v2_automated` "Automated Vulnerability Patch SLA Check" (`planned`, no evidence yet)
+
+### S10 — "What's the implementation status of the Encryption-at-Rest control?" (exact-match)
+```cypher
+MATCH (ctrl:Control) WHERE toLower(ctrl.title) CONTAINS "encryption-at-rest" RETURN ctrl.id, ctrl.implementation_status, ctrl.next_review_date
+```
+**Golden:** `ctrl_std_pol_data_protection_security_policy_8e4c18_v1_automated` — `implemented`, `next_review_date: 2026-08-15`
 
 ---
 
@@ -166,18 +185,64 @@ RETURN c.id, regs
 ```
 **Golden:** `{cap_security_logging_c4d9e2}` — shared via `CRA-1.0` + `HELVEX-SOP-1.0`.
 
+### M9 — "How many Controls are currently overdue for review?" (exact-match)
+```cypher
+MATCH (ctrl:Control) WHERE ctrl.next_review_date < "2026-08-01" AND ctrl.implementation_status <> "deprecated" RETURN count(ctrl)
+```
+**Golden:** 1 — `ctrl_std_pol_incident_vulnerability_response_policy_9de859_v1_manual` (`2026-07-20`). Excludes `ctrl_std_pol_legacy_asset_personnel_security_policy_7ed6c2_v1_manual` (`2026-01-01`) — it's `deprecated`, so it isn't meaningfully "due," it's retired; same exclusion logic H7 already applies to it. Anchored to the fixture's `2026-08-01` reference date, not wall-clock today, per `synthetic-data-spec.md`'s reproducibility note.
+
+### M10 — "What percentage of our Policies are still draft or deprecated rather than approved?" (exact-match)
+```cypher
+MATCH (p:Policy) RETURN p.status, count(p)
+```
+**Golden:** 4 Policies total — 2 `approved` (Data Protection & Security; Incident & Vulnerability Response), 1 `draft` (Clinical Data Integrity), 1 `deprecated` (Legacy Asset & Personnel Security) → **50%** (2 of 4) are not `approved`.
+
+### M11 — "Which Capabilities have a governing Policy but zero implemented Controls underneath?" (set-match)
+```cypher
+MATCH (c:Capability)-[:GOVERNED_BY]->(p:Policy)
+OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->(ctrl:Control)
+WITH c, p, collect(DISTINCT ctrl.implementation_status) AS statuses
+WHERE NOT "implemented" IN statuses
+RETURN c.id, c.name, p.id, p.status, statuses
+```
+**Golden:** 4 capabilities — `cap_asset_personnel_security_management_e68e9a` and `cap_data_protection_officer_management_ec3cd2` (both under the `deprecated` Legacy Asset & Personnel Security Policy, whose only Control is itself `deprecated`), `cap_data_protection_impact_assessment_a51acb` and `cap_clinical_trial_data_integrity_f28d55` (both under the `draft` Clinical Data Integrity Policy, which has no Controls under it at all yet — `statuses = []`). Deeper coverage-gap question than H2: H2 only checks "has a Policy," this checks whether that Policy's chain actually bottoms out in a working Control.
+
+### M12 — "Which Controls are overdue for review right now?" (set-match)
+```cypher
+MATCH (ctrl:Control) WHERE ctrl.next_review_date < "2026-08-01" AND ctrl.implementation_status <> "deprecated" RETURN ctrl.id, ctrl.title, ctrl.next_review_date
+```
+**Golden:** `{ctrl_std_pol_incident_vulnerability_response_policy_9de859_v1_manual}` — same single-control set M9 counts. A mechanism answering both from independently-written queries risks the two disagreeing; both should derive from one shared filter.
+
+### M13 — "Which Standards under the Data Protection & Security Policy are still in draft?" (set-match)
+```cypher
+MATCH (:Policy {id:"pol_data_protection_security_policy_8e4c18"})-[:SUPPORTED_BY]->(s:Standard {implementation_status:"draft"}) RETURN s.id, s.title
+```
+**Golden:** ∅ — empty set. All 3 Standards under this Policy are `implemented`/`reviewed`. Deliberately kept in the catalog to test whether a mechanism confidently returns "none" rather than hallucinating a plausible-sounding draft Standard (the failure mode approach 1's whole design is built to avoid — see `q-approach1.md`).
+
+### M14 — "Which of our draft Policies are blocking GDPR readiness?" (rubric)
+Only one Policy is `draft`: `pol_clinical_data_integrity_policy_e1a539`, governing `cap_data_protection_impact_assessment_a51acb` (Data Protection Impact Assessment) and `cap_clinical_trial_data_integrity_f28d55` (Clinical Trial Data Integrity).
+**Rubric — a good answer must:**
+- Name `pol_clinical_data_integrity_policy_e1a539` specifically, not "some policies."
+- Recognize the Data Protection Impact Assessment capability is directly GDPR-relevant (Art. 35 territory) — that's the actual "blocking GDPR readiness" claim, not just "it's a draft."
+- Not conflate this with the separately-stale `deprecated` Legacy Asset & Personnel Security Policy, which is a real staleness signal but not a *draft* one — the question asked specifically about draft.
+
 ---
 
 ## Hard tier
 
 ### H1 — "Are we compliant with GDPR Article 32?" (rubric) — **now has a real, textured chain to reason over**
+
+**Correction (2026-08-06, found while grading a real LLM run against this rubric — see `q-approach2.md`'s Result section):** the entry below originally covered only 32.1a/b/c and 32.4. The real requirement set is six, not four — `GDPR-1.0_req_art_32.1` (the umbrella clause) and `GDPR-1.0_req_art_32.1d` (testing/evaluating security-measure effectiveness) exist too and were missed. Both resolve to capabilities that turn out to be **entirely ungoverned** — `cap_cybersecurity_risk_management_program_50601b` (32.1) and `cap_security_control_effectiveness_assessment_627623` (32.1d) have no `GOVERNED_BY` edge to any Policy at all, confirmed live. This is a *fourth* case beyond clean/partial/stale-deprecated: structurally absent evidence, not just untrustworthy evidence — if anything a more serious gap than the ones already documented, not a smaller one. (Also: computing this correction hit the exact same FalkorDB projection-dependent row-dropping bug M7 documents below — a 4-hop chained query with `OPTIONAL MATCH` silently returned zero rows for both, resolved by walking each hop separately, per that section's own mitigation advice. Worth restating: this bug keeps recurring for anyone who forgets the mitigation, including inside this same document days later.)
+
 Art. 32's sub-obligations resolve as follows (from M7's chain data, filtered to Art. 32):
+- **32.1** (umbrella "appropriate technical and organisational measures") → `cap_cybersecurity_risk_management_program_50601b` → **no governing Policy at all** — **ungoverned, no evidence to cite**
 - **32.1a** (encryption) → `cap_data_encryption_0e50d3` → approved Policy → 3 Standards, all `implemented`/`reviewed` — **clean**
 - **32.1b** (CIA/resilience) → `cap_access_control_authentication_151816` + `cap_data_configuration_integrity_protection_882f84` → same approved Policy, same clean Standards — **clean**
 - **32.1c** (restore availability after incident) → `cap_business_continuity_disaster_recovery_9c1c32` → approved Incident & Vulnerability Response Policy → one `implemented` Standard/Control, one `draft`/`planned` Standard/Control — **partial**
+- **32.1d** (test/evaluate effectiveness) → `cap_security_control_effectiveness_assessment_627623` → **no governing Policy at all** — **ungoverned, no evidence to cite**
 - **32.4** (personnel process only on instructions) → `cap_asset_personnel_security_management_e68e9a` → `pol_legacy_asset_personnel_security_policy_7ed6c2`, which is **`deprecated`** with a `deprecated` Standard/Control — **stale, not current evidence**
 
-**Rubric — a good answer must:** conclude **partial compliance**, cite the real chain per sub-clause above, explicitly flag 32.4's evidence as stale (governed only by a deprecated policy — structurally present but shouldn't be reported as passing), and flag 32.1c's second control as not-yet-implemented rather than silently rolling it into "compliant."
+**Rubric — a good answer must:** conclude **partial compliance** (2 of 6 sub-clauses clean, 1 partial, 1 stale, 2 entirely ungoverned — not a uniform verdict either direction), cite the real chain per sub-clause above, explicitly flag 32.4's evidence as stale (governed only by a deprecated policy) and 32.1/32.1d as having no governance at all (a stronger gap than "stale"), and flag 32.1c's second control as not-yet-implemented rather than silently rolling it into "compliant."
 
 ### H2 — "Which capabilities required by CRA have no governing Policy yet?" (set-match) — already ✅, confirmed prior session
 ```cypher
@@ -214,3 +279,52 @@ MATCH (ctrl:Control) WHERE ctrl.next_review_date >= "2026-08-01" AND ctrl.next_r
 **Golden:** exactly 2 — `ctrl_std_pol_data_protection_security_policy_8e4c18_v1_automated` (Encryption-at-Rest, `2026-08-15`), `ctrl_std_pol_data_protection_security_policy_8e4c18_v2_automated` (Access Control & MFA, `2026-08-25`). Excludes: `2026-07-20` (overdue, before the window — a correct mechanism must not lump this in), `2026-11-01` (not due soon), `2026-01-01` (deprecated control, stale).
 
 **Note on the date anchor:** per `synthetic-data-spec.md`, the fixture is authored as-of `2026-08-01`, not wall-clock today (`2026-08-06` as of this doc). A query mechanism needs that anchor supplied explicitly (e.g. in a system prompt) rather than computing "next 30 days" from its own clock — otherwise this golden answer silently drifts as real time passes.
+
+### H8 — "I'm building a new microservice that stores customer PII — what compliance capabilities should I be thinking about?" (rubric)
+No single endpoint/article to anchor on — broader than H3, which is scoped to one endpoint and one Article.
+**Rubric — a good answer must:**
+- Name several real Capabilities by id, not vague categories: at minimum `cap_data_encryption_0e50d3` (data at rest/in transit), `cap_access_control_authentication_151816`, `cap_security_logging_c4d9e2`, `cap_data_protection_impact_assessment_a51acb` (a DPIA is plausibly triggered by a new PII-processing system under GDPR Art. 35), and `cap_secure_data_removal_portability_3d7885` (data-subject deletion/portability rights).
+- Explicitly perform the NL→Capability mapping rather than silently assuming it (per H3's precedent).
+- Not claim these Capabilities are *satisfied* just because they're relevant — the question asks what to think about, not a compliance verdict.
+
+### H9 — "Our security scanner flagged missing rate-limiting on an endpoint that processes health data — does that block a GDPR-relevant control?" (rubric)
+```cypher
+MATCH (c:Capability) WHERE toLower(c.name) CONTAINS "rate" OR toLower(c.name) CONTAINS "throttl" RETURN c.id, c.name
+```
+**Golden (confirmed live):** no real hit — the only substring match is `cap_binding_corporate_rules_governance_5d8a7a` ("Binding Corporate Rules Governance," a GDPR international-transfer mechanism, unrelated to rate-limiting).
+**Rubric — a good answer must:**
+- State plainly that the graph does not model an API rate-limiting/throttling Capability, so no Control-blocking verdict can be computed — not invent one that sounds plausible.
+- May separately note that "processes health data" engages GDPR's special-category-data territory (Art. 9) and real Capabilities like `cap_data_encryption_0e50d3` are worth checking instead, but must keep that clearly separate from the (unanswerable) rate-limiting question.
+
+### H10 — "Is my service, `checkout-api`, currently compliant?" (rubric) — **schema gap, not a mechanism gap**
+No Cypher query can answer this: `ps-domain-concepts.md`'s 8 node labels (`Regulation`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control`) contain nothing representing a deployed service, application, or system. There is no edge anywhere linking code to a `Capability`.
+**Rubric — a good answer must:** state directly that the graph has no representation of "your service" to check, and that this isn't a question-answering limitation but a missing concept in the model — not fabricate a status by guessing which Capabilities `checkout-api` might touch. **Follow-up for the model, not the mechanism:** if this question needs to become answerable, the domain model needs a `Service`/`System` concept with an edge into `Capability` — that's a modeling change, out of scope for any query mechanism built on the graph as it stands today.
+
+### H11 — "If an attacker exploited a missing MFA control today, which regulatory obligations across CRA/NIS2/GDPR would we be out of compliance with?" (rubric)
+```cypher
+MATCH (reg:Regulation)-[:DEFINES]->(:Role)-[:HAS]->(o:Obligation)-[:REQUIRES]->(c:Capability {id:"cap_access_control_authentication_151816"})
+RETURN DISTINCT reg.id, o.id, o.text ORDER BY reg.id
+```
+**Golden (confirmed live):** 7 obligations across all three regulations converge on `cap_access_control_authentication_151816` — CRA's `obl_protect_against_unauthorised_access_ef908f`; GDPR's `obl_ensure_confidentiality_integrity_availability_and_resilience_of_p_888591` (Controller) and `..._408068` (Processor); NIS2's `obl_maintain_human_resources_security_access_control_and_asset_m_644c45`/`..._40eba8` (Essential/Important entity) and, notably, `obl_deploy_multi_factor_authentication_and_secured_communication_138a1f`/`..._c2a8ea` — NIS2 names MFA explicitly.
+**Rubric — a good answer must:**
+- First perform the NL→Capability mapping ("MFA" → `cap_access_control_authentication_151816`) explicitly.
+- Walk the chain **backward** (Capability←Obligation←Role←Regulation) rather than forward, and name the real 7-obligation set above — not just "GDPR and NIS2 in general."
+- Note the Capability is currently governed by an `approved` Policy with an `implemented` Control (`Access Control & MFA Enforcement Audit`, due `2026-08-25`) — so the question is hypothetical against *today's* real evidence, and a good answer says so rather than implying an existing gap.
+
+### H12 — "Across our whole Control set, where are we most exposed — what would an auditor flag first?" (rubric) — genuinely open/global
+No entity to anchor on; requires synthesizing every gap signal already computed elsewhere in this document.
+**Rubric — a good answer must** cite concrete, real signals rather than a generic risk narrative: the 55-of-68 ungoverned Capabilities (H2), the 1 `planned` (not-yet-implemented) Control (`Automated Vulnerability Patch SLA Check`), the 1 overdue Control (`Quarterly Incident Triage SLA Review`, overdue since `2026-07-20`), and the 2 non-`approved` Policies whose Capabilities have zero implemented Controls underneath (M11's 4-capability set) — and should rank these rather than listing them flatly, since "an auditor would flag first" implies prioritization, not enumeration.
+
+### H13 — "Give me a one-paragraph summary of our overall compliance posture I can bring to the board." (rubric) — the flagship global question
+Same underlying signals as H12, framed as an executive narrative instead of a punch list — this is the question shape `q-approach2.md`'s router design exists to handle, deliberately unanchored (no Regulation, Capability, or Policy named).
+**Rubric — a good answer must:**
+- Ground every claim in a real number: 68 Capabilities total, 13 governed / 55 ungoverned; 4 Policies (2 `approved`, 1 `draft`, 1 `deprecated`); 6 Controls (4 `implemented`, 1 `planned`, 1 `deprecated`); 1 Control currently overdue for review.
+- Explicitly flag the `deprecated`/`draft`/`planned` signals as *not current evidence* rather than smoothing everything into a uniformly reassuring narrative — this is the same honesty discipline `is_current_evidence` enforces structurally in `query_mechanism_v1.py`, now required of prose instead of a boolean column.
+- Not claim an overall compliance "score" the graph doesn't actually compute — describe posture, don't fabricate a metric.
+
+### H14 — "What should my team prioritize this quarter to move the needle on compliance?" (rubric)
+**Rubric — a good answer must** turn H12/H13's signals into specific, real, actionable items rather than generic advice — e.g.: finish the `planned` Vulnerability Patch SLA Check (`ctrl_std_pol_incident_vulnerability_response_policy_9de859_v2_automated`); review the overdue Incident Triage SLA control; move `pol_clinical_data_integrity_policy_e1a539` from `draft` to `approved` (unblocks its 2 governed Capabilities); decide the fate of `pol_legacy_asset_personnel_security_policy_7ed6c2` (`deprecated`, but still the sole governor of 2 Capabilities with zero implemented Controls — an orphaned-looking risk, not a resolved one). Generic answers ("improve security posture," "do more audits") should be graded as failing, regardless of tone.
+
+### H15 — "How long, on average, does it take a Standard to go from draft to implemented in our organization?" (rubric) — **schema gap, not a mechanism gap**
+`Standard` (and `Policy`, `Control`) carry only a current `implementation_status` enum value — no timestamped history of prior status values, per `ps-domain-concepts.md`'s property tables. There is no way to compute a duration between two states that were never recorded.
+**Rubric — a good answer must:** state that this isn't tracked and therefore can't be computed from the current graph, and ideally name what would need to change (a status-transition log, or timestamped edges/events per status change) — not fabricate a plausible-sounding average. Same category of finding as H10: a missing concept in the domain model, not a gap in query sophistication.

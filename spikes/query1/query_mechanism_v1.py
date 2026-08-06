@@ -286,6 +286,70 @@ def _h_h7(m, resolver):
     )
 
 
+def _h_s9(m, resolver):
+    pol_id = resolver.resolve_policy(m.group(1))
+    if not pol_id:
+        raise ValueError(f"unknown policy: {m.group(1)}")
+    return (
+        "MATCH (:Policy {id:$pol_id})-[:SUPPORTED_BY]->(:Standard)-[:IMPLEMENTED_BY]->(ctrl:Control) "
+        "RETURN ctrl.id, ctrl.title, ctrl.implementation_status",
+        {"pol_id": pol_id},
+    )
+
+
+def _h_s10(m, resolver):
+    # Fuzzy title match, same shape as H4 -- no distinct Control-name
+    # resolver table exists (unlike Capability/Policy/Obligation), so this
+    # matches directly in Cypher rather than through EntityResolver.
+    return (
+        "MATCH (ctrl:Control) WHERE toLower(ctrl.title) CONTAINS $needle "
+        "RETURN ctrl.id, ctrl.implementation_status, ctrl.next_review_date",
+        {"needle": m.group(1).strip().lower()},
+    )
+
+
+def _h_overdue_controls(m, resolver):
+    # Shared by M9 ("how many") and M12 ("which ones") -- same underlying
+    # set (see golden-answers.md's M9/M12 note: a mechanism answering both
+    # from independently-written queries risks disagreement). Deprecated
+    # controls are excluded -- retired, not "due" -- same exclusion logic
+    # H7 already applies on the upcoming-review side.
+    return (
+        "MATCH (ctrl:Control) WHERE ctrl.next_review_date < $anchor AND ctrl.implementation_status <> 'deprecated' "
+        "RETURN ctrl.id, ctrl.title, ctrl.next_review_date",
+        {"anchor": FIXTURE_ANCHOR_DATE},
+    )
+
+
+def _h_m10(m, resolver):
+    return (
+        "MATCH (p:Policy) RETURN p.status, count(p) AS n ORDER BY p.status",
+        {},
+    )
+
+
+def _h_m11(m, resolver):
+    return (
+        "MATCH (c:Capability)-[:GOVERNED_BY]->(p:Policy) "
+        "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(:Standard)-[:IMPLEMENTED_BY]->(ctrl:Control) "
+        "WITH c, p, collect(DISTINCT ctrl.implementation_status) AS statuses "
+        "WHERE NOT 'implemented' IN statuses "
+        "RETURN c.id, c.name, p.id, p.status ORDER BY c.id",
+        {},
+    )
+
+
+def _h_m13(m, resolver):
+    pol_id = resolver.resolve_policy(m.group(1))
+    if not pol_id:
+        raise ValueError(f"unknown policy: {m.group(1)}")
+    return (
+        "MATCH (:Policy {id:$pol_id})-[:SUPPORTED_BY]->(s:Standard {implementation_status:'draft'}) "
+        "RETURN s.id, s.title",
+        {"pol_id": pol_id},
+    )
+
+
 TEMPLATES: list[tuple[str, re.Pattern, Handler]] = [
     ("H4", re.compile(r"audit evidence.*log retention control", re.I), _h_h4),
     ("H7", re.compile(r"controls.*due for review.*next 30 days", re.I), _h_h7),
@@ -296,7 +360,16 @@ TEMPLATES: list[tuple[str, re.Pattern, Handler]] = [
     ("M4", re.compile(r"obligations does gdpr place on data processors vs\.? data controllers", re.I), _h_m4),
     ("M2", re.compile(r"trace the full path from (\w+) art\.?\s*([\d.]+)", re.I), _h_m2),
     ("M1", re.compile(r"capabilities.*required by more than one obligation", re.I), _h_m1),
+    # M13 must be tried before S8 -- "standards under the X policy ... draft"
+    # would otherwise match S8's more general pattern first and return the
+    # unfiltered list instead of the draft-only one.
+    ("M13", re.compile(r"standards under the ([\w\s&]+?) policy.*draft", re.I), _h_m13),
     ("S8", re.compile(r"standards under the ([\w\s&]+?) policy", re.I), _h_s8),
+    ("S9", re.compile(r"controls exist under the ([\w\s&]+?) policy", re.I), _h_s9),
+    ("S10", re.compile(r"implementation status of the ([\w\s\-]+?) control", re.I), _h_s10),
+    ("M11", re.compile(r"capabilities.*governing policy but zero implemented controls", re.I), _h_m11),
+    ("M10", re.compile(r"percentage of our policies.*draft or deprecated", re.I), _h_m10),
+    ("M9M12", re.compile(r"controls?.*overdue for review", re.I), _h_overdue_controls),
     ("S7", re.compile(r"polic(?:y|ies) governs? the '([^']+)' capability", re.I), _h_s7),
     ("S6", re.compile(r"requirement does the '([^']+)' obligation satisfy", re.I), _h_s6),
     ("S5", re.compile(r"when does (\w+) become effective.*status", re.I), _h_s5),

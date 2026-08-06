@@ -58,6 +58,31 @@ CASES = [
        "Automated Encryption-at-Rest Compliance Check", "implemented", "2026-08-15"),
       ("ctrl_std_pol_data_protection_security_policy_8e4c18_v2_automated",
        "Access Control & MFA Enforcement Audit", "implemented", "2026-08-25")}),
+    ("S9", "Which Controls exist under the Incident & Vulnerability Response Policy, and what are their statuses?",
+     {("ctrl_std_pol_incident_vulnerability_response_policy_9de859_v1_manual",
+       "Quarterly Incident Triage SLA Review", "implemented"),
+      ("ctrl_std_pol_incident_vulnerability_response_policy_9de859_v2_automated",
+       "Automated Vulnerability Patch SLA Check", "planned")}),
+    ("S10", "What's the implementation status of the Encryption-at-Rest control?",
+     {("ctrl_std_pol_data_protection_security_policy_8e4c18_v1_automated", "implemented", "2026-08-15")}),
+    ("M9", "How many Controls are currently overdue for review?",
+     None),  # checked by count below (1)
+    ("M10", "What percentage of our Policies are still draft or deprecated rather than approved?",
+     {("approved", 2), ("draft", 1), ("deprecated", 1)}),
+    ("M11", "Which Capabilities have a governing Policy but zero implemented Controls underneath?",
+     {("cap_asset_personnel_security_management_e68e9a", "Asset & Personnel Security Management",
+       "pol_legacy_asset_personnel_security_policy_7ed6c2", "deprecated"),
+      ("cap_data_protection_impact_assessment_a51acb", "Data Protection Impact Assessment",
+       "pol_clinical_data_integrity_policy_e1a539", "draft"),
+      ("cap_data_protection_officer_management_ec3cd2", "Data Protection Officer Management",
+       "pol_legacy_asset_personnel_security_policy_7ed6c2", "deprecated"),
+      ("cap_clinical_trial_data_integrity_f28d55", "Clinical Trial Data Integrity",
+       "pol_clinical_data_integrity_policy_e1a539", "draft")}),
+    ("M12", "Which Controls are overdue for review right now?",
+     {("ctrl_std_pol_incident_vulnerability_response_policy_9de859_v1_manual",
+       "Quarterly Incident Triage SLA Review", "2026-07-20")}),
+    ("M13", "Which Standards under the Data Protection & Security Policy are still in draft?",
+     set()),  # golden is the empty set, deliberately -- see golden-answers.md
 ]
 
 # Rubric-graded, no template should exist for these -- NO_TEMPLATE_MATCH is
@@ -69,6 +94,15 @@ OUT_OF_SCOPE = [
     ("H3", "Is this new API endpoint, which logs access but doesn't encrypt data at rest, compliant with GDPR Article 32?"),
     ("H5", "NIS2 was updated - which of our Policies are now potentially out of date?"),
     ("H6", "If we adopt a 'Software Bill of Materials' capability, which existing CRA/NIS2 obligations would it newly satisfy?"),
+    ("M14", "Which of our draft Policies are blocking GDPR readiness?"),
+    ("H8", "I'm building a new microservice that stores customer PII in a database - what compliance capabilities should I be thinking about?"),
+    ("H9", "Our security scanner flagged missing rate-limiting on an endpoint that processes health data - does that block a GDPR-relevant control?"),
+    ("H10", "Is my service, checkout-api, currently compliant?"),
+    ("H11", "If an attacker exploited a missing MFA control today, which regulatory obligations across CRA/NIS2/GDPR would we be out of compliance with?"),
+    ("H12", "Across our whole Control set, where are we most exposed - what would an auditor flag first?"),
+    ("H13", "Give me a one-paragraph summary of our overall compliance posture I can bring to the board."),
+    ("H14", "What should my team prioritize this quarter to move the needle on compliance?"),
+    ("H15", "How long, on average, does it take a Standard to go from draft to implemented in our organization?"),
 ]
 
 
@@ -109,6 +143,9 @@ def main() -> int:
         elif qid == "H2":
             ok = len(result.rows) == 55
             note = f"({len(result.rows)} ungoverned, expected 55)"
+        elif qid == "M9":
+            ok = len(result.rows) == 1
+            note = f"({len(result.rows)} overdue controls, expected 1)"
         else:
             got = project(result.rows, result.columns, result.columns) if expected else set()
             got_full = {tuple(row) for row in result.rows}

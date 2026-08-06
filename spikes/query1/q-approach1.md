@@ -58,6 +58,24 @@ fixed template can't do — this is the honest boundary of this approach, not
 a bug):
 M3, M5, H1, H3, H5, H6.
 
+**Re-scoped after `example-questions.md`'s second pass (2026-08-06).**
+S9–S15/M9–M14/H8–H15 added Software Engineer / Security Engineer /
+Engineering Manager questions, deliberately including ones with no named
+entity to anchor on. 7 of the 16 turned out to be just as templatable as
+the original 17 — deterministic aggregates/filters don't actually require
+an entity anchor, they just need the right Cypher shape (M9–M13's
+overdue-control counts, coverage-gap set, draft-standard filter; S9/S10's
+Policy→Control chain and fuzzy Control-title lookup). Newly in scope: **S9,
+S10, M9, M10, M11, M12, M13** (7 more templates, `M9M12` sharing one
+handler since they're the same underlying query in two response shapes —
+see `golden-answers.md`'s note on why that sharing matters, not just
+convenient). Newly out of scope, confirmed via honest `NO_TEMPLATE_MATCH`:
+**M14, H8, H9, H10, H11, H12, H13, H14, H15** — 9 more, including two that
+aren't a mechanism gap at all: H10 and H15 ask about data the graph
+structurally doesn't have (a Service node, a status-transition history),
+not data a smarter query mechanism could find. In-scope total: **24**.
+Out-of-scope total: **15**.
+
 ## Known catalog wrinkle surfaced while building this
 
 H2's question text says "capabilities **required by CRA** [that] have no
@@ -83,10 +101,21 @@ tier summary. Success bar: 100% pass on in-scope questions, and a clean
 - `query_mechanism_v1.py` — entity resolver, template library, router.
 - `test_query_mechanism_v1.py` — golden-value test harness and report.
 
-## Result: 23/23 (`python3 test_query_mechanism_v1.py`)
+## Result: 39/39 (`python3 test_query_mechanism_v1.py`)
 
-All 17 in-scope questions pass against golden, all 6 out-of-scope questions
-correctly refuse with `NO_TEMPLATE_MATCH` rather than guessing.
+Originally 23/23 (17 in-scope + 6 out-of-scope). Re-run against the
+augmented catalog after `example-questions.md`'s second pass added 16
+Software Engineer / Security Engineer / Engineering Manager questions:
+**39/39** — 24 in-scope questions pass against golden (7 new templates
+added, see "Re-scoped" above), 15 out-of-scope questions correctly refuse.
+The ratio holding up (roughly 60% templatable before and after) is itself
+informative: adding audiences who ask more **open** (unanchored) questions
+didn't collapse the deterministic-template floor, because about half of
+their questions turned out to be anchor-free but still deterministic
+(M9–M13) rather than genuinely open-ended. Only the questions that need
+NL-to-Capability mapping, backward multi-hop reasoning, or whole-graph
+synthesis (M14, H8, H9, H11–H14) — plus the two genuine schema gaps (H10,
+H15) — actually need something past a template.
 
 Two things fell out of actually building and testing this, beyond just
 "does the router work":
@@ -120,10 +149,10 @@ Two things fell out of actually building and testing this, beyond just
 
 ## Next
 
-This establishes the floor: 17 of 23 questions are fully solved by
+This establishes the floor: 24 of 39 questions are fully solved by
 deterministic templates plus a governance-aware trust flag, no LLM
-required. The remaining 6 (M3, M5, H1, H3, H5, H6) need either an
-LLM-in-the-loop mechanism or a RAG-style retrieval step for the
-NL-to-Capability mapping and semantic-similarity reasoning they require —
-that's approach 2, and it's now scoped precisely by what's left rather than
-by the whole catalog.
+required. The remaining 15 (M3, M5, M14, H1, H3, H5, H6, H8, H9, H11, H12,
+H13, H14 — needing NL-to-Capability mapping, semantic similarity, backward
+multi-hop reasoning, or whole-graph synthesis — plus H10 and H15, which are
+schema gaps no query mechanism can close) are what `q-approach2.md` is
+scoped against, precisely by what's left rather than by the whole catalog.

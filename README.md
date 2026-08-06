@@ -130,6 +130,9 @@ The system combines semantic search on text descriptions with graph pattern matc
 | **Risk Managers** | Get compliance scores with drill-down by obligation, policy, standard, and control |
 | **DevOps/Engineering** | Query compliance status of solutions; integrate automated checks in CI/CD pipelines |
 | **Auditors** | Review governance decisions and approval logs; trace obligations to controls with full provenance |
+| **Software Engineers** | Check what a specific Standard/Control requires before shipping; ideally check "is my service compliant" — not yet answerable, see [`spikes/query1`](./spikes/query1/example-questions.md)'s H10 |
+| **Security Engineers** | Find coverage gaps below the Policy level (governed capabilities with no working Control yet); reason about blast radius if a specific control fails |
+| **Engineering Managers** | Get whole-team/whole-org posture summaries and prioritized punch lists — open-ended synthesis questions, not single-entity lookups |
 
 ---
 
