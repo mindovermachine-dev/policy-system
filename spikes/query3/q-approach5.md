@@ -474,3 +474,115 @@ deterministic facts rather than fresh exploration** (H13, revised per 9.5).
 matches this document's own §2 framing exactly: not "make the LLM better,"
 but "shrink what's actually left for it to do, and be honest about the one
 place a live test showed shrinking it further didn't help."
+
+## 10. Generalization stress test: does this handle vague questions it wasn't tuned on?
+
+§9's results are real but earned entirely on the 11 questions `clarifier.py`
+was built and tuned against — every matcher in it is a regex written
+directly from those 11 literal phrasings. That's exactly the overfitting
+risk worth checking before trusting §9.6's numbers as a general claim
+rather than a fixed-catalog one. `experiment_generalization_stress_test.py`
+runs 20 new questions, none from `golden-answers.md`, built to probe this
+directly: close paraphrases of the 11 known shapes (does the matcher
+generalize at all?), genuinely novel global questions with no shape built
+for them (does the router degrade safely?), and phrasings chosen to risk a
+false-positive match (a confident wrong answer is worse than an honest
+fallthrough). Each question's expected outcome was written down *before*
+running the script, so a mismatch is a real finding, not a rationalized one.
+
+### 10.1 Result: overfitting confirmed, directly
+
+```
+v2-agent (would need LLM):  19 / 20
+v3-clarify:                  1 / 20
+```
+
+Only **N7** ("Where are we most exposed right now?") matched — and
+correctly: it contains the literal substring `"most exposed"` the H12–H14
+matcher was keyed on, and the resulting axis-pick clarification is exactly
+right for that question despite it being far shorter than H12's original
+phrasing. Every other paraphrase — including direct rewordings of M14
+("which policies still sitting in draft status could delay our GDPR
+readiness" — same question as M14, different verb structure), H6, H3, M5,
+H8, H12, H13, H14, H10, H15, and even query2's own already-shipped H5
+catalog template ("might be stale given how regulations have shifted
+recently" vs. its regex's `"potentially out of date"`) — fell through
+entirely unmatched. **Zero false positives** — nothing in `clarifier.py` or
+`query_mechanism_v3.py`'s existing `CATALOG_TEMPLATES` misfired with a wrong
+confident answer on any of the 20, including the ones deliberately worded
+to look close to a trigger phrase without being the same shape (N2, N19).
+The matcher's failure mode is safe (fall through) rather than dangerous
+(silently wrong) — but it is a real, near-total failure to generalize
+beyond the literal training phrasing, not a partial one.
+
+### 10.2 The bigger problem this surfaced: the fallback itself isn't reliable either
+
+§9's design leans on stage 4 (`v2`'s unmodified freehand agent) as "the
+fallback of last resort — never worse than what query1 already has." Four
+of the 19 fallthroughs were spot-checked live
+(`qwen3-coder-next:q4_K_M`, single run, real graph) to see whether "falls
+through safely" also means "still gets a usable answer":
+
+| # | Question | Result |
+|---|---|---|
+| N1 | "Which policies still sitting in draft status could delay our GDPR readiness?" (= M14, reworded) | **Failed to converge** — no answer after 8 turns, 19.0s |
+| N14 | "Can you give our compliance program a maturity score out of 10?" | Good — explicitly refuses to fabricate a score, correctly states no scoring mechanism exists, offers real deterministic alternatives |
+| N15 | "What obligations do we have specifically around AI systems?" | **Failed to converge** — no answer after 8 turns, 10.6s |
+| N18 | "What's standing between us and full NIS2 compliance?" | **Failed to converge** — no answer after 8 turns, 13.0s |
+
+**3 of 4 spot-checked fallthroughs failed to converge at all** — not a wrong
+answer, no answer. This is the same non-convergence class `union-of-n.md`
+already documented for this model on H1, now confirmed on three previously
+untested questions, including N1 — a *plain rewording of M14*, a question
+this design answers deterministically in 0.002s when phrased the way
+`golden-answers.md` phrases it, and that the freehand agent cannot answer
+at all when phrased the way an actual user just as plausibly would.
+
+### 10.3 What this means for §9's claims
+
+§9.6 said 7 of `query2`'s 11 LLM-routed questions "now resolve with zero LLM
+calls at any point." That statement is **correct as measured, and
+narrower than it reads** — it's true for those exact 11 questions, not for
+"hard global questions" as a class. This stress test's honest bottom line:
+
+- The deterministic gains in §9 (M3, M14, H6, H3, H8, H12, H14) are real,
+  live-verified, and worth keeping — nothing here undoes them.
+- They do not yet generalize past close variants of their exact tuning
+  phrasing. A user who asks the *same underlying question* about M14 in
+  different words gets routed to a fallback that, in this sample, fails to
+  converge 75% of the time — a materially worse outcome than either the
+  deterministic path or, arguably, than not building this stage at all for
+  that specific phrasing (since the fallback was already there in `query2`
+  and carries the same risk on its own).
+- The router's own safety property held (no false positives), which matters
+  — but "fails safe" isn't the same claim as "handles the question," and
+  this document shouldn't let the first stand in for the second.
+
+### 10.4 Fixing this is a real design fork, not a small patch
+
+Three directions, not adopted here, presented for a decision rather than
+picked unilaterally:
+
+1. **Broaden the regexes** (more keyword variants, looser anchoring). Cheap,
+   but has a ceiling — N1 through N20 alone suggest the space of real
+   phrasings is larger than any hand-enumerated pattern set will cover, and
+   every broadening pass risks trading false negatives (safe) for false
+   positives (dangerous) the more permissive it gets.
+2. **A lightweight structural/keyword classifier** scored against each
+   shape's known vocabulary (e.g. "draft," "blocking," "readiness" as a
+   weighted set for M14, not an exact phrase) rather than a single regex —
+   more permissive than 1, still not a free LLM call, but needs its own
+   false-positive testing before trusting it, per §7 critique point 2's
+   standing requirement that stage 3 stay structural.
+3. **Accept the narrower scope and say so** — ship this design explicitly
+   as "improves the 11 questions this graph's own golden catalog names, not
+   a general hard-question detector," and separately invest in making
+   stage 4's freehand fallback itself converge more reliably (e.g. the
+   union-of-n resampling `query_mechanism_v2` already has, currently run at
+   `union_runs=1` in these experiments to keep them fast) — since §10.2
+   shows that's now the more consequential weak point for anything outside
+   the 11.
+
+Not resolved in this document — the right call depends on how much
+engineering investment the next phase of `query3` is meant to get, which is
+the user's call, not an inference to make here.
