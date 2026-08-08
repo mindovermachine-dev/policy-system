@@ -1,13 +1,15 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
 # Spike: Skill Transfer
 
-**Status:** Dev set complete 2026-08-08 — **AD-6 holds on the dev set:
-54/54 correct-or-correctly-refused (100%)** across fresh headless Copilot CLI
-sessions (kimi-k3), 0 Cypher-shape errors, 0 fabricated-provenance fallbacks,
-4/4 honest refusals under missing data. 50 answers matched golden; the other
-4 were correct refusals against a golden/dataset mismatch (penalty provisions
-never extracted into the graph — dataset backlog item, FINDING-001 in
-[RUNBOOK.md](./RUNBOOK.md)). Held-out set still pending.
+**Status:** Complete 2026-08-08. Dev set: **AD-6 held — 54/54 (100%)**
+correct-or-correctly-refused. Held-out (blind) set, single frozen run:
+**44/54 (81.5%)** — 37 correct, 5 correct FINDING-001 refusals, 2 agent-right/
+golden-defective — **below the 100% bar, so per the stated success criteria AD-6
+needs revision.** Zero Cypher-shape errors, zero fabricated-provenance fallbacks,
+and 6/6 honest refusals across both sets — the behavioral criteria held everywhere;
+the misses cluster in boundary/exclusion definitions, blast-radius over-claiming,
+and counting granularity. Full per-question table, failure-pattern analysis, and
+golden-defect findings (FINDING-003) in [RUNBOOK.md](./RUNBOOK.md).
 
 ---
 
