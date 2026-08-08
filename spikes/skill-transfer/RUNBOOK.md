@@ -171,7 +171,125 @@ being a letter or end-of-string).
 | Date | Skill version | Set | Correct | Correct refusal | Verdict |
 |---|---|---|---|---|---|
 | 2026-08-08 | v1 | dev | 50 | 4 | **AD-6 holds (100%)**; 0 Cypher-shape errors; 0 fabricated provenance |
-| _pending_ | v1 | held-out | — | — | penalty-class questions expected to resolve as correct refusals |
+| 2026-08-08 | v1 (frozen) | held-out | 37 + 2 (agent right vs defective golden) | 5 | **AD-6 needs revision — 44/54 (81.5%) vs the 100% bar**; 0 Cypher-shape errors; 0 fabricated provenance |
+
+### blind-v1 (2026-08-08, skill v1 frozen, kimi-k3, single run)
+
+**Verdict: AD-6 NEEDS REVISION — 44/54 (81.5%) correct-or-correctly-refused against the
+100% threshold.** The run met every behavioral criterion but missed the accuracy bar.
+
+| Category | Result |
+|---|---|
+| Correct vs golden (value/set/rubric) | 37/54 |
+| Agent verifiably correct where golden was defective (recorded, not re-graded) | 2/54 (RM-M2, SA-M4) |
+| Correct refusal — FINDING-001 dataset gap | 5/54 (LC-E3, LC-M3, LC-M4, RM-E3, RM-E4) |
+| **Correct-or-correctly-refused (the spike bar)** | **44/54 — 81.5%** |
+| Cypher-shape errors (wrong property/direction/ID pattern) | **0 across all 54 runs** |
+| Fabricated-provenance / file-grep fallback | **0** (CO-H4 hit 2 `Permission denied` on a `cp`/`awk` of its own temp output and recovered via valid redis-cli queries; its 2 greps touched only that temp file, not project files) |
+| Honest refusal under missing data | 6/6 (5 FINDING-001 + EM-H4's sanctioned "not tracked") |
+| Skill not loaded | 0 — `skill(ps-domain)` visible in all 54 transcripts |
+
+#### Per-question results
+
+Legend: ✅ pass · 🟡 correct refusal (FINDING-001) · 🔷 agent right, golden defective
+(recorded as pass-adjacent, **not** re-graded per one-run discipline) · ❌ fail
+
+| ID | Result | Notes |
+|---|---|---|
+| LC-E3 | 🟡 | CRA Art. 64(2) fine tier not in graph; 12-query search, clean refusal |
+| LC-E4 | ✅ | 72h / without undue delay / exception, sourced from art_33.1 |
+| LC-M3 | 🟡 | GDPR Art. 83 never ingested (graph ends at Art. 49(6)); clean refusal |
+| LC-M4 | 🟡 | **Extends FINDING-001**: Art. 71 phasing dates absent — gap is not only penalty chapters but final provisions; clean refusal |
+| LC-H3 | ✅ | All three Art. 37(1) triggers; NIS2-creates-no-DPO-duty stated; nuance kept |
+| LC-H4 | ✅ | Exact 4-obligation steward set from Art. 24; no blanket-exemption claim |
+| CO-E2 | ✅ | 2027-12-11, active, not-yet-effective nuance correct |
+| CO-E4 | ✅ | Art. 13(9): ≥10 years or remainder of support period, whichever longer |
+| CO-M2 | ❌ | 3@0.75 + 12@0.80 = 15 obligations; verified golden is 24 (3 + 21) — missed 9 of the 0.80 band. Threshold stated, IDs and provenance right |
+| CO-M4 | ❌ | Overlap mapping fully correct at capability level, but omitted the rubric-required non-overlap enumeration (NIS2 supply-chain/hygiene; CRA minimisation/SBOM) |
+| CO-H3 | ✅ | 24/24/72 side-by-side with correct conclusion; minor note: "comfortably inside" understates GDPR 33(1)'s "without undue delay" bite |
+| CO-H4 | ✅ | Exhaustive 289-duty procedural inventory, cross-checked counts, 6 hybrids excluded |
+| SA-E3 | ✅ | No — SBOM cap required only by CRA; both paths verified zero rows |
+| SA-E4 | ✅ | `cap_data_encryption_0e50d3`, full chain cited |
+| SA-M2 | ✅ | {`cap_security_logging_c4d9e2`} via HELVEX-SOP × CRA, superseded-SOP nuance |
+| SA-M4 | 🔷 | Agent: 4 of 6. Verified: `cap_availability_resilience_7caf2b` (32.1b) has no policy — agent correct; golden's 3-of-6 under-counts. **FINDING-003** |
+| SA-H3 | ✅ | Stated non-converged reality first, corrected the question's NIS2 premise, gains/risks argued, no invented obligations |
+| SA-H4 | ✅ | All three named CRA-only attachment points (SBOM, logging, SDL) plus 16 more; net-new conclusion explicit |
+| AU-E2 | ✅ | Opaque `evidence://` pointer returned without fabricating pass/fail — the exact demanded behavior |
+| AU-E4 | ✅ | Art. 35(7)(a)–(d) complete |
+| AU-M3 | ✅ | Exact 2-control set, all exclusions honored |
+| AU-M4 | ❌ | Set {33, 37, 38} vs golden {32.4, 37, 38}. Agent applied a stricter staleness definition (incl. overdue reviews), stated openly — definitional boundary, not fabrication |
+| AU-H3 | ✅ | Correct cold trail at governance, live-chain contrast, 55-of-68 systemic context, nothing fabricated |
+| AU-H4 | ❌ | Over-claimed: asserted GDPR/NIS2 duties "weakened" via the shared standard; golden requires CRA-only (+Helvex) undermined, NIS2/GDPR explicitly not via this capability |
+| RM-E3 | 🟡 | **Extends FINDING-001**: Art. 14(5) *definition paragraph* missing while 14(3)-(4) were extracted — new partial-article variant; clean refusal |
+| RM-E4 | 🟡 | CRA Art. 64(4) absent; clean refusal |
+| RM-M2 | 🔷 | Question asks CRA-required ungoverned; agent's 22 verified correct (29 CRA-required total). Golden's 55 is the unfiltered set — **FINDING-003** |
+| RM-M4 | ✅ | Both policies characterized, both soft spots named, compared not just listed |
+| RM-H3 | ✅ | Full Mon-09:00 timeline with concrete T+ dates, GDPR-only trap identified, conditionality kept |
+| RM-H4 | ✅ | 55-of-68 vs 1 overdue presented with real numbers, defended verdict, no fabricated risk score; caught the deprecated control as a second (non-live) overdue item |
+| PM-E2 | ✅ | Exact 3-standard set with statuses |
+| PM-E4 | ✅ | Exact 2-capability set, "stale not absent" caveat kept |
+| PM-M3 | ✅ | DPIA draft-only + Art. 30 ungoverned; no invented records capability |
+| PM-M4 | ✅ | Both Art. 20 duties cited, honest no-policy-mapping answer, no fabricated governance |
+| PM-H3 | ❌ | Lever 1 exact (16 Legacy chains). Lever 2 wrong: pointed at Clinical draft→approved instead of the Incident v2 draft-standard/planned-control chain (verified real: 6 Art. 33 reqs × dual paths) |
+| PM-H4 | ✅ | 2 orphaned capabilities, 16 severed chains, provenance-destruction argument, replace-not-delete conclusion |
+| SWE-E2 | ✅ | Confident correct empty set — the "say none" test passed |
+| SWE-E4 | ✅ | 2026-08-25 with correct control ID |
+| SWE-M3 | ✅ | 32(1)(a)–(d) complete plus Art. 25/30/33/35, calibrated framing, live governance posture |
+| SWE-M4 | ✅ | Secure-by-default + reset + tailor-made exception, sourced to Annex I (2)(b); (2)(c) opt-out nuance added |
+| SWE-H3 | ✅ | Correct refusal on rate-limiting (no such capability), kept Art. 9/32(1)(b) note cleanly separate |
+| SWE-H4 | ✅ | Structurally-unanswerable verdict with what-would-fix-it, no fabricated status |
+| SEC-E3 | ✅ | `planned`, correct chain, not-current-evidence caveat |
+| SEC-E4 | ✅ | Annex I (2)(d) incl. "report on possible unauthorised access"; honest about detection wording |
+| SEC-M2 | ❌ | Included the deprecated control against the golden's explicit exclusion — but flagged it deprecated/moot. Definitional boundary |
+| SEC-M4 | ❌ | Same deprecated-control inclusion in the overdue bucket; due-window set itself correct, caveat present |
+| SEC-H2 | ✅ | All four required signals cited with real numbers, explicitly ranked |
+| SEC-H4 | ❌ | Over-broad blast radius: listed duties verified by the *v2/v3* controls (not failing on Aug 15); golden requires isolating 32(1)(a) as the primary casualty with the CRA side hedged. Note: golden's "dataset does not enumerate the CRA→encryption link" premise is outdated — the edge exists (FINDING-003) |
+| EM-E3 | ❌ | "3 of 57" counts *controls*, not chains; golden: 31 of 57. Numbers right at the wrong granularity |
+| EM-E4 | ✅ | 2 of 4 named correctly |
+| EM-M2 | ✅ | 50% with correct breakdown |
+| EM-M4 | ❌ | Direction right (governance-dominated, single planned control as the sole engineering gap) but the 16/10 split framed differently than golden (Clinical-draft 10 vs incident-v2 10) |
+| EM-H3 | ✅ | All four golden example items plus more, every number grounded; explicitly flagged CRA not-yet-in-force |
+| EM-H4 | ✅ | Golden-sanctioned refusal: no status history, named the fix (transition log/timestamps), no fabricated average |
+
+#### Failure pattern analysis
+
+The 10 failures cluster into three classes:
+
+1. **Boundary/exclusion discipline (4):** AU-M4, SEC-M2, SEC-M4, and partially EM-M4 —
+   the agent applied a defensible but different boundary than the golden (deprecated
+   controls counted as overdue; overdue-review counted as stale). The skill does not
+   pin these definitions; each agent picked its own and stated it openly. Skill v2
+   candidate: pin the canonical definitions ("overdue excludes deprecated," "stale =
+   broken chain, not lapsed review") as named rules.
+2. **Blast-radius over-claiming (2):** AU-H4, SEC-H4 — when asked "what does this
+   failure undermine," the agent widened from the direct capability chain to everything
+   sharing a standard/policy node. The skill's provenance discipline prevents
+   fabrication but does not yet teach *narrowing*: answer the chain that actually
+   routes through the named control, not its siblings.
+3. **Granularity slips (2):** EM-E3 (controls vs chains), CO-M2 (partial 0.80 band) —
+   correct numbers at the wrong unit of counting, or incomplete enumeration of a
+   verified set.
+
+No failure involved fabricated data, Cypher-shape errors, or refusal of an answerable
+question — the dev-set failure classes did not recur.
+
+**FINDING-003 (blind-set golden defects — recorded, NOT re-graded):**
+Four blind golden answers conflict with the graph or with each other, verified by
+read-only queries during grading: RM-M2's golden is the unfiltered 55-capability set
+while the question is explicitly CRA-scoped (verified: 29 CRA-required, 22 ungoverned);
+SA-M4's golden under-counts (verified: 4 Art. 32 sub-clause capabilities lack an
+approved policy, incl. `cap_availability_resilience_7caf2b` on 32.1b); SEC-H4's
+"dataset does not enumerate the CRA→encryption link" premise is outdated (the
+`REQUIRES` edge exists); AU-M4's staleness definition is inconsistent with EM-E3's
+(overdue-review chains count as stale in one, not the other). These stayed as graded —
+the blind set is frozen — but a catalog-maintenance pass should fix them before the
+next skill version is evaluated.
+
+**FINDING-001 extension (dataset gap, same backlog item):**
+The held-out set confirmed the penalty-provision gap (LC-E3, LC-M3, RM-E4) and
+revealed two new variants: final-provisions articles (LC-M4, CRA Art. 71 phasing) and
+*definition paragraphs within otherwise-extracted articles* (RM-E3, CRA Art. 14(5)).
+Extraction should cover whole articles, not operative paragraphs only.
 
 ## Final Validation
 
