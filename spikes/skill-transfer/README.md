@@ -1,7 +1,13 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
 # Spike: Skill Transfer
 
-**Status:** Planned (question catalog ready in `docs/test-data/`; skill not yet written)
+**Status:** Dev set complete 2026-08-08 — **AD-6 holds on the dev set:
+54/54 correct-or-correctly-refused (100%)** across fresh headless Copilot CLI
+sessions (kimi-k3), 0 Cypher-shape errors, 0 fabricated-provenance fallbacks,
+4/4 honest refusals under missing data. 50 answers matched golden; the other
+4 were correct refusals against a golden/dataset mismatch (penalty provisions
+never extracted into the graph — dataset backlog item, FINDING-001 in
+[RUNBOOK.md](./RUNBOOK.md)). Held-out set still pending.
 
 ---
 
@@ -51,8 +57,8 @@ From `query1/q-approach2.md`: moving the graph schema into the system prompt eli
 
 | Criterion | Threshold |
 |---|---|
-| **Development set correctness** | 50% of development questions answered correctly or correctly refused (matching golden answers/rubrics) |
-| **Held-out set correctness** | 50% of held-out questions answered correctly or correctly refused — same threshold as dev, since both are blind-generated |
+| **Development set correctness** | 100% of development questions answered correctly or correctly refused due to lack of information (matching golden answers/rubrics) |
+| **Held-out set correctness** | 100% of held-out questions answered correctly or correctly refused due to lack of information — same threshold as dev, since both are blind-generated |
 | **No Cypher-shape errors** | Zero wrong-property, wrong-ID-pattern, or reversed-relationship failures across all runs |
 | **Provenance citation** | Every answer cites the source chain (Regulation → article → Obligation → ...) |
 | **Honest refusal** | Questions with no matching data result in "no such capability exists," not fabricated answers |
