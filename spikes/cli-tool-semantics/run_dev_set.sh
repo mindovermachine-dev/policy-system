@@ -7,21 +7,36 @@
 # saving one transcript per question. See README.md for the procedure this
 # implements.
 #
-# Support: --smoke runs only the small SMOKE_IDS subset, into a separate
-# output dir, to validate the harness plumbing before committing to all 54.
+# Usage: run_dev_set.sh [--smoke | VERSION]
+#   --smoke   runs only the small SMOKE_IDS subset, into runs/<VERSION>-smoke,
+#             to validate the harness plumbing before committing to all 54.
+#   VERSION   output subdirectory name under runs/ (default: dev-v1).
+#             e.g. `run_dev_set.sh dev-v2b` writes to runs/dev-v2b/.
+#
+# --disable-builtin-mcps (added for dev-v2b, design change 4 in
+# DEV-V2B-KICKOFF.md): dev-v1's EM-M3 escaped the CLI/graph surface via the
+# built-in github-mcp-server's web-search tool, which shell-only allow-tool
+# scoping does not cover -- that tool class was never denied, just never
+# explicitly allowed, and non-interactive mode let it through anyway. This
+# flag removes that tool from the session entirely rather than relying on a
+# denial rule the agent could route around.
 
 set -u
 cd "$(dirname "$0")/../.."   # repo root — required so the CLI auto-loads .github/skills/ps-domain
 
 SMOKE=0
+VERSION="dev-v1"
 if [[ "${1:-}" == "--smoke" ]]; then
   SMOKE=1
+  VERSION="${2:-dev-v1}"
+elif [[ -n "${1:-}" ]]; then
+  VERSION="$1"
 fi
 
 if (( SMOKE )); then
-  OUT_DIR="spikes/cli-tool-semantics/runs/dev-v1-smoke"
+  OUT_DIR="spikes/cli-tool-semantics/runs/${VERSION}-smoke"
 else
-  OUT_DIR="spikes/cli-tool-semantics/runs/dev-v1"
+  OUT_DIR="spikes/cli-tool-semantics/runs/${VERSION}"
 fi
 mkdir -p "$OUT_DIR"
 
@@ -109,6 +124,7 @@ for ID in "${ORDERED_IDS[@]}"; do
   copilot -p "$HARNESS_PREFIX ${QUESTIONS[$ID]}" \
     --model kimi-k3 \
     --allow-tool "shell(spikes/cli-tool-semantics/ps.py:*)" \
+    --disable-builtin-mcps \
     > "$LOG" 2>&1
   echo "DONE $ID (exit $?)"
 done

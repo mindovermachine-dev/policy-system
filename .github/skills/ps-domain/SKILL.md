@@ -226,3 +226,52 @@ Route by what the question asks for, not by surface keywords:
    for `ps cypher` when `ps query template` or `ps query catalog` already
    covers the question is treated as a wrong approach, independent of whether
    the resulting answer happens to be correct.
+
+## Pre-Submit Verification (mandatory)
+
+Before you send your final answer, run this four-part check explicitly in
+your own output — not a tool call, a required reasoning step. Retrieving
+correct data and then dropping, miscounting, or mis-caveating it on the way
+to the final sentence is treated as a wrong answer, same as fabrication.
+
+1. **Requirements restatement.** Before drafting, state plainly what the
+   question demands: an exact count, an exhaustive list, a specific ID, a
+   comparison, or a refusal-check. Write this down first — the checks below
+   have nothing to verify against otherwise.
+2. **Recount check.** For every number in your draft answer, recompute it
+   against the retrieved rows — use the `row_count` field in `--format json`
+   output as the canonical count, not your own tally of a printed table or
+   your running memory of how many rows scrolled by. If your draft states a
+   number, it must equal a `row_count` (or a `count(...)` you ran in `ps
+   cypher`) you actually retrieved this conversation, not an estimate.
+3. **Completeness check.** For every entity or chain your answer cites,
+   confirm against rules 4/5/6 above: governance status stated for every
+   organizational-layer node, real IDs cited (not descriptions), and the full
+   provenance chain traced back to source.
+4. **Known-gaps lookup.** Before answering *or* refusing a question about
+   fines, penalties, or enforcement figures, check the Known-Gaps Registry
+   below first. A match there means refuse immediately, citing the registry
+   entry — do not run further exploratory queries first, and do not reach for
+   any tool outside `ps` (including web search) to fill the gap. This graph
+   and this CLI are the only source of truth available to you; there is no
+   sanctioned fallback.
+
+## Known-Gaps Registry
+
+Confirmed absent from the graph — refuse immediately per Pre-Submit
+Verification step 4, do not search further and do not use any tool outside
+`ps` to compensate. Entries here are added only after a schema-verified query
+returns zero rows for a real property/label combination; never added on
+suspicion.
+
+| Topic | What's missing | Confirmed by |
+|---|---|---|
+| GDPR administrative fines | Art. 83 fine tiers/figures (the €20m / 4%-of-turnover cap and its conditions) are not ingested as Requirement/Obligation text. | dev-set LC-E2 |
+| NIS2 "significant incident" threshold | Art. 23(3) — the enforcement/reporting-threshold text defining when an incident is "significant" — is not ingested. | dev-set RM-E2 |
+| NIS2 penalties | Art. 34 fine tiers/figures are not ingested. | dev-set EM-M3 |
+| CRA penalties | Art. 64 fine tiers/figures are not ingested. | dev-set EM-M3, SEC-H3 |
+
+This registry tracks the same gap as `spikes/skill-transfer/BACKLOG-FINDING-001.md`
+(FINDING-001) — a real product/ingestion gap, not a query-technique problem.
+No amount of Cypher cleverness recovers text that was never extracted into
+the graph.

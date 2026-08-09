@@ -61,7 +61,7 @@ def _connect(args):
 
 def _print_rows(columns, rows, fmt):
     if fmt == "json":
-        print(json.dumps({"columns": columns, "rows": rows}, indent=2, default=str))
+        print(json.dumps({"columns": columns, "rows": rows, "row_count": len(rows)}, indent=2, default=str))
         return
     if not rows:
         print("(no rows)")
@@ -104,6 +104,7 @@ def cmd_query_template(args):
                     "template": result.template,
                     "columns": result.columns,
                     "rows": result.rows,
+                    "row_count": len(result.rows),
                 },
                 indent=2,
                 default=str,
@@ -195,7 +196,18 @@ def cmd_query_catalog(args):
     ]
 
     if args.format == "json":
-        print(json.dumps({"resolved": {"id": cap_id, "name": cap_name}, "columns": _CATALOG_COLUMNS, "rows": out_rows}, indent=2, default=str))
+        print(
+            json.dumps(
+                {
+                    "resolved": {"id": cap_id, "name": cap_name},
+                    "columns": _CATALOG_COLUMNS,
+                    "rows": out_rows,
+                    "row_count": len(out_rows),
+                },
+                indent=2,
+                default=str,
+            )
+        )
     else:
         print(f"resolved: {cap_id} ({cap_name})")
         _print_rows(_CATALOG_COLUMNS, out_rows, args.format)
