@@ -78,9 +78,21 @@ more than model capability: schema-in-system-prompt eliminated the ID-pattern
 and relationship-direction Cypher failures entirely. The PS Agent Skill
 (1a) carries that grounding. Its content split is deliberate: the skill holds
 the **model** (durable, slow-changing — node labels, relationship directions,
-ID conventions, routing patterns); the **data** (which regulations are loaded,
-which capabilities exist) is introspected at runtime via CLI commands, so
-content updates never stale the skill.
+ID conventions, routing patterns) **and canonical semantic definitions**
+(durable boundary rules — what counts as "overdue," "stale," "blast radius" —
+which a schema alone does not encode); the **data** (which regulations are
+loaded, which capabilities exist) is introspected at runtime via CLI commands,
+so content updates never stale the skill.
+
+*Revision note (2026-08-09, `skill-transfer` spike):* AD-6 held fully for
+grounding *shape* — 100% dev-set correct-or-correctly-refused, zero
+Cypher-shape errors across 108 runs. It did not hold unrevised for grounding
+*semantic boundaries*: held-out accuracy (81.5%) clustered its failures in
+boundary/exclusion definitions the skill left to per-agent judgment (e.g.
+whether an overdue-review chain counts as "stale"). The skill must carry
+these definitions explicitly, not just schema knowledge — see the
+`ps-domain` skill's Canonical Definitions section. See
+`spikes/skill-transfer/RUNBOOK.md` for the full evidence.
 
 ## Deliberately Excluded (prototype mode)
 
