@@ -1,22 +1,34 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
 # Spike: CLI Tool Semantics
 
-**Status:** Dev set run and graded 2026-08-09 (CLI v1 + skill rule 9,
-kimi-k3). **43/54 (79.6%) correct-or-correctly-refused — below the 100%
-bar, and a real regression from `skill-transfer`'s 54/54 (100%) on the
-identical 54 questions via raw Cypher.** Command-routing discipline itself
-held (zero freelancing, zero parameter-guessing, only 3 self-corrected
-Cypher-shape errors inside the escape hatch across 54 runs); the accuracy
-gap clusters downstream of retrieval — miscounted own-data summaries,
-dropped rubric points, and a refusal-discipline slip that escalated to an
-unsanctioned external tool on one question. Full per-question table and
-failure analysis in [RUNBOOK.md](./RUNBOOK.md). Held-out set not yet run —
-per this spike's own discipline, the dev bar should be met first. Verdict
-on AD-3 at the CLI boundary: **needs an iteration pass before final
-validation.** A proposed v2 design (cypher-first CLI, deterministic
-schema-shape pre-flight check, good/bad Cypher examples in the skill) is
-documented in [DEV-V2-KICKOFF.md](./DEV-V2-KICKOFF.md) — not yet
-implemented, pending a decision to proceed.
+**Status:** Two dev-set iterations run and graded (2026-08-09, kimi-k3).
+**dev-v1** (CLI v1 + skill rule 9): 43/54 (79.6%) correct-or-correctly-refused.
+**dev-v2b** (CLI unchanged + `row_count` field, skill Pre-Submit
+Verification block + Known-Gaps Registry, harness `--disable-builtin-mcps`):
+42/54 (77.8%) — statistically flat headline, but not a flat result: every
+class dev-v2b targeted was resolved (refusal-discipline 2/2 fixed,
+external-tool-escape 1/1 fixed, miscounting 2/3 fixed + 1 partial, plus a
+bonus fix of all 3 dev-v1 command-selection defects it didn't even target),
+and the flat score is fully explained by 6 new failures in the one
+untouched, low-confidence-by-design class (dropped/under-argued rubric
+points) — the same class responsible for 5 of the persisting original
+failures. Both runs are **below the 100% bar**; full per-question tables,
+before/after comparisons, and golden-answer defect logs for both are in
+[RUNBOOK.md](./RUNBOOK.md). Held-out set not yet run — per this spike's own
+discipline, the dev bar should be met first. Verdict on AD-3 at the CLI
+boundary: **still needs iteration; recommend a structural fix for the
+rubric-completeness class specifically (or a repeated-trial variance check
+to confirm it's a real ceiling) before spending the held-out set.** The
+CLI-command-surface concern the spike originally set out to test
+(command-routing discipline: freelancing, parameter-guessing) is now
+essentially resolved across both runs — the remaining gap is a reasoning/
+completeness problem downstream of retrieval, not a tool-selection one. An
+alternative, not-yet-tried design (cypher-first CLI, deterministic
+schema-shape pre-flight check) remains documented in
+[DEV-V2-KICKOFF.md](./DEV-V2-KICKOFF.md) for reference; dev-v2b's clean
+resolution of the 3 command-selection defects without that pre-flight check
+weakens its case somewhat, though n=1-per-question in both runs keeps that
+inconclusive.
 
 ---
 
