@@ -13,7 +13,10 @@ unsanctioned external tool on one question. Full per-question table and
 failure analysis in [RUNBOOK.md](./RUNBOOK.md). Held-out set not yet run —
 per this spike's own discipline, the dev bar should be met first. Verdict
 on AD-3 at the CLI boundary: **needs an iteration pass before final
-validation.**
+validation.** A proposed v2 design (cypher-first CLI, deterministic
+schema-shape pre-flight check, good/bad Cypher examples in the skill) is
+documented in [DEV-V2-KICKOFF.md](./DEV-V2-KICKOFF.md) — not yet
+implemented, pending a decision to proceed.
 
 ---
 

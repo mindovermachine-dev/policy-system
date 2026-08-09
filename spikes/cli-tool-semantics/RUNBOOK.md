@@ -244,3 +244,10 @@ frozen run "with the final CLI + skill combination" — since dev-v1 sits at
 finished combination. Recommend an iteration pass first (see failure
 pattern analysis above), then dev-v2, then held-out once dev clears the bar
 — mirroring the discipline `skill-transfer` itself used.
+
+A concrete design for that iteration pass — dropping `query
+template`/`query catalog` in favor of a cypher-first CLI with a
+deterministic pre-flight schema-shape check, plus good/bad Cypher examples
+in the skill — is documented in
+[DEV-V2-KICKOFF.md](./DEV-V2-KICKOFF.md), ready to implement pending a
+decision to proceed.
