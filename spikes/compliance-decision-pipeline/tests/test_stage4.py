@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import fitness  # noqa: E402
+from pipeline import fitness, ps_client  # noqa: E402
 from tests.fixtures import (  # noqa: E402
     REFERENCE_DATE,
     INCIDENT_POLICY_CONTROLS as _INCIDENT_POLICY_CONTROLS,
@@ -38,6 +38,7 @@ from tests.fixtures import (  # noqa: E402
     EM_M4_INCIDENT_CAPABILITIES as _EM_M4_INCIDENT_CAPABILITIES,
     EM_M4_RESOLVED_CAPABILITY as _EM_M4_RESOLVED_CAPABILITY,
     EM_M4_EXCLUDED_CAPABILITY as _EM_M4_EXCLUDED_CAPABILITY,
+    CO_M2_CONFIDENCE_QUERY as _CO_M2_CONFIDENCE_QUERY,
 )
 
 
@@ -287,6 +288,64 @@ class TestEvidenceGapRootCause(unittest.TestCase):
             result = fitness.check_existence(set(), query)
             incident_total += len(result.evidence["retrieved_ids"])
         self.assertEqual(incident_total, 10)
+
+
+class TestCompletenessGrounding(unittest.TestCase):
+    """Targets CO-M2 -- the live-held-out-audit finding (PROGRESS.md) that
+    check_existence is structurally blind to omission. Golden and the
+    actual recorded failing set are both derived live here (not hardcoded
+    in fixtures.py) since they're a straightforward split of one query's
+    real results by confidence value -- not worth a second giant ID list.
+    """
+
+    def test_flags_the_actual_recorded_failure_missing_nine(self):
+        rows = ps_client.cypher(_CO_M2_CONFIDENCE_QUERY)["rows"]
+        golden = {r[0] for r in rows}
+        self.assertEqual(len(golden), 24, "test premise: live golden set must be 24, matching RUNBOOK.md")
+
+        band_080 = sorted({r[0] for r in ps_client.cypher(
+            "MATCH (o:Obligation) WHERE o.confidence = 0.80 RETURN o.id"
+        )["rows"]})
+        band_075 = {r[0] for r in ps_client.cypher(
+            "MATCH (o:Obligation) WHERE o.confidence = 0.75 RETURN o.id"
+        )["rows"]}
+        # Reproduces the actual recorded shape: all 3 of the 0.75 band, only
+        # 12 of the 21 in the 0.80 band -- missing 9, none fabricated.
+        failing_claimed = band_075 | set(band_080[:12])
+        self.assertEqual(len(failing_claimed), 15, "test premise: must match RUNBOOK.md's recorded 15")
+
+        result = fitness.check_completeness(failing_claimed, _CO_M2_CONFIDENCE_QUERY)
+        self.assertTrue(result.flagged, result.reason)
+        self.assertEqual(len(result.evidence["retrieved_ids"]) - len(failing_claimed), 9)
+
+    def test_does_not_flag_the_complete_golden_set(self):
+        golden = {r[0] for r in ps_client.cypher(_CO_M2_CONFIDENCE_QUERY)["rows"]}
+        result = fitness.check_completeness(golden, _CO_M2_CONFIDENCE_QUERY)
+        self.assertFalse(result.flagged, result.reason)
+
+    def test_existence_grounding_alone_misses_this_failure(self):
+        # Locks in the exact gap that motivated this mechanism: the same
+        # incomplete-but-not-fabricated claim must NOT be flagged by
+        # check_existence, confirming the two checks are not redundant.
+        rows = ps_client.cypher(_CO_M2_CONFIDENCE_QUERY)["rows"]
+        band_080 = sorted({r[0] for r in ps_client.cypher(
+            "MATCH (o:Obligation) WHERE o.confidence = 0.80 RETURN o.id"
+        )["rows"]})
+        band_075 = {r[0] for r in ps_client.cypher(
+            "MATCH (o:Obligation) WHERE o.confidence = 0.75 RETURN o.id"
+        )["rows"]}
+        failing_claimed = band_075 | set(band_080[:12])
+        self.assertFalse(fitness.check_existence(failing_claimed, _CO_M2_CONFIDENCE_QUERY).flagged)
+        self.assertTrue(fitness.check_completeness(failing_claimed, _CO_M2_CONFIDENCE_QUERY).flagged)
+
+    def test_does_not_flag_an_over_claimed_but_complete_set(self):
+        # Non-regression: check_completeness's job is only the omission
+        # direction -- an over-claim (fabricated extra id) on top of a
+        # complete set is check_existence's job, not this one's.
+        golden = {r[0] for r in ps_client.cypher(_CO_M2_CONFIDENCE_QUERY)["rows"]}
+        over_claimed = golden | {"obl_fabricated_deadbeef"}
+        result = fitness.check_completeness(over_claimed, _CO_M2_CONFIDENCE_QUERY)
+        self.assertFalse(result.flagged, result.reason)
 
 
 if __name__ == "__main__":

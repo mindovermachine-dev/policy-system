@@ -29,6 +29,14 @@ needed its own mechanism rather than forcing a fit onto
 check_entity_type_match. See fitness.py's module docstring and
 PROGRESS.md's "Stage 4 -- root-cause classification" section.
 
+CO-M2 is included too, from a live held-out generalization audit
+(PROGRESS.md): it's one of exactly 3 `blind_questions.tsv` failures never
+used to design any mechanism, run blind against the already-built pipeline
+first -- and slipped through uncaught (check_existence only detects
+fabrication, not omission). `check_completeness` was then built using
+CO-M2 as direct design reference, which is why it carries an explicit
+non-held-out caveat unlike every other scenario here.
+
 Requires FalkorDB reachable at localhost:6379 (same as test_stage4.py).
 
 Run: /usr/bin/python3 tests/run_target_cases.py
@@ -42,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import fitness  # noqa: E402
+from pipeline import fitness, ps_client  # noqa: E402
 from pipeline.alias_table import run_stage1  # noqa: E402
 from pipeline.compose import compose_output  # noqa: E402
 from pipeline.routing import route_question  # noqa: E402
@@ -51,6 +59,7 @@ from pipeline.types import FitnessResult  # noqa: E402
 from tests.fixtures import (  # noqa: E402
     CO_H2_OBLIGATIONS,
     CO_H2_REQUIREMENT_IDS,
+    CO_M2_CONFIDENCE_QUERY,
     DATA_ENCRYPTION_CAPABILITY,
     DATA_ENCRYPTION_OBLIGATIONS,
     DEPRECATED_PAST_DUE_CONTROL,
@@ -79,7 +88,10 @@ _AU_H4_TEXT = (
 )
 _EM_E3_TEXT = "How many of our GDPR evidence chains would currently hold up in an audit?"
 _SEC_E1_TEXT = "Which Controls implement the incident/vulnerability response policy?"
-_SEC_H1_TEXT = "Which obligations require multi-factor authentication (MFA)?"
+_SEC_H1_TEXT = (
+    "If an attacker exploited a missing MFA check today, which regulatory "
+    "duties across CRA/NIS2/GDPR would we be in breach of?"
+)
 _SA_H1_TEXT = (
     "If we adopt a 'Software Bill of Materials' capability, which existing "
     "CRA/NIS2 obligations would it newly satisfy, and where are we already "
@@ -105,6 +117,15 @@ _AU_M4_TEXT = (
 _EM_M4_TEXT = (
     "How much of our GDPR evidence problem is a governance problem versus "
     "an engineering problem?"
+)
+_CO_M2_TEXT = (
+    "Which of our extracted regulatory duties have the shakiest provenance "
+    "confidence and should get a human review?"
+)
+_AU_H2_TEXT = (
+    "Trace the CRA's actively-exploited-vulnerability reporting duty from "
+    "the regulation text all the way into our internal governance — does "
+    "the trail reach a check that's actually running?"
 )
 
 _SEC_E1_QUERY = (
@@ -209,7 +230,11 @@ def build_scenarios() -> list:
     scenarios.append((
         "SEC-H1-golden",
         _run(
-            "SEC-H1", "B", _SEC_H1_TEXT,
+            # type D, not B -- see PROGRESS.md's text-audit finding: this
+            # is dev-questions.md's actual verbatim wording (an "if an
+            # attacker exploited X today" hypothetical-chain shape), not
+            # the plain enumeration paraphrase used before this session.
+            "SEC-H1", "D", _SEC_H1_TEXT,
             [fitness.check_existence(MFA_OBLIGATIONS, _SEC_H1_QUERY)],
             f"Obligations: {sorted(MFA_OBLIGATIONS)}.",
         ),
@@ -336,6 +361,57 @@ def build_scenarios() -> list:
             "10 of our GDPR evidence gaps trace to the Clinical Data Integrity policy (still draft -- "
             "a governance gap); 10 trace to the Incident/Vulnerability Response policy's v2 automation "
             "(already implemented at v1, so an engineering-in-progress gap, not a governance one).",
+        ),
+    ))
+
+    # CO-M2 (type B) -- completeness grounding, the mechanism the live
+    # held-out audit motivated (PROGRESS.md). Golden and the actual
+    # recorded failing set (missing 9 of the 21-item 0.80 confidence band)
+    # are both derived live -- see fitness.py's module docstring for the
+    # caveat: this case was used to design check_completeness, not just
+    # validate it, so it's spent as held-out data going forward.
+    co_m2_golden = {r[0] for r in ps_client.cypher(CO_M2_CONFIDENCE_QUERY)["rows"]}
+    co_m2_band_080 = sorted({
+        r[0] for r in ps_client.cypher("MATCH (o:Obligation) WHERE o.confidence = 0.80 RETURN o.id")["rows"]
+    })
+    co_m2_band_075 = {
+        r[0] for r in ps_client.cypher("MATCH (o:Obligation) WHERE o.confidence = 0.75 RETURN o.id")["rows"]
+    }
+    co_m2_failing = co_m2_band_075 | set(co_m2_band_080[:12])
+    scenarios.append((
+        "CO-M2-failing",
+        _run(
+            "CO-M2", "B", _CO_M2_TEXT,
+            [fitness.check_completeness(co_m2_failing, CO_M2_CONFIDENCE_QUERY)],
+            f"{len(co_m2_failing)} obligations have shaky provenance confidence (0.75/0.80 band) and need human review.",
+        ),
+    ))
+    scenarios.append((
+        "CO-M2-golden",
+        _run(
+            "CO-M2", "B", _CO_M2_TEXT,
+            [fitness.check_completeness(co_m2_golden, CO_M2_CONFIDENCE_QUERY)],
+            f"{len(co_m2_golden)} obligations have shaky provenance confidence (0.75/0.80 band) and need human review.",
+        ),
+    ))
+
+    # AU-H2 (type D) -- regression scenario for the vacuous-pass hole this
+    # very question exposed (PROGRESS.md): before compose.py's enforcement
+    # was keyed on routing.path instead of on mandatory_check_names being
+    # non-empty, composing this with zero Stage 4 checks produced a
+    # confident "this is correct" -- AU-H2 is type D but not the
+    # hypothetical-chain shape, so routing.py names no specific mandatory
+    # check for it, and the old condition treated "no check named" as "no
+    # check required". Now correctly fails closed on zero checks, same as
+    # AU-M4-unbuilt-check, for a related but distinct reason (no check
+    # exists AT ALL for this route, vs. AU-M4 which names one specific
+    # unbuilt check).
+    scenarios.append((
+        "AU-H2-zero-checks",
+        _run(
+            "AU-H2", "D", _AU_H2_TEXT,
+            [],
+            "Yes, the trail reaches a live, running check.",
         ),
     ))
 

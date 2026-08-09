@@ -141,6 +141,22 @@ EM_M4_RESOLVED_CAPABILITY = "cap_data_encryption_0e50d3"
 EM_M4_EXCLUDED_CAPABILITY = "cap_asset_personnel_security_management_e68e9a"
 
 # --------------------------------------------------------------------------
+# CO-M2 -- provenance-confidence threshold band (live held-out audit,
+# PROGRESS.md). Golden: 24 obligations at confidence 0.75 or 0.80 (verified
+# live: exactly 3 at 0.75, 21 at 0.80). The actual recorded failure found
+# 15 -- all 3 at 0.75, only 12 of the 21 at 0.80, missing 9. Every claimed
+# id in the failing answer is real (not fabricated) -- check_existence
+# alone does not catch this; targets check_completeness specifically.
+# CAVEAT (unlike every other fixture in this file): this case was used to
+# design check_completeness, not just validate an already-designed
+# mechanism -- see fitness.py's module docstring. Not held-out-clean for
+# future completeness-mechanism work.
+# --------------------------------------------------------------------------
+
+CO_M2_CONFIDENCE_QUERY = "MATCH (o:Obligation) WHERE o.confidence IN [0.75, 0.80] RETURN o.id"
+
+
+# --------------------------------------------------------------------------
 # Stage 1 -- alias table target cases
 # --------------------------------------------------------------------------
 

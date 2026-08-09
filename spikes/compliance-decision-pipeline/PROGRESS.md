@@ -288,6 +288,7 @@ cases above, not new/invented questions, per the chosen build strategy).
 | Stage 4 — scope-match, SEC-H4 | ✅ validated — turned out to be `check_existence`, not a new mechanism | See "Design finding, revisited" below: the earlier "needs a bespoke redundancy mechanism" call was wrong. RUNBOOK.md's actual failure note ("listed duties verified by the v2/v3 controls, not failing on Aug 15") is an obligation-level over-claim, not a redundancy question — `check_existence` scoped to the failing control's own capability (`cap_data_encryption_0e50d3`, 5 real obligations) catches it directly. RUNBOOK-note-validated, not golden-validated (SEC-H4's golden text isn't in this repo). |
 | Stage 4 — entity-type cross-check (`check_entity_type_match`) | ✅ validated | targets EM-E3 (chain vs control) |
 | Stage 4 — root-cause classification (`check_evidence_gap_root_cause`, **later session**) | ✅ validated | targets EM-M4 (governance vs engineering) — a different dimension than EM-E3's counting-unit mismatch, so a new mechanism, not a forced fit onto `check_entity_type_match`. See "Stage 4 — root-cause classification" above |
+| Stage 4 — completeness grounding (`check_completeness`, **later session**) | ✅ validated, **not held-out** | targets CO-M2 (omission, not fabrication) — found via a live held-out audit, not a designed-in-advance target case. See "Live held-out generalization audit" and "CO-M2's gap closed" above. Explicitly non-blind: CO-M2 was used as direct design reference |
 | Stage 4 — existence grounding (`check_existence`) | ✅ validated for SEC-E1, SEC-H1, **CO-H2, SEC-H4** | SEC-E1/SEC-H1: independent re-queries return exactly the golden set (2 controls; 7 obligations), live. CO-H2: independent re-query via `Requirement-[:SATISFIED_BY]->Obligation` over the 7 requirement IDs (Art 13.5/13.6, Annex I Pt II points 1/2/4, Art 13.8c for the CVD policy obligation — the graph maps that duty to 13.8c, not annex1_pt2_5 as `dev-answers.md`'s own provenance states, a golden/graph citation mismatch worth a catalog-maintenance note but not a blocker here) returns exactly the 7 golden obligation IDs. SA-H1/SA-H2 use different mechanisms (see their own rows) — not deferred anymore, all three of the prior session's gaps are closed. |
 | Stage 4 — ranking grounding (`check_fanout_maximum`, **new**) | ✅ validated | targets SA-H2. Not existence grounding's shape (membership) — a claim of the form "X is required by the most obligations (N)" needs the ranking recomputed fresh, not looked up. Confirmed live: `cap_data_subject_rights_fulfilment_communication_8eedf0` is genuinely the maximum at 45, next-highest is 30 (`cap_binding_corporate_rules_governance_5d8a7a` / `cap_security_incident_reporting_449fa4`, tied). Flags a wrong capability/count claimed as the maximum, doesn't flag the correct one. |
 | Three-block output composer (`pipeline/compose.py`, `pipeline/question_types.py`) | ✅ validated | wires Stage 1+2+4 end-to-end per question; see `tests/run_target_cases.py` (prints actual (A)/(B)/(C) JSON for 18 scenarios) and `tests/test_compose.py` (4/4 pass). Covers every target case with a *built* Stage 4 mechanism — SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4 (failing + golden variant each) and SEC-E1, SEC-H1 (golden only) — deliberately excludes only AU-M4 now, a Stage 1 (not Stage 4) target case (composing it would be a vacuous fitness-gate pass, see the module docstring). Fixed along the way: `test_compose.py`'s golden-scenario assertion implicitly assumed every golden case gets the confident-type text — true by coincidence for the four original scenarios (all types B/C/D), false for SA-H2 (type G), which per README's Output posture gets the hedge even once its gate clears. Now asserts that explicitly instead of assuming it. |
@@ -383,20 +384,23 @@ named gap to a real Stage 4 mechanism.
 
 ### Composer result: no false auto-pass, across all mechanisms built so far
 
-Running the 21 end-to-end scenarios (`tests/run_target_cases.py`, updated
-across two later sessions to include Stage 3's routing, the AU-M4
-enforcement demonstration, and EM-M4's root-cause classification) confirms
-the pattern the success criteria require: all 9 `-failing` scenarios
-(reproducing SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4,
-EM-M4's actual recorded transcript/RUNBOOK-note failures) compose into a
-"Fitness gate failed" (A) and a `[FLAGGED -- not verified]` (B), never the
-confident statement; all 11 `-golden`/correct scenarios get either the
-confident statement or (SA-H2 only, type G) the hedge — never a flagged
-output; the 21st, `AU-M4-unbuilt-check`, is neither a `-failing` nor a
-`-golden` reproduction but Stage 3's own enforcement demonstration (see
-"Stage 3 — routing" above) — also correctly flagged, for a different
-reason (no mandatory check performed, not a check that failed). All 21 are
-three-block-complete. (C)'s `source_ref`
+Running the 24 end-to-end scenarios (`tests/run_target_cases.py`, updated
+across four later sessions to include Stage 3's routing, the AU-M4
+enforcement demonstration, EM-M4's root-cause classification, CO-M2's
+completeness grounding, and the AU-H2 vacuous-pass regression scenario)
+confirms the pattern the success criteria require: all 10 `-failing`
+scenarios (reproducing SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2,
+SEC-H4, EM-M4, CO-M2's actual recorded transcript/RUNBOOK-note failures)
+compose into a "Fitness gate failed" (A) and a `[FLAGGED -- not verified]`
+(B), never the confident statement; all 12 `-golden`/correct scenarios get
+either the confident statement or (SA-H2 only, type G) the hedge — never a
+flagged output; the remaining 2 (`AU-M4-unbuilt-check`,
+`AU-H2-zero-checks`) are neither `-failing` nor `-golden` reproductions
+but Stage 3 enforcement demonstrations (see "Stage 3 — routing" and the
+"Overfitting-fix pass" section above) — also correctly flagged, for a
+different reason each time (no mandatory check performed / no check
+performed at all, not a check that failed). All 24 are three-block-complete.
+(C)'s `source_ref`
 provenance-chain rendering was not yet built as of this paragraph's
 original writing — since fixed, see "Pharma-auditor-acceptance-bar manual
 pass" below for the update and `pipeline/provenance.py` for the
@@ -622,10 +626,10 @@ deleted, so the reasoning that led to flagging the gap stays visible.
 | Ambiguity resolution | ✅ PASS | All 5 (SA-H1, SA-H2, SEC-E1, SEC-H1, CO-H2) get a definitive live-graph verdict via `check_existence`/`check_regulation_scope`/`check_fanout_maximum` |
 | Miscount elimination | ⬜ NOT YET VERIFIABLE | Stage 2's count-shaped flag exists but has documented weak recall (2/7 spot-check), and there's no live answer-composition step to actually enforce "tool-computed number reaches the final answer" against — nothing to pass or fail this against yet, distinct from a fail. Stage 3's routing decision layer (later session) doesn't change this: it enforces which check ran, not that a specific number was tool-computed, since no such check exists yet (see `pipeline/routing.py`) |
 | Judge ensemble reliability | ❌ NOT BUILT | Explicitly deferred v0 scope, per plan |
-| No false auto-pass | ✅ PASS (strengthened) | All 9 `-failing` scenarios return `gate_passed: false`; zero false auto-passes across every mechanism built. Stage 3 (later session) closed a real edge of this: `FitnessResult.passed` was vacuously `True` on zero checks run — `AU-M4-unbuilt-check` now demonstrates the fix, see "Stage 3 — routing" above |
+| No false auto-pass | ✅ PASS (strengthened) | All 10 `-failing` scenarios return `gate_passed: false`; zero false auto-passes across every mechanism built. Stage 3 (later session) closed a real edge of this: `FitnessResult.passed` was vacuously `True` on zero checks run — `AU-M4-unbuilt-check` now demonstrates the fix, see "Stage 3 — routing" above. CO-M2 (later session) closed a different edge: an incomplete-but-non-fabricated claim, which `check_existence` alone can't see — see "CO-M2's gap closed" above |
 | Auditability | ✅ PASS (strengthened) | Every fitness check carries a named `check_name`, never an unlabeled aggregate boolean. (C) now also carries Stage 3's own routing decision (path + mandatory check names + reason), not just Stage 4's checks — an auditor can see *why* a check was mandatory, not only whether one ran |
 | Sampling efficiency | ✅ PASS | This session's Stage 5 dry-run: risk-weighted beats uniform-random at all 3 tested sample sizes, 2000 trials each (see above) |
-| Three-block completeness | ✅ PASS | `run_target_cases.py`: 21/21 three-block-complete |
+| Three-block completeness | ✅ PASS | `run_target_cases.py`: 24/24 three-block-complete |
 | Block (C) sufficiency for relational claims | ✅ PASS (updated, same session) | The relational over-claim itself (AU-H4/SA-H1/SEC-H4) is directly catchable from (C)'s side-by-side claimed-vs-routed/retrieved sets, no re-derivation needed. `source_ref`-to-article-text rendering (`pipeline/provenance.py`) is now built and wired in for every Obligation/Requirement id in (C) — see "Pharma-auditor-acceptance-bar manual pass" above for the update that closed this |
 
 **Net:** 10 of 12 criteria fully pass (upgraded from 9 across the two
@@ -655,12 +659,15 @@ what's already running). Stage 1/2/3 tests have no graph dependency; Stage
 4 and composer tests do. Stage 5's sampling tests/dry-run have no graph
 dependency either (pure question-text classification + in-memory sampling).
 
-**All 66 tests pass** (41 from the prior session + 13 new in
-`tests/test_routing.py`, none requiring FalkorDB — routing is pure
-Stage 1/2 + type-signal logic + 2 new compose-level checks; + 9 new in
-`tests/test_stage4.py::TestEvidenceGapRootCause` for EM-M4's root-cause
-mechanism + 1 more compose-level check, both requiring FalkorDB), 41 of
-them against the live FalkorDB graph.
+**All 74 tests pass** — `test_compose.py` 13, `test_provenance.py` 5,
+`test_routing.py` 14, `test_stage1.py` 2, `test_stage2.py` 2,
+`test_stage4.py` 30, `test_stage5.py` 8. Growth this doc's sessions:
+Stage 3's routing layer (+13 `test_routing.py`, +2 compose-level), EM-M4's
+root-cause mechanism (+9 `TestEvidenceGapRootCause`, +2 compose-level),
+CO-M2's completeness mechanism (+4 `TestCompletenessGrounding`, +2
+compose-level), the overfitting-fix pass (+1 hypothetical-chain-detection
+test, +1 AU-H2 vacuous-pass regression test) — on top of the 41 from the
+session before Stage 3. 48 of them against the live FalkorDB graph.
 
 **Next action:** every item from the previous session's "what's left" list
 that was still open is now done:
@@ -680,6 +687,22 @@ that was still open is now done:
   found by tracing RUNBOOK.md's failure note back to real graph entities
   rather than forcing the existing mechanism to fit. Success Criteria
   table's Granularity precision moves from PARTIAL to PASS.
+- **Live held-out generalization audit** — done, see "Live held-out
+  generalization audit" below. First real (not dry-run) test of whether
+  this pipeline generalizes beyond its own design cases: 0 of 3
+  previously-unseen held-out failures (CO-M2, CO-M4, PM-H3) caught.
+  CO-M2's specific gap (`check_existence` blind to omission) closed same
+  session with `check_completeness` — see "CO-M2's gap closed" below.
+  CO-M4 and PM-H3 remain open, honestly scoped, not forced.
+- **Overfitting-fix pass** — done, see "Overfitting-fix pass" above.
+  Closed a live "no false auto-pass" violation (AU-H2 composing a
+  confident answer on zero Stage 4 checks — more severe than any prior
+  finding, since it broke the pipeline's one non-negotiable guarantee),
+  broadened and re-validated the hypothetical-chain regex, audited and
+  fixed a silently-paraphrased target case (SEC-H1, now verbatim text +
+  correct type D), and confirmed Stage 1's alias table has no ungrounded
+  gap to fill. SEC-E1's own paraphrase surfaced a second, smaller,
+  not-yet-fixed gap (status verification) — carried forward below.
 - LLM judge ensemble and human escalation — still deferred, unchanged.
 
 What's left:
@@ -701,12 +724,298 @@ What's left:
    already NOT YET VERIFIABLE in the Success Criteria table below, unchanged
    by this session). Building either would follow the exact same
    must-flag/must-not-flag discipline as every mechanism in `fitness.py`.
-4. One small, explicitly-non-blocking note carried forward: CO-H2's
+4. **PM-H3 and CO-M4**, from the live held-out audit — genuinely new
+   mechanism shapes, not variants of anything built: PM-H3 needs a
+   counterfactual/what-if impact-ranking check (no existing mechanism
+   shape fits); CO-M4 needs Stage 2/3 multi-claim decomposition
+   (recognizing a question requires *two* independently-checkable claimed
+   sets), not a new Stage 4 check per se. See "CO-M2's gap closed" above
+   for the scoping reasoning. Both are known, not attempted, not silently
+   dropped.
+5. **SEC-E1's status-verification gap** (overfitting-fix pass, above):
+   `check_existence` confirms Control *ids* but never their
+   `implementation_status`, so the "and what state is each in?" half of
+   the real dev-questions.md question is unverified. Needs a signature
+   change (claimed (id, attribute) pairs, not just ids) to
+   `check_existence`/`check_completeness` — real work, not a quick patch,
+   and has no validated target case of its own yet.
+6. **Promote `_is_comparison_shaped` from Stage 5's dry-run heuristic to a
+   real Stage 2 signal** (overfitting-fix pass, above) — the one
+   principled opportunity found among Stage 2's 5 documented spot-check
+   misses (RM-H2's "benchmark X against Y" shape). Already flagged in
+   `stage5_sampling.py` as needing the same must-flag/must-not-flag
+   validation discipline as every real mechanism before promotion; not
+   done this session so as not to rush an unvalidated heuristic into a
+   live signal path.
+7. One small, explicitly-non-blocking note carried forward: CO-H2's
    golden/graph citation mismatch (Annex I Pt II point 5 vs. Art 13.8c) is
    a catalog-maintenance item for the source data — still not a pipeline
    bug. (EM-M4's entity-type/granularity gap, the other item previously
    listed here, is resolved — see "Open questions" below and "Stage 4 —
    root-cause classification" above.)
+
+---
+
+## Live held-out generalization audit (later session — a real Stage 5 cycle, not the dry-run)
+
+Prompted by a direct question: can this pipeline's non-overfitting be
+*proven*, not just argued? The honest starting point was no — every Stage
+4 mechanism was built by looking at one specific known failure and writing
+code that catches exactly that failure; design set and validation set were
+the same 33 known failures throughout. This section is the actual test,
+not another argument.
+
+**What "held-out" still means here, precisely.** Of `blind_questions.tsv`'s
+54 questions, this pipeline's mechanisms were built against exactly 7 of
+its 10 recorded failures (AU-M4, SEC-M2, SEC-M4, AU-H4, SEC-H4, EM-E3,
+EM-M4). **Three failures were never touched by any design or validation
+step: CO-M2, CO-M4, PM-H3.** Their existence was known (README's
+failure-kind taxonomy was derived by reading all 33 failures, including
+these three) but no mechanism was ever hand-fit to them specifically. That
+makes them the closest thing to genuine held-out data this repo still has
+for this pipeline — used here for the first time, as a blind evaluation
+of the *already-built* pipeline, not as design input.
+
+### Result: 0 of 3 previously-unseen failures caught
+
+| ID | Question | RUNBOOK failure | Caught by any existing mechanism? |
+|---|---|---|---|
+| CO-M2 | "Which of our extracted regulatory duties have the shakiest provenance confidence and should get a human review?" | Golden: 24 obligations (3 at `confidence=0.75` + 21 at `confidence=0.80`, verified live). Agent found 15 (missed 9 of the 0.80 band). | **No.** Ran the real 24-item golden set and the real 15-item failing set through the unmodified `check_existence` — it correctly does not flag the golden claim, but also does not flag the incomplete one. `check_existence` only checks `claimed - retrieved` (fabrication/over-claim); it never checks `retrieved - claimed` (omission/under-claim). This is a Completeness failure, and the design doc's own failure-kind table already says Completeness needs Stage 2 decomposition + a composed-answer fitness gate — neither is live. The gap is exactly where README predicted it, not a surprise, but this is the first time it was demonstrated against real data instead of asserted. |
+| PM-H3 | "Which policy state changes would unblock the most GDPR evidence chains?" | Golden lever 1 (16 Legacy chains) correct; lever 2 wrong — agent named "Clinical draft→approved" instead of "Incident v2 draft-standard/planned-control" (6 Art. 33 reqs × dual paths). | **No.** This needs a *counterfactual* query ("if Policy/Standard X's state changed, how many chains newly become live") — a different computation from anything built. `check_evidence_gap_root_cause` (built for EM-M4) classifies a capability's *current* state and, notably, uses the same two policies (Clinical, Incident) this question turns on — but classifying current state isn't the same as ranking hypothetical state changes by impact. Related subject matter, not a covering mechanism. |
+| CO-M4 | "Where do NIS2's minimum security measures overlap with CRA's essential requirements and GDPR's security-of-processing rules?" | Overlap mapping correct at capability level; omitted the rubric-required non-overlap enumeration. | **No.** "What the rubric additionally requires you to enumerate" isn't derivable from the graph at all — it's a completeness-of-*response-shape* requirement external to any structured re-query. Same failure kind as CO-M2 (Completeness), same reason it's uncaught. |
+
+### One precision check on the same previously-untouched data
+
+`RM-H4` (passing, held-out, never used to build or validate anything):
+golden correctly reports exactly 1 truly-overdue control, explicitly
+excluding a second, deprecated one it's aware of. Fed the golden-shaped
+claim through the unmodified `check_overdue_excludes_deprecated` — correctly
+not flagged. Weaker evidence than the failures above (same claim shape as
+the existing SEC-M2/SEC-M4 golden cases, just a different question wrapped
+around it), but consistent, not contradictory.
+
+### What this settles and what it doesn't
+
+- **It settles the original question with a number, not an argument: 0/3.**
+  Every previously-unseen held-out failure this pipeline had never looked
+  at slipped through uncaught. If these three had shown up in live output
+  today, the pipeline would have marked all three "verified" or let them
+  pass Stage 4 clean — the exact failure mode Stage 5 exists to catch
+  later, now demonstrated firsthand rather than assumed.
+- **It does not mean the pipeline is worthless or that Stage 4's actual
+  mechanisms are fake.** The earlier stress test (novel capabilities/
+  policies never used in any design step, run through `check_regulation_
+  scope`, `check_existence`, `check_evidence_gap_root_cause`) showed those
+  *specific, already-built* mechanisms hold up on fresh graph entities
+  within their own domain. What doesn't hold up is *coverage* — the set of
+  failure *kinds* this pipeline can catch at all is bounded by the 7 kinds
+  it was explicitly built against, and Completeness (2 of the 3 misses
+  here) is a kind with a known, already-documented, not-yet-built fix path
+  (decomposition + composed-answer gate).
+- **These three cases are now spent.** Any future mechanism built to catch
+  Completeness-shaped failures using CO-M2/CO-M4 as design input can no
+  longer treat them as held-out validation for that mechanism — same
+  discipline as every other target case in this doc. A genuinely fresh
+  held-out set (new questions, newly graded, never read during design)
+  would be needed to validate a completeness-checking fix, if one gets
+  built. `blind_questions.tsv`'s remaining 44 passing instances are still
+  usable as precision (false-positive) checks — they were not used to
+  design anything — but not as recall (does-it-catch-new-failures) checks,
+  since none of them are known failures.
+
+### CO-M2's gap closed (same session, explicitly non-blind)
+
+User decision after the audit above: fix the CO-M2 gap now, using CO-M2 as
+design reference, with the cost (CO-M2 no longer usable as held-out data)
+accepted explicitly rather than silently.
+
+Built `check_completeness(claimed_ids, independent_query, id_column_index)`
+in `pipeline/fitness.py` — the other direction from `check_existence`.
+Where `check_existence` flags `claimed - retrieved` (a claimed id that
+doesn't really exist — fabrication), `check_completeness` flags
+`retrieved - claimed` (a real id the independent re-query found that the
+claim omitted). Same generic shape, same caller contract (a fresh query +
+a claimed id set) — existence grounding is not one mechanism, it's two,
+same pattern as every other "X turned out to be (at least) two mechanisms"
+finding already in this doc (scope-match, granularity precision).
+
+Validated against CO-M2 live: golden is 24 obligations at
+`confidence` 0.75/0.80 (3 + 21, both derived live, not hardcoded);
+the actual recorded failing answer (15, missing 9 of the 0.80 band) is
+reproduced live via the real confidence values, not invented. Locked in
+with a test that pins down exactly why the fix was needed
+(`test_existence_grounding_alone_misses_this_failure`: same failing claim
+passes `check_existence` unmodified, fails `check_completeness`) —
+`tests/test_stage4.py::TestCompletenessGrounding`, 4/4, plus a
+non-regression case (an over-claimed-but-complete set must not be flagged
+by completeness alone — that's still `check_existence`'s job). Composed
+end-to-end in `tests/run_target_cases.py` (`CO-M2-failing`/`CO-M2-golden`)
+and locked in by two `test_compose.py` checks. Added to Stage 3's
+any-of grounding set (`pipeline/routing.py`) alongside the other three
+grounding checks.
+
+**What this does and doesn't close:**
+- **CO-M2**: closed, but not held-out-validated — see the caveat in
+  `fitness.py`'s module docstring. Any claim that this generalizes needs
+  fresh data, same as everything else in this section establishes.
+- **CO-M4** ("omitted the rubric-required non-overlap enumeration"): only
+  *partially* addressable by the same mechanism, and not attempted this
+  session — not silently glossed over. CO-M4's overlap claim itself was
+  already complete (its failure wasn't a same-id-space omission like
+  CO-M2's); what it dropped was an entire *second required deliverable*
+  (a non-overlap enumeration) the question's rubric demands alongside the
+  overlap mapping. `check_completeness` could in principle validate that
+  second deliverable too, if applied to its own independently-derivable
+  query (capabilities required by exactly one of the three regulations,
+  not multiple) — but recognizing that a question requires *two* separate
+  claimed-set checks in the first place is a Stage 2/3 multi-claim
+  decomposition problem, not a Stage 4 mechanism gap, and decomposition
+  execution is still out of v0 scope (see "Chosen build strategy" at the
+  top of this doc). Don't force this one; it's a different, larger piece
+  of work than CO-M2 was.
+- **PM-H3**: untouched, and harder — it needs a genuinely new mechanism
+  shape (counterfactual/what-if impact ranking), not a variant of
+  existence or completeness grounding. Left as an open, honestly-scoped
+  gap, not attempted.
+
+## Overfitting-fix pass (same session — "what else should be fixed")
+
+Direct follow-up to the audit above: asked what *other* overfitting issues
+existed, beyond CO-M2. Found and fixed four more; found and deliberately
+did not force a fifth. Same discipline throughout: verify live before
+fixing, don't invent coverage the graph/skill doesn't actually support.
+
+### Fix 1 — the vacuous-pass hole reopened (most severe finding)
+
+Testing routing end-to-end against AU-H2 (a real target case, previously
+only ever validated against Stage 1 in isolation — never actually
+composed) found a live violation of "no false auto-pass": composed with
+zero Stage 4 checks, AU-H2 produced `"Given the data currently in the
+system, this is correct."` Root cause: `compose.py`'s mandatory-check
+enforcement was keyed on `routing.mandatory_check_names` being non-empty.
+AU-H2 is type D but not the hypothetical-chain shape, so `routing.py`
+names no specific check for it — and the old condition treated "no check
+named" as "no check required," silently falling through to
+`FitnessResult.passed`'s vacuous `True` on zero checks. The exact same bug
+class as AU-M4's original gap, just relocated: AU-M4 got a named
+placeholder (`stale_chain_strict_reading`) because it was a specific case
+reasoned about directly; every other B/C/D question landing in a
+"no mechanism yet" routing branch had no such placeholder and fell
+straight through.
+
+**Fix:** enforcement is now keyed on `routing.path == DIRECT_MANDATORY_CHECK`
+(a property of the type, per README: B/C/D's trigger check is "mandatory,
+not optional"), not on whether a specific check happens to be named. When
+`mandatory_check_names` is non-empty, one of those names must appear
+(unchanged, stricter). When it's empty, *any* real Stage 4 check must have
+run — weaker (doesn't confirm the check is the *relevant* one) but closes
+the actual soundness hole. Verified this changes nothing for any existing
+scenario (every B/C/D target case already carries a real check) and fixes
+AU-H2 live. Locked in as a permanent regression scenario,
+`AU-H2-zero-checks`, in `tests/run_target_cases.py` and
+`tests/test_compose.py::test_au_h2_zero_checks_fails_closed_not_vacuously`.
+
+**Why this matters beyond AU-H2 itself:** this fix also blunts the impact
+of every remaining classification/regex imprecision below. Before it, a
+wrong or missing routing signal could mean *zero* verification and a
+confident pass. After it, the worst case for an unrecognized B/C/D shape
+is "some real check ran, just not provably the right one" — a precision
+gap, not a soundness one.
+
+### Fix 2 — hypothetical-chain regex broadened and validated wider
+
+`_is_hypothetical_chain` (built from AU-H4/SEC-H4's exact wording) was
+already demonstrated, in the audit above, to miss paraphrases like
+"should X stop working" and "assuming X is broken." Replaced the single
+regex with two independent, both-required signals — a conditional marker
+(`if`/`should`/`assuming`/`suppose`/`supposing`/`were to`) and a
+failure/state verb (broadened list: fails, breaks, turns out, collapses,
+malfunctions, stops working/functioning, goes down, ceases to
+function/work). Still a keyword net, not NLP — documented as such, same
+honesty as Stage 1/2's own disclosed limits. Validated against 6 must-match
+cases (AU-H4, SEC-H4, plus the paraphrases that broke the old version) and
+3 must-not-match cases (AU-H2, a real-time "is X currently failing"
+question with no conditional marker, SEC-E1) in
+`tests/test_routing.py::test_hypothetical_chain_detection_broadened_set`.
+
+### Fixes 3+4 — question-type audit and verbatim-text audit (they turned out to be one finding)
+
+Systematically diffed all 14 composed target cases' fixture text against
+their verbatim source (`dev-questions.md` / `blind_questions.tsv`) and
+independently re-derived each one's type (A–H) against README's own
+per-type definitions, rather than trusting the assignments already made.
+
+**Result: 12 of 14 match verbatim and re-derive to the same type already
+assigned — confirmed, not just assumed.** Two didn't:
+
+- **SEC-H1**: the fixture text (`"Which obligations require multi-factor
+  authentication (MFA)?"`) was a paraphrase that silently dropped
+  dev-questions.md's actual wording (`"If an attacker exploited a missing
+  MFA check today, which regulatory duties across CRA/NIS2/GDPR would we
+  be in breach of?"`) — and, with it, the hypothetical-chain framing that
+  should have made this type D, not the type B it was assigned. The
+  underlying golden answer (the same 7-obligation set) happens to be
+  identical either way, which is why this wasn't caught by the mechanism
+  failing — it was caught by re-deriving the type independently and
+  finding it didn't match the real question's shape. **Fixed:** now uses
+  the verbatim text, classified D. Confirmed live it correctly triggers
+  the hypothetical-chain grounding requirement (needed adding
+  `exploited`/`exploits` to fix 2's verb list — for this real question's
+  own wording, not to force a synthetic case).
+- **SEC-E1**: fixture text also paraphrased away part of the real
+  question — dev-questions.md asks `"...and what state is each in?"`,
+  which this pipeline's `check_existence` never verifies (it only checks
+  which Control *ids* are present, not their `implementation_status`).
+  Type B is still correct either way, so no reclassification — but this
+  is a real, undiscussed completeness gap in SEC-E1's own validation,
+  structurally the same shape as CO-M4's "second required deliverable"
+  gap. **Not fixed this session** — extending `check_existence`/
+  `check_completeness` to verify a second attribute per id (not just
+  membership) is a real signature change, not a quick patch, and doesn't
+  have its own validated target case yet. Flagged here so it isn't lost.
+
+### Fix 5 (audit only — correctly did not force a fix)
+
+Checked whether there's a *grounded* basis (not just "add more keywords")
+to expand Stage 1's alias table or Stage 2's structural patterns.
+
+- **Stage 1**: re-read `ps-domain/SKILL.md`'s Canonical Definitions
+  section in full. It defines exactly two boundary terms — Overdue and
+  Stale (deprecated is referenced within Overdue's own definition, not a
+  separate one) — and the alias table already covers both. **There is
+  nothing else to add without inventing an undefined term**, which would
+  be exactly the failure mode Stage 1 exists to avoid, not fix. Stage 1's
+  narrowness isn't an arbitrary gap; it's complete relative to what's
+  actually defined today.
+- **Stage 2**: individually examined all 5 of the documented 2/7
+  spot-check misses (AU-M2, EM-H2, SA-H2, PM-H1, RM-H2) to see if a
+  principled (not reverse-engineered-from-these-5) pattern exists.
+  Three don't: EM-H2's failure ("Give me a one-paragraph summary...") is
+  invisible in the question text by construction — no count language
+  exists to detect, confirming PROGRESS.md's own prior claim that this
+  class is caught downstream, not by Stage 2. AU-M2 and SA-H2 are the
+  same shape (the failure-kind label and the text-pattern space just
+  don't line up 1:1 for these). PM-H1 has no clean pattern without
+  reverse-engineering from a single example. **RM-H2 is the one real
+  opportunity**: it's comparison-shaped ("benchmark X against Y"), and
+  `pipeline/stage5_sampling.py`'s `_is_comparison_shaped` heuristic
+  already exists for a different purpose (Stage 5's dry-run sampling) and
+  was already flagged there as "do not promote to `pipeline/` proper
+  without the same must-flag/must-not-flag validation discipline the real
+  mechanisms got." That promotion is real, well-scoped follow-up work —
+  not attempted this session, so as not to rush an unvalidated heuristic
+  into a live signal path the way the original hypothetical-chain regex
+  was.
+
+### Net effect
+
+74 tests pass (was 72 before this pass — +1 hypothetical-chain-detection
+test, +1 AU-H2 regression test). Zero regressions across every existing
+scenario. The severity ordering going in (vacuous-pass hole > regex
+precision > classification/text audit > alias-table completeness) held up
+against actual investigation — the first finding was the only one that
+touched the "no false auto-pass" invariant directly; everything else was
+precision, not soundness.
 
 ---
 

@@ -12,8 +12,27 @@ named target case (see PROGRESS.md):
 - check_existence                    -- existence grounding (SEC-E1, SEC-H1, CO-H2, SEC-H4)
 - check_fanout_maximum               -- ranking grounding (SA-H2)
 - check_evidence_gap_root_cause      -- root-cause classification (EM-M4)
+- check_completeness                 -- completeness grounding (CO-M2)
 
-Design finding (later session): "granularity precision" turned out not to
+Design finding (later session, live held-out audit): "existence grounding"
+turned out not to be one mechanism either. check_existence only checks
+`claimed - retrieved` -- does every claimed id actually exist? -- which
+catches fabrication/over-claiming but is structurally blind to omission: a
+claimed set that is a real, non-fabricated *subset* of the truth passes it
+cleanly, no matter how incomplete. This was found, not assumed: a live
+held-out audit (PROGRESS.md) fed CO-M2's actual failing answer (15 of the
+real 24 obligations, missing 9) through the unmodified check_existence and
+confirmed it does not flag -- every one of the 15 claimed ids is real, so
+there's nothing for existence grounding to catch. check_completeness below
+checks the other direction, `retrieved - claimed`. IMPORTANT CAVEAT: unlike
+every other mechanism in this file, check_completeness was designed using
+CO-M2 as direct reference (that's how the gap was found and the fix
+motivated) -- it is NOT held-out-validated the way check_existence's
+original four target cases were. CO-M2 is now spent as future held-out
+data for this file; see PROGRESS.md's live audit section for the full
+discipline note.
+
+Design finding (earlier session): "granularity precision" turned out not to
 be one mechanism either, same pattern as scope-match's AU-H4/SEC-H4 split
 below. EM-E3's granularity-slip is a counting-*unit* mismatch (chain vs.
 control) -- check_entity_type_match's shape. EM-M4's is a root-*cause*
@@ -201,6 +220,42 @@ def check_existence(claimed_ids: Iterable[str], independent_query: str, id_colum
         check_name="existence_grounding",
         flagged=False,
         reason="every claimed id confirmed present in independent re-query",
+        evidence={"retrieved_ids": sorted(retrieved_ids), "claimed": sorted(claimed)},
+    )
+
+
+def check_completeness(claimed_ids: Iterable[str], independent_query: str, id_column_index: int = 0) -> CheckResult:
+    """Completeness grounding: the other direction from check_existence.
+    Independently re-query the graph and verify every id the query
+    actually returns was included in the claim -- catches omission
+    (a real, non-fabricated but incomplete claimed set), which
+    check_existence is structurally blind to (see this module's docstring
+    for the live audit that found the gap). Targets CO-M2: golden is 24
+    obligations at confidence 0.75/0.80; the failing answer found 15,
+    missing 9 of the 0.80 band -- every claimed id was real, so only the
+    completeness direction catches it.
+
+    Same generic shape as check_existence deliberately -- a caller that
+    wants both fabrication and omission caught runs both checks against
+    the same independent_query, same as scope-match and existence-
+    grounding already compose in the existing target cases.
+    """
+    result = ps_client.cypher(independent_query)
+    retrieved_ids = {row[id_column_index] for row in result["rows"]}
+    claimed = set(claimed_ids)
+
+    omitted = retrieved_ids - claimed
+    if omitted:
+        return CheckResult(
+            check_name="completeness_grounding",
+            flagged=True,
+            reason=f"independent re-query found real id(s) {sorted(omitted)} that the claim omitted",
+            evidence={"retrieved_ids": sorted(retrieved_ids), "claimed": sorted(claimed)},
+        )
+    return CheckResult(
+        check_name="completeness_grounding",
+        flagged=False,
+        reason="every id in the independent re-query is present in the claim -- nothing omitted",
         evidence={"retrieved_ids": sorted(retrieved_ids), "claimed": sorted(claimed)},
     )
 

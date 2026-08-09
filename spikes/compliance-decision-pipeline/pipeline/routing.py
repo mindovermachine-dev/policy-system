@@ -76,27 +76,61 @@ _DISAMBIGUATION_CHECK_FOR_TERM = {
 
 # Any-of grounding requirement for a type-B/D question with no disambiguation
 # term: some independent re-derivation must have run. v0 has no question-text
-# signal that distinguishes which specific grounding shape (existence vs.
-# scope-match vs. fanout) a given claim needs -- see PROGRESS.md, this is a
-# documented coarseness, not an oversight. Tightening it needs a discriminator
-# validated against a real target case, same bar as everything else here.
+# signal that distinguishes which specific grounding shape (existence,
+# completeness, scope-match, or fanout) a given claim needs -- see
+# PROGRESS.md, this is a documented coarseness, not an oversight. Tightening
+# it needs a discriminator validated against a real target case, same bar as
+# everything else here.
 _GROUNDING_CHECK_NAMES = frozenset(
-    {"existence_grounding", "scope_match_regulation_routing", "fanout_maximum"}
+    {"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}
 )
 
 # D's "hypothetical-chain variant" (README: "independent re-derivation +
 # scope-match for D's hypothetical-chain variant") -- validated against
 # AU-H4 ("If our log-retention check turns out to have failed...") and
-# SEC-H4 ("If the Encryption-at-Rest check fails its review..."). Not NLP:
-# a plain-D question like AU-H2 ("Trace the CRA's ... duty ... does the
-# trail reach a check that's actually running?") correctly does not match.
-_HYPOTHETICAL_CHAIN_PATTERN = re.compile(
-    r"\bif\b.*\b(fails?|failed|failing|breaks?|broken|turns out)\b", re.IGNORECASE
+# SEC-H4 ("If the Encryption-at-Rest check fails its review...").
+#
+# Broadened (later session, overfitting audit): the original single regex
+# (`if` ... `fails?|failed|failing|breaks?|broken|turns out`) was built
+# from AU-H4/SEC-H4's exact wording and demonstrably missed semantically
+# identical paraphrases that don't happen to use "if" or those specific
+# verbs -- confirmed by testing it against fresh phrasing, not assumed
+# (see PROGRESS.md). Now two independent signals, both required (in either
+# order, anywhere in the text): a conditional marker, and a failure/state
+# verb. Still not NLP -- a wider but still finite keyword net, same
+# category of heuristic as Stage 1's alias table and Stage 2's patterns,
+# and it inherits their honesty about that: some hypothetical-chain
+# phrasing will still slip past a rewording neither list anticipates
+# (e.g. "goes offline", "is compromised"). Validated must-match (AU-H4,
+# SEC-H4, plus paraphrases using "should"/"assuming"/"collapses" that the
+# old regex missed) and must-not-match (AU-H2, and "currently failing"
+# with no conditional marker -- a real-time question, not hypothetical) in
+# tests/test_routing.py.
+#
+# "exploited"/"exploits" added the same session, for a different reason:
+# a target-case text audit (PROGRESS.md) found SEC-H1's fixture text had
+# been silently paraphrased away from dev-questions.md's actual verbatim
+# question ("If an attacker exploited a missing MFA check today...") into
+# a plain enumeration with no hypothetical framing at all -- which had
+# also caused it to be misclassified type B instead of D. Now fixed to use
+# the real text and the real type; "exploited" needed adding here for that
+# real question's own wording to correctly match, not to make a synthetic
+# case pass.
+_CONDITIONAL_MARKER_PATTERN = re.compile(
+    r"\b(if|should|assuming|suppose|supposing|were to)\b", re.IGNORECASE
+)
+_FAILURE_STATE_PATTERN = re.compile(
+    r"\b(fails?|failed|failing|breaks?|broken|turns? out|collapses?|collapsed|"
+    r"malfunctions?|malfunctioned|stops? working|stops? functioning|goes? down|"
+    r"ceases? to (?:function|work)|exploited?|exploits?)\b",
+    re.IGNORECASE,
 )
 
 
 def _is_hypothetical_chain(question_text: str) -> bool:
-    return bool(_HYPOTHETICAL_CHAIN_PATTERN.search(question_text))
+    return bool(
+        _CONDITIONAL_MARKER_PATTERN.search(question_text) and _FAILURE_STATE_PATTERN.search(question_text)
+    )
 
 
 def _mandatory_checks_for_type_b(stage1: Stage1Result) -> frozenset:
