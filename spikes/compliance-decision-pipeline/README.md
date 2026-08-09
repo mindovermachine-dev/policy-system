@@ -472,9 +472,9 @@ graded instances per type, (A)'s stated figures update with it.
      SEC-H1, CO-H2) with a definitive verdict.
 5. Only after step 4 passes on every mechanism individually, build Stage 3
    (decomposition/composition routing) and the narrowed judge/human paths,
-   and re-run end to end against all 108 already-graded transcripts.
-6. **Dry-run Stage 5's sampling strategy retroactively**, using the 108
-   already-graded transcripts as a stand-in for "pipeline-verified
+   and re-run end to end against all 162 already-graded question-instances.
+6. **Dry-run Stage 5's sampling strategy retroactively**, using the 162
+   already-graded question-instances as a stand-in for "pipeline-verified
    answers" (a proxy, not a live test — see "What This Is NOT"): apply the
    risk-weighted sampling rule (step 1 of Stage 5) to the pool of
    transcripts Stage 1–4 marked verified, at a fixed sample size, and check
@@ -541,7 +541,7 @@ graded instances per type, (A)'s stated figures update with it.
   whether the *sampling rule* is smarter than random using known,
   already-labeled failures. It cannot test the harder live question (does
   the audit catch a failure kind nobody has hypothesized yet), because
-  every failure in the 108-transcript pool is by definition already known.
+  every failure in the 162-question-instance pool is by definition already known.
   A real Stage 5 cycle against live, previously-unseen pipeline output is
   later work.
 
@@ -553,7 +553,7 @@ graded instances per type, (A)'s stated figures update with it.
   canonical answering and evidence grounding.
 - Stage 5's sampling rule and audit procedure, specified and dry-run
   (setup step 6) against the retroactive pool — not yet run live.
-- A report applying the pipeline to the 108 already-graded transcripts
+- A report applying the pipeline to the 162 already-graded question-instances
   (`cli-tool-semantics` × 2 runs + `skill-transfer` held-out), with
   explicit resolution of the 5 ambiguous dev-v2b cases and a pass/fail
   against every success criterion above.
