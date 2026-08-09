@@ -12,14 +12,25 @@ sections:
    NO_MATCH entry today -- see its docstring -- but Stage1Result already
    carries has_undefined_term for exactly this case, so the branch is kept
    live for when Stage 1's vocabulary grows beyond the curated cluster.)
-2. A Stage 3 `RoutingDecision` was supplied and named mandatory check(s),
-   but none of them appear among the Stage 4 checks actually performed ->
-   gate failed. This is what closes the vacuous-pass gap `FitnessResult`
-   has on its own (`passed` is trivially True with zero checks run) --
-   `pipeline/routing.py`'s module docstring has the full rationale and the
-   concrete case (AU-M4) this catches. `routing` is optional and backward
-   compatible: omitting it (as callers predating Stage 3 do) skips this
-   check entirely, same behavior as before Stage 3 existed.
+2. A Stage 3 `RoutingDecision` was supplied and its path is
+   `DIRECT_MANDATORY_CHECK` (types B/C/D), but no Stage 4 check that
+   satisfies the route's requirement was actually performed -> gate
+   failed. This is what closes the vacuous-pass gap `FitnessResult` has on
+   its own (`passed` is trivially True with zero checks run) --
+   `pipeline/routing.py`'s module docstring has the full rationale.
+   Enforcement is keyed on the *path*, not on whether `mandatory_check_
+   names` happens to be non-empty: an earlier version of this gate keyed
+   on the named-checks set directly, which left a real hole for any B/C/D
+   question landing in a "no check named yet -- documented gap" routing
+   branch (confirmed live: AU-H2 composed with zero checks produced a
+   false confident result before this fix -- see PROGRESS.md's "Live
+   held-out generalization audit" follow-up). When `mandatory_check_names`
+   is non-empty, one of those specific names must appear; when it's empty,
+   any real Stage 4 check counts (weaker, but closes the zero-checks hole,
+   which is the part that actually violates "no false auto-pass"). `routing`
+   is optional and backward compatible: omitting it (as callers predating
+   Stage 3 do) skips this check entirely, same behavior as before Stage 3
+   existed.
 3. Any Stage 4 check flagged -> gate failed. Never deliver the flagged
    claim as verified -- mark it explicitly, state why, and let (C) carry
    the contradicting evidence. This is what "No false auto-pass" (README
@@ -45,7 +56,7 @@ from typing import List, Optional
 
 from . import provenance
 from .question_types import confidence_statement_for_type
-from .types import FitnessResult, MatchKind, RoutingDecision, Stage1Result, Stage2Result, ThreeBlockOutput
+from .types import FitnessResult, MatchKind, RoutingDecision, RoutingPath, Stage1Result, Stage2Result, ThreeBlockOutput
 
 
 def _collect_candidate_entity_ids(fitness: FitnessResult) -> List[str]:
@@ -130,15 +141,42 @@ def compose_output(
         answer = f"Not determinable from what's in the system without a definition for {undefined}."
         return ThreeBlockOutput(question_id, confidence, answer, verification_data)
 
-    if routing is not None and routing.mandatory_check_names:
+    if routing is not None and routing.path == RoutingPath.DIRECT_MANDATORY_CHECK:
+        # Enforcement is keyed on the *path*, not on whether routing named
+        # specific check(s) -- README's Stage 3 makes mandatory verification
+        # a property of the type (B/C/D), not of whether routing.py happens
+        # to know how to name the right check yet. Keying this on
+        # `routing.mandatory_check_names` alone (the original version of
+        # this gate) left a real hole: any B/C/D question landing in a
+        # "no check named -- documented gap" branch (e.g. AU-H2, type D,
+        # not the hypothetical-chain shape) had an empty mandatory set, so
+        # the old condition skipped enforcement entirely and let
+        # FitnessResult.passed's zero-checks vacuous-True through --
+        # confirmed live: AU-H2 composed with zero Stage 4 checks produced
+        # a confident "this is correct" before this fix. See PROGRESS.md.
         performed = {c.check_name for c in fitness.checks}
-        if not (performed & routing.mandatory_check_names):
+        if routing.mandatory_check_names:
+            satisfied = bool(performed & routing.mandatory_check_names)
+            requirement = (
+                f"at least one of {sorted(routing.mandatory_check_names)} to have "
+                f"been performed ({routing.reason})"
+            )
+        else:
+            # No specific check is named for this route yet (a documented
+            # gap, not a silent one -- see routing.py) -- but mandatory
+            # verification still applies, so *some* real Stage 4 check must
+            # have run. Weaker than the named-check case (doesn't confirm
+            # the check performed is actually the relevant one), but it
+            # closes the zero-checks hole, which is the failure mode that
+            # actually violates "no false auto-pass".
+            satisfied = bool(performed)
+            requirement = f"at least one Stage 4 check to have been performed ({routing.reason})"
+        if not satisfied:
             confidence = (
-                f"Fitness gate failed: this question's route requires at least one of "
-                f"{sorted(routing.mandatory_check_names)} to have been performed "
-                f"({routing.reason}), but none was. A check set that doesn't include the "
-                "mandatory mechanism must not be treated as a pass -- see (C) for exactly "
-                "what was (and wasn't) run."
+                f"Fitness gate failed: this question's route requires {requirement}, "
+                "but none was. A check set that doesn't meet the mandatory-verification "
+                "requirement must not be treated as a pass -- see (C) for exactly what "
+                "was (and wasn't) run."
             )
             answer = f"[FLAGGED -- not verified] {proposed_answer}"
             return ThreeBlockOutput(question_id, confidence, answer, verification_data)

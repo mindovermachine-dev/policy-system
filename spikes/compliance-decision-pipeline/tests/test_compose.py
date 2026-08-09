@@ -138,6 +138,38 @@ class TestThreeBlockComposer(unittest.TestCase):
         )
         self.assertFalse(em_m4_golden.answer.startswith("[FLAGGED"))
 
+    def test_co_m2_incomplete_claim_fails_closed(self):
+        # The live-held-out-audit fix (PROGRESS.md): a claim missing 9 real
+        # obligations, none of them fabricated, must still fail the gate --
+        # check_existence alone would have let this through.
+        co_m2_failing = self.scenarios["CO-M2-failing"]
+        self.assertTrue(co_m2_failing.answer.startswith("[FLAGGED -- not verified]"))
+        checks = co_m2_failing.verification_data["fitness_checks"]
+        self.assertTrue(any(c["check_name"] == "completeness_grounding" and c["flagged"] for c in checks))
+
+    def test_co_m2_complete_claim_gets_confident_statement(self):
+        co_m2_golden = self.scenarios["CO-M2-golden"]
+        self.assertEqual(
+            co_m2_golden.confidence_statement,
+            "Given the data currently in the system, this is correct.",
+        )
+        self.assertFalse(co_m2_golden.answer.startswith("[FLAGGED"))
+
+    def test_au_h2_zero_checks_fails_closed_not_vacuously(self):
+        # The severest finding of the overfitting audit (PROGRESS.md): a
+        # type-D question with no named mandatory check (routing.py has no
+        # mechanism for the non-hypothetical-chain shape) used to compose
+        # a confident, unverified answer on zero Stage 4 checks. Locked in
+        # here so it can never silently regress.
+        au_h2 = self.scenarios["AU-H2-zero-checks"]
+        self.assertTrue(au_h2.answer.startswith("[FLAGGED -- not verified]"))
+        self.assertNotEqual(
+            au_h2.confidence_statement,
+            "Given the data currently in the system, this is correct.",
+        )
+        self.assertIn("Fitness gate failed", au_h2.confidence_statement)
+        self.assertEqual(au_h2.verification_data["fitness_checks"], [])
+
     def test_routing_recorded_in_verification_data(self):
         # (C) should carry Stage 3's own decision, not just Stage 4's --
         # an auditor should be able to see *why* a check was mandatory,

@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.alias_table import run_stage1  # noqa: E402
-from pipeline.routing import route_question  # noqa: E402
+from pipeline.routing import _is_hypothetical_chain, route_question  # noqa: E402
 from pipeline.structural import run_stage2  # noqa: E402
 from pipeline.types import MatchKind, RoutingPath, Stage1Result, Stage2Result, TermMatch  # noqa: E402
 
@@ -144,7 +144,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.path, RoutingPath.DIRECT_MANDATORY_CHECK)
         self.assertEqual(
             decision.mandatory_check_names,
-            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum"}),
+            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}),
         )
 
     def test_au_h4_type_d_hypothetical_chain_requires_grounding_check(self):
@@ -152,7 +152,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.path, RoutingPath.DIRECT_MANDATORY_CHECK)
         self.assertEqual(
             decision.mandatory_check_names,
-            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum"}),
+            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}),
         )
 
     def test_au_h2_type_d_not_hypothetical_chain_no_mandatory_check(self):
@@ -166,6 +166,38 @@ class TestRouting(unittest.TestCase):
         decision = _route("EM-E3", "C", _EM_E3_TEXT)
         self.assertEqual(decision.path, RoutingPath.DIRECT_MANDATORY_CHECK)
         self.assertEqual(decision.mandatory_check_names, frozenset({"entity_type_cross_check"}))
+
+    def test_hypothetical_chain_detection_broadened_set(self):
+        # Overfitting audit finding (PROGRESS.md): the original regex was
+        # built from AU-H4/SEC-H4's exact wording and missed paraphrases.
+        # Broadened to two independent signals (conditional marker +
+        # failure/state verb); validated here against a wider set than the
+        # two cases it was built from, including the specific paraphrases
+        # that were confirmed live to slip past the old version.
+        must_match = [
+            _AU_H4_TEXT,  # "If our log-retention check turns out to have failed..."
+            (
+                "If the Encryption-at-Rest check fails its review on August "
+                "15, which regulatory duties does that put at risk?"
+            ),  # SEC-H4
+            "Should the vulnerability-scanning check stop working, what obligations are at risk?",
+            "Assuming the incident-response control is broken, what duties are exposed?",
+            "What happens to our GDPR posture if the DPO capability collapses?",
+            "If access control authentication were to fail tomorrow, what would we be exposed to?",
+        ]
+        must_not_match = [
+            _AU_H2_TEXT,  # real target case: no conditional/failure framing at all
+            # Real-time state question, not hypothetical -- no conditional
+            # marker despite containing a failure-state word.
+            "Is the vulnerability-management capability currently failing any obligations?",
+            _SEC_E1_TEXT,
+        ]
+        for text in must_match:
+            with self.subTest(text=text):
+                self.assertTrue(_is_hypothetical_chain(text), f"expected match: {text!r}")
+        for text in must_not_match:
+            with self.subTest(text=text):
+                self.assertFalse(_is_hypothetical_chain(text), f"expected no match: {text!r}")
 
     def test_unknown_type_raises(self):
         stage1 = Stage1Result(question_id="SYNTH-Z", question_text="text")
