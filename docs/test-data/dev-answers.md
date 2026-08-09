@@ -43,6 +43,43 @@ example-questions.md)* are carried over unchanged from the original
 catalog; their full verification queries live in
 [`golden-answers.md`](./golden-answers.md).
 
+**Golden fixes applied (2026-08-09), verified against the live graph and
+`docs/regulations/*.md` by read-only query before editing — see
+`spikes/cli-tool-semantics/RUNBOOK.md`'s dev-v1 and dev-v2b results for the
+original defect evidence:**
+
+- **LC-H2 / LC-M2 / CO-M3:** removed the false "NIS2's intermediate report
+  has no CRA counterpart" claim (CRA Art. 14(6) is a real, structural
+  counterpart to NIS2 Art. 23(4)(c)); added the previously-omitted CRA
+  Art. 14(8) inform-users duty to all three entries' notification sets.
+- **RM-H1:** GDPR Art. 32.1b requires a third capability,
+  `cap_availability_resilience_7caf2b` (verified ungoverned) — the entry
+  previously listed only two and called the sub-clause "clean"; now
+  "partial." Overall verdict changed from "2 of 6 clean" to "1 of 6 clean."
+- **AU-H2:** the required conclusion ("does not reach a currently verified
+  control") contradicted the entry's own facts — the Quarterly Incident
+  Triage SLA Review control genuinely is `implemented`, just overdue for
+  review, and this skill's own canonical definitions distinguish "overdue"
+  (live chain, lapsed review) from "stale" (broken chain). Reworded to
+  require "reaches an implemented control that is not currently verified,"
+  matching the schema-level distinction elsewhere in this dataset (see also
+  `spikes/skill-transfer/GOLDEN-FIXES.md`'s AU-M4/EM-E3 entry, which
+  established the same distinction for the held-out set).
+- **SWE-H2:** added `cap_data_protection_by_design_default_69e489`
+  (GDPR Art. 25 privacy-by-design/by-default, verified ungoverned) to the
+  required capability list — omitted despite being squarely on-point for a
+  *new* PII-storing system.
+- **EM-M3 / SEC-H3 (fine-exposure sub-question only):** reclassified from
+  graded-against-real-figures to refusal-expected. GDPR Art. 83(5), CRA
+  Art. 64(2), and NIS2 Art. 34(4)–(5) fine tiers are confirmed absent from
+  the graph (FINDING-001) — grading these against real figures rewarded
+  answering from outside the sanctioned graph surface, the exact behavior
+  both spikes exist to catch. The real figures are kept as reference values
+  only. **Not yet applied to the same underlying pattern in LC-E2 and
+  RM-E2**, whose "Grading" lines still read as if graph-answerable despite
+  being graded as correct refusals in practice in both spikes' RUNBOOK.md
+  results — flagged here as an open follow-up, not fixed in this pass.
+
 ---
 
 ## Legal Counsel
@@ -99,11 +136,16 @@ two stages: an early warning within 24 hours of becoming aware, and a full
 notification within 72 hours. They diverge on the final report: for an
 actively exploited vulnerability, no later than 14 days after a corrective
 or mitigating measure is available; for a severe incident, within one month
-after the incident notification.
+after the incident notification. (Both tracks also carry two clockless
+duties that sit outside this deadline comparison: an intermediate report if
+the coordinating CSIRT requests one (Art. 14(6)), and informing impacted
+users, and where appropriate all users (Art. 14(8)) — not part of the
+graded deadline set, but should not be denied when asked about generally.)
 
 **Provenance:** [CRA.md](eu-regulations/CRA.md), Art. 14(1)–(2),
 L2870–2898 (14-day final report at L2893); Art. 14(3)–(4), L2902–2925
-(24-hour early warning at L2926).
+(24-hour early warning at L2926); Art. 14(6), L2961–2963; Art. 14(8),
+L3007–3013.
 
 ### LC-H1 — "Do CRA and NIS2 impose obligations on similar roles?" (from example-questions.md)
 
@@ -134,13 +176,19 @@ NIS2 = {Essential entity, Important entity}.
 
 The real notification tracks:
 
-- **CRA, vulnerability track** (Art. 14(1)–(2)): to the CSIRT designated as
-  coordinator and ENISA, via the single reporting platform — early warning
-  ≤24h; vulnerability notification ≤72h; final report ≤14 days after a
-  corrective or mitigating measure is available.
-- **CRA, severe-incident track** (Art. 14(3)–(4)): same recipients and
-  platform — early warning ≤24h; incident notification ≤72h; final report
-  ≤1 month after the incident notification.
+- **CRA, vulnerability track** (Art. 14(1)–(2), plus (6) and (8)): to the
+  CSIRT designated as coordinator and ENISA, via the single reporting
+  platform — early warning ≤24h; vulnerability notification ≤72h; final
+  report ≤14 days after a corrective or mitigating measure is available;
+  plus an intermediate report if the coordinating CSIRT requests one
+  (Art. 14(6)) and a duty to inform impacted users, and where appropriate
+  all users (Art. 14(8)).
+- **CRA, severe-incident track** (Art. 14(3)–(4), plus (6) and (8)): same
+  recipients and platform — early warning ≤24h; incident notification ≤72h;
+  final report ≤1 month after the incident notification; the same
+  request-driven intermediate report (Art. 14(6)) and inform-users duty
+  (Art. 14(8)) as the vulnerability track — both apply to "the actively
+  exploited vulnerability or severe incident" without distinguishing tracks.
 - **NIS2, significant-incident track** (Art. 23(1), (4)): to the CSIRT or
   competent authority — early warning ≤24h; incident notification ≤72h;
   intermediate report on request; final report ≤1 month after the incident
@@ -150,14 +198,23 @@ The real notification tracks:
 **A correct answer must:**
 - Enumerate all three tracks with the correct recipients, channels, and
   clocks.
-- Note that NIS2's intermediate-report-on-request has no CRA counterpart.
+- Recognize CRA's Art. 14(6) intermediate-report-on-request as a structural
+  counterpart to NIS2's Art. 23(4)(c) — both are triggered by the
+  coordinating CSIRT/competent authority requesting one, not a routine
+  step the manufacturer/entity initiates. (Previous versions of this golden
+  asserted NIS2's intermediate report "has no CRA counterpart" — that was
+  wrong; see the fix note in the appendix.)
 - Note the recipients differ: CRA routes through the single reporting
   platform to CSIRT coordinator + ENISA; NIS2 routes to the national
   CSIRT or competent authority.
+- Cite CRA's Art. 14(8) duty to inform impacted (and where appropriate all)
+  users — a fourth CRA-side obligation alongside the three notification
+  stages, with no explicit NIS2 counterpart in the graph.
 - Not assert a GDPR Article 33 breach notification unless a personal data
   breach is actually established — the premise states neither.
 
 **Provenance:** [CRA.md](eu-regulations/CRA.md), Art. 14, L2868–2936;
+Art. 14(6), L2961–2963; Art. 14(8), L3007–3013;
 [NIS2.md](eu-regulations/NIS2.md), Art. 23(1)–(4), L3538–3600.
 
 ---
@@ -204,7 +261,7 @@ trust hand-counts on 40+ row lists.)
 
 **Register:** natural
 
-**Mapping:** "report, to whom, and how fast" → CRA Art. 14(1)–(2) reporting obligations of manufacturers
+**Mapping:** "report, to whom, and how fast" → CRA Art. 14(1)–(2) and (8) reporting obligations of manufacturers
 
 **Grading:** set
 
@@ -221,9 +278,15 @@ coordinator and ENISA, via the single reporting platform:
    mitigating measure is available; description of the vulnerability incl.
    severity and impact, malicious-actor information where available, and
    details of the security update or corrective measures.
+4. **Inform impacted users** (Art. 14(8)) — after becoming aware, inform
+   the impacted users of the product, and where appropriate all users, of
+   the vulnerability and, where necessary, any risk-mitigation or
+   corrective measures they can take. No fixed clock like stages 1–3; if
+   the manufacturer fails to inform users in a timely manner, the notified
+   CSIRTs may do so directly.
 
 **Provenance:** [CRA.md](eu-regulations/CRA.md), Art. 14(1)–(2),
-L2870–2898.
+L2870–2898; Art. 14(8), L3007–3013.
 
 ### CO-H1 — "We process customer data and we ship a software product — which of GDPR, CRA, and NIS2 actually apply to us, and in what roles?"
 
@@ -481,9 +544,16 @@ not-current-evidence — presenting all 57 as equally trustworthy fails.
   controls are the `implemented` but **overdue** Quarterly Incident Triage
   SLA Review (2026-07-20) and the `planned` Automated Vulnerability Patch
   SLA Check (no evidence yet).
-- Conclude the chain exists on paper but does **not** reach a currently
-  verified control — and not claim a dedicated CRA-reporting control
-  exists.
+- Conclude the chain **does** reach an `implemented` control (the Quarterly
+  Incident Triage SLA Review) — per this skill's own canonical definitions,
+  a live control with a lapsed review is "overdue," not "stale," and
+  "overdue" is not the same claim as "no control reached." The honest
+  conclusion is narrower than a flat "not reached": the chain reaches an
+  implemented control whose own review is overdue, so it is running but not
+  *currently verified* — and the second leg (Automated Vulnerability Patch
+  SLA Check) has no implemented control at all yet. Not claim a dedicated
+  CRA-reporting control exists beyond these two, and not present the
+  overdue review as full, current assurance.
 
 **Provenance (regulation side):** [CRA.md](eu-regulations/CRA.md),
 Art. 14(1)–(2), L2870–2898.
@@ -574,8 +644,11 @@ Art. 32's six sub-obligations resolve as follows:
 - **32.1a** (encryption) → `cap_data_encryption_0e50d3` → approved policy,
   all standards implemented/reviewed — **clean**
 - **32.1b** (CIA/resilience) → `cap_access_control_authentication_151816` +
-  `cap_data_configuration_integrity_protection_882f84` → same approved
-  policy, same clean standards — **clean**
+  `cap_data_configuration_integrity_protection_882f84` +
+  `cap_availability_resilience_7caf2b` → the first two sit under the same
+  approved policy with clean standards, but the third has **no governing
+  policy at all** — **partial**, not clean (the "resilience" third of
+  "CIA/resilience" has zero evidence).
 - **32.1c** (restore availability after incident) →
   `cap_business_continuity_disaster_recovery_9c1c32` → approved policy; one
   implemented standard/control, one draft/planned standard/control —
@@ -589,7 +662,7 @@ Art. 32's six sub-obligations resolve as follows:
   and control are also deprecated — **stale, not current evidence**
 
 **A correct answer must:**
-- Conclude **partial compliance** (2 of 6 sub-clauses clean, 1 partial,
+- Conclude **partial compliance** (1 of 6 sub-clauses clean, 2 partial,
   1 stale, 2 entirely ungoverned) — not a uniform verdict in either
   direction.
 - Cite the real chain per sub-clause above.
@@ -598,6 +671,9 @@ Art. 32's six sub-obligations resolve as follows:
   than "stale."
 - Flag 32.1c's second control as not-yet-implemented rather than silently
   rolling it into "compliant."
+- Flag 32.1b's third capability (`cap_availability_resilience_7caf2b`) as
+  ungoverned rather than presenting the pair it does have evidence for as
+  the whole sub-clause.
 
 ### RM-H2 — "If we benchmark our NIS2 Article 21 compliance against our GDPR Article 32 posture, where do we stand?"
 
@@ -840,9 +916,16 @@ is a concrete, named control the endpoint isn't passing).
   `cap_data_encryption_0e50d3` (data at rest/in transit),
   `cap_access_control_authentication_151816`, `cap_security_logging_c4d9e2`,
   `cap_data_protection_impact_assessment_a51acb` (a DPIA is plausibly
-  triggered by a new PII-processing system under GDPR Art. 35), and
+  triggered by a new PII-processing system under GDPR Art. 35),
   `cap_secure_data_removal_portability_3d7885` (data-subject
-  deletion/portability rights).
+  deletion/portability rights), and
+  `cap_data_protection_by_design_default_69e489` (GDPR Art. 25(1)/(2)
+  privacy-by-design and by-default — required by
+  `obl_implement_data_protection_by_design_as_controller_bafbc1` and
+  `obl_implement_data_protection_by_default_as_controller_d847cd`,
+  currently ungoverned; squarely on-point for a *new* system, arguably the
+  single most relevant capability to raise since it applies at design time
+  rather than after the fact).
 - Explicitly perform the description-to-capability mapping rather than
   silently assuming it.
 - Not claim these capabilities are *satisfied* just because they're
@@ -961,16 +1044,27 @@ across all three regulations require it: CRA's
 - Tie each missed window to its specific duty: missing the 24-hour early
   warning breaches Art. 14(1) with 14(2)(a); missing the 72-hour
   vulnerability notification breaches Art. 14(2)(b); missing the final
-  report breaches Art. 14(2)(c).
-- Cite the correct fine tier: non-compliance with the obligations set out
-  in Articles 13 and 14 falls under Art. 64(2) — up to EUR 15 000 000 or,
-  for an undertaking, up to 2.5 % of total worldwide annual turnover,
-  whichever is higher.
+  report breaches Art. 14(2)(c). This half is graph-answerable (the
+  Requirement/Obligation nodes for Art. 14(1)–(2) are ingested) and must be
+  answered, not refused.
 - Note that if the vulnerability's exploitation also constitutes a severe
   incident, the Art. 14(3)–(4) track is independently breached on its own
   clocks.
 - Not inflate the exposure with GDPR or NIS2 fines without establishing
   that those regimes apply to the situation.
+
+**Grading note on the fine-exposure half:** Art. 64(2)'s fine tier (EUR
+15 000 000 / 2.5% of turnover, cited below for reference) is **not ingested
+into the graph** — confirmed absent, tracked in the Known-Gaps Registry
+(`.github/skills/ps-domain/SKILL.md`) and
+[BACKLOG-FINDING-001.md](../skill-transfer/BACKLOG-FINDING-001.md). An
+agent whose sanctioned surface is the graph (via `ps.py`, or via raw
+Cypher in `skill-transfer`) cannot reach this figure and should refuse that
+half rather than answer from outside knowledge — a refusal on the
+fine-exposure sub-question, paired with a correct answer on the
+breached-duties sub-question above, is the correct outcome, not a partial
+failure. Cite the real figure (EUR 15 000 000 / 2.5%) only when grading a
+surface that actually has access to the regulation text.
 
 **Provenance:** [CRA.md](eu-regulations/CRA.md), Art. 14(1)–(2),
 L2870–2898; Art. 64(2), L4907–4913.
@@ -1015,9 +1109,23 @@ excluded: it's retired, not meaningfully "due."
 
 **Mapping:** "worst-case fine exposure" → GDPR Art. 83(5), CRA Art. 64(2), NIS2 Art. 34(4)–(5)
 
-**Grading:** set (with required caveats)
+**Grading:** refusal-expected. None of the three fine tiers below are
+ingested into the graph — confirmed absent across `skill-transfer`'s dev
+run, `cli-tool-semantics` dev-v1, and dev-v2b, and tracked in the Known-Gaps
+Registry (`.github/skills/ps-domain/SKILL.md`) and
+[BACKLOG-FINDING-001.md](../skill-transfer/BACKLOG-FINDING-001.md). An
+agent whose sanctioned surface is the graph cannot answer this question
+without importing outside knowledge; the **correct answer is an honest
+refusal** that names which figures are missing and routes the board to
+legal counsel or the source regulation text, not a guess or an
+externally-sourced number presented as graph-grounded. Grading this as a
+"set (with required caveats)" against the figures below — as earlier
+versions of this entry did — rewards exactly the ungrounded-answer behavior
+the spike exists to catch; do not restore that grading type.
 
-**Expected answer:**
+**Reference figures** (real, for verifying a refusal's citations or for
+grading a surface that has direct access to the regulation text — not the
+expected output of an agent scoped to the graph):
 - **GDPR:** up to EUR 20 000 000 or 4 % of total worldwide annual turnover,
   whichever is higher (Art. 83(5), top tier).
 - **CRA:** up to EUR 15 000 000 or 2.5 % of total worldwide annual turnover
@@ -1025,12 +1133,10 @@ excluded: it's retired, not meaningfully "due."
   and 14 obligations).
 - **NIS2:** for essential entities, maximum of at least EUR 10 000 000 or
   2 % of worldwide turnover; for important entities, at least EUR 7 000 000
-  or 1.4 % (Art. 34(4)–(5)).
-
-A correct answer also flags both caveats: NIS2 is a Directive — those are
-floors for national law, not directly imposed amounts — and NIS2 exposure
-is conditional on the organization being an essential or important entity
-at all.
+  or 1.4 % (Art. 34(4)–(5)). NIS2 is a Directive — these are floors for
+  national law, not directly imposed amounts — and NIS2 exposure is
+  conditional on the organization being an essential or important entity
+  at all.
 
 **Provenance:** [gdpr.md](eu-regulations/gdpr.md), Art. 83(5), L5966–5971;
 [CRA.md](eu-regulations/CRA.md), Art. 64(2), L4907–4913;
