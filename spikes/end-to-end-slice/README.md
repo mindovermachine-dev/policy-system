@@ -28,15 +28,15 @@ This is the integration test, not a learning vehicle — the learning happened i
 4. **Helvex graph** in FalkorDB, as before.
 
 5. **Run the full question set** through the complete stack:
-   - Development set from `skill-transfer` (~20 questions)
-   - Held-out set from `skill-transfer` (~20 questions)
+   - Development set from `skill-transfer` (54 questions)
+   - Held-out set from `skill-transfer` (54 questions)
    - Each question flows: User → Harness (agent + skill) → PS CLI → API Gateway → PS Subsystem → FalkorDB → back with facts + provenance → synthesized answer
 
 ### Success Criteria
 
 | Criterion | Threshold |
 |---|---|
-| **End-to-end correctness** | 50% on development set; 50% on held-out set (same thresholds as `skill-transfer`) |
+| **End-to-end correctness** | 100% of questions answered correctly or correctly refused due to lack of information, on both development and held-out sets (same threshold as `skill-transfer`) |
 | **Provenance completeness** | Every answer cites the full source chain (Regulation → article → Obligation → Capability → Policy → Standard → Control) |
 | **Trust flags** | Stale/partial chains are labeled as such — not laundered into clean prose |
 | **No component bypasses** | Every request flows through all four components (verified by logs/tracing at each hop) |
@@ -61,5 +61,5 @@ This is the integration test, not a learning vehicle — the learning happened i
 - A running PS Subsystem service (minimal FastAPI app)
 - A running PS API Gateway (minimal routing layer)
 - Updated PS CLI calling the gateway
-- Results tables: development set and held-out set (~20 each), each with full-stack pass/fail + component traces
+- Results tables: development set and held-out set (54 each), each with full-stack pass/fail + component traces
 - A verdict: the four-component architecture carries UC-3 end-to-end, or specific integration issues to fix
