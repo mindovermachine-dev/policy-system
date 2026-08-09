@@ -11,6 +11,19 @@ named target case (see PROGRESS.md):
 - check_entity_type_match            -- entity-type cross-check (EM-E3)
 - check_existence                    -- existence grounding (SEC-E1, SEC-H1, CO-H2, SEC-H4)
 - check_fanout_maximum               -- ranking grounding (SA-H2)
+- check_evidence_gap_root_cause      -- root-cause classification (EM-M4)
+
+Design finding (later session): "granularity precision" turned out not to
+be one mechanism either, same pattern as scope-match's AU-H4/SEC-H4 split
+below. EM-E3's granularity-slip is a counting-*unit* mismatch (chain vs.
+control) -- check_entity_type_match's shape. EM-M4's is a root-*cause*
+mismatch (governance vs. engineering) -- a different dimension entirely,
+not reducible to a counting unit, so forcing it through
+check_entity_type_match would have been a false fit (PROGRESS.md's prior
+"don't force a fit" call on EM-M4 was correct at the time -- no mechanism
+for this dimension existed yet). check_evidence_gap_root_cause below is
+that mechanism, added once a real, independently-re-derivable structural
+definition was found: see its own docstring.
 
 Revision to the earlier note here (see PROGRESS.md "Design finding,
 revisited"): SEC-H4 was originally flagged as needing a bespoke
@@ -228,4 +241,99 @@ def check_fanout_maximum(claimed_capability_id: str, claimed_count: int) -> Chec
         flagged=False,
         reason="claimed maximum-fanout capability and count match independent re-query",
         evidence={"actual_capability_id": actual_capability_id, "actual_count": actual_count},
+    )
+
+
+_LIVE_CONTROL_STATUSES = {"implemented", "reviewed"}
+_VALID_ROOT_CAUSE_CATEGORIES = {"governance", "engineering", "resolved", "excluded"}
+
+
+def classify_evidence_gap_root_cause(capability_id: str) -> str:
+    """Independently derive a capability's evidence-gap root cause from
+    its Policy/Standard/Control structure -- four categories, mutually
+    exclusive:
+
+    - "excluded": the Policy is deprecated -- out of scope, same exclusion
+      discipline as check_overdue_excludes_deprecated (a deprecated Policy
+      left the review cycle, it didn't fail it).
+    - "governance": no Policy at all, or the Policy is still in `draft` --
+      the chain is broken not because a build is late, but because no
+      current Control backs it and nothing has even been organizationally
+      chartered to do so. Includes the "no Policy at all" case (the
+      majority of GDPR-linked capabilities, verified live) as the extreme
+      instance of this same category, not a separate one -- there is even
+      less governance structure there, not a different kind of gap.
+    - "engineering": the Policy has at least one live (implemented/
+      reviewed) Control -- the chain is not stale -- but also at least one
+      Control that is not live and not merely deprecated (e.g. `planned`)
+      under the same Policy. Something is actively being built, just not
+      finished -- a build/schedule problem, not an organizational one.
+    - "resolved": the Policy has at least one live Control and nothing
+      else in progress -- no evidence problem at all.
+
+    Verified live against EM-M4's two named RUNBOOK.md entities (see
+    tests/fixtures.py): the Clinical Data Integrity policy's DPIA
+    capability classifies "governance" (draft policy, zero Controls); all
+    three capabilities under the Incident/Vulnerability Response policy
+    classify "engineering" (v1 Control implemented, v2 still `planned`).
+    """
+    result = ps_client.cypher(
+        "MATCH (cap:Capability {id: '"
+        + capability_id
+        + "'}) OPTIONAL MATCH (cap)-[:GOVERNED_BY]->(p:Policy) "
+        "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(:Standard)-[:IMPLEMENTED_BY]->(c:Control) "
+        "RETURN p.status, collect(DISTINCT c.implementation_status)"
+    )
+    # OPTIONAL MATCH means this always returns exactly one row for a real
+    # capability id -- p.status/the collected list are simply empty/None
+    # when there's no Policy (or no Standard/Control) to find.
+    policy_status, raw_statuses = result["rows"][0]
+    control_statuses = {s for s in (raw_statuses or []) if s is not None}
+
+    if policy_status == "deprecated":
+        return "excluded"
+
+    has_live_control = bool(control_statuses & _LIVE_CONTROL_STATUSES)
+    has_incomplete_control = bool(control_statuses - _LIVE_CONTROL_STATUSES - {"deprecated"})
+
+    if not has_live_control:
+        return "governance"
+    if has_incomplete_control:
+        return "engineering"
+    return "resolved"
+
+
+def check_evidence_gap_root_cause(capability_id: str, claimed_category: str) -> CheckResult:
+    """Root-cause classification cross-check: does an answer's claimed
+    category for a capability's evidence gap (governance/engineering/
+    resolved/excluded) match what the graph's own Policy/Standard/Control
+    structure actually shows? Targets EM-M4: the failing transcript's
+    16/10 split framed the breakdown at a different sub-grouping than
+    golden's "Clinical-draft 10 vs incident-v2 10" -- this check grounds
+    the underlying claim a governance/engineering split depends on, one
+    named capability at a time, the same way check_entity_type_match
+    grounds a counting-unit claim. See classify_evidence_gap_root_cause's
+    docstring for the four-category definition and how it was validated.
+    """
+    if claimed_category not in _VALID_ROOT_CAUSE_CATEGORIES:
+        raise ValueError(
+            f"claimed_category {claimed_category!r} must be one of {sorted(_VALID_ROOT_CAUSE_CATEGORIES)}"
+        )
+
+    actual_category = classify_evidence_gap_root_cause(capability_id)
+    if claimed_category != actual_category:
+        return CheckResult(
+            check_name="evidence_gap_root_cause",
+            flagged=True,
+            reason=(
+                f"claimed '{capability_id}' is a '{claimed_category}' evidence gap, but its "
+                f"Policy/Standard/Control structure shows '{actual_category}'"
+            ),
+            evidence={"capability_id": capability_id, "claimed_category": claimed_category, "actual_category": actual_category},
+        )
+    return CheckResult(
+        check_name="evidence_gap_root_cause",
+        flagged=False,
+        reason=f"claimed category '{claimed_category}' matches the independently-derived structure",
+        evidence={"capability_id": capability_id, "claimed_category": claimed_category, "actual_category": actual_category},
     )

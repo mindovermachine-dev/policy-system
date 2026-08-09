@@ -27,6 +27,14 @@ followed to the letter either — a middle path:
 - Stage 3 (decomposition/composition routing), the LLM judge ensemble, and
   human escalation are legitimately stubbed/deferred in v0 — least urgent,
   matches README's own sequencing.
+  **Update (later session):** Stage 3's *routing-decision* layer (which
+  path a question takes, and which Stage 4 check(s) become mandatory) was
+  built and validated — see "Stage 3 — routing" below. What's still
+  deferred is the actual decomposition/recursive-answer machinery the
+  DECOMPOSE path would need to *execute*, because this pipeline has no
+  answer-generation engine to decompose into (see README's "What This Is
+  NOT" — it verifies a candidate answer, it doesn't produce one). The
+  judge ensemble and human escalation remain fully deferred, unchanged.
 - **Test oracle is the 162 already-graded question-instances, not new
   questions.** Iterate against the specific known target cases below
   (ground truth already established) before ever running a new/unseen
@@ -152,6 +160,85 @@ Stage 1 must record the question's stated entity type ("chain" vs
 "control" vs "obligation" etc.) at capture time; Stage 4 cross-checks the
 answer's stated counting unit against it.
 
+**Update (later session): EM-M4 resolved, via a different mechanism than
+originally planned here.** This session's own framing above ("spot-check
+EM-M4" against `check_entity_type_match`) turned out to be the wrong tool
+— see "Stage 4 — root-cause classification (EM-M4)" below for why, and
+`fitness.py`'s module docstring for the finding this produced ("granularity
+precision is not one mechanism, it's two"). Kept here unedited, not
+rewritten, same discipline as every other superseded call in this doc.
+
+### Stage 4 — root-cause classification (EM-M4, later session)
+
+Revisits the "Open questions" entry that had stood since the prior
+session: "EM-M4's entity-type mismatch is weaker/fuzzier than EM-E3's —
+may need a different mechanism... Don't force a fit." That call was
+correct at the time — no mechanism existed for the dimension EM-M4's
+failure actually turns on. This session found one, by tracing RUNBOOK.md's
+compressed failure note ("16/10 split framed differently than golden
+(Clinical-draft 10 vs incident-v2 10)") back to real, named graph
+entities instead of guessing at the golden's exact reasoning (which isn't
+in this repo — held-out question):
+
+- **"Clinical-draft"** = `cap_data_protection_impact_assessment_a51acb`,
+  governed by `pol_clinical_data_integrity_policy_e1a539` — status
+  `draft`, and its Standard has **zero** Controls at all. Nothing has
+  been built; nothing has even been formally chartered beyond a draft
+  policy. A pure governance gap.
+- **"incident-v2"** = the three capabilities governed by
+  `pol_incident_vulnerability_response_policy_9de859` (status `approved`):
+  `cap_security_incident_reporting_449fa4`, `cap_incident_handling_4cf73e`,
+  `cap_business_continuity_disaster_recovery_9c1c32`. This policy already
+  has a **live** Control (`..._v1_manual`, `implemented`) — the chain is
+  not stale — but *also* a second, parallel Control
+  (`..._v2_automated`, `planned`) that hasn't landed yet. Something is
+  actively being built, on a real (if incomplete) schedule — an
+  engineering gap, not an organizational one.
+
+Verified live, independently, not fit to the target numbers after the
+fact: GDPR obligations requiring the Clinical capability = **10**; summed
+across the three Incident-v2 capabilities = **10** — reproducing
+RUNBOOK's own "Clinical-draft 10 vs incident-v2 10" note exactly.
+
+This generalizes into a clean, four-category, independently-derivable
+classification per capability (`classify_evidence_gap_root_cause`,
+`pipeline/fitness.py`):
+
+- **excluded** — Policy is `deprecated` (same exclusion discipline as the
+  overdue rule check: it left the review cycle, it didn't fail it).
+- **governance** — no live (`implemented`/`reviewed`) Control exists, and
+  the Policy isn't deprecated. Includes both "Policy is `draft`" (Clinical)
+  and "no Policy at all" (verified live: this is the majority case across
+  GDPR's 42 linked capabilities — 32 of them have no Policy mapped at
+  all) as the same category, not two — there's *even less* governance
+  structure in the second case, not a different kind of gap.
+- **engineering** — a live Control exists (chain not stale) but at least
+  one other, non-deprecated Control under the same Policy is not yet live
+  (e.g. `planned`) — an active, incomplete build.
+- **resolved** — a live Control exists and nothing else is in progress.
+  No evidence problem.
+
+`check_evidence_gap_root_cause(capability_id, claimed_category)` cross-
+checks a claim against this independent classification — same shape as
+`check_entity_type_match` (does a stated category match ground truth?),
+different dimension (root cause, not counting unit). Validated in
+`tests/test_stage4.py::TestEvidenceGapRootCause` against all four
+categories, including two non-regression cases neither of RUNBOOK's named
+entities happens to cover (a fully `resolved` capability under the same
+security policy as SEC-H4's; the `deprecated`/`excluded` legacy policy
+SEC-M2/SEC-M4 already established as out-of-scope) — 9/9 pass, plus a
+live re-derivation of the "10 and 10" counts themselves. Composed
+end-to-end in `tests/run_target_cases.py` (`EM-M4-failing`/`EM-M4-golden`)
+and locked in by two `test_compose.py` checks.
+
+**Design finding, same pattern as scope-match's AU-H4/SEC-H4 split
+(above): "granularity precision" is not one mechanism, it's (at least)
+two.** EM-E3 is a counting-*unit* mismatch (chain vs. control) —
+`check_entity_type_match`'s shape, a stated noun against Stage 1's
+recorded entity-type. EM-M4 is a root-*cause* mismatch (governance vs.
+engineering) — not reducible to a counting unit at all, hence the new,
+separate mechanism. Full docstring and rationale in `pipeline/fitness.py`.
+
 ### Stage 4 — existence grounding / independent re-query (resolves 5 ambiguous dev-v2b cases)
 
 SA-H1, SA-H2, SEC-E1, SEC-H1, CO-H2 — all **passed in dev-v1, failed in
@@ -181,10 +268,12 @@ description only, no real IDs.
 
 ## Build status
 
-**All 26 tests pass, 20 of them against the live FalkorDB graph (not
-mocked) — see "How to run" below.** Code lives in `pipeline/` (real logic)
-and `tests/` (validation against the target cases above, not new/invented
-questions, per the chosen build strategy).
+**All tests pass — see "How to run" below for the current count and
+breakdown** (this line intentionally doesn't hardcode a number here
+anymore; it drifted out of date at least twice already as the suite grew
+session over session — one source of truth instead). Code lives in
+`pipeline/` (real logic) and `tests/` (validation against the target
+cases above, not new/invented questions, per the chosen build strategy).
 
 | Component | Status | Notes |
 |---|---|---|
@@ -197,26 +286,117 @@ questions, per the chosen build strategy).
 | Stage 4 — rule check (`check_overdue_excludes_deprecated`) | ✅ validated | targets SEC-M2/SEC-M4. Ground truth pulled live: 6 Controls total, exactly 1 truly overdue (`ctrl_..._incident_vulnerability_response_policy_9de859_v1_manual`), 1 deprecated-but-past-due trap (`ctrl_..._legacy_asset_personnel_security_policy_7ed6c2_v1_manual`, review date 2026-01-01) — the exact shape SEC-M2/SEC-M4 fell into. Flags the trap, doesn't flag the correct set. |
 | Stage 4 — scope-match, regulation-routing variant (`check_regulation_scope`) | ✅ validated for AU-H4 **and SA-H1** | confirmed live: `cap_security_logging_c4d9e2`'s full catalog has zero NIS2/GDPR rows — only CRA-1.0 and HELVEX-SOP-1.0 route through it (AU-H4). Same mechanism, different capability, reused unchanged for SA-H1: `cap_component_inventory_sbom_management_b5223c` is required only by CRA's SBOM obligation today, zero NIS2/GDPR redundant coverage — flags a claim of NIS2/GDPR coverage, doesn't flag the correct CRA-only claim. |
 | Stage 4 — scope-match, SEC-H4 | ✅ validated — turned out to be `check_existence`, not a new mechanism | See "Design finding, revisited" below: the earlier "needs a bespoke redundancy mechanism" call was wrong. RUNBOOK.md's actual failure note ("listed duties verified by the v2/v3 controls, not failing on Aug 15") is an obligation-level over-claim, not a redundancy question — `check_existence` scoped to the failing control's own capability (`cap_data_encryption_0e50d3`, 5 real obligations) catches it directly. RUNBOOK-note-validated, not golden-validated (SEC-H4's golden text isn't in this repo). |
-| Stage 4 — entity-type cross-check (`check_entity_type_match`) | ✅ validated | targets EM-E3 (chain vs control). EM-M4 not attempted — its granularity issue is a framing/bucketing mismatch, not a clean entity-type-noun mismatch; forcing it through this mechanism would be a false fit (see "Open questions") |
+| Stage 4 — entity-type cross-check (`check_entity_type_match`) | ✅ validated | targets EM-E3 (chain vs control) |
+| Stage 4 — root-cause classification (`check_evidence_gap_root_cause`, **later session**) | ✅ validated | targets EM-M4 (governance vs engineering) — a different dimension than EM-E3's counting-unit mismatch, so a new mechanism, not a forced fit onto `check_entity_type_match`. See "Stage 4 — root-cause classification" above |
 | Stage 4 — existence grounding (`check_existence`) | ✅ validated for SEC-E1, SEC-H1, **CO-H2, SEC-H4** | SEC-E1/SEC-H1: independent re-queries return exactly the golden set (2 controls; 7 obligations), live. CO-H2: independent re-query via `Requirement-[:SATISFIED_BY]->Obligation` over the 7 requirement IDs (Art 13.5/13.6, Annex I Pt II points 1/2/4, Art 13.8c for the CVD policy obligation — the graph maps that duty to 13.8c, not annex1_pt2_5 as `dev-answers.md`'s own provenance states, a golden/graph citation mismatch worth a catalog-maintenance note but not a blocker here) returns exactly the 7 golden obligation IDs. SA-H1/SA-H2 use different mechanisms (see their own rows) — not deferred anymore, all three of the prior session's gaps are closed. |
 | Stage 4 — ranking grounding (`check_fanout_maximum`, **new**) | ✅ validated | targets SA-H2. Not existence grounding's shape (membership) — a claim of the form "X is required by the most obligations (N)" needs the ranking recomputed fresh, not looked up. Confirmed live: `cap_data_subject_rights_fulfilment_communication_8eedf0` is genuinely the maximum at 45, next-highest is 30 (`cap_binding_corporate_rules_governance_5d8a7a` / `cap_security_incident_reporting_449fa4`, tied). Flags a wrong capability/count claimed as the maximum, doesn't flag the correct one. |
 | Three-block output composer (`pipeline/compose.py`, `pipeline/question_types.py`) | ✅ validated | wires Stage 1+2+4 end-to-end per question; see `tests/run_target_cases.py` (prints actual (A)/(B)/(C) JSON for 18 scenarios) and `tests/test_compose.py` (4/4 pass). Covers every target case with a *built* Stage 4 mechanism — SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4 (failing + golden variant each) and SEC-E1, SEC-H1 (golden only) — deliberately excludes only AU-M4 now, a Stage 1 (not Stage 4) target case (composing it would be a vacuous fitness-gate pass, see the module docstring). Fixed along the way: `test_compose.py`'s golden-scenario assertion implicitly assumed every golden case gets the confident-type text — true by coincidence for the four original scenarios (all types B/C/D), false for SA-H2 (type G), which per README's Output posture gets the hedge even once its gate clears. Now asserts that explicitly instead of assuming it. |
-| Stage 3 routing | ⬜ deferred (v0 scope) | route everything direct-answer for now, as planned |
+| Stage 3 — routing decision (`pipeline/routing.py`) | ✅ validated (decision layer only) | `route_question()` maps Stage 1/2 signals + question type to a `RoutingDecision` (path + mandatory Stage 4 check names), and `compose.py` now enforces it — closes the vacuous-pass gap `tests/run_target_cases.py` previously worked around by excluding AU-M4. Actual decomposition/recursive-answer execution remains deferred — see "Stage 3 — routing" below and the "Chosen build strategy" update above |
 | LLM judge ensemble | ⬜ deferred (v0 scope) | narrow residual, least urgent, as planned |
 | Human escalation | ⬜ deferred (v0 scope) | stub: log + flag only, as planned |
 | Stage 5 — sampling rule (`pipeline/stage5_sampling.py`) | ✅ dry-run validated | Setup step 6, done this session — see "Stage 5 sampling dry-run" below. Real logic (risk classifier reusing Stage 1/2 + a sampler), not a stub; audit/classify/promote/regression-check/version (Stage 5 steps 2-6) remain out of v0 scope, process not code |
 | (C)'s `source_ref` provenance rendering (`pipeline/provenance.py`) | ✅ validated | Done this session — the acceptance-bar pass's concrete finding, fixed same session. Scoped to Obligation (one hop via `SATISFIED_BY`) and Requirement (direct) ids only — Control/Capability ids deliberately excluded, confirmed live that a full transitive walk for those returns dozens of unrelated regulation-article rows (see "Pharma-auditor-acceptance-bar manual pass" below). Validated in `tests/test_provenance.py` (5/5) and wired into `compose.py`'s (C), locked in by two new `test_compose.py` checks |
 
+### Stage 3 — routing (later session)
+
+Built `pipeline/routing.py`'s `route_question(stage1, stage2, question_type)
+-> RoutingDecision`, wired into `compose.py` (optional `routing` param,
+backward compatible) and into `tests/run_target_cases.py`'s `_run` helper.
+Scope, deliberately bounded: this is the routing *decision* (which of
+README's four paths a question takes, and — for the direct-answer paths —
+which Stage 4 check(s) become mandatory), not decomposition/recursive-
+answer execution. This pipeline verifies a candidate answer; it has no
+answer-generation engine to decompose *into* (README's "What This Is
+NOT"), so DECOMPOSE stays a classification, same as it was before Stage 3
+existed via the type-F/G hedge path in `compose.py` — Stage 3 makes that
+classification an explicit, testable decision instead of an implicit one.
+
+**The concrete gap this closes:** `FitnessResult.passed` is vacuously
+`True` when zero checks were run. `tests/run_target_cases.py` already
+documented this concretely — it excluded AU-M4 specifically because
+composing it with no Stage 4 mechanism behind it would have been a silent
+vacuous pass, and the file said so in its own docstring rather than hide
+it. `route_question` now assigns AU-M4 (type B, "stale" disambiguation) a
+mandatory check name (`stale_chain_strict_reading`) that doesn't exist in
+`fitness.py` yet, and `compose.py` enforces that at least one mandatory
+check_name actually appears among the checks performed before allowing a
+confident result. AU-M4 is now included in `run_target_cases.py`
+(`AU-M4-unbuilt-check`) specifically to demonstrate this: it composes with
+zero Stage 4 checks and correctly comes back `gate_passed: false`,
+`[FLAGGED -- not verified]`, naming the missing mechanism by name —
+instead of, as it would have before this session, silently passing on an
+empty check list. Validated in `tests/test_compose.py`
+(`test_mandatory_check_not_performed_fails_closed_not_vacuously`).
+
+**Design resolution: multi_part vs. a type's own known trigger.** README's
+routing bullets list "type with a known specific trigger (B, C, D)" and
+"needs decomposition (multi-part, ...)" without stating which wins when
+both fire on the same question — not hypothetical: SEC-M4 is Stage 2
+`multi_part=True` (its "which...and which" phrasing trips the keyword
+heuristic) *and* a validated, already-shipped type-B direct-answer target
+case (Stage 4's rule check, prior session). Decomposing it would
+contradict an already-built, already-validated mechanism. Resolved: a
+type's own known-trigger mechanism wins over the multi_part structural
+signal, because the mechanism already reduces the compound claim to one
+verifiable derived quantity (SEC-M4's rule check evaluates the whole
+"overdue set" as a single query result — there's nothing left for
+decomposition to do). multi_part only drives DECOMPOSE when the type
+itself has no known trigger to lean on. Full reasoning in
+`pipeline/routing.py`'s module docstring; locked in by
+`tests/test_routing.py::test_sec_m4_multi_part_still_routes_direct_not_decompose`,
+which asserts the premise (`stage2.multi_part` is actually `True` for
+SEC-M4's real text) before asserting the resolution — not a synthetic
+example.
+
+**Mandatory-check mapping built and validated per type/signal** (any-of
+semantics — at least one named check must have run, not all; see
+`routing.py` for why v0 has no textual discriminator to require a
+*specific* one for B/D's grounding shapes):
+
+| Type / signal | Mandatory check(s) | Validated against |
+|---|---|---|
+| A, E, H | none (near-100% reliability or solved gap-check) | definitional, no target case exercises this directly |
+| B, disambiguation term = overdue/deprecated | `rule_overdue_excludes_deprecated` | SEC-M2, SEC-M4 (incl. the multi_part resolution above) |
+| B, disambiguation term = stale | `stale_chain_strict_reading` (not built yet — intentional, visible gap) | AU-M4 |
+| B, no disambiguation term | any of `existence_grounding` / `scope_match_regulation_routing` / `fanout_maximum` | SEC-E1, SEC-H1, SA-H1, CO-H2 |
+| C, entity_type recorded | `entity_type_cross_check` | EM-E3 |
+| C, no entity_type recorded | none (tool-computed-count check doesn't exist yet — matches the Success Criteria table's existing "Miscount elimination: NOT YET VERIFIABLE") | EM-M4 has its own real, validated Stage 4 mechanism now (`evidence_gap_root_cause`, added later session) — but no question-text signal exists yet for Stage 3 to auto-require it, so it stays an available check a caller selects, same as most Stage 4 mechanisms already work in `run_target_cases.py` |
+| D, "if X breaks/fails" shape | any of `existence_grounding` / `scope_match_regulation_routing` / `fanout_maximum` | AU-H4, SEC-H4 |
+| D, not that shape | none (documented gap, same reasoning as C) | AU-H2 (non-regression: must not spuriously require the grounding set) |
+
+Re-ran every one of the 18 previously-built end-to-end scenarios through
+this enforcement as a regression check (same must-flag/must-not-flag
+discipline as every other mechanism here) — all 18 already carried a
+check_name that satisfies their type's mandatory set, so none of them
+newly fail closed. Only AU-M4 (newly added, not previously composed)
+demonstrates the enforcement actually firing.
+
+**Not attempted, and not silently glossed over:** distinguishing *which*
+specific grounding check a no-disambiguation type-B or hypothetical-chain
+type-D question needs (existence vs. scope-match vs. fanout) from question
+text alone — no target case currently motivates a specific discriminator,
+and inventing one without validation would repeat the exact mistake this
+pipeline's own discipline exists to avoid (see EM-M4's "don't force a fit"
+precedent). The any-of set is the honest current precision; tightening it
+is future work, same bar as promoting `stale_chain_strict_reading` from a
+named gap to a real Stage 4 mechanism.
+
 ### Composer result: no false auto-pass, across all mechanisms built so far
 
-Running the 18 end-to-end scenarios (`tests/run_target_cases.py`) confirms
-the pattern the success criteria require: all 8 `-failing` scenarios
-(reproducing SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4's
-actual recorded transcript/RUNBOOK-note failures) compose into a "Fitness
-gate failed" (A) and a `[FLAGGED -- not verified]` (B), never the
-confident statement; all 10 `-golden`/correct scenarios get either the
+Running the 21 end-to-end scenarios (`tests/run_target_cases.py`, updated
+across two later sessions to include Stage 3's routing, the AU-M4
+enforcement demonstration, and EM-M4's root-cause classification) confirms
+the pattern the success criteria require: all 9 `-failing` scenarios
+(reproducing SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4,
+EM-M4's actual recorded transcript/RUNBOOK-note failures) compose into a
+"Fitness gate failed" (A) and a `[FLAGGED -- not verified]` (B), never the
+confident statement; all 11 `-golden`/correct scenarios get either the
 confident statement or (SA-H2 only, type G) the hedge — never a flagged
-output. All 18 are three-block-complete. (C)'s `source_ref`
+output; the 21st, `AU-M4-unbuilt-check`, is neither a `-failing` nor a
+`-golden` reproduction but Stage 3's own enforcement demonstration (see
+"Stage 3 — routing" above) — also correctly flagged, for a different
+reason (no mandatory check performed, not a check that failed). All 21 are
+three-block-complete. (C)'s `source_ref`
 provenance-chain rendering was not yet built as of this paragraph's
 original writing — since fixed, see "Pharma-auditor-acceptance-bar manual
 pass" below for the update and `pipeline/provenance.py` for the
@@ -438,23 +618,23 @@ deleted, so the reasoning that led to flagging the gap stays visible.
 | Vocabulary-gap precision | ✅ PASS | `test_stage1.py`: flags AU-M4, doesn't false-flag AU-H2/SEC-M2/SEC-M4 |
 | Interaction-rule coverage | ✅ PASS | `test_stage4.py::TestRuleCheckOverdueExcludesDeprecated`: flags SEC-M2/SEC-M4's deprecated-inclusion trap, Stage 1 correctly silent on it |
 | Scope-match precision | ✅ PASS | `check_regulation_scope` (AU-H4, SA-H1) + `check_existence` scoped to the failing control's own capability (SEC-H4) — both flag the over-claim, both pass the correctly-scoped golden, confirmed live in `run_target_cases.py` |
-| Granularity precision | ⚠️ PARTIAL | EM-E3 validated (`test_stage4.py::TestEntityTypeCrossCheck`). EM-M4 explicitly not attempted — its mismatch is a framing/bucketing slip, not a clean entity-type-noun mismatch; forcing a fit would be a false positive on the mechanism's own terms (see "Open questions") |
+| Granularity precision | ✅ PASS (upgraded, later session) | EM-E3 validated (`test_stage4.py::TestEntityTypeCrossCheck`, counting-unit mismatch). EM-M4 previously PARTIAL — resolved once its actual dimension (root-cause, not counting-unit) was identified: `check_evidence_gap_root_cause`, validated in `TestEvidenceGapRootCause` (9/9), including an independent live re-derivation of RUNBOOK's own "10 and 10" figures. See "Stage 4 — root-cause classification" above |
 | Ambiguity resolution | ✅ PASS | All 5 (SA-H1, SA-H2, SEC-E1, SEC-H1, CO-H2) get a definitive live-graph verdict via `check_existence`/`check_regulation_scope`/`check_fanout_maximum` |
-| Miscount elimination | ⬜ NOT YET VERIFIABLE | Stage 2's count-shaped flag exists but has documented weak recall (2/7 spot-check), and there's no live answer-composition step (Stage 3, deferred) to actually enforce "tool-computed number reaches the final answer" against — nothing to pass or fail this against yet, distinct from a fail |
+| Miscount elimination | ⬜ NOT YET VERIFIABLE | Stage 2's count-shaped flag exists but has documented weak recall (2/7 spot-check), and there's no live answer-composition step to actually enforce "tool-computed number reaches the final answer" against — nothing to pass or fail this against yet, distinct from a fail. Stage 3's routing decision layer (later session) doesn't change this: it enforces which check ran, not that a specific number was tool-computed, since no such check exists yet (see `pipeline/routing.py`) |
 | Judge ensemble reliability | ❌ NOT BUILT | Explicitly deferred v0 scope, per plan |
-| No false auto-pass | ✅ PASS | All 8 `-failing` scenarios in `run_target_cases.py` (reproducing actual RUNBOOK-graded failures) return `gate_passed: false`; zero false auto-passes across every mechanism built |
-| Auditability | ✅ PASS | Every fitness check carries a named `check_name`, never an unlabeled aggregate boolean |
+| No false auto-pass | ✅ PASS (strengthened) | All 9 `-failing` scenarios return `gate_passed: false`; zero false auto-passes across every mechanism built. Stage 3 (later session) closed a real edge of this: `FitnessResult.passed` was vacuously `True` on zero checks run — `AU-M4-unbuilt-check` now demonstrates the fix, see "Stage 3 — routing" above |
+| Auditability | ✅ PASS (strengthened) | Every fitness check carries a named `check_name`, never an unlabeled aggregate boolean. (C) now also carries Stage 3's own routing decision (path + mandatory check names + reason), not just Stage 4's checks — an auditor can see *why* a check was mandatory, not only whether one ran |
 | Sampling efficiency | ✅ PASS | This session's Stage 5 dry-run: risk-weighted beats uniform-random at all 3 tested sample sizes, 2000 trials each (see above) |
-| Three-block completeness | ✅ PASS | `run_target_cases.py`: 18/18 three-block-complete |
+| Three-block completeness | ✅ PASS | `run_target_cases.py`: 21/21 three-block-complete |
 | Block (C) sufficiency for relational claims | ✅ PASS (updated, same session) | The relational over-claim itself (AU-H4/SA-H1/SEC-H4) is directly catchable from (C)'s side-by-side claimed-vs-routed/retrieved sets, no re-derivation needed. `source_ref`-to-article-text rendering (`pipeline/provenance.py`) is now built and wired in for every Obligation/Requirement id in (C) — see "Pharma-auditor-acceptance-bar manual pass" above for the update that closed this |
 
-**Net:** 9 of 12 criteria fully pass (upgraded from 8 this session once
-`source_ref` rendering closed), 1 remains partial (EM-M4's entity-type fit
-— a known, already-documented, non-blocking gap), 1 isn't yet testable (no
+**Net:** 10 of 12 criteria fully pass (upgraded from 9 across the two
+later sessions: Stage 3's mandatory-check enforcement strengthened two
+already-passing criteria, and EM-M4's root-cause mechanism moved
+Granularity precision from partial to full pass). 1 isn't yet testable (no
 live answer path to check "miscount elimination" against), 1 is out of v0
 scope by design (judge ensemble). Nothing here contradicts the "no false
-auto-pass" bar, which is the one
-criterion this spike cannot compromise on.
+auto-pass" bar, which is the one criterion this spike cannot compromise on.
 
 ### How to run
 
@@ -471,45 +651,62 @@ cd spikes/compliance-decision-pipeline
 
 Requires FalkorDB reachable at `localhost:6379`, graph `policy_system`
 (same environment every other spike in this repo uses — no setup beyond
-what's already running). Stage 1/2 tests have no graph dependency; Stage 4
-and composer tests do. Stage 5's sampling tests/dry-run have no graph
+what's already running). Stage 1/2/3 tests have no graph dependency; Stage
+4 and composer tests do. Stage 5's sampling tests/dry-run have no graph
 dependency either (pure question-text classification + in-memory sampling).
 
-**All 41 tests pass** (26 from before this session + 8 Stage 5 sanity
-checks in `tests/test_stage5.py` + 5 provenance checks in
-`tests/test_provenance.py` + 2 compose-level source_ref integration checks
-in `test_compose.py`), 22 of them against the live FalkorDB graph.
+**All 66 tests pass** (41 from the prior session + 13 new in
+`tests/test_routing.py`, none requiring FalkorDB — routing is pure
+Stage 1/2 + type-signal logic + 2 new compose-level checks; + 9 new in
+`tests/test_stage4.py::TestEvidenceGapRootCause` for EM-M4's root-cause
+mechanism + 1 more compose-level check, both requiring FalkorDB), 41 of
+them against the live FalkorDB graph.
 
 **Next action:** every item from the previous session's "what's left" list
-is now done, including the one it surfaced along the way:
-- Stage 5's sampling-strategy dry-run — done, risk-weighted beats
-  uniform-random at every tested sample size (see "Stage 5 sampling
-  dry-run" above).
-- The pharma-auditor-acceptance-bar manual pass — done (see above), and
-  its one concrete finding (block (C) missing `source_ref` rendering) is
-  now fixed too (`pipeline/provenance.py`, wired into `compose.py`,
-  validated in `tests/test_provenance.py` and `test_compose.py`).
-- The Success Criteria table checkoff — done (see above); now 9/12 full
-  pass after the `source_ref` fix, up from 8.
-- The 108-vs-162 documentation discrepancy the dry-run surfaced — fixed in
-  both README.md and this doc (every "108 already-graded transcripts"
-  reference now reads "162 already-graded question-instances").
+that was still open is now done:
+- **Stage 3's routing-decision layer** — done, see "Stage 3 — routing"
+  above. Scope note, not a partial completion: the *decision* (which path,
+  which mandatory check) is fully built and validated; actual
+  decomposition/recursive-answer *execution* remains out of scope because
+  no answer-generation engine exists in this pipeline to decompose into
+  (unchanged from the original v0 call — see "Chosen build strategy"'s
+  update at the top of this doc). The acceptance-bar re-run against real
+  generated prose (previous session's stated reason Stage 3 was needed
+  first) still needs that answer-generation engine, which this session
+  did not build — carried forward below, not resolved.
+- **EM-M4's Granularity precision gap** — done, see "Stage 4 — root-cause
+  classification" above. Not the mechanism originally guessed at
+  (`check_entity_type_match`) — a new one (`check_evidence_gap_root_cause`),
+  found by tracing RUNBOOK.md's failure note back to real graph entities
+  rather than forcing the existing mechanism to fit. Success Criteria
+  table's Granularity precision moves from PARTIAL to PASS.
+- LLM judge ensemble and human escalation — still deferred, unchanged.
 
-What's left, unchanged from the original v0 scope decision (not new
-gaps — see "Chosen build strategy" at the top of this doc):
-1. **Stage 3** (decomposition/composition routing) — deferred v0 scope.
-   Needed before a real answer-composition path exists to re-run the
-   acceptance-bar pass against actual generated prose, rather than the
-   test-harness reproductions `run_target_cases.py` uses today.
+What's left:
+1. **An actual answer-composition/generation path** — needed before the
+   acceptance-bar pass can be re-run against real generated prose instead
+   of `run_target_cases.py`'s test-harness reproductions, and before
+   Stage 3's DECOMPOSE path can do more than classify (today it correctly
+   identifies "this needs decomposition" but has nothing to recursively
+   route sub-questions *to*). This is a larger scope decision than the
+   routing layer was — flagging it explicitly rather than deferring
+   silently, since it's the one piece of README's design this pipeline
+   still cannot demonstrate end-to-end.
 2. **LLM judge ensemble** and **human escalation** — deferred v0 scope,
-   least urgent, per the original plan. Build after Stage 3.
-3. Two small, explicitly-non-blocking notes carried forward: EM-M4's
-   entity-type mismatch doesn't cleanly fit `check_entity_type_match`
-   (see "Open questions"); CO-H2's golden/graph citation mismatch
-   (Annex I Pt II point 5 vs. Art 13.8c) is a catalog-maintenance item for
-   the source data, re-confirmed live again this session via the new
-   `source_ref` rendering (see the acceptance-bar update above) — same
-   finding, now surfaced two different ways, still not a pipeline bug.
+   least urgent, per the original plan.
+3. Two check-name gaps Stage 3 made newly visible, not new problems: no
+   Stage 4 mechanism exists yet for `stale_chain_strict_reading` (AU-M4's
+   mandatory check — see "Stage 3 — routing" above) or for a
+   tool-computed-count check (type C's "Miscount elimination" criterion,
+   already NOT YET VERIFIABLE in the Success Criteria table below, unchanged
+   by this session). Building either would follow the exact same
+   must-flag/must-not-flag discipline as every mechanism in `fitness.py`.
+4. One small, explicitly-non-blocking note carried forward: CO-H2's
+   golden/graph citation mismatch (Annex I Pt II point 5 vs. Art 13.8c) is
+   a catalog-maintenance item for the source data — still not a pipeline
+   bug. (EM-M4's entity-type/granularity gap, the other item previously
+   listed here, is resolved — see "Open questions" below and "Stage 4 —
+   root-cause classification" above.)
 
 ---
 
@@ -520,10 +717,14 @@ gaps — see "Chosen build strategy" at the top of this doc):
   passes; `source_ref`-to-regulation-text rendering in (C) is the concrete
   gap standing between "mechanically verified" and "auditor-signable" —
   tracked as the top item in "Next action" above, not re-opened here.
-- EM-M4's entity-type mismatch is weaker/fuzzier than EM-E3's — may need a
-  different mechanism than a clean entity-type cross-check, or may just be
-  a partial-credit case. Don't force a fit; note honestly if it doesn't
-  cleanly validate.
+- ~~EM-M4's entity-type mismatch is weaker/fuzzier than EM-E3's — may need
+  a different mechanism than a clean entity-type cross-check, or may just
+  be a partial-credit case. Don't force a fit; note honestly if it
+  doesn't cleanly validate.~~ — resolved a later session: it needed a
+  different mechanism, not partial credit. The dimension is root-cause
+  (governance vs. engineering), not counting-unit — `check_evidence_gap_
+  root_cause`, validated live against RUNBOOK's own "10 and 10" note. See
+  "Stage 4 — root-cause classification" above.
 - ~~SEC-E1/SEC-H1 golden detail not yet pulled into this doc~~ — done (see
   "Target cases" above); resolved a prior session.
 - CO-H2's requirement-to-obligation mapping surfaced a small
