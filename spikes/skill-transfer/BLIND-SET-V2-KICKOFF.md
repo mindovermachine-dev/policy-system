@@ -1,6 +1,12 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
 # Kickoff Prompt: Blind-Set v2 Generation
 
+**Superseded 2026-08-09** (see [NEXT-ACTIONS.md](./NEXT-ACTIONS.md), thread
+4): decided that reusing the existing blind set is sufficient — a spike not
+having seen it during its own development is enough isolation, without
+regenerating a v2 in a structurally isolated workspace. Kept below as a
+record of the option considered and rejected, not as a live task.
+
 **Do not run this in the current session.** This session has read
 `RUNBOOK.md`, `NEXT-ACTIONS.md`, and specific held-out question IDs and
 their failure patterns — exactly the contamination the isolation rule in

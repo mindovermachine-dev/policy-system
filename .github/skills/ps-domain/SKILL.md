@@ -122,7 +122,41 @@ explicitly, and apply them consistently across every answer:
   an overdue review on an otherwise-live chain. A live Control with a lapsed
   review is "overdue," not "stale." Do not conflate the two when counting.
 
+## CLI Command Surface
+
+Where a `ps` CLI is available in your harness, reach the graph through it, not
+through raw Cypher. Prefer a deterministic command over `ps cypher` whenever
+one fits the question — freelancing Cypher for something a command already
+answers deterministically is a wrong approach even if the answer comes out
+right.
+
+| Command | Use for | Query shape below |
+|---|---|---|
+| `ps query template "<question, verbatim>"` | Structural questions matched by fixed shape: roles, obligations, requirement text, policy/standard/control lookups by name, aggregate counts | Shape 1, templated cases of Shape 5 |
+| `ps query catalog <capability-id-or-name>` | Full chain through one named Capability: Regulation → Role → Obligation → Capability → Policy → Standard → Control, plus the Requirement text | Shape 4 |
+| `ps capabilities list [--filter TEXT] [--ungoverned]` | Discover the exact Capability id/name before calling `query catalog`, or list ungoverned Capabilities | Shape 2, Capability only |
+| `ps templates` | List every pattern `query template` recognizes — check command coverage before assuming a gap means the data doesn't exist | coverage check, not a shape |
+| `ps cypher "<MATCH/RETURN query>"` | Escape hatch — read-only, write clauses rejected before execution. Use ONLY when nothing above fits: anchored walks not rooted at a Capability, entity-vocabulary discovery for labels other than Capability, or aggregates the template router doesn't recognize | Shape 2 (non-Capability), Shape 3, untemplated Shape 5 |
+
+Command-selection order for any question:
+
+1. Does it match a pattern in `ps templates`? → `ps query template`.
+2. Is it anchored on a named Capability, asking about its regulatory-to-organizational chain or coverage? → resolve the id with `ps capabilities list --filter <text>` if you don't already have it, then `ps query catalog <id>`.
+3. Otherwise, and only otherwise → `ps cypher`, applying every rule in this skill exactly as if you were querying directly — the escape hatch does not relax the schema, ID, or provenance discipline below.
+
+`NO_TEMPLATE_MATCH` from `ps query template` means "fall through to the next
+step in this order," not "the data doesn't exist" — it is a routing signal,
+not a refusal to relay to the user.
+
+Global flags (`--host`, `--port`, `--graph`, `--format text|json`) are accepted
+both before and after the subcommand. Use `--format json` when you need to
+parse fields out of the result rather than read a table.
+
 ## Canonical Query Shapes
+
+These describe the underlying retrieval strategy regardless of access
+mechanism; where a `ps` CLI command implements one (see above), use it instead
+of writing the Cypher yourself.
 
 Route by what the question asks for, not by surface keywords:
 
@@ -187,3 +221,8 @@ Route by what the question asks for, not by surface keywords:
    you are counting — chains, distinct Controls, distinct Obligations, etc.
    These yield different numbers over the same graph. A numerically correct
    count at the wrong granularity is a wrong answer.
+9. **No freelancing past a deterministic command.** Where the CLI Command
+   Surface above lists a command for the question's shape, use it. Reaching
+   for `ps cypher` when `ps query template` or `ps query catalog` already
+   covers the question is treated as a wrong approach, independent of whether
+   the resulting answer happens to be correct.
