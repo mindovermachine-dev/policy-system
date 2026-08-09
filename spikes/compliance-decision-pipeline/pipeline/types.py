@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import FrozenSet, List, Optional
 
 
 class MatchKind(Enum):
@@ -84,6 +84,41 @@ class FitnessResult:
     @property
     def passed(self) -> bool:
         return not any(c.flagged for c in self.checks)
+
+
+class RoutingPath(Enum):
+    """Stage 3's four routes (README.md "Stage 3 -- Routing")."""
+
+    DIRECT_CONFIDENT = "direct_confident"
+    DIRECT_MANDATORY_CHECK = "direct_mandatory_check"
+    DECOMPOSE = "decompose"
+    REFUSE = "refuse"
+
+
+@dataclass
+class RoutingDecision:
+    """Stage 3's routing decision for one question: which path it takes,
+    and -- for the direct-answer paths -- which Stage 4 check(s) are
+    mandatory, not optional, before a confident result may be delivered.
+
+    `mandatory_check_names` closes a real gap the composer had without it:
+    `FitnessResult.passed` is vacuously True when zero checks were run, so
+    a question that needed a specific check but got none would silently
+    compose a confident answer with nothing behind it. This set is an
+    any-of requirement (at least one of these check_names must appear
+    among the checks actually performed), not all-of -- see routing.py's
+    module docstring for why v0 has no single canonical grounding check
+    per B/D-type question.
+
+    `reason` is the human-legible explanation of why this route was
+    chosen -- rendered into (C) for auditability, same discipline as every
+    other named mechanism in this pipeline.
+    """
+
+    question_id: str
+    path: RoutingPath
+    mandatory_check_names: FrozenSet[str] = field(default_factory=frozenset)
+    reason: str = ""
 
 
 @dataclass

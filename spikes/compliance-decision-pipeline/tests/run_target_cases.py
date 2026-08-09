@@ -1,8 +1,8 @@
 # © 2026 Cartman ApS. All rights reserved.
-"""End-to-end demonstration: wires Stage 1 + Stage 2 + Stage 4 into
-pipeline.compose.compose_output() for every target case that has a real,
-validated Stage 4 mechanism (PROGRESS.md's Build status table) and prints
-the resulting three-block (A)/(B)/(C) output.
+"""End-to-end demonstration: wires Stage 1 + Stage 2 + Stage 3 + Stage 4
+into pipeline.compose.compose_output() for every target case that has a
+real, validated Stage 4 mechanism (PROGRESS.md's Build status table) and
+prints the resulting three-block (A)/(B)/(C) output.
 
 This is PROGRESS.md's "Next action (b)" -- not a new mechanism, a
 demonstration that the mechanisms already validated in isolation
@@ -13,13 +13,21 @@ and the golden-correct answer (must produce a confident output) -- the
 same must-flag/must-not-flag discipline Setup step 4 used for the
 mechanisms themselves, now applied at the composed-output level.
 
-Deliberately excludes AU-M4: a real Stage 1 target case, not a Stage 4
-one -- composing an output for it would mean a fitness gate with zero
-checks run, i.e. a vacuous pass. Silently doing that would hide the gap
-PROGRESS.md documents rather than show it. SEC-H4, SA-H1, SA-H2, and CO-H2
-were the same kind of gap as of the prior session; each now has a real,
-validated Stage 4 mechanism behind it (see fitness.py's module docstring
-for what changed) and is included below.
+AU-M4 is now included, not excluded: it was previously left out because
+composing it with zero Stage 4 checks would be a vacuous pass, and
+silently doing that would have hidden the gap rather than shown it. Stage
+3's routing (pipeline/routing.py) now makes that gap visible on purpose --
+AU-M4 needs a check (`stale_chain_strict_reading`) that doesn't exist yet,
+so routing it correctly produces a flagged, not-verified result instead of
+a false confident one. See routing.py's module docstring.
+
+EM-M4 is also now included: `pipeline.fitness.check_evidence_gap_root_cause`
+(later session) closed the "Granularity precision" success criterion's
+partial status -- EM-M4's mismatch is a root-cause (governance vs.
+engineering) classification, not a counting-unit one like EM-E3, so it
+needed its own mechanism rather than forcing a fit onto
+check_entity_type_match. See fitness.py's module docstring and
+PROGRESS.md's "Stage 4 -- root-cause classification" section.
 
 Requires FalkorDB reachable at localhost:6379 (same as test_stage4.py).
 
@@ -37,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pipeline import fitness  # noqa: E402
 from pipeline.alias_table import run_stage1  # noqa: E402
 from pipeline.compose import compose_output  # noqa: E402
+from pipeline.routing import route_question  # noqa: E402
 from pipeline.structural import run_stage2  # noqa: E402
 from pipeline.types import FitnessResult  # noqa: E402
 from tests.fixtures import (  # noqa: E402
@@ -45,6 +54,8 @@ from tests.fixtures import (  # noqa: E402
     DATA_ENCRYPTION_CAPABILITY,
     DATA_ENCRYPTION_OBLIGATIONS,
     DEPRECATED_PAST_DUE_CONTROL,
+    EM_M4_CLINICAL_CAPABILITY,
+    EM_M4_INCIDENT_CAPABILITIES,
     INCIDENT_POLICY_CONTROLS,
     MAX_FANOUT_CAPABILITY,
     MAX_FANOUT_COUNT,
@@ -87,6 +98,14 @@ _SEC_H4_TEXT = (
     "If the Encryption-at-Rest check fails its review on August 15, which "
     "regulatory duties does that put at risk?"
 )
+_AU_M4_TEXT = (
+    "Which GDPR articles currently have only stale requirement-to-control "
+    "evidence chains, and why?"
+)
+_EM_M4_TEXT = (
+    "How much of our GDPR evidence problem is a governance problem versus "
+    "an engineering problem?"
+)
 
 _SEC_E1_QUERY = (
     "MATCH (p:Policy {id: 'pol_incident_vulnerability_response_policy_9de859'})"
@@ -110,8 +129,9 @@ _SEC_H4_QUERY = (
 def _run(question_id: str, question_type: str, text: str, fitness_checks: list, answer: str):
     stage1 = run_stage1(question_id, text)
     stage2 = run_stage2(question_id, text)
+    routing = route_question(stage1, stage2, question_type)
     fitness_result = FitnessResult(question_id=question_id, checks=fitness_checks)
-    return compose_output(question_id, question_type, stage1, stage2, fitness_result, answer)
+    return compose_output(question_id, question_type, stage1, stage2, fitness_result, answer, routing)
 
 
 def build_scenarios() -> list:
@@ -281,6 +301,58 @@ def build_scenarios() -> list:
         ),
     ))
 
+    # EM-M4 (type C) -- root-cause classification, not entity-type
+    # cross-check (that's EM-E3's shape, a different dimension). Golden
+    # names the Clinical-draft capability "governance" and the three
+    # Incident-v2 capabilities "engineering" (RUNBOOK.md's "Clinical-draft
+    # 10 vs incident-v2 10" note, reproduced live -- see fitness.py). The
+    # failing scenario reproduces "framed at a different sub-grouping than
+    # golden" by mis-attributing one Incident-v2 capability (an active,
+    # tracked engineering build) as a governance failure instead.
+    incident_ids = sorted(EM_M4_INCIDENT_CAPABILITIES)
+    scenarios.append((
+        "EM-M4-failing",
+        _run(
+            "EM-M4", "C", _EM_M4_TEXT,
+            [
+                fitness.check_evidence_gap_root_cause(EM_M4_CLINICAL_CAPABILITY, "governance"),
+                fitness.check_evidence_gap_root_cause(incident_ids[0], "governance"),  # mis-attributed
+                fitness.check_evidence_gap_root_cause(incident_ids[1], "engineering"),
+                fitness.check_evidence_gap_root_cause(incident_ids[2], "engineering"),
+            ],
+            "16 of our GDPR evidence gaps are governance problems, 10 are engineering problems.",
+        ),
+    ))
+    scenarios.append((
+        "EM-M4-golden",
+        _run(
+            "EM-M4", "C", _EM_M4_TEXT,
+            [
+                fitness.check_evidence_gap_root_cause(EM_M4_CLINICAL_CAPABILITY, "governance"),
+                fitness.check_evidence_gap_root_cause(incident_ids[0], "engineering"),
+                fitness.check_evidence_gap_root_cause(incident_ids[1], "engineering"),
+                fitness.check_evidence_gap_root_cause(incident_ids[2], "engineering"),
+            ],
+            "10 of our GDPR evidence gaps trace to the Clinical Data Integrity policy (still draft -- "
+            "a governance gap); 10 trace to the Incident/Vulnerability Response policy's v2 automation "
+            "(already implemented at v1, so an engineering-in-progress gap, not a governance one).",
+        ),
+    ))
+
+    # AU-M4 (type B) -- not a Stage 4 mechanism demonstration; a Stage 3
+    # enforcement demonstration. "stale" disambiguation has no built check
+    # (see routing.py), so this composes with zero Stage 4 checks -- before
+    # Stage 3's mandatory-check enforcement existed, that would have been a
+    # silent vacuous pass. Now it correctly comes back flagged.
+    scenarios.append((
+        "AU-M4-unbuilt-check",
+        _run(
+            "AU-M4", "B", _AU_M4_TEXT,
+            [],
+            "GDPR articles 32.4, 37, and 38 currently have only stale evidence chains.",
+        ),
+    ))
+
     return scenarios
 
 
@@ -293,7 +365,11 @@ def main() -> None:
                 "label": label,
                 "question_id": output.question_id,
                 "is_complete": output.is_complete,
-                "gate_passed": not any(c["flagged"] for c in output.verification_data["fitness_checks"]),
+                # Not just "no check flagged" -- a mandatory-check-not-performed
+                # result (Stage 3, e.g. AU-M4) has zero flagged checks yet still
+                # isn't a pass. answer's [FLAGGED ...] prefix is compose.py's own
+                # single source of truth for "this is not a verified result".
+                "gate_passed": not output.answer.startswith("[FLAGGED"),
                 "A_confidence_statement": output.confidence_statement,
                 "B_answer": output.answer,
                 "C_verification_data": output.verification_data,
@@ -303,7 +379,12 @@ def main() -> None:
 
     n_complete = sum(1 for r in report if r["is_complete"])
     n_gate_failed = sum(1 for r in report if not r["gate_passed"])
-    print(f"\n{len(report)} scenarios, {n_complete} three-block-complete, {n_gate_failed} gate-failed (expected: the *-failing ones).", file=sys.stderr)
+    print(
+        f"\n{len(report)} scenarios, {n_complete} three-block-complete, {n_gate_failed} gate-failed "
+        "(expected: the *-failing ones, plus AU-M4-unbuilt-check -- Stage 3's mandatory-check "
+        "enforcement correctly fails closed on a check that doesn't exist yet).",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

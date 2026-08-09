@@ -109,6 +109,38 @@ SEC_H4_OVERCLAIMED_MFA_OBLIGATION = "obl_deploy_multi_factor_authentication_and_
 SEC_H4_OVERCLAIMED_LOGGING_OBLIGATION = "obl_maintain_security_logging_c427be"
 
 # --------------------------------------------------------------------------
+# EM-M4 -- root-cause classification (governance vs. engineering) for the
+# two capabilities RUNBOOK.md's own failure note names by structure, not
+# by golden text (held-out question): "Clinical-draft" is
+# cap_data_protection_impact_assessment_a51acb, governed by the (draft-
+# status) Clinical Data Integrity policy with zero Controls at all --
+# nothing built, a pure governance gap. "incident-v2" is the three
+# capabilities under the (approved) Incident/Vulnerability Response policy,
+# which already has a live v1 Control (chain not stale/broken) but also a
+# still-`planned` v2 Control -- an in-progress build, an engineering gap,
+# not a governance one. Verified live this session: GDPR obligations
+# requiring the Clinical capability = 10; summed across the three Incident
+# capabilities = 10 -- reproducing RUNBOOK's own "Clinical-draft 10 vs
+# incident-v2 10" note exactly, from independent re-derivation, not by
+# construction. Targets check_evidence_gap_root_cause.
+# --------------------------------------------------------------------------
+
+EM_M4_CLINICAL_CAPABILITY = "cap_data_protection_impact_assessment_a51acb"
+EM_M4_INCIDENT_CAPABILITIES = {
+    "cap_security_incident_reporting_449fa4",
+    "cap_incident_handling_4cf73e",
+    "cap_business_continuity_disaster_recovery_9c1c32",
+}
+# A resolved capability under the same, otherwise-implemented security
+# policy -- the must-not-flag non-regression case (neither governance nor
+# engineering gap; the chain is fully live, nothing planned or missing).
+EM_M4_RESOLVED_CAPABILITY = "cap_data_encryption_0e50d3"
+# The legacy policy is deprecated -- excluded from the evidence problem
+# entirely (deprecated Controls left the review cycle, they didn't fail
+# it -- same exclusion discipline as SEC-M2/SEC-M4's overdue rule check).
+EM_M4_EXCLUDED_CAPABILITY = "cap_asset_personnel_security_management_e68e9a"
+
+# --------------------------------------------------------------------------
 # Stage 1 -- alias table target cases
 # --------------------------------------------------------------------------
 

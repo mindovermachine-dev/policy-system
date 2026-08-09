@@ -102,6 +102,51 @@ class TestThreeBlockComposer(unittest.TestCase):
         sec_m2 = self.scenarios["SEC-M2-failing"]
         self.assertEqual(sec_m2.verification_data["source_refs"], {})
 
+    def test_mandatory_check_not_performed_fails_closed_not_vacuously(self):
+        # Stage 3's concrete fix (pipeline/routing.py, PROGRESS.md): AU-M4
+        # composes with zero Stage 4 checks (no mechanism exists yet for
+        # "stale" disambiguation) -- before Stage 3's enforcement existed,
+        # FitnessResult.passed would have been vacuously True on an empty
+        # check list, and this would have shipped as a confident answer.
+        au_m4 = self.scenarios["AU-M4-unbuilt-check"]
+        self.assertFalse(au_m4.answer.startswith("[Draft"))
+        self.assertTrue(au_m4.answer.startswith("[FLAGGED -- not verified]"))
+        self.assertIn("mandatory", au_m4.confidence_statement.lower())
+        self.assertIn("stale_chain_strict_reading", au_m4.confidence_statement)
+        self.assertNotEqual(
+            au_m4.confidence_statement,
+            "Given the data currently in the system, this is correct.",
+        )
+        self.assertEqual(au_m4.verification_data["fitness_checks"], [])
+        self.assertTrue(au_m4.is_complete)
+
+    def test_em_m4_root_cause_misattribution_fails_closed(self):
+        # Granularity precision's other half (PROGRESS.md): EM-M4's
+        # mismatch is a root-cause misattribution, not a counting-unit one
+        # -- check_evidence_gap_root_cause, not check_entity_type_match.
+        em_m4_failing = self.scenarios["EM-M4-failing"]
+        self.assertTrue(em_m4_failing.answer.startswith("[FLAGGED -- not verified]"))
+        self.assertIn("evidence gap", em_m4_failing.confidence_statement)
+        checks = em_m4_failing.verification_data["fitness_checks"]
+        self.assertTrue(any(c["check_name"] == "evidence_gap_root_cause" and c["flagged"] for c in checks))
+
+    def test_em_m4_correct_root_cause_split_gets_confident_statement(self):
+        em_m4_golden = self.scenarios["EM-M4-golden"]
+        self.assertEqual(
+            em_m4_golden.confidence_statement,
+            "Given the data currently in the system, this is correct.",
+        )
+        self.assertFalse(em_m4_golden.answer.startswith("[FLAGGED"))
+
+    def test_routing_recorded_in_verification_data(self):
+        # (C) should carry Stage 3's own decision, not just Stage 4's --
+        # an auditor should be able to see *why* a check was mandatory,
+        # not just that one was or wasn't run.
+        sec_m2 = self.scenarios["SEC-M2-failing"]
+        routing_info = sec_m2.verification_data["routing"]
+        self.assertEqual(routing_info["path"], "direct_mandatory_check")
+        self.assertEqual(routing_info["mandatory_check_names"], ["rule_overdue_excludes_deprecated"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

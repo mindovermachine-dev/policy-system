@@ -34,6 +34,10 @@ from tests.fixtures import (  # noqa: E402
     DATA_ENCRYPTION_OBLIGATIONS as _DATA_ENCRYPTION_OBLIGATIONS,
     SEC_H4_OVERCLAIMED_MFA_OBLIGATION as _SEC_H4_OVERCLAIMED_MFA_OBLIGATION,
     SEC_H4_OVERCLAIMED_LOGGING_OBLIGATION as _SEC_H4_OVERCLAIMED_LOGGING_OBLIGATION,
+    EM_M4_CLINICAL_CAPABILITY as _EM_M4_CLINICAL_CAPABILITY,
+    EM_M4_INCIDENT_CAPABILITIES as _EM_M4_INCIDENT_CAPABILITIES,
+    EM_M4_RESOLVED_CAPABILITY as _EM_M4_RESOLVED_CAPABILITY,
+    EM_M4_EXCLUDED_CAPABILITY as _EM_M4_EXCLUDED_CAPABILITY,
 )
 
 
@@ -208,6 +212,81 @@ class TestExistenceGroundingSECH4(unittest.TestCase):
         result = fitness.check_existence(over_claimed, self._query())
         self.assertTrue(result.flagged, result.reason)
         self.assertIn(_SEC_H4_OVERCLAIMED_MFA_OBLIGATION, result.evidence["claimed"])
+
+
+class TestEvidenceGapRootCause(unittest.TestCase):
+    """Targets EM-M4 -- root-cause classification (governance vs.
+    engineering), not a counting-unit mismatch (that's EM-E3's shape, a
+    different mechanism -- see fitness.py's module docstring). Both the
+    'Clinical-draft' (governance) and 'incident-v2' (engineering) sides
+    RUNBOOK.md's failure note names are validated here, live, plus two
+    non-regression cases (a fully resolved capability, a deprecated/
+    excluded one) neither of RUNBOOK's two named entities happens to cover.
+    """
+
+    def test_flags_clinical_capability_claimed_as_engineering(self):
+        # Reproduces the shape of EM-M4's failure: attributing a pure
+        # governance gap (draft policy, zero Controls) to the wrong
+        # category.
+        result = fitness.check_evidence_gap_root_cause(_EM_M4_CLINICAL_CAPABILITY, "engineering")
+        self.assertTrue(result.flagged, result.reason)
+        self.assertEqual(result.evidence["actual_category"], "governance")
+
+    def test_does_not_flag_clinical_capability_claimed_as_governance(self):
+        result = fitness.check_evidence_gap_root_cause(_EM_M4_CLINICAL_CAPABILITY, "governance")
+        self.assertFalse(result.flagged, result.reason)
+
+    def test_flags_incident_capabilities_claimed_as_governance(self):
+        for capability_id in _EM_M4_INCIDENT_CAPABILITIES:
+            with self.subTest(capability_id=capability_id):
+                result = fitness.check_evidence_gap_root_cause(capability_id, "governance")
+                self.assertTrue(result.flagged, result.reason)
+                self.assertEqual(result.evidence["actual_category"], "engineering")
+
+    def test_does_not_flag_incident_capabilities_claimed_as_engineering(self):
+        for capability_id in _EM_M4_INCIDENT_CAPABILITIES:
+            with self.subTest(capability_id=capability_id):
+                result = fitness.check_evidence_gap_root_cause(capability_id, "engineering")
+                self.assertFalse(result.flagged, result.reason)
+
+    def test_does_not_flag_resolved_capability(self):
+        # Non-regression: a capability with a live Control and nothing
+        # else in progress is neither a governance nor an engineering gap.
+        result = fitness.check_evidence_gap_root_cause(_EM_M4_RESOLVED_CAPABILITY, "resolved")
+        self.assertFalse(result.flagged, result.reason)
+
+    def test_flags_resolved_capability_claimed_as_governance(self):
+        result = fitness.check_evidence_gap_root_cause(_EM_M4_RESOLVED_CAPABILITY, "governance")
+        self.assertTrue(result.flagged, result.reason)
+
+    def test_does_not_flag_excluded_deprecated_capability(self):
+        # Non-regression: a deprecated Policy is out of scope entirely --
+        # same exclusion discipline as the overdue rule check.
+        result = fitness.check_evidence_gap_root_cause(_EM_M4_EXCLUDED_CAPABILITY, "excluded")
+        self.assertFalse(result.flagged, result.reason)
+
+    def test_reproduces_runbook_ten_and_ten_obligation_counts(self):
+        # The concrete validation this mechanism rests on: independently
+        # re-deriving RUNBOOK.md's own "Clinical-draft 10 vs incident-v2
+        # 10" note from the graph, not assuming it.
+        clinical_query = (
+            "MATCH (r:Regulation {id: 'GDPR-1.0'})-[:EXPRESSES]->(req:Requirement)"
+            "-[:SATISFIED_BY]->(o:Obligation)-[:REQUIRES]->"
+            f"(c:Capability {{id: '{_EM_M4_CLINICAL_CAPABILITY}'}}) RETURN o.id"
+        )
+        result = fitness.check_existence(set(), clinical_query)
+        self.assertEqual(len(result.evidence["retrieved_ids"]), 10)
+
+        incident_total = 0
+        for capability_id in _EM_M4_INCIDENT_CAPABILITIES:
+            query = (
+                "MATCH (r:Regulation {id: 'GDPR-1.0'})-[:EXPRESSES]->(req:Requirement)"
+                "-[:SATISFIED_BY]->(o:Obligation)-[:REQUIRES]->"
+                f"(c:Capability {{id: '{capability_id}'}}) RETURN o.id"
+            )
+            result = fitness.check_existence(set(), query)
+            incident_total += len(result.evidence["retrieved_ids"])
+        self.assertEqual(incident_total, 10)
 
 
 if __name__ == "__main__":
