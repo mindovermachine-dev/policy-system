@@ -67,6 +67,11 @@ where HARNESS_PREFIX is (verbatim):
    content that lives in the regulation files but was never extracted into the
    graph (the known FINDING-001 penalty-provision gap; such cases are
    "correct refusal," and note them explicitly as dataset-gap instances).
+   **Hard-tier grading requires independent review** (thread 5,
+   [NEXT-ACTIONS.md](./NEXT-ACTIONS.md)): the session that ran the batch
+   must not also grade Hard-tier answers solo — have a separate
+   session/reviewer grade those without seeing the running session's
+   reasoning, to remove the self-grading bias present in the dev-v1 run.
 6. Record results in `c4b-ps-internal/spikes/skill-transfer/RUNBOOK.md`
    (results table) and update the Status line in
    `c4b-ps-internal/spikes/skill-transfer/README.md`.

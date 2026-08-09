@@ -8,6 +8,23 @@
 work (3) is worth doing, which determines what skill v2 (2) can actually be
 validated against.
 
+**Status (2026-08-09): all five threads resolved and executed** in
+sequence 4 → 3 → 2 → 1 → 5. Summary:
+
+| # | Decision | Artifact |
+|---|---|---|
+| 4 | Generate blind-set v2 in an isolated workspace, folding fixed goldens into a new frozen catalog | [BLIND-SET-V2-KICKOFF.md](./BLIND-SET-V2-KICKOFF.md) (not yet run — needs a fresh isolated session) |
+| 3 | Scoped to goldens-only; FINDING-001 filed separately, non-blocking | [GOLDEN-FIXES.md](./GOLDEN-FIXES.md) (applied to `ps-questions/blind-answers.md`), [BACKLOG-FINDING-001.md](./BACKLOG-FINDING-001.md) |
+| 2 | Three definition packs + FINDING-002 fix written into the skill | [`ps-domain/SKILL.md`](../../.github/skills/ps-domain/SKILL.md) |
+| 1 | AD-6 narrowed to "holds for shape, not semantic definitions," dated revision note added | [`ps-prototype-architecture.md`](../../docs/architecture/ps-prototype-architecture.md) |
+| 5 | Hard-tier grading requires independent review going forward | [HELD-OUT-KICKOFF.md](./HELD-OUT-KICKOFF.md) (step 5 updated) |
+
+Remaining before `cli-tool-semantics` can start: **run blind-set v2
+generation** (a fresh, isolated session — this repo's context is now
+contaminated with these findings and cannot generate it), then the
+confirmatory evaluation of skill v2 against it with independent Hard-tier
+grading.
+
 ---
 
 ## 1. Close the loop on the spike's own verdict: revise AD-6

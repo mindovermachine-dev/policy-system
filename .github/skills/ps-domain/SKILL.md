@@ -60,6 +60,14 @@ Requirement under one article, use `req.id CONTAINS "art_18"` or
 that only matches an ID ending *exactly* there and silently misses every
 lettered sub-clause.
 
+**`STARTS WITH` over-matches across article-number boundaries** (FINDING-002):
+`req.id STARTS WITH "CRA-1.0_req_art_13.1"` also matches `art_13.11` through
+`art_13.19` — the prefix is a textual match, not a numeric one. To scope to
+article 13.1 and its lettered sub-clauses only, match the prefix and then
+verify the character immediately after it is a letter or end-of-string (e.g.
+filter results client-side, or anchor with a second condition that excludes
+`.1` followed by another digit).
+
 ## ID Conventions
 
 | Label | Shape | Example |
@@ -100,6 +108,19 @@ Status fields are layer-specific and governance-significant:
 
 A chain through a `deprecated` Policy or a `planned` Control is **not current
 evidence**.
+
+## Canonical Definitions
+
+These boundary rules are not derivable from the schema alone — pin them
+explicitly, and apply them consistently across every answer:
+
+- **Overdue**: a Control's `next_review_date` has passed. Deprecated Controls
+  are excluded — a deprecated Control has left the review cycle, it has not
+  failed it.
+- **Stale**: the chain from Capability to a current Control is *broken* (no
+  `IMPLEMENTED_BY` Control in `implemented` or `reviewed` status) — not merely
+  an overdue review on an otherwise-live chain. A live Control with a lapsed
+  review is "overdue," not "stale." Do not conflate the two when counting.
 
 ## Canonical Query Shapes
 
@@ -157,3 +178,12 @@ Route by what the question asks for, not by surface keywords:
    have no `source_ref` property by design — their provenance is transitive,
    established by walking inbound `SATISFIED_BY` / `REQUIRES` edges back to
    the Requirements and Regulation articles. Cite that walked chain.
+7. **Narrowing discipline.** When asked what depends on, or breaks with, a
+   named node, cite only chains that *route through* that node — not sibling
+   chains that reach the same downstream target by a different path. Scope
+   blast-radius claims to the actual traversed chain, not the union of
+   everything nearby that happens to be reachable.
+8. **Unit-of-counting discipline.** Before answering "how many," state what
+   you are counting — chains, distinct Controls, distinct Obligations, etc.
+   These yield different numbers over the same graph. A numerically correct
+   count at the wrong granularity is a wrong answer.
