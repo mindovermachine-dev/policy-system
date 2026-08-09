@@ -27,13 +27,14 @@ followed to the letter either — a middle path:
 - Stage 3 (decomposition/composition routing), the LLM judge ensemble, and
   human escalation are legitimately stubbed/deferred in v0 — least urgent,
   matches README's own sequencing.
-- **Test oracle is the 108 already-graded transcripts, not new questions.**
-  Iterate against the specific known target cases below (ground truth
-  already established) before ever running a new/unseen question through
-  the pipeline. New-question testing is phase 2, once mechanisms pass their
-  own target cases — that's what tests generalization, not correctness.
-- One open gap, not yet addressed: none of the 108 transcripts were graded
-  against an actual pharma-auditor acceptance bar (they used this project's
+- **Test oracle is the 162 already-graded question-instances, not new
+  questions.** Iterate against the specific known target cases below
+  (ground truth already established) before ever running a new/unseen
+  question through the pipeline. New-question testing is phase 2, once
+  mechanisms pass their own target cases — that's what tests
+  generalization, not correctness.
+- One open gap, not yet addressed: none of the 162 question-instances were
+  graded against an actual pharma-auditor acceptance bar (they used this project's
   own expert-grading rubric). Plan to add an explicit manual checkpoint
   against that bar once the skeleton passes its mechanical validation —
   see "Open questions" below.
@@ -203,6 +204,8 @@ questions, per the chosen build strategy).
 | Stage 3 routing | ⬜ deferred (v0 scope) | route everything direct-answer for now, as planned |
 | LLM judge ensemble | ⬜ deferred (v0 scope) | narrow residual, least urgent, as planned |
 | Human escalation | ⬜ deferred (v0 scope) | stub: log + flag only, as planned |
+| Stage 5 — sampling rule (`pipeline/stage5_sampling.py`) | ✅ dry-run validated | Setup step 6, done this session — see "Stage 5 sampling dry-run" below. Real logic (risk classifier reusing Stage 1/2 + a sampler), not a stub; audit/classify/promote/regression-check/version (Stage 5 steps 2-6) remain out of v0 scope, process not code |
+| (C)'s `source_ref` provenance rendering (`pipeline/provenance.py`) | ✅ validated | Done this session — the acceptance-bar pass's concrete finding, fixed same session. Scoped to Obligation (one hop via `SATISFIED_BY`) and Requirement (direct) ids only — Control/Capability ids deliberately excluded, confirmed live that a full transitive walk for those returns dozens of unrelated regulation-article rows (see "Pharma-auditor-acceptance-bar manual pass" below). Validated in `tests/test_provenance.py` (5/5) and wired into `compose.py`'s (C), locked in by two new `test_compose.py` checks |
 
 ### Composer result: no false auto-pass, across all mechanisms built so far
 
@@ -213,10 +216,11 @@ actual recorded transcript/RUNBOOK-note failures) compose into a "Fitness
 gate failed" (A) and a `[FLAGGED -- not verified]` (B), never the
 confident statement; all 10 `-golden`/correct scenarios get either the
 confident statement or (SA-H2 only, type G) the hedge — never a flagged
-output. All 18 are three-block-complete. Not yet built: (C)'s source_ref
-provenance-chain rendering — no stage resolves those chains to citable
-regulation text yet, documented as a gap in `pipeline/compose.py` rather
-than faked.
+output. All 18 are three-block-complete. (C)'s `source_ref`
+provenance-chain rendering was not yet built as of this paragraph's
+original writing — since fixed, see "Pharma-auditor-acceptance-bar manual
+pass" below for the update and `pipeline/provenance.py` for the
+implementation. Kept here as the original record, not rewritten.
 
 ### Design finding, revisited: SEC-H4 didn't need a new mechanism after all
 
@@ -282,6 +286,176 @@ obligation-granularity, not a redundancy question, and `check_existence`
 here, not deleted, exactly per this section's own stated reason —
 so the reasoning that led to the wrong call stays visible, not erased.
 
+### Stage 5 sampling dry-run (this session — README Setup step 6)
+
+**Pool:** 162 question-instances (54 dev questions × 2 `cli-tool-semantics`
+runs + 54 held-out questions × 1 `skill-transfer` raw-Cypher run), 33 of
+them known failures — transcribed verbatim from both RUNBOOKs'
+per-question result tables into `tests/fixtures_stage5.py`, cross-checked
+against README's own "162 question-instances" / "33 failure instances"
+tallies and each RUNBOOK's own pass-count arithmetic (43/54, 42/54, 44/54 ⇒
+11 + 12 + 10 = 33).
+
+**Documentation discrepancy found and recorded, not silently fixed:** this
+doc's own "Next action" section (below) and README's Deliverables section
+both call this "the 108 already-graded transcripts" — 108 is only
+`cli-tool-semantics`'s two runs (54×2); it omits the 54 held-out instances
+named in the same sentence. The dry-run uses the arithmetically-correct
+162, matching README's type-reliability table. Worth a one-line fix in
+README/PROGRESS wording later; not blocking.
+
+**Risk classifier** (`pipeline/stage5_sampling.classify_risk`): reuses the
+already-validated Stage 1 (`needs_disambiguation_check`) and Stage 2
+(`multi_part`) classifiers unchanged, plus one new heuristic,
+`_is_comparison_shaped` — a keyword/regulation-name-count check standing in
+for README's "comparison/relation-shaped claims" signal, which has no
+built classifier anywhere else in the pipeline. Labeled everywhere as a
+dry-run-only heuristic, not a Stage 1/2/4 mechanism — do not promote it to
+`pipeline/` proper without giving it the same must-flag/must-not-flag
+validation discipline the real mechanisms got.
+
+**Result** (`tests/stage5_dry_run.py`, 2000 trials/sampler/sample-size,
+seed `20260809`):
+
+| Sample size | Risk-weighted mean hit-fraction | Uniform-random mean hit-fraction | Risk-weighted wins? |
+|---|---|---|---|
+| 20 (~12% of pool) | 0.227 | 0.203 | ✅ |
+| 30 (~18% of pool) | 0.240 | 0.202 | ✅ |
+| 45 (~28% of pool) | 0.250 | 0.202 | ✅ |
+
+Risk-weighted beats uniform-random at every tested size — the widening gap
+as sample size grows tracks the risk pool's own size (57 of 162 instances
+carry at least one of the three flags; uniform-random's fraction stays
+essentially flat at ~20%, the pool's base failure rate, exactly as
+expected for an unweighted draw). **Success criterion "Sampling
+efficiency" — PASS.** Composition of the risk pool: 13 instances flagged
+by Stage 1 disambiguation, 26 by Stage 2 multi-part, 31 by the comparison
+heuristic (some overlap; 57 total unique). Full numbers reproducible via
+`tests/stage5_dry_run.py`; fast deterministic sanity checks (not the full
+Monte Carlo) live in `tests/test_stage5.py` (8/8 pass, no FalkorDB
+dependency).
+
+**Caveat carried over from README's own "What This Is NOT":** this proves
+the *sampling rule* beats chance at surfacing *already-known* failures. It
+cannot and does not test whether a live Stage 5 audit would catch a
+genuinely new, unhypothesized failure kind — every failure in this pool is
+by construction already known. That harder question needs a real Stage 5
+cycle against live, previously-unseen pipeline output, later work per
+README.
+
+### Pharma-auditor-acceptance-bar manual pass (this session)
+
+Reviewed all 18 composed `tests/run_target_cases.py` outputs against "would
+a pharma-industry auditor actually sign off on this" — the open question
+PROGRESS.md flagged as unblocked once every target case had a real Stage 4
+mechanism behind it (see "Open questions" below, now resolved).
+
+**What holds up:** the core discipline an auditor would check first —
+never present an unverified or wrong claim as confident — held on all 18.
+Every one of the 8 `-failing` scenarios (reproductions of SEC-M2, SEC-M4,
+AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4's actual recorded failures) comes
+back `gate_passed: false` with a `[FLAGGED -- not verified]` (B) and an (A)
+that names the specific contradicting mechanism and evidence — never a
+generic hedge. Every `check_name` in (C)'s `fitness_checks` is a named,
+inspectable mechanism (`rule_overdue_excludes_deprecated`,
+`scope_match_regulation_routing`, `entity_type_cross_check`,
+`existence_grounding`, `fanout_maximum`) — an auditor doesn't have to trust
+a black-box verdict, they can see exactly which rule fired and why. All 18
+are three-block-complete, confirmed programmatically.
+
+**What would block an actual sign-off:** (C) currently carries the
+structured graph values (real IDs, counts, routed regulations) but not the
+other half of what README's own Output-posture section promises —
+`source_ref` provenance chains back to the actual regulation article text.
+An auditor reviewing, say, SEC-H4-golden's claim ("GDPR Art 32(1)(a) is the
+primary casualty") can see from (C) that
+`obl_apply_pseudonymisation_and_encryption_as_controller_fc1f7e` is a real,
+independently-reconfirmed obligation ID — but nothing in (C) shows *that
+this specific ID is what "Art 32(1)(a)" means*, or quotes the article
+text itself. They'd have to go open `docs/regulations/GDPR.md` by hand for
+every claim, which is exactly the "citation alone" failure mode (C) was
+designed to make unnecessary. This is not a new finding — PROGRESS.md's
+Build status table already flags "(C)'s source_ref provenance-chain
+rendering -- no stage resolves those chains to citable regulation text
+yet" — this pass confirms it concretely, against real output, as the
+single biggest remaining gap between "mechanically verified" and
+"auditor-signable."
+
+**Secondary note, not a blocker:** the (B) answer text in all 18 scenarios
+is test-harness prose reproducing (or correcting) an actual transcript
+answer for mechanism validation, not natural-language output from a live
+answer-composition step (Stage 3, deferred). Tone/register/phrasing
+quality — a real part of what a human auditor judges — hasn't been
+reviewed yet because there's no live composer to produce it. Re-run this
+acceptance-bar pass once Stage 3 exists and generates real prose; today's
+pass validates the gate mechanism and the three-block contract, not final
+answer prose.
+
+**Verdict (as of this pass):** the gate discipline (never auto-pass a
+wrong answer, always name the mechanism) is auditor-grade already. The
+evidence-citation discipline is half-built (structured values: yes;
+regulation-text provenance: not yet). Recommend building the `source_ref`
+rendering next, before claiming full AD-7 sign-off — the graph data it
+needs (`source_ref` fields on Requirement/Obligation nodes) already exists
+and is already used for citation in the `cli-tool-semantics` transcripts
+(RUNBOOK.md, throughout); it's a rendering gap in `compose.py`, not a data
+gap.
+
+**Update, same session — the `source_ref` gap above is now closed.**
+Built `pipeline/provenance.py` and wired it into `compose.py`'s (C). Scope
+resolved live before wiring it in, not assumed: a full transitive walk
+back to Regulation for a Control or Capability id returns dozens of
+unrelated regulation-article rows (tested live against SEC-E1's control —
+31 rows across CRA/NIS2/GDPR, because the Standard it sits under governs a
+Capability shared by many other Obligations) — rendering that as "this
+Control's provenance" would reintroduce, one level up, the exact
+over-citation problem `check_regulation_scope`'s narrowing discipline
+(SKILL.md rule 7) exists to catch. So the fix is scoped to exactly what
+SKILL.md's own Provenance rule (rule 6) describes: Requirement ids resolve
+directly (their own `EXPRESSES` edge carries `source_ref`); Obligation ids
+resolve one hop back via `SATISFIED_BY` to the Requirement(s) that satisfy
+them. Control/Capability ids are deliberately left unresolved — not a gap,
+a design boundary confirmed against live data. Validated against target
+cases in `tests/test_provenance.py` (5/5 pass): SEC-H1's NIS2-only MFA
+obligation resolves to exactly `NIS2-1.0` / `Art. 21(2), point (j)`;
+CO-H2's fabricated `obl_does_not_exist_deadbeef` resolves to `[]` (honest
+"not found," not an error) — and, as a bonus confirmation, CO-H2's real
+coordinated-vulnerability-disclosure obligation resolves to
+`CRA-1.0_req_art_13.8c`, live evidence matching the golden/graph citation
+mismatch this doc already flagged (dev-answers.md cites Annex I Pt II
+point (5) instead). `test_compose.py` gained two integration tests
+locking in that SEC-H1-golden's (C) now carries resolved source_refs and
+SEC-M2-failing's (C) correctly carries none (Control-only claim). All 41
+tests pass (39 + 2). The acceptance-bar verdict above is superseded by
+this: evidence-citation discipline is now fully built for the id types
+that carry a citable source, not just structured values — kept above, not
+deleted, so the reasoning that led to flagging the gap stays visible.
+
+### Success Criteria checkoff (README.md's table, this session)
+
+| Criterion | Verdict | Basis |
+|---|---|---|
+| Vocabulary-gap precision | ✅ PASS | `test_stage1.py`: flags AU-M4, doesn't false-flag AU-H2/SEC-M2/SEC-M4 |
+| Interaction-rule coverage | ✅ PASS | `test_stage4.py::TestRuleCheckOverdueExcludesDeprecated`: flags SEC-M2/SEC-M4's deprecated-inclusion trap, Stage 1 correctly silent on it |
+| Scope-match precision | ✅ PASS | `check_regulation_scope` (AU-H4, SA-H1) + `check_existence` scoped to the failing control's own capability (SEC-H4) — both flag the over-claim, both pass the correctly-scoped golden, confirmed live in `run_target_cases.py` |
+| Granularity precision | ⚠️ PARTIAL | EM-E3 validated (`test_stage4.py::TestEntityTypeCrossCheck`). EM-M4 explicitly not attempted — its mismatch is a framing/bucketing slip, not a clean entity-type-noun mismatch; forcing a fit would be a false positive on the mechanism's own terms (see "Open questions") |
+| Ambiguity resolution | ✅ PASS | All 5 (SA-H1, SA-H2, SEC-E1, SEC-H1, CO-H2) get a definitive live-graph verdict via `check_existence`/`check_regulation_scope`/`check_fanout_maximum` |
+| Miscount elimination | ⬜ NOT YET VERIFIABLE | Stage 2's count-shaped flag exists but has documented weak recall (2/7 spot-check), and there's no live answer-composition step (Stage 3, deferred) to actually enforce "tool-computed number reaches the final answer" against — nothing to pass or fail this against yet, distinct from a fail |
+| Judge ensemble reliability | ❌ NOT BUILT | Explicitly deferred v0 scope, per plan |
+| No false auto-pass | ✅ PASS | All 8 `-failing` scenarios in `run_target_cases.py` (reproducing actual RUNBOOK-graded failures) return `gate_passed: false`; zero false auto-passes across every mechanism built |
+| Auditability | ✅ PASS | Every fitness check carries a named `check_name`, never an unlabeled aggregate boolean |
+| Sampling efficiency | ✅ PASS | This session's Stage 5 dry-run: risk-weighted beats uniform-random at all 3 tested sample sizes, 2000 trials each (see above) |
+| Three-block completeness | ✅ PASS | `run_target_cases.py`: 18/18 three-block-complete |
+| Block (C) sufficiency for relational claims | ✅ PASS (updated, same session) | The relational over-claim itself (AU-H4/SA-H1/SEC-H4) is directly catchable from (C)'s side-by-side claimed-vs-routed/retrieved sets, no re-derivation needed. `source_ref`-to-article-text rendering (`pipeline/provenance.py`) is now built and wired in for every Obligation/Requirement id in (C) — see "Pharma-auditor-acceptance-bar manual pass" above for the update that closed this |
+
+**Net:** 9 of 12 criteria fully pass (upgraded from 8 this session once
+`source_ref` rendering closed), 1 remains partial (EM-M4's entity-type fit
+— a known, already-documented, non-blocking gap), 1 isn't yet testable (no
+live answer path to check "miscount elimination" against), 1 is out of v0
+scope by design (judge ensemble). Nothing here contradicts the "no false
+auto-pass" bar, which is the one
+criterion this spike cannot compromise on.
+
 ### How to run
 
 ```sh
@@ -290,42 +464,62 @@ cd spikes/compliance-decision-pipeline
 
 # to look at the actual composed (A)/(B)/(C) output, not just pass/fail:
 /usr/bin/python3 tests/run_target_cases.py
+
+# Stage 5's sampling-rule dry-run (risk-weighted vs. uniform-random):
+/usr/bin/python3 tests/stage5_dry_run.py
 ```
 
 Requires FalkorDB reachable at `localhost:6379`, graph `policy_system`
 (same environment every other spike in this repo uses — no setup beyond
 what's already running). Stage 1/2 tests have no graph dependency; Stage 4
-and composer tests do.
+and composer tests do. Stage 5's sampling tests/dry-run have no graph
+dependency either (pure question-text classification + in-memory sampling).
 
-**Next action:** (a) and (b) are both done now — SEC-H4, SA-H1, SA-H2, and
-CO-H2 all have real, validated Stage 4 mechanisms (`check_existence`
-reused twice with correctly-scoped queries, `check_regulation_scope`
-reused once, and one genuinely new mechanism, `check_fanout_maximum`, for
-SA-H2's ranking claim), and all four are wired into
-`tests/run_target_cases.py`'s 18-scenario set with failing/golden pairs.
-Every mechanism named in the README's Setup step 4 and Success Criteria
-tables now has a built, validated implementation — nothing left stubbed
-or deferred except the explicitly-v0-scoped items (Stage 3 routing, judge
-ensemble, human escalation). What's left:
-- Setup step 6's Stage 5 sampling-strategy dry-run (risk-weighted vs.
-  uniform-random sample of the 108-transcript pool) — not yet done.
-- The open pharma-auditor-acceptance-bar manual pass (below) — now
-  unblocked, there's a full set of (A)/(B)/(C) outputs across all 8 target
-  failure cases to run past that bar.
-- A pass through the full Success Criteria table in README.md to check
-  off each one explicitly against what's now built, rather than inferring
-  it from this table.
+**All 41 tests pass** (26 from before this session + 8 Stage 5 sanity
+checks in `tests/test_stage5.py` + 5 provenance checks in
+`tests/test_provenance.py` + 2 compose-level source_ref integration checks
+in `test_compose.py`), 22 of them against the live FalkorDB graph.
+
+**Next action:** every item from the previous session's "what's left" list
+is now done, including the one it surfaced along the way:
+- Stage 5's sampling-strategy dry-run — done, risk-weighted beats
+  uniform-random at every tested sample size (see "Stage 5 sampling
+  dry-run" above).
+- The pharma-auditor-acceptance-bar manual pass — done (see above), and
+  its one concrete finding (block (C) missing `source_ref` rendering) is
+  now fixed too (`pipeline/provenance.py`, wired into `compose.py`,
+  validated in `tests/test_provenance.py` and `test_compose.py`).
+- The Success Criteria table checkoff — done (see above); now 9/12 full
+  pass after the `source_ref` fix, up from 8.
+- The 108-vs-162 documentation discrepancy the dry-run surfaced — fixed in
+  both README.md and this doc (every "108 already-graded transcripts"
+  reference now reads "162 already-graded question-instances").
+
+What's left, unchanged from the original v0 scope decision (not new
+gaps — see "Chosen build strategy" at the top of this doc):
+1. **Stage 3** (decomposition/composition routing) — deferred v0 scope.
+   Needed before a real answer-composition path exists to re-run the
+   acceptance-bar pass against actual generated prose, rather than the
+   test-harness reproductions `run_target_cases.py` uses today.
+2. **LLM judge ensemble** and **human escalation** — deferred v0 scope,
+   least urgent, per the original plan. Build after Stage 3.
+3. Two small, explicitly-non-blocking notes carried forward: EM-M4's
+   entity-type mismatch doesn't cleanly fit `check_entity_type_match`
+   (see "Open questions"); CO-H2's golden/graph citation mismatch
+   (Annex I Pt II point 5 vs. Art 13.8c) is a catalog-maintenance item for
+   the source data, re-confirmed live again this session via the new
+   `source_ref` rendering (see the acceptance-bar update above) — same
+   finding, now surfaced two different ways, still not a pipeline bug.
 
 ---
 
 ## Open questions (not blocking, but don't lose track)
 
-- **Pharma-auditor acceptance bar is unvalidated.** All grading so far
-  (108 transcripts) used this project's own expert rubric, not a real or
-  simulated pharma-auditor review. Plan: once Stage 1/2/4 mechanisms pass
-  their target cases, do one explicit manual pass — a handful of
-  pipeline outputs reviewed against "would this specific auditor sign off"
-  — separate from the automated success criteria in README.md.
+- ~~Pharma-auditor acceptance bar is unvalidated.~~ — done this session
+  (see "Pharma-auditor-acceptance-bar manual pass" above). Gate discipline
+  passes; `source_ref`-to-regulation-text rendering in (C) is the concrete
+  gap standing between "mechanically verified" and "auditor-signable" —
+  tracked as the top item in "Next action" above, not re-opened here.
 - EM-M4's entity-type mismatch is weaker/fuzzier than EM-E3's — may need a
   different mechanism than a clean entity-type cross-check, or may just be
   a partial-credit case. Don't force a fit; note honestly if it doesn't

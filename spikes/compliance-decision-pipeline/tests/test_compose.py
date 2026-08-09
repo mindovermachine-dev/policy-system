@@ -82,6 +82,26 @@ class TestThreeBlockComposer(unittest.TestCase):
         cross_check_evidence = em_e3.verification_data["fitness_checks"][0]["evidence"]
         self.assertEqual(cross_check_evidence["answer_counting_unit"], "control")
 
+    def test_verification_data_carries_source_ref_provenance_for_obligation_claims(self):
+        # The acceptance-bar pass's concrete finding (PROGRESS.md): (C) must
+        # resolve every claimed Obligation id to its regulation-article
+        # source_ref, not just the structured graph values. SEC-H1-golden
+        # cites 7 real obligation ids -- each must resolve.
+        sec_h1 = self.scenarios["SEC-H1-golden"]
+        source_refs = sec_h1.verification_data["source_refs"]
+        mfa_obligation = "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f"
+        self.assertIn(mfa_obligation, source_refs)
+        self.assertEqual(source_refs[mfa_obligation][0]["regulation_id"], "NIS2-1.0")
+        self.assertEqual(source_refs[mfa_obligation][0]["source_ref"], "Art. 21(2), point (j)")
+
+    def test_source_refs_omit_control_and_capability_ids(self):
+        # Control/Capability ids (SEC-M2's overdue Controls, SA-H2's
+        # fanout Capability) must not appear in source_refs -- see
+        # provenance.py's module docstring for why forcing one would be
+        # wrong, not just unbuilt.
+        sec_m2 = self.scenarios["SEC-M2-failing"]
+        self.assertEqual(sec_m2.verification_data["source_refs"], {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
