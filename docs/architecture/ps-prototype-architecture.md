@@ -309,6 +309,14 @@ built — proposed 2026-08-09; design derived across a single working
 session from `cli-tool-semantics`' dev-v2b grading, see that spike's
 RUNBOOK.md for the originating evidence).
 
+**AD-7: Cross-source reasoning requires governed alignment, not ad-hoc dataset mixing.**
+The subsystem should support cross-source reasoning through a shared canonical
+semantic core plus source-package alignment gates, not by assuming independently
+generated datasets will converge by chance. This avoids hidden disjoints and
+keeps query trust explicit while preserving incremental ingestion.
+Decision details and adoption plan are captured in
+[ps-cross-source-dataset-alignment.md](ps-cross-source-dataset-alignment.md).
+
 ## Deliberately Excluded (prototype mode)
 
 | Candidate | Why excluded |

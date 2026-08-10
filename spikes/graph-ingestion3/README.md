@@ -6,6 +6,12 @@ into FalkorDB from plain JSON data files — one per regulation — and proves
 out that multiple regulations can converge on shared `Capability` nodes in
 a single graph.
 
+Promoted copies of reusable extracted datasets now live in
+[`docs/test-data/eu-regulations`](../../docs/test-data/eu-regulations).
+
+Promoted reusable loader/convergence scripts now live in
+[`tools/graph-ingestion`](../../tools/graph-ingestion).
+
 ## Files
 
 - `policy_system_graph.json` — the original worked example: all 8 node
@@ -15,14 +21,14 @@ a single graph.
   Engineering Practices/internal chain) built to converge on the same
   `Capability` and `Policy` nodes.
 - `cra.json` — a full LLM extraction of CRA (EU 2024/2847) from
-  `spikes/eu-regulations/CRA.md`: Roles, Requirements, Obligations and
+  `docs/regulations/CRA.md`: Roles, Requirements, Obligations and
   Capabilities only (no Policy/Standard/Control layer yet). See
   `cra-prompt.md` (the extraction prompt) and
   `cra-extraction-methodology.md` (the judgment calls — role/requirement/
   obligation/capability boundaries, granularity, what got excluded and why)
   for how it was derived.
 - `nis2.json` — the same extraction pattern applied to NIS2 (EU 2022/2555)
-  from `spikes/eu-regulations/NIS2.md`, scoped to Art. 3(1)-(4), 20, 21 and
+  from `docs/regulations/NIS2.md`, scoped to Art. 3(1)-(4), 20, 21 and
   23 (see `nis2-prompt.md`). `nis2-extraction-methodology.md` records the
   judgment calls, including where it diverges from CRA's (Member-State
   transposition wrapper stripped from every duty; Capability convergence
@@ -68,17 +74,17 @@ domain doc.
 ## Run (single regulation)
 
 ```bash
-cd spikes/graph-ingestion3
-pip install -r requirements.txt
+cd ../..
+pip install -r tools/graph-ingestion/requirements.txt
 
 # Start FalkorDB
 podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
 
 # Load the data
-python load_graph.py --file cra.json --graph-name policy_system
+python tools/graph-ingestion/load_graph.py --file docs/test-data/eu-regulations/cra.json --graph-name policy_system
 
 # Re-run from a clean graph
-python load_graph.py --file cra.json --graph-name policy_system --reset
+python tools/graph-ingestion/load_graph.py --file docs/test-data/eu-regulations/cra.json --graph-name policy_system --reset
 ```
 
 `load_graph.py` prints node/edge counts per type after loading, plus a
@@ -119,9 +125,9 @@ regulation identity and version already live on the `Regulation` node's own
 id (e.g. `EU-2024/2847-v1`).
 
 ```bash
-python load_graph.py --file cra.json  --graph-name policy_system   # base load
-python load_graph.py --file nis2.json --graph-name policy_system   # layers on top, no --reset
-python load_graph.py --file gdpr.json --graph-name policy_system   # layers on top, no --reset
+python tools/graph-ingestion/load_graph.py --file docs/test-data/eu-regulations/cra.json  --graph-name policy_system   # base load
+python tools/graph-ingestion/load_graph.py --file docs/test-data/eu-regulations/nis2.json --graph-name policy_system   # layers on top, no --reset
+python tools/graph-ingestion/load_graph.py --file docs/test-data/eu-regulations/gdpr.json --graph-name policy_system   # layers on top, no --reset
 ```
 
 Because `load_graph.py` never resets unless told to, and every node/edge is
@@ -147,7 +153,7 @@ finder to shortlist candidate matches against everything already in the
 graph:
 
 ```bash
-python find_capability_duplicates.py --graph-name policy_system
+python tools/graph-ingestion/find_capability_duplicates.py --graph-name policy_system
 ```
 
 It scores every pair of `Capability` nodes with TF-IDF cosine similarity
@@ -176,7 +182,7 @@ Record decisions by appending to `capability_merges.json`:
 Then apply:
 
 ```bash
-python merge_capabilities.py --graph-name policy_system --decisions capability_merges.json
+python tools/graph-ingestion/merge_capabilities.py --graph-name policy_system --decisions docs/test-data/eu-regulations/capability_merges.json
 # add --dry-run first to preview without writing
 ```
 
