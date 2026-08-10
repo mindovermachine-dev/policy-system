@@ -1,0 +1,54 @@
+AU-E2	Show me the audit evidence that our log retention control passed last quarter.
+AU-E4	What must a data protection impact assessment contain, at minimum, under GDPR?
+AU-H3	'Show me proof that you test whether your security measures actually work' — what can we point to, and where does the trail go cold?
+AU-H4	If our log-retention check turns out to have failed, which regulatory requirements does that undermine?
+AU-M3	Which of our automated controls are due for review in the next 30 days?
+AU-M4	Which GDPR articles currently have only stale requirement-to-control evidence chains, and why?
+CO-E2	When does CRA become effective, and what's its current status?
+CO-E4	Once we've shipped a security update, how long does the CRA make us keep it available?
+CO-H3	Put all three regulations' first-notification clocks side by side — if I set one internal escalation SLA, does 24 hours cover everything?
+CO-H4	Which duties in these three regulations are purely procedural — the ones no technical security measure could ever satisfy?
+CO-M2	Which of our extracted regulatory duties have the shakiest provenance confidence and should get a human review?
+CO-M4	Where do NIS2's minimum security measures overlap with CRA's essential requirements and GDPR's security-of-processing rules?
+EM-E3	How many of our GDPR evidence chains would currently hold up in an audit?
+EM-E4	Which of our four policies are approved?
+EM-H3	What should my team prioritize this quarter to move the needle on compliance?
+EM-H4	How long, on average, does it take a Standard to go from draft to implemented in our organization?
+EM-M2	What percentage of our Policies are still draft or deprecated rather than approved?
+EM-M4	How much of our GDPR evidence problem is a governance problem versus an engineering problem?
+LC-E3	What's the maximum fine under the CRA for not meeting its essential cybersecurity requirements?
+LC-E4	Under GDPR, how quickly do we have to notify the supervisory authority of a personal data breach?
+LC-H3	When does GDPR force us to appoint a Data Protection Officer, and does being classified as an essential entity under NIS2 change that analysis?
+LC-H4	If we position our offering as free and open-source software, which CRA obligations do we still carry as an open-source software steward?
+LC-M3	Which GDPR infringements fall into the higher fine tier versus the lower one?
+LC-M4	Does the CRA apply all at once, or in phases — what are the exact dates?
+PM-E2	List the standards under the Data Protection & Security Policy.
+PM-E4	What capabilities does the deprecated Legacy Asset & Personnel Security Policy still govern?
+PM-H3	Which policy state changes would unblock the most GDPR evidence chains?
+PM-H4	If we simply delete the deprecated Legacy policy instead of replacing it, what happens to the things it governs and the GDPR evidence that routes through them?
+PM-M3	GDPR requires records of processing and DPIAs — do our policies actually cover both duties?
+PM-M4	What duties does NIS2 Article 20 create for our management body, and do any of our policies map to them?
+RM-E3	How does the CRA define a 'severe' incident that manufacturers must report?
+RM-E4	What's the maximum CRA fine for giving the authorities incorrect or misleading information?
+RM-H3	A severe product incident hits at 09:00 on a Monday — walk the deadline timeline across all three regulations, and tell me where GDPR-only habits would make us miss one.
+RM-H4	Which is the bigger exposure: the 55 things we're required to be able to do that no policy governs, or the one check that's overdue for review?
+RM-M2	Which capabilities required by CRA have no governing policy?
+RM-M4	Compare our two approved policies — what does each cover, and where are the soft spots?
+SA-E3	Do NIS2 or GDPR need our SBOM capability for anything today?
+SA-E4	Where does GDPR's encryption sub-clause land in our capability map?
+SA-H3	Should we converge CRA's security logging, NIS2's unauthorised-access reporting, and GDPR's compliance monitoring onto a single shared capability — what would we gain, and what would we risk?
+SA-H4	If we try to cover the CRA purely by mapping it onto our existing GDPR-driven capabilities, where does that strategy break down?
+SA-M2	What capabilities does our internal Helvex SOP have in common with the CRA?
+SA-M4	Of the things GDPR Article 32 expects us to be able to do, which lack an approved policy covering them?
+SEC-E3	What's the status of the Automated Vulnerability Patch SLA Check?
+SEC-E4	Does the CRA require products to detect and report unauthorised access?
+SEC-H2	Across everything we verify, where are we most exposed — what would an auditor flag first?
+SEC-H4	If the Encryption-at-Rest check fails its review on August 15, which regulatory duties does that put at risk?
+SEC-M2	Which checks are overdue for review right now — not just due soon?
+SEC-M4	Which checks come due for review before the end of August 2026, and which are already overdue?
+SWE-E2	Which standards under the Data Protection & Security Policy are still in draft?
+SWE-E4	When is the Access Control & MFA check next due for review?
+SWE-H3	Our security scanner flagged missing rate-limiting on an endpoint that processes health data — does that block a GDPR-relevant control?
+SWE-H4	Is my service, `checkout-api`, currently compliant?
+SWE-M3	My service processes personal data — what does GDPR actually ask of me, technically?
+SWE-M4	What does 'secure by default' mean under the CRA, and can I ever ship anything else?
