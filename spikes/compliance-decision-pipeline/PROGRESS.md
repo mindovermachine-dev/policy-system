@@ -384,23 +384,23 @@ named gap to a real Stage 4 mechanism.
 
 ### Composer result: no false auto-pass, across all mechanisms built so far
 
-Running the 24 end-to-end scenarios (`tests/run_target_cases.py`, updated
-across four later sessions to include Stage 3's routing, the AU-M4
+Running the 27 end-to-end scenarios (`tests/run_target_cases.py`, updated
+across five later sessions to include Stage 3's routing, the AU-M4
 enforcement demonstration, EM-M4's root-cause classification, CO-M2's
-completeness grounding, and the AU-H2 vacuous-pass regression scenario)
-confirms the pattern the success criteria require: all 10 `-failing`
-scenarios (reproducing SEC-M2, SEC-M4, AU-H4, EM-E3, SA-H1, SA-H2, CO-H2,
-SEC-H4, EM-M4, CO-M2's actual recorded transcript/RUNBOOK-note failures)
-compose into a "Fitness gate failed" (A) and a `[FLAGGED -- not verified]`
-(B), never the confident statement; all 12 `-golden`/correct scenarios get
-either the confident statement or (SA-H2 only, type G) the hedge — never a
-flagged output; the remaining 2 (`AU-M4-unbuilt-check`,
-`AU-H2-zero-checks`) are neither `-failing` nor `-golden` reproductions
-but Stage 3 enforcement demonstrations (see "Stage 3 — routing" and the
-"Overfitting-fix pass" section above) — also correctly flagged, for a
-different reason each time (no mandatory check performed / no check
-performed at all, not a check that failed). All 24 are three-block-complete.
-(C)'s `source_ref`
+completeness grounding, the AU-H2 vacuous-pass regression scenario, and
+the SA-E3/SA-M2/PM-M3 precision tests) confirms the pattern the success
+criteria require: all 10 `-failing` scenarios (reproducing SEC-M2, SEC-M4,
+AU-H4, EM-E3, SA-H1, SA-H2, CO-H2, SEC-H4, EM-M4, CO-M2's actual recorded
+transcript/RUNBOOK-note failures) compose into a "Fitness gate failed" (A)
+and a `[FLAGGED -- not verified]` (B), never the confident statement; all
+15 `-golden`/correct scenarios get either the confident statement or
+(SA-H2 only, type G) the hedge — never a flagged output; the remaining 2
+(`AU-M4-unbuilt-check`, `AU-H2-zero-checks`) are neither `-failing` nor
+`-golden` reproductions but Stage 3 enforcement demonstrations (see
+"Stage 3 — routing" and the "Overfitting-fix pass" section above) — also
+correctly flagged, for a different reason each time (no mandatory check
+performed / no check performed at all, not a check that failed). All 27
+are three-block-complete. (C)'s `source_ref`
 provenance-chain rendering was not yet built as of this paragraph's
 original writing — since fixed, see "Pharma-auditor-acceptance-bar manual
 pass" below for the update and `pipeline/provenance.py` for the
@@ -629,7 +629,7 @@ deleted, so the reasoning that led to flagging the gap stays visible.
 | No false auto-pass | ✅ PASS (strengthened) | All 10 `-failing` scenarios return `gate_passed: false`; zero false auto-passes across every mechanism built. Stage 3 (later session) closed a real edge of this: `FitnessResult.passed` was vacuously `True` on zero checks run — `AU-M4-unbuilt-check` now demonstrates the fix, see "Stage 3 — routing" above. CO-M2 (later session) closed a different edge: an incomplete-but-non-fabricated claim, which `check_existence` alone can't see — see "CO-M2's gap closed" above |
 | Auditability | ✅ PASS (strengthened) | Every fitness check carries a named `check_name`, never an unlabeled aggregate boolean. (C) now also carries Stage 3's own routing decision (path + mandatory check names + reason), not just Stage 4's checks — an auditor can see *why* a check was mandatory, not only whether one ran |
 | Sampling efficiency | ✅ PASS | This session's Stage 5 dry-run: risk-weighted beats uniform-random at all 3 tested sample sizes, 2000 trials each (see above) |
-| Three-block completeness | ✅ PASS | `run_target_cases.py`: 24/24 three-block-complete |
+| Three-block completeness | ✅ PASS | `run_target_cases.py`: 27/27 three-block-complete |
 | Block (C) sufficiency for relational claims | ✅ PASS (updated, same session) | The relational over-claim itself (AU-H4/SA-H1/SEC-H4) is directly catchable from (C)'s side-by-side claimed-vs-routed/retrieved sets, no re-derivation needed. `source_ref`-to-article-text rendering (`pipeline/provenance.py`) is now built and wired in for every Obligation/Requirement id in (C) — see "Pharma-auditor-acceptance-bar manual pass" above for the update that closed this |
 
 **Net:** 10 of 12 criteria fully pass (upgraded from 9 across the two
@@ -1016,6 +1016,60 @@ precision > classification/text audit > alias-table completeness) held up
 against actual investigation — the first finding was the only one that
 touched the "no false auto-pass" invariant directly; everything else was
 precision, not soundness.
+
+## Precision tests on previously-untouched held-out passes (same session)
+
+Follow-up to a direct question: would running the rest of `blind_
+questions.tsv`'s 54 questions through the pipeline be meaningful? Answer
+worked out in two parts, not just asserted:
+
+- **For recall** (does it catch new failures): no value left. All 10 of
+  the held-out set's known failures are now accounted for — 7 were used
+  to design mechanisms, the other 3 (CO-M2, CO-M4, PM-H3) were just
+  audited above. The remaining 44 are passing instances by definition, so
+  they can't test recall at all.
+- **For precision** (does it avoid false-flagging good answers): most of
+  the 44 touch no existing mechanism's domain at all (breach-notification
+  timing, effective dates, refusal cases, open-ended summaries) —
+  composing those would only ever produce "no mechanism," which isn't new
+  information. Checked all 44 against the 7 mechanisms' actual domains and
+  found exactly 3 clean candidates: passing questions that reuse an entity
+  an existing mechanism already covers, never composed before.
+
+**Result: all 3 confirmed correct, live.**
+
+| ID | Question | Mechanism reused | Result |
+|---|---|---|---|
+| SA-E3 | "Do NIS2 or GDPR need our SBOM capability for anything today?" | `check_regulation_scope`, same capability as SA-H1 | Golden claim (CRA-1.0 only) not flagged |
+| SA-M2 | "What capabilities does our internal Helvex SOP have in common with the CRA?" | `check_existence`, a **freshly constructed** intersection query (CRA's required-capability set ∩ HELVEX-SOP's) — not SA-H1/AU-H4's query reused verbatim | Intersection independently confirmed to be exactly `{cap_security_logging_c4d9e2}`, matching RUNBOOK; golden claim not flagged |
+| PM-M3 | "GDPR requires records of processing and DPIAs — do our policies actually cover both duties?" | `check_evidence_gap_root_cause`, twice — DPIA reuses EM-M4's capability (already "governance"); Art 30/ROPA is `cap_compliance_documentation_management_a87281`, a capability **no prior mechanism had touched**, independently classified "governance" live | Both duties confirmed governance gaps, matching RUNBOOK's "DPIA draft-only + Art. 30 ungoverned"; golden claim not flagged |
+
+**One real gap found and fixed along the way, not just a confirmation:**
+building PM-M3 exposed that `evidence_gap_root_cause` had never been added
+to Stage 3's any-of grounding-check set (`routing.py`) — an omission from
+when the type-C-specific root-cause branch was built for EM-M4, before
+this precision test needed the same mechanism reachable from type B's
+generic "no disambiguation" branch too. Added; existing `test_routing.py`
+assertions updated to match.
+
+Composed end-to-end as `SA-E3-golden`, `SA-M2-golden`, `PM-M3-golden` in
+`tests/run_target_cases.py` (golden-only — these are correct transcripts,
+not recorded failures, so there's no failing variant to reproduce). 27
+scenarios total now (was 24), all three-block-complete, gate-failed count
+unchanged at 12 (all three pass cleanly, as expected). No new test
+methods needed — `test_compose.py`'s generic loops
+(`test_every_scenario_is_three_block_complete`,
+`test_golden_scenarios_get_a_confident_statement`) already cover new
+scenarios automatically.
+
+**What this does and doesn't add to the overfitting picture:** three more
+data points that the mechanisms don't false-flag correct answers on
+material they were never built from — real, but modest, since two of the
+three reuse capabilities already validated (SA-E3 fully, PM-M3's DPIA
+half). The one genuinely new entity (PM-M3's ROPA capability) held up.
+This doesn't change the recall picture at all — CO-M4 and PM-H3 are still
+open, and a fresh held-out set is still the only path to new recall
+evidence, exactly as concluded in the audit above.
 
 ---
 

@@ -77,12 +77,21 @@ _DISAMBIGUATION_CHECK_FOR_TERM = {
 # Any-of grounding requirement for a type-B/D question with no disambiguation
 # term: some independent re-derivation must have run. v0 has no question-text
 # signal that distinguishes which specific grounding shape (existence,
-# completeness, scope-match, or fanout) a given claim needs -- see
-# PROGRESS.md, this is a documented coarseness, not an oversight. Tightening
-# it needs a discriminator validated against a real target case, same bar as
-# everything else here.
+# completeness, scope-match, fanout, or root-cause) a given claim needs --
+# see PROGRESS.md, this is a documented coarseness, not an oversight.
+# Tightening it needs a discriminator validated against a real target case,
+# same bar as everything else here. `evidence_gap_root_cause` added when a
+# type-B precision test (PM-M3) needed it and it was missing from this set
+# -- an omission from when the type-C-specific root-cause branch below was
+# built, not a deliberate exclusion.
 _GROUNDING_CHECK_NAMES = frozenset(
-    {"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}
+    {
+        "existence_grounding",
+        "scope_match_regulation_routing",
+        "fanout_maximum",
+        "completeness_grounding",
+        "evidence_gap_root_cause",
+    }
 )
 
 # D's "hypothetical-chain variant" (README: "independent re-derivation +

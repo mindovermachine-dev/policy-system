@@ -69,7 +69,9 @@ from tests.fixtures import (  # noqa: E402
     MAX_FANOUT_CAPABILITY,
     MAX_FANOUT_COUNT,
     MFA_OBLIGATIONS,
+    PM_M3_ROPA_CAPABILITY,
     REFERENCE_DATE,
+    SA_M2_HELVEX_CRA_INTERSECTION_QUERY,
     SBOM_CAPABILITY,
     SECURITY_LOGGING_CAPABILITY,
     SEC_H4_OVERCLAIMED_LOGGING_OBLIGATION,
@@ -121,6 +123,12 @@ _EM_M4_TEXT = (
 _CO_M2_TEXT = (
     "Which of our extracted regulatory duties have the shakiest provenance "
     "confidence and should get a human review?"
+)
+_SA_E3_TEXT = "Do NIS2 or GDPR need our SBOM capability for anything today?"
+_SA_M2_TEXT = "What capabilities does our internal Helvex SOP have in common with the CRA?"
+_PM_M3_TEXT = (
+    "GDPR requires records of processing and DPIAs — do our policies "
+    "actually cover both duties?"
 )
 _AU_H2_TEXT = (
     "Trace the CRA's actively-exploited-vulnerability reporting duty from "
@@ -392,6 +400,39 @@ def build_scenarios() -> list:
             "CO-M2", "B", _CO_M2_TEXT,
             [fitness.check_completeness(co_m2_golden, CO_M2_CONFIDENCE_QUERY)],
             f"{len(co_m2_golden)} obligations have shaky provenance confidence (0.75/0.80 band) and need human review.",
+        ),
+    ))
+
+    # SA-E3, SA-M2, PM-M3 -- precision tests (PROGRESS.md, "would running
+    # more held-out questions through be meaningful"): passing, never-
+    # composed held-out questions that reuse an entity an existing
+    # mechanism already covers. Golden-only -- no failing variant, since
+    # these are correct transcripts, not recorded failures.
+    scenarios.append((
+        "SA-E3-golden",
+        _run(
+            "SA-E3", "B", _SA_E3_TEXT,
+            [fitness.check_regulation_scope(SBOM_CAPABILITY, {"CRA-1.0"})],
+            "No -- NIS2 and GDPR don't require the SBOM capability today; only CRA does.",
+        ),
+    ))
+    scenarios.append((
+        "SA-M2-golden",
+        _run(
+            "SA-M2", "B", _SA_M2_TEXT,
+            [fitness.check_existence({"cap_security_logging_c4d9e2"}, SA_M2_HELVEX_CRA_INTERSECTION_QUERY)],
+            "cap_security_logging_c4d9e2 -- the only capability shared between the Helvex SOP and CRA.",
+        ),
+    ))
+    scenarios.append((
+        "PM-M3-golden",
+        _run(
+            "PM-M3", "B", _PM_M3_TEXT,
+            [
+                fitness.check_evidence_gap_root_cause(EM_M4_CLINICAL_CAPABILITY, "governance"),
+                fitness.check_evidence_gap_root_cause(PM_M3_ROPA_CAPABILITY, "governance"),
+            ],
+            "No -- DPIA is draft-only and Art. 30 records of processing is ungoverned; neither duty is actually covered.",
         ),
     ))
 

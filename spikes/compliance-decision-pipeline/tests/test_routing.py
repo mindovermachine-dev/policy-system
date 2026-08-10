@@ -144,7 +144,13 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.path, RoutingPath.DIRECT_MANDATORY_CHECK)
         self.assertEqual(
             decision.mandatory_check_names,
-            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}),
+            frozenset({
+                "existence_grounding",
+                "scope_match_regulation_routing",
+                "fanout_maximum",
+                "completeness_grounding",
+                "evidence_gap_root_cause",
+            }),
         )
 
     def test_au_h4_type_d_hypothetical_chain_requires_grounding_check(self):
@@ -152,7 +158,13 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.path, RoutingPath.DIRECT_MANDATORY_CHECK)
         self.assertEqual(
             decision.mandatory_check_names,
-            frozenset({"existence_grounding", "scope_match_regulation_routing", "fanout_maximum", "completeness_grounding"}),
+            frozenset({
+                "existence_grounding",
+                "scope_match_regulation_routing",
+                "fanout_maximum",
+                "completeness_grounding",
+                "evidence_gap_root_cause",
+            }),
         )
 
     def test_au_h2_type_d_not_hypothetical_chain_no_mandatory_check(self):

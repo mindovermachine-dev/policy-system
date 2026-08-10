@@ -155,6 +155,33 @@ EM_M4_EXCLUDED_CAPABILITY = "cap_asset_personnel_security_management_e68e9a"
 
 CO_M2_CONFIDENCE_QUERY = "MATCH (o:Obligation) WHERE o.confidence IN [0.75, 0.80] RETURN o.id"
 
+# --------------------------------------------------------------------------
+# Precision tests (later session, "would running more held-out questions
+# through be meaningful" -- PROGRESS.md): SA-E3, SA-M2, PM-M3. Not recall
+# tests (all three are passing/golden held-out instances, not failures) --
+# each reuses an entity an existing mechanism already covers, to check the
+# mechanism doesn't false-flag a genuinely different, never-composed
+# question that happens to land on the same fact.
+# --------------------------------------------------------------------------
+
+# SA-M2 -- "What capabilities does our internal Helvex SOP have in common
+# with the CRA?" Golden: {cap_security_logging_c4d9e2} -- verified live via
+# a fresh intersection query (CRA's required-capability set ∩ HELVEX-SOP's),
+# not reused from AU-H4's query. Targets check_existence/check_completeness.
+SA_M2_HELVEX_CRA_INTERSECTION_QUERY = (
+    "MATCH (r1:Regulation {id: 'CRA-1.0'})-[:EXPRESSES]->(:Requirement)-[:SATISFIED_BY]->"
+    "(o1:Obligation)-[:REQUIRES]->(c:Capability) WITH collect(DISTINCT c.id) AS cra_caps "
+    "MATCH (r2:Regulation {id: 'HELVEX-SOP-1.0'})-[:EXPRESSES]->(:Requirement)-[:SATISFIED_BY]->"
+    "(o2:Obligation)-[:REQUIRES]->(c2:Capability) WHERE c2.id IN cra_caps RETURN DISTINCT c2.id"
+)
+
+# PM-M3 -- "GDPR requires records of processing and DPIAs -- do our
+# policies actually cover both duties?" Golden: both are governance gaps
+# ("DPIA draft-only + Art. 30 ungoverned"). DPIA reuses EM_M4_CLINICAL_
+# CAPABILITY (already validated "governance"); Art 30 (records of
+# processing / ROPA) is a capability never touched by any prior mechanism
+# -- found live via GDPR-1.0_req_art_30.* -> Obligation -> REQUIRES.
+PM_M3_ROPA_CAPABILITY = "cap_compliance_documentation_management_a87281"
 
 # --------------------------------------------------------------------------
 # Stage 1 -- alias table target cases
