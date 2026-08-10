@@ -1,0 +1,32 @@
+[
+  {
+    "keep": "cap_secure_development_lifecycle_9f3224",
+    "drop": ["cap_secure_sdlc_execution_91a2ed"],
+    "note": "Seed 'Secure SDLC Execution' (execute secure design/coding practices across delivery lifecycle) and existing 'Secure Development Lifecycle' (design/develop/produce with risk-based cybersecurity by default) describe the same capability. High confidence."
+  },
+  {
+    "keep": "cap_access_control_authentication_151816",
+    "drop": ["cap_engineering_identity_access_6d2a4f"],
+    "note": "Seed 'Engineering Identity and Access Control' (authN/authZ, least-privilege) and existing 'Access Control & Authentication' (prevent unauthorised access via authN/IAM) are the same capability, engineering-scoped phrasing only. High confidence."
+  },
+  {
+    "keep": "cap_security_logging_c4d9e2",
+    "drop": ["cap_audit_logging_evidence_8bc1d3"],
+    "note": "Seed 'Audit Logging and Evidence Management' (retain structured audit logs/evidence) and existing 'Security Logging' (capture/retain/review security-relevant log data) cover the same underlying capability. High confidence."
+  },
+  {
+    "keep": "cap_component_inventory_sbom_management_b5223c",
+    "drop": ["cap_software_supply_chain_integrity_54f1be"],
+    "note": "Seed 'Software Supply Chain Integrity' (dependencies, licenses, build-artifact provenance) overlaps substantially with existing 'Component Inventory & SBOM Management' (SBOM covering product components). Medium confidence -- seed wording also touches license management, which SBOM management doesn't explicitly call out; review before applying."
+  },
+  {
+    "keep": "cap_data_protection_by_design_default_69e489",
+    "drop": ["cap_data_protection_privacy_controls_4f2bd6"],
+    "note": "Seed 'Data Protection and Privacy Controls' (enforce privacy/data-protection safeguards in engineering systems) is closest to existing 'Data Protection by Design & Default' (build data-protection measures into systems from design). Medium confidence -- seed capability is broader/engineering-general rather than design-time specific; review before applying."
+  },
+  {
+    "keep": "cap_availability_resilience_7caf2b",
+    "drop": ["cap_service_reliability_management_a3c0fe"],
+    "note": "Seed 'Service Reliability Management' (SLOs, observability, resilience controls) overlaps with existing 'Availability & Resilience' (protect availability, resilience against DoS). Medium-low confidence -- seed capability's SLO/observability scope is not represented in the existing capability at all; merging loses that nuance. Consider keeping separate or renaming the kept node's description to fold it in instead of a straight merge."
+  }
+]

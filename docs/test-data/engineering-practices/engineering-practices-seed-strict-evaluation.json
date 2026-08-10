@@ -1,0 +1,718 @@
+{
+  "dataset": "docs/test-data/engineering-practices/engineering-practices-seed.json",
+  "rubric_source": "docs/test-data/rubrics/policy-standard-control-strict-rubrics.md",
+  "mode": "strict",
+  "summary": {
+    "policies_evaluated": 10,
+    "standards_evaluated": 10,
+    "controls_evaluated": 10,
+    "accepted": 30,
+    "rejected": 0,
+    "run_status": "PASSED_STRICT_GATE"
+  },
+  "policy_evaluations": [
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_engineering_policy_governance_6b0f1a",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_secure_sdlc_0f66a2",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_engineering_access_control_3d9ec4",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_change_release_control_a95e17",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_supply_chain_license_2bc87d",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_test_quality_gates_e7d8f2",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_reliability_operations_14ca8e",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_vulnerability_remediation_88a5c1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_data_handling_privacy_561ceb",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Policy",
+      "entity_id": "pol_logging_audit_retention_73cd90",
+      "hard_fail_results": {
+        "identity_present": true,
+        "enforced_status_approved": true,
+        "ownership_present": true,
+        "governance_link_exists": true,
+        "version_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "scope_clarity": 1,
+        "normative_language": 1,
+        "review_cadence_clarity": 1,
+        "exception_pathway": 1,
+        "measurable_intent": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    }
+  ],
+  "standard_evaluations": [
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_engineering_policy_governance_6b0f1a_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_secure_sdlc_0f66a2_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_engineering_access_control_3d9ec4_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_change_release_control_a95e17_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_supply_chain_license_2bc87d_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_test_quality_gates_e7d8f2_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_reliability_operations_14ca8e_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_vulnerability_remediation_88a5c1_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_data_handling_privacy_561ceb_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Standard",
+      "entity_id": "std_pol_logging_audit_retention_73cd90_v1",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_status": true,
+        "single_parent_policy": true,
+        "version_present": true,
+        "actionability_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "procedure_specificity": 1,
+        "role_clarity": 1,
+        "boundary_clarity": 1,
+        "verification_readiness": 1,
+        "change_traceability": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    }
+  ],
+  "control_evaluations": [
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_engineering_policy_governance_6b0f1a_v1_manual",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_secure_sdlc_0f66a2_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_engineering_access_control_3d9ec4_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_change_release_control_a95e17_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_supply_chain_license_2bc87d_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_test_quality_gates_e7d8f2_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_reliability_operations_14ca8e_v1_manual",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_vulnerability_remediation_88a5c1_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_data_handling_privacy_561ceb_v1_manual",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    },
+    {
+      "entity_type": "Control",
+      "entity_id": "ctrl_std_pol_logging_audit_retention_73cd90_v1_automated",
+      "hard_fail_results": {
+        "identity_present": true,
+        "valid_type": true,
+        "valid_status": true,
+        "single_parent_standard": true,
+        "review_anchor_present": true
+      },
+      "hard_fail_pass": true,
+      "scored_results": {
+        "pass_fail_objectivity": 1,
+        "execution_clarity": 1,
+        "evidence_quality": 1,
+        "ownership_clarity": 1,
+        "risk_alignment": 1
+      },
+      "score": 5,
+      "min_score_threshold": 4,
+      "decision": "ACCEPTED",
+      "rejection_reasons": []
+    }
+  ],
+  "dataset_level_gates": {
+    "every_practice_area_has_policy": true,
+    "every_risk_path_has_verified_control": true,
+    "every_policy_has_standard": true,
+    "every_standard_has_control": true,
+    "every_capability_linked_to_area_and_risk": true,
+    "rejected_records_exported": false
+  },
+  "rejections": []
+}

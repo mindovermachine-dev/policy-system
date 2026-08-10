@@ -14,6 +14,8 @@
    - [Role](#role)
    - [Requirement](#requirement)
    - [Obligation](#obligation)
+    - [PracticeArea](#practicearea)
+    - [RiskPath](#riskpath)
    - [Capability](#capability)
    - [Policy](#policy)
    - [Standard](#standard)
@@ -28,6 +30,10 @@ This document models the Policy System domain as a **property graph**; a semanti
 
 **A fact belongs on the node or the edge, whichever it's actually about.** Properties that describe one specific relationship instance (a provenance reference for example) live on the edge, not on the node — otherwise a reused/canonical node ends up with a single property value that can't be true for all of its relationships at once.
 
+The model has two layers:
+- A **compliance spine** (`Regulation → Role/Requirement → Obligation → Capability → Policy → Standard → Control`) that carries regulatory provenance and implementation traceability.
+- A **classification layer** (`PracticeArea`, `RiskPath`) that organizes and analyzes the spine without changing its compliance semantics.
+
 ---
 
 ## Domain Concept Diagram
@@ -38,6 +44,8 @@ graph LR
     Role("(:Role)")
     Requirement("(:Requirement)")
     Obligation("(:Obligation)")
+    PracticeArea("(:PracticeArea)")
+    RiskPath("(:RiskPath)")
     Capability("(:Capability)")
     Policy("(:Policy)")
     Standard("(:Standard)")
@@ -48,9 +56,13 @@ graph LR
     Role -->|"HAS"| Obligation
     Requirement -->|"SATISFIED_BY"| Obligation
     Obligation -->|"REQUIRES"| Capability
+    PracticeArea -->|"COVERS"| Capability
+    PracticeArea -->|"OWNS"| Policy
+    RiskPath -->|"MITIGATED_BY"| Capability
     Capability -->|"GOVERNED_BY"| Policy
     Policy -->|"SUPPORTED_BY"| Standard
     Standard -->|"IMPLEMENTED_BY"| Control
+    RiskPath -->|"VERIFIED_BY"| Control
 ```
 
 **Legend:**
@@ -177,6 +189,62 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 
 ---
 
+### PracticeArea
+
+**Description:** A stable engineering taxonomy used to group related capabilities and govern ownership of policies — e.g. "Secure Development Lifecycle" or "Reliability and Service Operations." PracticeArea is organizational classification, not compliance provenance: it improves assignment, scoping, and reporting without altering the `Regulation`-anchored traceability chain.
+
+**Lifecycle:** Curated by engineering governance and updated infrequently as operating models change. Usually long-lived reference data with occasional renames, merges, or deprecations.
+
+**Node label:** `PracticeArea`
+**Identity:** `pa_{slug}_{hash}` (e.g. `pa_secure_sdlc_4a7c1d`) — content-derived from `name` alone, regulation-independent.
+
+#### Properties
+
+| Property | Type | Required | Notes |
+|----------|------|----------|-------|
+| `name` | string | Yes | |
+| `description` | string | No | |
+| `status` | enum: `active` \| `deprecated` | Yes | |
+| `version` | string | No | |
+| `owner_id` | string | No | Optional organizational owner for this taxonomy area. |
+
+#### Relationships
+
+| Edge | Target | Cardinality | Edge Properties | Note |
+|------|--------|-------------|------------------|------|
+| `COVERS` | Capability | 1 : 0..* | — | Classifies which reusable Capabilities belong to this practice area. |
+| `OWNS` | Policy | 1 : 0..* | — | Assigns governance ownership of Policies by area. |
+
+---
+
+### RiskPath
+
+**Description:** A cross-cutting risk lens used to reason about completeness and gaps — e.g. "Secure Build and Release" or "Incident and Recovery Readiness." RiskPath is analytical metadata, not a replacement for Requirement or Obligation semantics.
+
+**Lifecycle:** Seeded from the organization's baseline risk model and refined as incidents, audits, and threat modeling evolve.
+
+**Node label:** `RiskPath`
+**Identity:** `rp_{slug}_{hash}` (e.g. `rp_secure_build_release_d93f8a`) — content-derived from `name` alone, canonical across regulations and business units.
+
+#### Properties
+
+| Property | Type | Required | Notes |
+|----------|------|----------|-------|
+| `name` | string | Yes | |
+| `description` | string | No | |
+| `status` | enum: `active` \| `deprecated` | Yes | |
+| `risk_type` | enum: `security` \| `reliability` \| `privacy` \| `compliance` \| `safety` \| `supply_chain` | No | Optional categorization for reporting slices. |
+| `version` | string | No | |
+
+#### Relationships
+
+| Edge | Target | Cardinality | Edge Properties | Note |
+|------|--------|-------------|------------------|------|
+| `MITIGATED_BY` | Capability | 1 : 0..* | — | Connects abstract risk exposure to reusable technical/organizational capacity. |
+| `VERIFIED_BY` | Control | 1 : 0..* | — | Connects risk exposure to concrete verification evidence paths. |
+
+---
+
 ### Capability
 
 **Description:** A technical or organizational capacity that must exist to fulfill Obligations — e.g. "Data Encryption," "Access Control System," "Security Logging." Capability is the "how" to Obligation's "what": it lets an organization see commonalities across obligations that look different on paper, e.g. recognizing that both "Maintain Security Monitoring" (CRA) and "Ensure Logging of Access" (GDPR) require the same "Security Logging" capability. This is exactly the cross-regulation convergence the identity design below protects — hashing on `name` alone is what lets one Capability be required by many Obligations instead of fragmenting.
@@ -200,6 +268,8 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `REQUIRES` (inbound) | Obligation | 0..* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
+| `COVERS` (inbound) | PracticeArea | 0..* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
+| `MITIGATED_BY` (inbound) | RiskPath | 0..* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
 | `GOVERNED_BY` (outbound) | Policy | 1 : 0..* | — | See [Policy → GOVERNED_BY](#policy). |
 
 ---
@@ -227,6 +297,7 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
+| `OWNS` (inbound) | PracticeArea | 0..* : 1 | — | See [PracticeArea → OWNS](#practicearea). Starter baseline should enforce exactly one owning PracticeArea per active Policy. |
 | `GOVERNED_BY` (inbound) | Capability | 1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
 
@@ -286,6 +357,7 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `IMPLEMENTED_BY` (inbound) | Standard | 0..* : 1 | — | See [Standard → IMPLEMENTED_BY](#standard). Each Control verifies exactly one Standard. |
+| `VERIFIED_BY` (inbound) | RiskPath | 0..* : 1..* | — | See [RiskPath → VERIFIED_BY](#riskpath). Enables completeness checks that each active RiskPath has concrete verification evidence. |
 
 ---
 

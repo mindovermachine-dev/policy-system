@@ -1,0 +1,3157 @@
+{
+  "graph_name": "policy_system",
+  "nodes": [
+    {
+      "label": "Regulation",
+      "id": "NIS2-1.0",
+      "properties": {
+        "id": "NIS2-1.0",
+        "title": "Directive (EU) 2022/2555 on measures for a high common level of cybersecurity across the Union (NIS2)",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "effective_date": "2024-10-18",
+        "version": "1.0",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_essential_entity_c0a509",
+      "properties": {
+        "id": "role_essential_entity_c0a509",
+        "name": "Essential entity",
+        "description": "An entity of a type listed in Annex I exceeding the medium-sized enterprise thresholds, a qualified trust service provider or TLD name registry/DNS service provider regardless of size, a medium-sized provider of public electronic communications networks or services, a relevant public administration entity, or an entity otherwise designated by a Member State as essential."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_important_entity_10b250",
+      "properties": {
+        "id": "role_important_entity_10b250",
+        "name": "Important entity",
+        "description": "An entity of a type listed in Annex I or II that does not qualify as an essential entity, including entities designated by a Member State as important."
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_regulatory_registration_information_management_98b76b",
+      "properties": {
+        "id": "cap_regulatory_registration_information_management_98b76b",
+        "name": "Regulatory Registration & Information Management",
+        "type": "organizational",
+        "description": "Capacity to submit and keep current an entity's registration information (identity, contact details, sector, service footprint) with competent authorities.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_cybersecurity_governance_oversight_733dec",
+      "properties": {
+        "id": "cap_cybersecurity_governance_oversight_733dec",
+        "name": "Cybersecurity Governance & Oversight",
+        "type": "organizational",
+        "description": "Capacity for an entity's management body to approve cybersecurity risk-management measures and oversee their implementation.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_cybersecurity_training_awareness_63b70e",
+      "properties": {
+        "id": "cap_cybersecurity_training_awareness_63b70e",
+        "name": "Cybersecurity Training & Awareness",
+        "type": "organizational",
+        "description": "Capacity to deliver cybersecurity training and basic cyber hygiene awareness to management bodies and staff.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_cybersecurity_risk_management_program_50601b",
+      "properties": {
+        "id": "cap_cybersecurity_risk_management_program_50601b",
+        "name": "Cybersecurity Risk Management Program",
+        "type": "organizational",
+        "description": "Capacity to establish and run a program of appropriate and proportionate technical, operational and organisational measures to manage cybersecurity risk to network and information systems.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_incident_handling_4cf73e",
+      "properties": {
+        "id": "cap_incident_handling_4cf73e",
+        "name": "Incident Handling",
+        "type": "technical",
+        "description": "Capacity to detect, respond to and contain cybersecurity incidents affecting network and information systems.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_business_continuity_disaster_recovery_9c1c32",
+      "properties": {
+        "id": "cap_business_continuity_disaster_recovery_9c1c32",
+        "name": "Business Continuity & Disaster Recovery",
+        "type": "organizational",
+        "description": "Capacity to maintain backup management, disaster recovery and crisis management processes that sustain operations through an incident.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_supply_chain_security_management_d1f111",
+      "properties": {
+        "id": "cap_supply_chain_security_management_d1f111",
+        "name": "Supply Chain Security Management",
+        "type": "organizational",
+        "description": "Capacity to manage security-related aspects of relationships with direct suppliers and service providers, including assessing their vulnerabilities and cybersecurity practices.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_control_effectiveness_assessment_627623",
+      "properties": {
+        "id": "cap_security_control_effectiveness_assessment_627623",
+        "name": "Security Control Effectiveness Assessment",
+        "type": "organizational",
+        "description": "Capacity to apply policies and procedures that assess the effectiveness of an entity's cybersecurity risk-management measures.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_asset_personnel_security_management_e68e9a",
+      "properties": {
+        "id": "cap_asset_personnel_security_management_e68e9a",
+        "name": "Asset & Personnel Security Management",
+        "type": "organizational",
+        "description": "Capacity to manage human resources security and maintain an inventory and control regime over organisational assets.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_communications_faed53",
+      "properties": {
+        "id": "cap_secure_communications_faed53",
+        "name": "Secure Communications",
+        "type": "technical",
+        "description": "Capacity to provide secured voice, video and text communication channels, including secured emergency communication systems.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_non_compliance_remediation_e893b3",
+      "properties": {
+        "id": "cap_non_compliance_remediation_e893b3",
+        "name": "Non-Compliance Remediation",
+        "type": "organizational",
+        "description": "Capacity to identify non-compliance with required risk-management measures and take necessary, appropriate and proportionate corrective action without undue delay.",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_cybersecurity_risk_assessment_process_ce1a2f",
+      "properties": {
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f",
+        "name": "Cybersecurity Risk Assessment Process",
+        "description": "Capacity to identify, document and keep current a structured assessment of cybersecurity risks associated with a product across its lifecycle.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_development_lifecycle_9f3224",
+      "properties": {
+        "id": "cap_secure_development_lifecycle_9f3224",
+        "name": "Secure Development Lifecycle",
+        "description": "Capacity to design, develop and produce products so that they achieve an appropriate, risk-based level of cybersecurity by default.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_management_55d0c4",
+      "properties": {
+        "id": "cap_vulnerability_management_55d0c4",
+        "name": "Vulnerability Management",
+        "description": "Capacity to identify, triage, and remediate vulnerabilities in a product and its components on an ongoing basis.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_coordinated_vulnerability_disclosure_policy_c23221",
+      "properties": {
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221",
+        "name": "Coordinated Vulnerability Disclosure Policy",
+        "description": "Capacity to maintain and enforce a documented policy governing coordinated vulnerability disclosure.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_data_encryption_0e50d3",
+      "properties": {
+        "id": "cap_data_encryption_0e50d3",
+        "name": "Data Encryption",
+        "description": "Capacity to protect the confidentiality of stored, transmitted or processed data using state-of-the-art encryption.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_access_control_authentication_151816",
+      "properties": {
+        "id": "cap_access_control_authentication_151816",
+        "name": "Access Control & Authentication",
+        "description": "Capacity to prevent unauthorised access via authentication and identity/access management, and to report on unauthorised access attempts.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_security_incident_reporting_449fa4",
+      "properties": {
+        "id": "cap_security_incident_reporting_449fa4",
+        "name": "Security Incident Reporting",
+        "description": "Capacity to detect, assess and report actively exploited vulnerabilities and severe security incidents to competent authorities within mandated timeframes.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_reporting_user_communication_3865f4",
+      "properties": {
+        "id": "cap_vulnerability_reporting_user_communication_3865f4",
+        "name": "Vulnerability Reporting & User Communication",
+        "description": "Capacity to operate a reachable point of contact for vulnerability reports and to communicate security-relevant information to users and third parties.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_3.4a",
+      "properties": {
+        "id": "NIS2-1.0_req_art_3.4a",
+        "text": "Essential and important entities shall submit to the competent authorities their name, address and up-to-date contact details (including email addresses, IP ranges and telephone numbers), where applicable the relevant sector and subsector, and where applicable a list of the Member States where they provide services falling within the scope of this Directive.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_registration_information_to_competent_authorities_eabdc4",
+      "properties": {
+        "id": "obl_submit_registration_information_to_competent_authorities_eabdc4",
+        "text": "Submit Registration Information to Competent Authorities as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_registration_information_to_competent_authorities_d81d47",
+      "properties": {
+        "id": "obl_submit_registration_information_to_competent_authorities_d81d47",
+        "text": "Submit Registration Information to Competent Authorities as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_3.4b",
+      "properties": {
+        "id": "NIS2-1.0_req_art_3.4b",
+        "text": "Essential and important entities shall notify any changes to the registration details they submitted without delay, and, in any event, within two weeks of the date of the change.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_changes_to_registration_information_within_two_weeks_7bbcd2",
+      "properties": {
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_7bbcd2",
+        "text": "Notify Changes to Registration Information Within Two Weeks as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_changes_to_registration_information_within_two_weeks_cc554d",
+      "properties": {
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_cc554d",
+        "text": "Notify Changes to Registration Information Within Two Weeks as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_20.1",
+      "properties": {
+        "id": "NIS2-1.0_req_art_20.1",
+        "text": "The management bodies of essential and important entities shall approve the cybersecurity risk-management measures taken by those entities to comply with Article 21, oversee their implementation, and can be held liable for infringements of that Article.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ec4d3f",
+      "properties": {
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ec4d3f",
+        "text": "Approve and Oversee Cybersecurity Risk-Management Measures as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ab972c",
+      "properties": {
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ab972c",
+        "text": "Approve and Oversee Cybersecurity Risk-Management Measures as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_20.2",
+      "properties": {
+        "id": "NIS2-1.0_req_art_20.2",
+        "text": "The members of the management bodies of essential and important entities shall be required to follow training to gain sufficient knowledge and skills to identify risks and assess cybersecurity risk-management practices and their impact on the services provided by the entity.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_management_body_cybersecurity_training_ae2ef8",
+      "properties": {
+        "id": "obl_ensure_management_body_cybersecurity_training_ae2ef8",
+        "text": "Ensure Management Body Cybersecurity Training as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_management_body_cybersecurity_training_f08bfb",
+      "properties": {
+        "id": "obl_ensure_management_body_cybersecurity_training_f08bfb",
+        "text": "Ensure Management Body Cybersecurity Training as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.1",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.1",
+        "text": "Essential and important entities shall take appropriate and proportionate technical, operational and organisational measures to manage the risks posed to the security of network and information systems which those entities use for their operations or for the provision of their services, and to prevent or minimise the impact of incidents on recipients of their services and on other services.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_43a844",
+      "properties": {
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_43a844",
+        "text": "Implement Proportionate Cybersecurity Risk-Management Measures as Essential entity",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_925be8",
+      "properties": {
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_925be8",
+        "text": "Implement Proportionate Cybersecurity Risk-Management Measures as Important entity",
+        "confidence": 0.8,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2a",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2a",
+        "text": "Measures shall include policies on risk analysis and information system security.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_risk_analysis_and_information_system_security_polic_0db736",
+      "properties": {
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_0db736",
+        "text": "Maintain Risk Analysis and Information System Security Policies as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_risk_analysis_and_information_system_security_polic_41fe36",
+      "properties": {
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_41fe36",
+        "text": "Maintain Risk Analysis and Information System Security Policies as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2b",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2b",
+        "text": "Measures shall include incident handling.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_incident_handling_capability_08480e",
+      "properties": {
+        "id": "obl_maintain_incident_handling_capability_08480e",
+        "text": "Maintain Incident Handling Capability as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_incident_handling_capability_08e4c3",
+      "properties": {
+        "id": "obl_maintain_incident_handling_capability_08e4c3",
+        "text": "Maintain Incident Handling Capability as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2c",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2c",
+        "text": "Measures shall include business continuity, such as backup management and disaster recovery, and crisis management.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_815f07",
+      "properties": {
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_815f07",
+        "text": "Ensure Business Continuity, Backup Management and Crisis Management as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_31a6ec",
+      "properties": {
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_31a6ec",
+        "text": "Ensure Business Continuity, Backup Management and Crisis Management as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2d",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2d",
+        "text": "Measures shall include supply chain security, including security-related aspects concerning the relationships between each entity and its direct suppliers or service providers.",
+        "type": "requirement",
+        "status": "active"
+      },
+      "_comment": "Art. 21(3)'s duty to take into account each direct supplier's vulnerabilities and the results of Art. 22(1) coordinated security risk assessments is folded into this Requirement as elaboration of the same supply-chain-security duty, not extracted as a separate Requirement."
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_manage_supply_chain_security_b97a63",
+      "properties": {
+        "id": "obl_manage_supply_chain_security_b97a63",
+        "text": "Manage Supply Chain Security as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_manage_supply_chain_security_63cbd2",
+      "properties": {
+        "id": "obl_manage_supply_chain_security_63cbd2",
+        "text": "Manage Supply Chain Security as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2e",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2e",
+        "text": "Measures shall include security in network and information systems acquisition, development and maintenance, including vulnerability handling and disclosure.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2",
+      "properties": {
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2",
+        "text": "Secure Network and Information Systems Acquisition, Development and Maintenance, Including Vulnerability Handling and Disclosure as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_secure_network_and_information_systems_acquisition_developme_074738",
+      "properties": {
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738",
+        "text": "Secure Network and Information Systems Acquisition, Development and Maintenance, Including Vulnerability Handling and Disclosure as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2f",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2f",
+        "text": "Measures shall include policies and procedures to assess the effectiveness of cybersecurity risk-management measures.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_e1cc9d",
+      "properties": {
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_e1cc9d",
+        "text": "Assess Effectiveness of Cybersecurity Risk-Management Measures as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_5a3678",
+      "properties": {
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_5a3678",
+        "text": "Assess Effectiveness of Cybersecurity Risk-Management Measures as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2g",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2g",
+        "text": "Measures shall include basic cyber hygiene practices and cybersecurity training.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_331468",
+      "properties": {
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_331468",
+        "text": "Maintain Cyber Hygiene Practices and Cybersecurity Training as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_6ec076",
+      "properties": {
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_6ec076",
+        "text": "Maintain Cyber Hygiene Practices and Cybersecurity Training as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2h",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2h",
+        "text": "Measures shall include policies and procedures regarding the use of cryptography and, where appropriate, encryption.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_cryptography_and_encryption_policies_40a163",
+      "properties": {
+        "id": "obl_maintain_cryptography_and_encryption_policies_40a163",
+        "text": "Maintain Cryptography and Encryption Policies as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_cryptography_and_encryption_policies_640faf",
+      "properties": {
+        "id": "obl_maintain_cryptography_and_encryption_policies_640faf",
+        "text": "Maintain Cryptography and Encryption Policies as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2i",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2i",
+        "text": "Measures shall include human resources security, access control policies and asset management.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45",
+      "properties": {
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45",
+        "text": "Maintain Human Resources Security, Access Control and Asset Management as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8",
+      "properties": {
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8",
+        "text": "Maintain Human Resources Security, Access Control and Asset Management as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.2j",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.2j",
+        "text": "Measures shall include the use of multi-factor authentication or continuous authentication solutions, secured voice, video and text communications and secured emergency communication systems within the entity, where appropriate.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f",
+      "properties": {
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f",
+        "text": "Deploy Multi-Factor Authentication and Secured Communications as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea",
+      "properties": {
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea",
+        "text": "Deploy Multi-Factor Authentication and Secured Communications as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_21.4",
+      "properties": {
+        "id": "NIS2-1.0_req_art_21.4",
+        "text": "An entity that finds that it does not comply with the measures provided for in Article 21(2) shall take, without undue delay, all necessary, appropriate and proportionate corrective measures.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_take_corrective_measures_for_risk_management_non_compliance_5d3100",
+      "properties": {
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_5d3100",
+        "text": "Take Corrective Measures for Risk-Management Non-Compliance as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_take_corrective_measures_for_risk_management_non_compliance_d2fdc4",
+      "properties": {
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_d2fdc4",
+        "text": "Take Corrective Measures for Risk-Management Non-Compliance as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.1a",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.1a",
+        "text": "Essential and important entities shall notify, without undue delay, their CSIRT or competent authority of any incident that has a significant impact on the provision of their services, including information enabling determination of any cross-border impact.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_competent_authority_of_significant_incidents_8400b5",
+      "properties": {
+        "id": "obl_notify_competent_authority_of_significant_incidents_8400b5",
+        "text": "Notify Competent Authority of Significant Incidents as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_competent_authority_of_significant_incidents_c9c448",
+      "properties": {
+        "id": "obl_notify_competent_authority_of_significant_incidents_c9c448",
+        "text": "Notify Competent Authority of Significant Incidents as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.1b",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.1b",
+        "text": "Where appropriate, entities shall notify, without undue delay, the recipients of their services of significant incidents that are likely to adversely affect the provision of those services.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_service_recipients_of_significant_incidents_167c44",
+      "properties": {
+        "id": "obl_notify_service_recipients_of_significant_incidents_167c44",
+        "text": "Notify Service Recipients of Significant Incidents as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_notify_service_recipients_of_significant_incidents_95375e",
+      "properties": {
+        "id": "obl_notify_service_recipients_of_significant_incidents_95375e",
+        "text": "Notify Service Recipients of Significant Incidents as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.2",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.2",
+        "text": "Essential and important entities shall communicate, without undue delay, to the recipients of their services that are potentially affected by a significant cyber threat any measures or remedies those recipients can take in response, and, where appropriate, shall inform those recipients of the significant cyber threat itself.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_427b33",
+      "properties": {
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_427b33",
+        "text": "Communicate Cyber Threat Remedies to Potentially Affected Recipients as Essential entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_b30c60",
+      "properties": {
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_b30c60",
+        "text": "Communicate Cyber Threat Remedies to Potentially Affected Recipients as Important entity",
+        "confidence": 0.85,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.4a",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.4a",
+        "text": "Entities shall submit to the CSIRT or competent authority, without undue delay and in any event within 24 hours of becoming aware of a significant incident, an early warning indicating, where applicable, whether the incident is suspected of being caused by unlawful or malicious acts or could have a cross-border impact.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_181c69",
+      "properties": {
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_181c69",
+        "text": "Submit Early Warning Within 24 Hours of Significant Incident as Essential entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_90858a",
+      "properties": {
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_90858a",
+        "text": "Submit Early Warning Within 24 Hours of Significant Incident as Important entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.4b",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.4b",
+        "text": "Entities shall submit to the CSIRT or competent authority, without undue delay and in any event within 72 hours of becoming aware of a significant incident, an incident notification updating the early warning and providing an initial assessment of the incident, including its severity, impact and, where available, indicators of compromise.",
+        "type": "requirement",
+        "status": "active"
+      },
+      "_comment": "Art. 23(4), first subparagraph (derogation): trust service providers must submit this notification within 24 hours rather than 72. Not modeled as a separate Requirement/Role since Trust service provider is not separately extracted as a Role in this pass \u2014 it falls under Essential entity per Art. 3(1)(b)."
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_incident_notification_within_72_hours_of_significant__cf7b00",
+      "properties": {
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__cf7b00",
+        "text": "Submit Incident Notification Within 72 Hours of Significant Incident as Essential entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_incident_notification_within_72_hours_of_significant__6a4449",
+      "properties": {
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__6a4449",
+        "text": "Submit Incident Notification Within 72 Hours of Significant Incident as Important entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.4c",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.4c",
+        "text": "Entities shall submit to the CSIRT or competent authority, upon request, an intermediate report on relevant status updates.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_intermediate_status_report_upon_request_c70466",
+      "properties": {
+        "id": "obl_submit_intermediate_status_report_upon_request_c70466",
+        "text": "Submit Intermediate Status Report Upon Request as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_intermediate_status_report_upon_request_444275",
+      "properties": {
+        "id": "obl_submit_intermediate_status_report_upon_request_444275",
+        "text": "Submit Intermediate Status Report Upon Request as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.4d",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.4d",
+        "text": "Entities shall submit a final report not later than one month after submission of the incident notification, including a detailed description of the incident and its severity and impact, the type of threat or root cause likely to have triggered it, applied and ongoing mitigation measures, and, where applicable, its cross-border impact.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_final_incident_report_within_one_month_90fcee",
+      "properties": {
+        "id": "obl_submit_final_incident_report_within_one_month_90fcee",
+        "text": "Submit Final Incident Report Within One Month as Essential entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_final_incident_report_within_one_month_2b0ec7",
+      "properties": {
+        "id": "obl_submit_final_incident_report_within_one_month_2b0ec7",
+        "text": "Submit Final Incident Report Within One Month as Important entity",
+        "confidence": 0.95,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "NIS2-1.0_req_art_23.4e",
+      "properties": {
+        "id": "NIS2-1.0_req_art_23.4e",
+        "text": "For an incident that is still ongoing at the time the final report is due, entities shall provide a progress report at that time and a final report within one month of handling the incident.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_c4ef11",
+      "properties": {
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_c4ef11",
+        "text": "Submit Progress and Final Reports for Ongoing Incidents as Essential entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_fcccbf",
+      "properties": {
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_fcccbf",
+        "text": "Submit Progress and Final Reports for Ongoing Incidents as Important entity",
+        "confidence": 0.9,
+        "obligation_type": "organizational"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "properties": {
+        "source_ref": "Art. 3(1)"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "properties": {
+        "source_ref": "Art. 3(2)"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4a"
+      },
+      "properties": {
+        "source_ref": "Art. 3(4), first subparagraph"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_eabdc4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_eabdc4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_eabdc4"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_registration_information_management_98b76b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_d81d47"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_d81d47"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_registration_information_to_competent_authorities_d81d47"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_registration_information_management_98b76b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4b"
+      },
+      "properties": {
+        "source_ref": "Art. 3(4), third subparagraph"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_7bbcd2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_7bbcd2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_7bbcd2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_registration_information_management_98b76b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_3.4b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_cc554d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_cc554d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_changes_to_registration_information_within_two_weeks_cc554d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_regulatory_registration_information_management_98b76b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.1"
+      },
+      "properties": {
+        "source_ref": "Art. 20(1), first subparagraph"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ec4d3f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ec4d3f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ec4d3f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_governance_oversight_733dec"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ab972c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ab972c"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_approve_and_oversee_cybersecurity_risk_management_measures_ab972c"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_governance_oversight_733dec"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.2"
+      },
+      "properties": {
+        "source_ref": "Art. 20(2)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_ae2ef8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_ae2ef8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_ae2ef8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_training_awareness_63b70e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_20.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_f08bfb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_f08bfb"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_management_body_cybersecurity_training_f08bfb"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_training_awareness_63b70e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.1"
+      },
+      "properties": {
+        "source_ref": "Art. 21(1)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_43a844"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_43a844"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_43a844"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_management_program_50601b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_925be8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_925be8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_implement_proportionate_cybersecurity_risk_management_measur_925be8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_management_program_50601b"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2a"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (a)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_0db736"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_0db736"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_0db736"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_41fe36"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_41fe36"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_risk_analysis_and_information_system_security_polic_41fe36"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_risk_assessment_process_ce1a2f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2b"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (b)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08480e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08480e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08480e"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_incident_handling_4cf73e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08e4c3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08e4c3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_incident_handling_capability_08e4c3"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_incident_handling_4cf73e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2c"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (c)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_815f07"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_815f07"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_815f07"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_business_continuity_disaster_recovery_9c1c32"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_31a6ec"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_31a6ec"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_ensure_business_continuity_backup_management_and_crisis_mana_31a6ec"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_business_continuity_disaster_recovery_9c1c32"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2d"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (d)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_b97a63"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_b97a63"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_b97a63"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_security_management_d1f111"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_63cbd2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_63cbd2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_manage_supply_chain_security_63cbd2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_supply_chain_security_management_d1f111"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2e"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (e)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2e"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_6434b2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2e"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_development_lifecycle_9f3224"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_management_55d0c4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_secure_network_and_information_systems_acquisition_developme_074738"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_coordinated_vulnerability_disclosure_policy_c23221"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2f"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (f)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2f"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_e1cc9d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_e1cc9d"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_e1cc9d"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_control_effectiveness_assessment_627623"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2f"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_5a3678"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_5a3678"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_assess_effectiveness_of_cybersecurity_risk_management_measur_5a3678"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_control_effectiveness_assessment_627623"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2g"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (g)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2g"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_331468"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_331468"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_331468"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_training_awareness_63b70e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2g"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_6ec076"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_6ec076"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_cyber_hygiene_practices_and_cybersecurity_training_6ec076"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_cybersecurity_training_awareness_63b70e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2h"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (h)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2h"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_40a163"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_40a163"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_40a163"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_data_encryption_0e50d3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2h"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_640faf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_640faf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_cryptography_and_encryption_policies_640faf"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_data_encryption_0e50d3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2i"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (i)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2i"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_access_control_authentication_151816"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_644c45"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_asset_personnel_security_management_e68e9a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2i"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_access_control_authentication_151816"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_maintain_human_resources_security_access_control_and_asset_m_40eba8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_asset_personnel_security_management_e68e9a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2j"
+      },
+      "properties": {
+        "source_ref": "Art. 21(2), point (j)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2j"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_access_control_authentication_151816"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_138a1f"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_communications_faed53"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.2j"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_access_control_authentication_151816"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_deploy_multi_factor_authentication_and_secured_communication_c2a8ea"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_secure_communications_faed53"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.4"
+      },
+      "properties": {
+        "source_ref": "Art. 21(4)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_5d3100"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_5d3100"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_5d3100"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_non_compliance_remediation_e893b3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_21.4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_d2fdc4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_d2fdc4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_take_corrective_measures_for_risk_management_non_compliance_d2fdc4"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_non_compliance_remediation_e893b3"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1a"
+      },
+      "properties": {
+        "source_ref": "Art. 23(1), first subparagraph"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_8400b5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_8400b5"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_8400b5"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_c9c448"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_c9c448"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_competent_authority_of_significant_incidents_c9c448"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1b"
+      },
+      "properties": {
+        "source_ref": "Art. 23(1), first subparagraph"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_167c44"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_167c44"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_167c44"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.1b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_95375e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_95375e"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_notify_service_recipients_of_significant_incidents_95375e"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.2"
+      },
+      "properties": {
+        "source_ref": "Art. 23(2)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_427b33"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_427b33"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_427b33"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_b30c60"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_b30c60"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_communicate_cyber_threat_remedies_to_potentially_affected_re_b30c60"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_vulnerability_reporting_user_communication_3865f4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4a"
+      },
+      "properties": {
+        "source_ref": "Art. 23(4), point (a)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_181c69"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_181c69"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_181c69"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4a"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_90858a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_90858a"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_early_warning_within_24_hours_of_significant_incident_90858a"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4b"
+      },
+      "properties": {
+        "source_ref": "Art. 23(4), point (b)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__cf7b00"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__cf7b00"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__cf7b00"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4b"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__6a4449"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__6a4449"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_incident_notification_within_72_hours_of_significant__6a4449"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4c"
+      },
+      "properties": {
+        "source_ref": "Art. 23(4), point (c)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_c70466"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_c70466"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_c70466"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4c"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_444275"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_444275"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_intermediate_status_report_upon_request_444275"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4d"
+      },
+      "properties": {
+        "source_ref": "Art. 23(4), point (d)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_90fcee"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_90fcee"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_90fcee"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4d"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_2b0ec7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_2b0ec7"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_final_incident_report_within_one_month_2b0ec7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "Regulation",
+        "id": "NIS2-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4e"
+      },
+      "properties": {
+        "source_ref": "Art. 23(4), point (e)"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4e"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_c4ef11"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_essential_entity_c0a509"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_c4ef11"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_c4ef11"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "NIS2-1.0_req_art_23.4e"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_fcccbf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role_important_entity_10b250"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_fcccbf"
+      },
+      "properties": {}
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl_submit_progress_and_final_reports_for_ongoing_incidents_fcccbf"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap_security_incident_reporting_449fa4"
+      },
+      "properties": {}
+    }
+  ]
+}

@@ -1,0 +1,1082 @@
+{
+  "graph_name": "policy_system",
+  "nodes": [
+    {
+      "label": "Regulation",
+      "id": "ENGPRAC-3.0",
+      "properties": {
+        "id": "ENGPRAC-3.0",
+        "title": "Engineering Practices Regulation",
+        "source_type": "internal",
+        "effective_date": "2026-08-01",
+        "version": "3.0",
+        "status": "active"
+      }
+    },
+
+    {
+      "label": "Role",
+      "id": "role_service_owner_9f2e4d",
+      "properties": {
+        "id": "role_service_owner_9f2e4d",
+        "name": "Service Owner",
+        "description": "Accountable owner of a production service and its compliance posture."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_engineering_manager_3c7a11",
+      "properties": {
+        "id": "role_engineering_manager_3c7a11",
+        "name": "Engineering Manager",
+        "description": "Owns team execution and adherence to engineering policy."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_security_engineer_a65d20",
+      "properties": {
+        "id": "role_security_engineer_a65d20",
+        "name": "Security Engineer",
+        "description": "Implements and verifies security controls across the SDLC."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_sre_lead_5b2fd3",
+      "properties": {
+        "id": "role_sre_lead_5b2fd3",
+        "name": "SRE Lead",
+        "description": "Owns reliability engineering standards and operational readiness."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_qa_lead_7de4a2",
+      "properties": {
+        "id": "role_qa_lead_7de4a2",
+        "name": "QA Lead",
+        "description": "Owns quality gates and release test confidence."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role_data_protection_officer_b5ac9e",
+      "properties": {
+        "id": "role_data_protection_officer_b5ac9e",
+        "name": "Data Protection Officer",
+        "description": "Owns privacy engineering governance and data protection obligations."
+      }
+    },
+
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.1",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.1",
+        "text": "Engineering managers shall maintain approved policy governance and controlled exception handling for all production services.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.2",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.2",
+        "text": "Service teams shall apply secure SDLC practices including threat-informed design and secure coding standards.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.3",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.3",
+        "text": "Engineering systems shall enforce strong authentication, least privilege, and periodic access review.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.4",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.4",
+        "text": "Code changes shall follow controlled release processes with rollback readiness and risk-based approvals.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.5",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.5",
+        "text": "Software components shall be tracked, verified, and license-compliant across the supply chain.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.6",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.6",
+        "text": "Releases shall satisfy quality gates with automated and risk-based test evidence before deployment.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.7",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.7",
+        "text": "Production services shall maintain reliability objectives, observability baselines, and recovery readiness.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.8",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.8",
+        "text": "Security vulnerabilities and incidents shall be triaged, remediated, and escalated within defined SLAs.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.9",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.9",
+        "text": "Data handling and privacy safeguards shall be implemented proportionate to data sensitivity and legal obligations.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "ENGPRAC-3.0_req_art_4.10",
+      "properties": {
+        "id": "ENGPRAC-3.0_req_art_4.10",
+        "text": "Access and security logging shall be retained and reviewable to support traceability and audit evidence.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+
+    {
+      "label": "Obligation",
+      "id": "obl_policy_governance_exception_management_92ca31",
+      "properties": {
+        "id": "obl_policy_governance_exception_management_92ca31",
+        "text": "Maintain Policy Governance and Exception Management",
+        "obligation_type": "organizational"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_secure_sdlc_execution_5ad2ef",
+      "properties": {
+        "id": "obl_secure_sdlc_execution_5ad2ef",
+        "text": "Execute Secure SDLC Practices",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_identity_access_enforcement_39d0b8",
+      "properties": {
+        "id": "obl_identity_access_enforcement_39d0b8",
+        "text": "Enforce Engineering Identity and Access Controls",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_release_change_safety_8fbc74",
+      "properties": {
+        "id": "obl_release_change_safety_8fbc74",
+        "text": "Ensure Release and Change Safety",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_supply_chain_assurance_25e1d4",
+      "properties": {
+        "id": "obl_supply_chain_assurance_25e1d4",
+        "text": "Assure Software Supply Chain Integrity",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_quality_gate_enforcement_744bc9",
+      "properties": {
+        "id": "obl_quality_gate_enforcement_744bc9",
+        "text": "Enforce Test and Quality Gates",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_reliability_operational_readiness_5a1e6f",
+      "properties": {
+        "id": "obl_reliability_operational_readiness_5a1e6f",
+        "text": "Maintain Reliability and Operational Readiness",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_vulnerability_incident_response_4dcb91",
+      "properties": {
+        "id": "obl_vulnerability_incident_response_4dcb91",
+        "text": "Operate Vulnerability and Incident Response",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_data_privacy_engineering_0af321",
+      "properties": {
+        "id": "obl_data_privacy_engineering_0af321",
+        "text": "Implement Data Protection and Privacy Engineering",
+        "obligation_type": "technical"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl_logging_audit_traceability_2ebca8",
+      "properties": {
+        "id": "obl_logging_audit_traceability_2ebca8",
+        "text": "Maintain Logging and Audit Traceability",
+        "obligation_type": "technical"
+      }
+    },
+
+    {
+      "label": "PracticeArea",
+      "id": "pa_engineering_governance_exceptions_81d2bf",
+      "properties": {
+        "id": "pa_engineering_governance_exceptions_81d2bf",
+        "name": "Engineering Governance and Exceptions",
+        "description": "Governance model for policy ownership, review cadence, and exceptions.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "eng-governance-board"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_secure_sdlc_4a7c1d",
+      "properties": {
+        "id": "pa_secure_sdlc_4a7c1d",
+        "name": "Secure Development Lifecycle",
+        "description": "Secure by design and secure by default development lifecycle practices.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "security-engineering"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_identity_access_engineering_13fcb2",
+      "properties": {
+        "id": "pa_identity_access_engineering_13fcb2",
+        "name": "Identity and Access for Engineering Systems",
+        "description": "Identity, authentication, authorization, and access review for engineering tooling.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "security-engineering"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_change_release_deployment_safety_0f8da1",
+      "properties": {
+        "id": "pa_change_release_deployment_safety_0f8da1",
+        "name": "Change, Release, and Deployment Safety",
+        "description": "Release governance, risk controls, and rollback readiness.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "platform-engineering"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_supply_chain_dependencies_7ce830",
+      "properties": {
+        "id": "pa_supply_chain_dependencies_7ce830",
+        "name": "Software Supply Chain and Dependencies",
+        "description": "Integrity and compliance of third-party software and build artifacts.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "security-engineering"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_quality_test_assurance_a26d17",
+      "properties": {
+        "id": "pa_quality_test_assurance_a26d17",
+        "name": "Quality Engineering and Test Assurance",
+        "description": "Risk-based quality gates and release confidence standards.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "quality-engineering"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_reliability_service_operations_c01be6",
+      "properties": {
+        "id": "pa_reliability_service_operations_c01be6",
+        "name": "Reliability and Service Operations",
+        "description": "Reliability objectives, observability, and production operational discipline.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "sre"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_vulnerability_incident_management_2f7de3",
+      "properties": {
+        "id": "pa_vulnerability_incident_management_2f7de3",
+        "name": "Vulnerability and Incident Management",
+        "description": "Detection, triage, remediation, and incident response governance.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "security-operations"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_data_privacy_engineering_9b73f0",
+      "properties": {
+        "id": "pa_data_privacy_engineering_9b73f0",
+        "name": "Data Protection and Privacy Engineering",
+        "description": "Engineering controls for data minimization, lawful processing, and privacy safeguards.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "privacy-office"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "pa_observability_logging_audit_evidence_c8a2d9",
+      "properties": {
+        "id": "pa_observability_logging_audit_evidence_c8a2d9",
+        "name": "Observability, Logging, and Audit Evidence",
+        "description": "Telemetry, access logging, and audit evidence retention for verifiability.",
+        "status": "active",
+        "version": "1.0",
+        "owner_id": "sre"
+      }
+    },
+
+    {
+      "label": "RiskPath",
+      "id": "rp_secure_build_release_d93f8a",
+      "properties": {
+        "id": "rp_secure_build_release_d93f8a",
+        "name": "Secure Build and Release",
+        "description": "Risk of insecure build, weak release controls, or compromised deploy artifact.",
+        "status": "active",
+        "risk_type": "security",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "rp_reliable_service_operation_41abce",
+      "properties": {
+        "id": "rp_reliable_service_operation_41abce",
+        "name": "Reliable Service Operation",
+        "description": "Risk of service instability, degraded reliability, or failed operational readiness.",
+        "status": "active",
+        "risk_type": "reliability",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "rp_data_protection_privacy_2c51f0",
+      "properties": {
+        "id": "rp_data_protection_privacy_2c51f0",
+        "name": "Data Protection and Privacy",
+        "description": "Risk of privacy breach or insufficient protection of regulated data.",
+        "status": "active",
+        "risk_type": "privacy",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "rp_traceability_auditability_0de7fa",
+      "properties": {
+        "id": "rp_traceability_auditability_0de7fa",
+        "name": "Traceability and Auditability",
+        "description": "Risk of non-verifiable engineering practice due to weak evidence trails.",
+        "status": "active",
+        "risk_type": "compliance",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "rp_supply_chain_risk_7f1d44",
+      "properties": {
+        "id": "rp_supply_chain_risk_7f1d44",
+        "name": "Third-Party and Supply Chain Risk",
+        "description": "Risk introduced by external dependencies, licenses, and artifact integrity gaps.",
+        "status": "active",
+        "risk_type": "supply_chain",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "rp_incident_recovery_readiness_633ee1",
+      "properties": {
+        "id": "rp_incident_recovery_readiness_633ee1",
+        "name": "Incident and Recovery Readiness",
+        "description": "Risk of ineffective incident handling and delayed recovery outcomes.",
+        "status": "active",
+        "risk_type": "reliability",
+        "version": "1.0"
+      }
+    },
+
+    {
+      "label": "Capability",
+      "id": "cap_policy_exception_governance_3cfd12",
+      "properties": {
+        "id": "cap_policy_exception_governance_3cfd12",
+        "name": "Policy and Exception Governance",
+        "description": "Capability to manage policy ownership, review cadence, and controlled exceptions.",
+        "type": "organizational",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_secure_sdlc_execution_91a2ed",
+      "properties": {
+        "id": "cap_secure_sdlc_execution_91a2ed",
+        "name": "Secure SDLC Execution",
+        "description": "Capability to execute secure design and coding practices across the delivery lifecycle.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_engineering_identity_access_6d2a4f",
+      "properties": {
+        "id": "cap_engineering_identity_access_6d2a4f",
+        "name": "Engineering Identity and Access Control",
+        "description": "Capability to enforce authentication, authorization, and least-privilege controls.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_release_change_control_2ec781",
+      "properties": {
+        "id": "cap_release_change_control_2ec781",
+        "name": "Release and Change Control",
+        "description": "Capability to govern release approvals, deploy safeguards, and rollback readiness.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_software_supply_chain_integrity_54f1be",
+      "properties": {
+        "id": "cap_software_supply_chain_integrity_54f1be",
+        "name": "Software Supply Chain Integrity",
+        "description": "Capability to manage dependencies, licenses, and provenance of build artifacts.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_quality_gate_assurance_10ab6e",
+      "properties": {
+        "id": "cap_quality_gate_assurance_10ab6e",
+        "name": "Quality Gate Assurance",
+        "description": "Capability to enforce risk-based testing and release quality thresholds.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_service_reliability_management_a3c0fe",
+      "properties": {
+        "id": "cap_service_reliability_management_a3c0fe",
+        "name": "Service Reliability Management",
+        "description": "Capability to operate services with SLOs, observability, and resilience controls.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_vulnerability_incident_operations_92f40d",
+      "properties": {
+        "id": "cap_vulnerability_incident_operations_92f40d",
+        "name": "Vulnerability and Incident Operations",
+        "description": "Capability to triage vulnerabilities and execute incident response workflows.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_data_protection_privacy_controls_4f2bd6",
+      "properties": {
+        "id": "cap_data_protection_privacy_controls_4f2bd6",
+        "name": "Data Protection and Privacy Controls",
+        "description": "Capability to enforce privacy and data protection safeguards in engineering systems.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap_audit_logging_evidence_8bc1d3",
+      "properties": {
+        "id": "cap_audit_logging_evidence_8bc1d3",
+        "name": "Audit Logging and Evidence Management",
+        "description": "Capability to retain structured audit logs and evidence for verification.",
+        "type": "technical",
+        "status": "active"
+      }
+    },
+
+    {
+      "label": "Policy",
+      "id": "pol_engineering_policy_governance_6b0f1a",
+      "properties": {
+        "id": "pol_engineering_policy_governance_6b0f1a",
+        "title": "Engineering Policy Governance",
+        "description": "Must define governance scope and review boundaries; out-of-scope product exceptions require documented approval. Shall require annual review and measurable adherence reporting by policy owners.",
+        "owner_id": "eng-governance-board",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_secure_sdlc_0f66a2",
+      "properties": {
+        "id": "pol_secure_sdlc_0f66a2",
+        "title": "Secure SDLC Policy",
+        "description": "Must enforce secure design and coding controls for all internet-facing services; out-of-scope prototypes are prohibited in production. Shall require threat model review before release and measurable secure defect trend reporting.",
+        "owner_id": "security-engineering",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_engineering_access_control_3d9ec4",
+      "properties": {
+        "id": "pol_engineering_access_control_3d9ec4",
+        "title": "Access Control for Engineering Tooling",
+        "description": "Must enforce least privilege and MFA on engineering systems; break-glass use requires approved exceptions. Shall require quarterly access reviews and measurable stale-access reduction outcomes.",
+        "owner_id": "security-engineering",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_change_release_control_a95e17",
+      "properties": {
+        "id": "pol_change_release_control_a95e17",
+        "title": "Change and Release Control",
+        "description": "Must classify release risk and enforce approval boundaries; emergency bypasses require documented exceptions. Shall require rollback readiness evidence and measurable release-failure-rate objectives.",
+        "owner_id": "platform-engineering",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_supply_chain_license_2bc87d",
+      "properties": {
+        "id": "pol_supply_chain_license_2bc87d",
+        "title": "Third-Party Component and License Policy",
+        "description": "Must maintain dependency provenance and license compliance boundaries; prohibited licenses require approved exceptions. Shall require periodic SBOM review and measurable critical-dependency exposure reduction.",
+        "owner_id": "security-engineering",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_test_quality_gates_e7d8f2",
+      "properties": {
+        "id": "pol_test_quality_gates_e7d8f2",
+        "title": "Test and Quality Gate Policy",
+        "description": "Must enforce mandatory quality gates by release risk class; waiver requests require approved exceptions. Shall require regression coverage review and measurable escaped-defect reduction.",
+        "owner_id": "quality-engineering",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_reliability_operations_14ca8e",
+      "properties": {
+        "id": "pol_reliability_operations_14ca8e",
+        "title": "Reliability and Service Operations Policy",
+        "description": "Must define SLO and on-call boundaries for production services; temporary target changes require approved exceptions. Shall require monthly reliability review and measurable error-budget compliance.",
+        "owner_id": "sre",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_vulnerability_remediation_88a5c1",
+      "properties": {
+        "id": "pol_vulnerability_remediation_88a5c1",
+        "title": "Vulnerability Management and Remediation Policy",
+        "description": "Must define triage and remediation SLAs by severity boundaries; SLA extension requests require approved exceptions. Shall require weekly remediation review and measurable high-severity aging control.",
+        "owner_id": "security-operations",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_data_handling_privacy_561ceb",
+      "properties": {
+        "id": "pol_data_handling_privacy_561ceb",
+        "title": "Data Handling and Privacy Engineering Policy",
+        "description": "Must classify data handling boundaries and privacy safeguards by sensitivity tier; processing exceptions require approved approval path. Shall require periodic privacy review and measurable sensitive-data exposure reduction.",
+        "owner_id": "privacy-office",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol_logging_audit_retention_73cd90",
+      "properties": {
+        "id": "pol_logging_audit_retention_73cd90",
+        "title": "Logging and Audit Retention Policy",
+        "description": "Must retain audit logs with clear retention boundaries; retention deviations require approved exceptions. Shall require evidence review cadence and measurable audit retrieval completeness.",
+        "owner_id": "sre",
+        "status": "approved",
+        "version": "1.0"
+      }
+    },
+
+    {
+      "label": "Standard",
+      "id": "std_pol_engineering_policy_governance_6b0f1a_v1",
+      "properties": {
+        "id": "std_pol_engineering_policy_governance_6b0f1a_v1",
+        "title": "Policy Lifecycle and Exception Workflow Standard",
+        "description": "Define policy lifecycle steps, policy template requirements, and exception review workflow with quarterly governance sign-off.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_secure_sdlc_0f66a2_v1",
+      "properties": {
+        "id": "std_pol_secure_sdlc_0f66a2_v1",
+        "title": "Threat Modeling and Secure Coding Standard",
+        "description": "Define required threat modeling steps, secure coding checks, and release entry criteria for high-risk changes.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_engineering_access_control_3d9ec4_v1",
+      "properties": {
+        "id": "std_pol_engineering_access_control_3d9ec4_v1",
+        "title": "MFA, RBAC, and Access Review Standard",
+        "description": "Define MFA enforcement, role-based access control procedures, and quarterly access recertification checkpoints.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_change_release_control_a95e17_v1",
+      "properties": {
+        "id": "std_pol_change_release_control_a95e17_v1",
+        "title": "Release Risk and Rollback Standard",
+        "description": "Define release risk scoring, approval rules, and tested rollback procedures for production deployments.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_supply_chain_license_2bc87d_v1",
+      "properties": {
+        "id": "std_pol_supply_chain_license_2bc87d_v1",
+        "title": "Dependency Provenance and License Review Standard",
+        "description": "Define SBOM generation, provenance attestation checks, and license compliance review checkpoints for all releases.",
+        "implementation_status": "reviewed",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_test_quality_gates_e7d8f2_v1",
+      "properties": {
+        "id": "std_pol_test_quality_gates_e7d8f2_v1",
+        "title": "Risk-Based Quality Gate Standard",
+        "description": "Define mandatory test suites by risk class and release gating criteria with waiver escalation procedures.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_reliability_operations_14ca8e_v1",
+      "properties": {
+        "id": "std_pol_reliability_operations_14ca8e_v1",
+        "title": "SLO and Operational Readiness Standard",
+        "description": "Define SLO baseline requirements, on-call readiness checks, and resilience validation steps before major releases.",
+        "implementation_status": "reviewed",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_vulnerability_remediation_88a5c1_v1",
+      "properties": {
+        "id": "std_pol_vulnerability_remediation_88a5c1_v1",
+        "title": "Vulnerability Triage and Patch SLA Standard",
+        "description": "Define triage workflow, patch SLA windows by severity, and verification steps for remediation closure.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_data_handling_privacy_561ceb_v1",
+      "properties": {
+        "id": "std_pol_data_handling_privacy_561ceb_v1",
+        "title": "Data Classification and Privacy Safeguard Standard",
+        "description": "Define data classification classes, privacy safeguard controls, and evidence requirements for regulated processing.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "std_pol_logging_audit_retention_73cd90_v1",
+      "properties": {
+        "id": "std_pol_logging_audit_retention_73cd90_v1",
+        "title": "Structured Logging and Audit Retention Standard",
+        "description": "Define structured log schema, retention windows, and immutable evidence retrieval procedures for audits.",
+        "implementation_status": "implemented",
+        "version": "1"
+      }
+    },
+
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_engineering_policy_governance_6b0f1a_v1_manual",
+      "properties": {
+        "id": "ctrl_std_pol_engineering_policy_governance_6b0f1a_v1_manual",
+        "type": "manual",
+        "title": "Quarterly Policy Governance Board Review",
+        "description": "Manual review verifies policy lifecycle completion, exception approvals, and overdue policy remediation.",
+        "implementation_status": "implemented",
+        "execution_frequency": "quarterly",
+        "last_test_date": "2026-07-15",
+        "next_review_date": "2026-10-15",
+        "evidence_ref": "evidence://governance/policy-board/2026-q3"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_secure_sdlc_0f66a2_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_secure_sdlc_0f66a2_v1_automated",
+        "type": "automated",
+        "title": "Pre-Release Threat Model Enforcement Check",
+        "description": "Automated pipeline gate verifies required threat model and secure coding checklist for qualifying releases.",
+        "implementation_status": "implemented",
+        "execution_frequency": "on_deploy",
+        "last_test_date": "2026-08-05",
+        "next_review_date": "2026-11-05",
+        "evidence_ref": "evidence://ci/secure-sdlc-gate/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_engineering_access_control_3d9ec4_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_engineering_access_control_3d9ec4_v1_automated",
+        "type": "automated",
+        "title": "MFA and RBAC Configuration Audit",
+        "description": "Automated audit verifies MFA enforcement and least-privilege role assignments for engineering systems.",
+        "implementation_status": "implemented",
+        "execution_frequency": "weekly",
+        "last_test_date": "2026-08-04",
+        "next_review_date": "2026-09-04",
+        "evidence_ref": "evidence://ci/mfa-rbac-audit/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_change_release_control_a95e17_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_change_release_control_a95e17_v1_automated",
+        "type": "automated",
+        "title": "Release Risk and Rollback Readiness Check",
+        "description": "Automated gate verifies release risk approval and tested rollback plan evidence before deployment.",
+        "implementation_status": "implemented",
+        "execution_frequency": "on_deploy",
+        "last_test_date": "2026-08-06",
+        "next_review_date": "2026-11-06",
+        "evidence_ref": "evidence://ci/release-rollback-check/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_supply_chain_license_2bc87d_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_supply_chain_license_2bc87d_v1_automated",
+        "type": "automated",
+        "title": "SBOM Provenance and License Compliance Scan",
+        "description": "Automated scan verifies dependency provenance attestations and license policy conformance for release artifacts.",
+        "implementation_status": "reviewed",
+        "execution_frequency": "daily",
+        "last_test_date": "2026-08-03",
+        "next_review_date": "2026-09-03",
+        "evidence_ref": "evidence://ci/sbom-license-scan/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_test_quality_gates_e7d8f2_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_test_quality_gates_e7d8f2_v1_automated",
+        "type": "automated",
+        "title": "Risk-Based Test Gate Verification",
+        "description": "Automated release gate verifies required test suite pass conditions for the assigned release risk class.",
+        "implementation_status": "implemented",
+        "execution_frequency": "on_deploy",
+        "last_test_date": "2026-08-06",
+        "next_review_date": "2026-11-06",
+        "evidence_ref": "evidence://ci/quality-gates/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_reliability_operations_14ca8e_v1_manual",
+      "properties": {
+        "id": "ctrl_std_pol_reliability_operations_14ca8e_v1_manual",
+        "type": "manual",
+        "title": "Monthly SLO and Readiness Review",
+        "description": "Manual review verifies SLO adherence, incident trends, and operational readiness checklist completion.",
+        "implementation_status": "reviewed",
+        "execution_frequency": "monthly",
+        "last_test_date": "2026-08-01",
+        "next_review_date": "2026-09-01",
+        "evidence_ref": "evidence://ops/slo-readiness/2026-08"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_vulnerability_remediation_88a5c1_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_vulnerability_remediation_88a5c1_v1_automated",
+        "type": "automated",
+        "title": "Severity-Based Patch SLA Compliance Check",
+        "description": "Automated check verifies vulnerability remediation closure times meet severity-based SLA thresholds.",
+        "implementation_status": "implemented",
+        "execution_frequency": "daily",
+        "last_test_date": "2026-08-06",
+        "next_review_date": "2026-09-06",
+        "evidence_ref": "evidence://ci/vulnerability-sla/latest"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_data_handling_privacy_561ceb_v1_manual",
+      "properties": {
+        "id": "ctrl_std_pol_data_handling_privacy_561ceb_v1_manual",
+        "type": "manual",
+        "title": "Quarterly Privacy Safeguard Conformance Review",
+        "description": "Manual review verifies data classification controls and privacy safeguard implementation evidence.",
+        "implementation_status": "implemented",
+        "execution_frequency": "quarterly",
+        "last_test_date": "2026-07-20",
+        "next_review_date": "2026-10-20",
+        "evidence_ref": "evidence://privacy/conformance/2026-q3"
+      }
+    },
+    {
+      "label": "Control",
+      "id": "ctrl_std_pol_logging_audit_retention_73cd90_v1_automated",
+      "properties": {
+        "id": "ctrl_std_pol_logging_audit_retention_73cd90_v1_automated",
+        "type": "automated",
+        "title": "Structured Log Retention and Retrieval Check",
+        "description": "Automated check verifies required log retention and successful retrieval of immutable audit evidence samples.",
+        "implementation_status": "implemented",
+        "execution_frequency": "daily",
+        "last_test_date": "2026-08-06",
+        "next_review_date": "2026-09-06",
+        "evidence_ref": "evidence://ci/log-retention-retrieval/latest"
+      }
+    }
+  ],
+
+  "edges": [
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_service_owner_9f2e4d" }, "properties": { "source_ref": "Sec. 3.1" } },
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_engineering_manager_3c7a11" }, "properties": { "source_ref": "Sec. 3.2" } },
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_security_engineer_a65d20" }, "properties": { "source_ref": "Sec. 3.3" } },
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_sre_lead_5b2fd3" }, "properties": { "source_ref": "Sec. 3.4" } },
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_qa_lead_7de4a2" }, "properties": { "source_ref": "Sec. 3.5" } },
+    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_data_protection_officer_b5ac9e" }, "properties": { "source_ref": "Sec. 3.6" } },
+
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.1" }, "properties": { "source_ref": "Sec. 4.1" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.2" }, "properties": { "source_ref": "Sec. 4.2" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.3" }, "properties": { "source_ref": "Sec. 4.3" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.4" }, "properties": { "source_ref": "Sec. 4.4" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.5" }, "properties": { "source_ref": "Sec. 4.5" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.6" }, "properties": { "source_ref": "Sec. 4.6" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.7" }, "properties": { "source_ref": "Sec. 4.7" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.8" }, "properties": { "source_ref": "Sec. 4.8" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.9" }, "properties": { "source_ref": "Sec. 4.9" } },
+    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.10" }, "properties": { "source_ref": "Sec. 4.10" } },
+
+    { "type": "HAS", "from": { "label": "Role", "id": "role_engineering_manager_3c7a11" }, "to": { "label": "Obligation", "id": "obl_policy_governance_exception_management_92ca31" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_security_engineer_a65d20" }, "to": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_security_engineer_a65d20" }, "to": { "label": "Obligation", "id": "obl_identity_access_enforcement_39d0b8" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_service_owner_9f2e4d" }, "to": { "label": "Obligation", "id": "obl_release_change_safety_8fbc74" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_security_engineer_a65d20" }, "to": { "label": "Obligation", "id": "obl_supply_chain_assurance_25e1d4" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_qa_lead_7de4a2" }, "to": { "label": "Obligation", "id": "obl_quality_gate_enforcement_744bc9" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_sre_lead_5b2fd3" }, "to": { "label": "Obligation", "id": "obl_reliability_operational_readiness_5a1e6f" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_security_engineer_a65d20" }, "to": { "label": "Obligation", "id": "obl_vulnerability_incident_response_4dcb91" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_data_protection_officer_b5ac9e" }, "to": { "label": "Obligation", "id": "obl_data_privacy_engineering_0af321" }, "properties": {} },
+    { "type": "HAS", "from": { "label": "Role", "id": "role_sre_lead_5b2fd3" }, "to": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "properties": {} },
+
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.1" }, "to": { "label": "Obligation", "id": "obl_policy_governance_exception_management_92ca31" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.2" }, "to": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.3" }, "to": { "label": "Obligation", "id": "obl_identity_access_enforcement_39d0b8" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.4" }, "to": { "label": "Obligation", "id": "obl_release_change_safety_8fbc74" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.5" }, "to": { "label": "Obligation", "id": "obl_supply_chain_assurance_25e1d4" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.6" }, "to": { "label": "Obligation", "id": "obl_quality_gate_enforcement_744bc9" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.7" }, "to": { "label": "Obligation", "id": "obl_reliability_operational_readiness_5a1e6f" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.8" }, "to": { "label": "Obligation", "id": "obl_vulnerability_incident_response_4dcb91" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.9" }, "to": { "label": "Obligation", "id": "obl_data_privacy_engineering_0af321" }, "properties": {} },
+    { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.10" }, "to": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "properties": {} },
+
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_policy_governance_exception_management_92ca31" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_identity_access_enforcement_39d0b8" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_release_change_safety_8fbc74" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_supply_chain_assurance_25e1d4" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_quality_gate_enforcement_744bc9" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_reliability_operational_readiness_5a1e6f" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_vulnerability_incident_response_4dcb91" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_data_privacy_engineering_0af321" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_engineering_governance_exceptions_81d2bf" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_secure_sdlc_4a7c1d" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_identity_access_engineering_13fcb2" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_change_release_deployment_safety_0f8da1" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_supply_chain_dependencies_7ce830" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_quality_test_assurance_a26d17" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_reliability_service_operations_c01be6" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_vulnerability_incident_management_2f7de3" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_data_privacy_engineering_9b73f0" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_observability_logging_audit_evidence_c8a2d9" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_engineering_governance_exceptions_81d2bf" }, "to": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_secure_sdlc_4a7c1d" }, "to": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_identity_access_engineering_13fcb2" }, "to": { "label": "Policy", "id": "pol_engineering_access_control_3d9ec4" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_change_release_deployment_safety_0f8da1" }, "to": { "label": "Policy", "id": "pol_change_release_control_a95e17" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_supply_chain_dependencies_7ce830" }, "to": { "label": "Policy", "id": "pol_supply_chain_license_2bc87d" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_quality_test_assurance_a26d17" }, "to": { "label": "Policy", "id": "pol_test_quality_gates_e7d8f2" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_reliability_service_operations_c01be6" }, "to": { "label": "Policy", "id": "pol_reliability_operations_14ca8e" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_vulnerability_incident_management_2f7de3" }, "to": { "label": "Policy", "id": "pol_vulnerability_remediation_88a5c1" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_data_privacy_engineering_9b73f0" }, "to": { "label": "Policy", "id": "pol_data_handling_privacy_561ceb" }, "properties": {} },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_observability_logging_audit_evidence_c8a2d9" }, "to": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "properties": {} },
+
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_supply_chain_risk_7f1d44" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_reliable_service_operation_41abce" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_incident_recovery_readiness_633ee1" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_data_protection_privacy_2c51f0" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "to": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "to": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "to": { "label": "Policy", "id": "pol_engineering_access_control_3d9ec4" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "to": { "label": "Policy", "id": "pol_change_release_control_a95e17" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "to": { "label": "Policy", "id": "pol_supply_chain_license_2bc87d" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "to": { "label": "Policy", "id": "pol_test_quality_gates_e7d8f2" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "to": { "label": "Policy", "id": "pol_reliability_operations_14ca8e" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "to": { "label": "Policy", "id": "pol_vulnerability_remediation_88a5c1" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "to": { "label": "Policy", "id": "pol_data_handling_privacy_561ceb" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "to": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "properties": {} },
+
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "to": { "label": "Standard", "id": "std_pol_engineering_policy_governance_6b0f1a_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "to": { "label": "Standard", "id": "std_pol_secure_sdlc_0f66a2_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_engineering_access_control_3d9ec4" }, "to": { "label": "Standard", "id": "std_pol_engineering_access_control_3d9ec4_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_change_release_control_a95e17" }, "to": { "label": "Standard", "id": "std_pol_change_release_control_a95e17_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_supply_chain_license_2bc87d" }, "to": { "label": "Standard", "id": "std_pol_supply_chain_license_2bc87d_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_test_quality_gates_e7d8f2" }, "to": { "label": "Standard", "id": "std_pol_test_quality_gates_e7d8f2_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_reliability_operations_14ca8e" }, "to": { "label": "Standard", "id": "std_pol_reliability_operations_14ca8e_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_vulnerability_remediation_88a5c1" }, "to": { "label": "Standard", "id": "std_pol_vulnerability_remediation_88a5c1_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_data_handling_privacy_561ceb" }, "to": { "label": "Standard", "id": "std_pol_data_handling_privacy_561ceb_v1" }, "properties": {} },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "to": { "label": "Standard", "id": "std_pol_logging_audit_retention_73cd90_v1" }, "properties": {} },
+
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_engineering_policy_governance_6b0f1a_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_engineering_policy_governance_6b0f1a_v1_manual" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_secure_sdlc_0f66a2_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_secure_sdlc_0f66a2_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_engineering_access_control_3d9ec4_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_engineering_access_control_3d9ec4_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_change_release_control_a95e17_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_change_release_control_a95e17_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_supply_chain_license_2bc87d_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_supply_chain_license_2bc87d_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_test_quality_gates_e7d8f2_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_test_quality_gates_e7d8f2_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_reliability_operations_14ca8e_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_reliability_operations_14ca8e_v1_manual" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_vulnerability_remediation_88a5c1_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_vulnerability_remediation_88a5c1_v1_automated" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_data_handling_privacy_561ceb_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_data_handling_privacy_561ceb_v1_manual" }, "properties": {} },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std_pol_logging_audit_retention_73cd90_v1" }, "to": { "label": "Control", "id": "ctrl_std_pol_logging_audit_retention_73cd90_v1_automated" }, "properties": {} },
+
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Control", "id": "ctrl_std_pol_engineering_policy_governance_6b0f1a_v1_manual" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Control", "id": "ctrl_std_pol_secure_sdlc_0f66a2_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Control", "id": "ctrl_std_pol_engineering_access_control_3d9ec4_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Control", "id": "ctrl_std_pol_change_release_control_a95e17_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_supply_chain_risk_7f1d44" }, "to": { "label": "Control", "id": "ctrl_std_pol_supply_chain_license_2bc87d_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Control", "id": "ctrl_std_pol_test_quality_gates_e7d8f2_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_reliable_service_operation_41abce" }, "to": { "label": "Control", "id": "ctrl_std_pol_reliability_operations_14ca8e_v1_manual" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_incident_recovery_readiness_633ee1" }, "to": { "label": "Control", "id": "ctrl_std_pol_vulnerability_remediation_88a5c1_v1_automated" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_data_protection_privacy_2c51f0" }, "to": { "label": "Control", "id": "ctrl_std_pol_data_handling_privacy_561ceb_v1_manual" }, "properties": {} },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Control", "id": "ctrl_std_pol_logging_audit_retention_73cd90_v1_automated" }, "properties": {} }
+  ]
+}
