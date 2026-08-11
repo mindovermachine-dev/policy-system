@@ -29,17 +29,23 @@ stays frozen as its own historical record.
 
 ## Gaps to close
 
-1. **No CLI entrypoint.** `compliance-decision-pipeline` only has
-   `tests/run_target_cases.py` (fixed scenarios). Needs a callable
-   `pipeline query "<question>" --answer <claims>` command.
-2. **No claim-extraction path.** Stage 4 checks take structured input
-   (capability id, claimed count/status) currently hand-derived per test
-   case. Resolved (D1): harness emits structured claims alongside prose
-   (avoids reintroducing model non-determinism via prose-parsing) — one
-   claim kind per Stage 4 check, schema in `PROGRESS.md`. Claim-schema
-   adapter (dispatching a `ClaimSet` to fitness.py calls) still to build.
+1. **No CLI entrypoint.** ✅ Closed — `pipeline_cli.py`'s `pipeline query
+   "<question>" --type <A-H> --answer <prose> --claims <json>`, wiring
+   Stage 1/2/3/adapter/compose. Verified live against the real graph
+   (`PROGRESS.md`'s Environment section): a correct claim composes a
+   confident answer with real `source_refs`; a deliberately incomplete one
+   is caught and flagged, not silently passed.
+2. **No claim-extraction path.** Resolved (D1): harness emits structured
+   claims alongside prose — one claim kind per Stage 4 check, schema in
+   `PROGRESS.md`. ✅ Adapter built (`pipeline/adapter.py`), dispatching a
+   `ClaimSet` to fitness.py calls per claim kind. Named v0 gap: `cited_ids`
+   only supports ids anchored at a single Capability's required
+   Obligations — a claim about Control or Requirement ids isn't dispatched
+   correctly yet (raises, doesn't silently misfire).
 3. **No harness wiring.** A CLI existing doesn't make the agent call it —
-   needs skill-level grounding per AD-6 — see D3.
+   needs skill-level grounding per AD-6. Resolved (D3): spike-local
+   addendum first, fold into `ps-domain/SKILL.md` once proven — not built
+   yet.
 
 Carried over unchanged, not this spike's scope unless a live question
 forces it: routing-table blind spots (no mandatory check for unseen signal
@@ -48,11 +54,11 @@ judge ensemble/human escalation.
 
 ## Setup
 
-1. Resolve D1 (done) / D3 (`PROGRESS.md`).
+1. Resolve D1 (done) / D3 (done — `PROGRESS.md`).
 2. Fork `pipeline/*` and `ps.py` into this spike (D2 — done, plus `ps.py`'s
    real dependency closure, `query_mechanism_v1.py` + `catalog.py`).
-3. Build the CLI entrypoint.
-4. Build the claim-schema adapter.
+3. Build the CLI entrypoint (done — `pipeline_cli.py`).
+4. Build the claim-schema adapter (done — `pipeline/adapter.py`).
 5. Wire the harness side.
 6. Run real, previously-unasked questions through it live.
 7. Compare misses against the known failure-kind taxonomy — a new miss is
