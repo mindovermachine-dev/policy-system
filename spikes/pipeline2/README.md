@@ -48,28 +48,9 @@ Can we disprove the answer from the data in the graph? So rather than looking fo
 
 ## Static rubric (governs step 1's authoring, not the questions themselves)
 
-A note on what's measured vs. assumed in this design: the rubric's
-constraints are not a priori tuning — each bullet encodes a failure class
-measured in `compliance-decision-pipeline` (scope-match and granularity
-splits) or ps-domain rules 3/4/7. Constraints without measured backing
-belong in step 5's falsification creativity test, not here. Conversely,
-step 3's "non-deterministic by nature" is currently an *assumption* — a
-two-run variance check on answer construction (same question, same
-retrieved data, how much do answers differ?) is a candidate early
-experiment.
-
-A fitness function is only valid if it:
-- bottoms out in an executable (query, predicate) pair — no natural-language
-  pass criteria (kills the self-grading risk of an LLM judging its own prose)
-- re-queries independently of whatever query produced the answer
-- states an explicit scope/narrowing bound (no claim credited via a shared
-  upstream node it doesn't actually route through — SKILL.md rule 7)
-- states the explicit counting unit / entity type the question is asking
-  about, when applicable
-- states what data would falsify the claim, not just what would confirm it
-
-Rubric is static and versioned; fitness functions are not reused across questions — each is a matched pair with its question, since `compliance-decision-pipeline` already demonstrated no single check shape generalizes across question types (scope-match split into two mechanisms,
-granularity split into two).
+See [RUBRIC.md](./RUBRIC.md) for the versioned, standalone rubric that
+step 1's fitness-function authoring is validated against, including its
+measured-vs-assumed provenance note and growth discipline.
 
 ## Setup
 
