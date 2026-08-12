@@ -104,7 +104,7 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `DEFINES` | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation defines this Role. Lives on the edge, not on Role, because the defining act is specific to this Regulation–Role pair. |
-| `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this Regulation–Requirement pair. Current graph implementation names this edge `CONTAINS`; not yet reconciled with this conceptual name. |
+| `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this Regulation–Requirement pair. |
 | `SUPERSEDED_BY` | Regulation | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
 
 ---
