@@ -11,7 +11,7 @@ description: >-
   those remain separate, not-yet-added increments (spikes/pipeline2).
 metadata:
   copyright: "© 2026 Cartman ApS. All rights reserved."
-  version: "0.2.2"
+  version: "0.3.0"
   tags: [thinking, reason, help, retrieval]
 ---
 
@@ -93,7 +93,12 @@ falsification yet).
      or is hypothetical/forward-looking (e.g. a system not yet built). If
      hypothetical, say so explicitly and confirm whether an attribute/
      theme-filter answer (no traversal) is acceptable, rather than forcing
-     a fake edge to something that doesn't exist yet.
+     a fake edge to something that doesn't exist yet. Before concluding
+     there's no anchor at all, check whether the classification layer
+     (PracticeArea, RiskPath — see ps-domain-concepts.md's Document
+     Purpose section) has a real matching category (e.g. RiskPath.
+     risk_type) that could anchor the question instead of a bare
+     keyword filter on Capability/Obligation text.
    - Whether the question implies comparing or matching entities across a
      layer the model deliberately keeps non-convergent (Role, Standard,
      Control — check the concept's own Identity note in
@@ -106,6 +111,14 @@ falsification yet).
    entities/edges it maps to. If step 2 surfaced a compound question the
    user chose to keep bundled, state each clause explicitly in the
    proposal rather than collapsing them into one sentence.
+
+   **Pre-flight gate, mandatory, not discretionary:** if the proposal
+   applies any status/lifecycle filter (e.g. "active-only"), confirm every
+   independently-statused entity in the filtered chain was explicitly
+   asked about in step 2 — not silently defaulted. If it wasn't asked, go
+   back and ask before proposing. This is a checklist item to verify, not
+   a judgment call about whether the ambiguity "feels" significant enough
+   to raise.
 4. **Approval gate.** Ask the user to approve the question verbatim. If not
    approved, continue the loop on the specific part that's wrong — don't
    restart from scratch. Only continue to step 5 once approved.
@@ -122,6 +135,21 @@ falsification yet).
    spikes/pipeline2/README.md's Setup step 3; does not route through
    `ps query template` or `ps query catalog`). Show the query before or
    alongside its results — never hide what was actually run.
+
+   More than one query is expected and fine — a discovery query to resolve
+   an ambiguous entity name, or a follow-up aggregate query to compute
+   exact statistics rather than hand-summing a large result set, are both
+   legitimate freehand retrieval, not a violation of "the approved
+   question." Show every query run, not just the last one.
+
+   If a fuzzy/pattern-matched entity name resolves to more than one real
+   node at retrieval time, don't silently pick one. If only one candidate
+   actually connects to relevant data, that's an empirical resolution —
+   say so explicitly in the answer. If more than one candidate connects
+   with real data, report each candidate's results separately rather than
+   merging them, and flag the ambiguity in the constructed answer — the
+   approval gate already passed, so this can't be sent back to the user;
+   the answer itself has to carry the caveat.
 6. **Construct the answer.** Build a plain-English answer directly from the
    retrieved rows. State only what the data supports; do not round up,
    extrapolate, or fill gaps with assumed domain knowledge.
@@ -152,7 +180,12 @@ falsification yet).
    Answer: <constructed answer>
 
    Status: unverified — no fitness-function check or falsification pass
-   yet (spikes/pipeline2/PROGRESS.md D13).
+   yet (spikes/pipeline2/PROGRESS.md D13). If the answer was produced via
+   an attribute/theme filter rather than a modeled traversal (Edges line's
+   second or third case), add a second sentence naming that the result is
+   also sensitive to the specific keyword/theme terms chosen — not just
+   unverified in the fitness-check sense. A different keyword list could
+   return a different result set.
    ```
 
 ## Guardrails
