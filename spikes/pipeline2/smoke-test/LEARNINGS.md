@@ -2,24 +2,30 @@
 # Smoke-test learnings so far
 
 Synthesis across [run-01.md](./run-01.md), [run-02-subagents.md](./run-02-subagents.md),
-and [run-03-rubric-validator.md](./run-03-rubric-validator.md). These were
-cheap, throwaway tests of individual pipeline layers, run before investing
-in the real skill/harness/rubric build-out (Setup steps 2-5) — not
-pipeline2 deliverables themselves. Motivation: check whether the design's
-core bets (falsification adds value; the rubric-validation harness
-actually discriminates) hold up before building around them.
+[run-03-rubric-validator.md](./run-03-rubric-validator.md), and
+[run-04-hand-authored-fitness.md](./run-04-hand-authored-fitness.md).
+These were cheap, throwaway tests of individual pipeline layers, run
+before investing in the real skill/harness/rubric build-out (Setup steps
+2-5) — not pipeline2 deliverables themselves. Motivation: check whether
+the design's core bets (falsification adds value; the rubric-validation
+harness actually discriminates; a fitness function can be hand-authored
+and actually work) hold up before building around them.
 
 ## What was tested, and what wasn't
 
 Tested: step 5 (falsification) against a steps-2+3 baseline (run-01,
-run-02); step 1's rubric-validation harness in isolation (run-03, D9/D11).
+run-02); step 1's rubric-validation harness in isolation (run-03, D9/D11);
+hand-authoring a real fitness function from an approved fixture and
+executing it live against real retrieved data (run-04).
 
 Not tested: Socratic narrowing (the open-question-to-scoped-question
-dialogue, step 1's other half) and the verification loop (step 4) end to
-end. Both would need a different test shape — Socratic narrowing needs a
-simulated naive-user dialogue, not a single-shot question; the
-verification loop needs a real authored fitness function actually
-executed against a real (possibly wrong) candidate answer.
+dialogue, step 1's other half) and the full verification *loop* (step 4)
+— specifically, its refine-on-fail path. Socratic narrowing needs a
+simulated naive-user dialogue, not a single-shot question. Run-04 executed
+a real fitness function against a real candidate answer and got a true
+verdict, but both fitness functions passed on the first try — the loop's
+refine-and-retry behavior when a fitness function actually fails against
+the answer remains unexercised.
 
 ## Finding 1 — Falsification's value is difficulty-gated, not uniform
 
@@ -87,6 +93,41 @@ cleared the gate because FF-CNT-001 tolerates Partial and the validator
 reasonably followed the more specific per-criterion wording. **Not yet
 fixed** — flagged to the user, decision pending.
 
+## Finding 5 — Hand-authoring works, and independent-re-query quality is gated by claim structure, not authoring effort
+
+run-04: two fitness functions hand-authored against RUBRIC.md v2 (no
+fitness-authoring skill exists yet), each executed live against
+`policy_system` — for NQ-001 (single-edge claim: Roles defined by active
+CRA) and NQ-002 (six-edge chain claim: Requirement→...→Control
+completeness).
+
+NQ-001's first draft **failed its own gate** (FF-REQ-001 honestly scored
+Partial — the schema offers exactly one path to the claim, so no
+independently-authored query can walk a genuinely different one) and its
+gate-legal query still had a latent defect only live execution caught:
+predicate 1 ("exactly one active CRA regulation") wasn't actually
+derivable from the query's own output, because a join could silently drop
+a zero-match regulation before the predicate ever saw it. Same shape as
+Finding 4: rubric-legal text is not the same as a query that returns what
+its own predicate needs.
+
+NQ-002 passed cleanly on the first attempt, including a genuine FF-REQ-001
+**Pass** (not Partial) — six edge types gave real room for a structurally
+different derivation (enumerate valid end-states via `UNWIND`+`MATCH`
+vs. the answer query's `OPTIONAL MATCH`+aggregate-`reduce`), with no
+shared subquery fragment.
+
+**Implication for the not-yet-built fitness-authoring skill:** expect
+FF-REQ-001 to cap at Partial for single-hop factual lookups as a
+structural ceiling, not an authoring failure — don't tune the skill to
+chase a Pass that the claim's own shape makes unreachable.
+
+Incidentally surfaced, same genre as Finding 3's `count(*)` bug: FalkorDB
+rejects `EXISTS { }` Cypher subqueries and pattern-predicates with inline
+property maps referencing externally-bound variables
+(`Unable to resolve filtered alias`) — undocumented anywhere before this
+run, real constraint on freehand retrieval's toolset.
+
 ## Meta-learning
 
 Every one of these three cheap tests found something real and specific
@@ -102,8 +143,13 @@ first and discovering gaps later.
 - RUBRIC.md v2's Guardrail 4 vs. Criteria table conflict — unresolved.
 - Socratic narrowing — untested, needs a different test shape (simulated
   naive-user dialogue).
-- Full verification loop (step 4) — untested end to end with a real
-  authored fitness function against a real candidate answer.
+- Full verification *loop*'s refine-on-fail path — still untested; run-04
+  executed a real fitness function against a real candidate answer and
+  got a true verdict, but both passed on the first try.
+- FalkorDB Cypher dialect gaps found in run-04 (`EXISTS {}` subqueries,
+  filtered-alias pattern-predicates) — not yet folded into any guidance
+  for freehand retrieval authors.
 - Sample sizes remain small: 6 questions for step 5, 6 fitness functions
-  for step 1's rubric validation. Findings are real but not yet a basis
-  for broad claims.
+  for step 1's rubric validation, 2 fitness functions for run-04's
+  hand-authoring test. Findings are real but not yet a basis for broad
+  claims.
