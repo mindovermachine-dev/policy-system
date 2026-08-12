@@ -18,6 +18,7 @@ Resumable build state for [README.md](./README.md)'s design.
 | D9 | Step 1 actor split: who authors vs. who validates the fitness function | **Resolved** — skill authors, harness validates against the static rubric |
 | D10 | Step 2 retrieval: CLI template routing vs. freehand Cypher | **Resolved for the spike** — genuinely freehand; ps-domain schema rules apply as skill context, its command-preference routing does not. Revisit after run-log data |
 | D11 | Fitness-function rubric scoring methodology: adopt structure from `inspiration/business-challenge-rubric.md` + `inspiration/bc-scoring-methodology.md`, or keep the flat 5-bullet valid/invalid check | **Resolved** — adopted: per-criterion IDs, Pass(2)/Partial(1)/Fail(0) tiers, explicit pass-gate expression, scoring guardrails (RUBRIC.md v2). Declined for this revision: evidence-citation requirement, multi-perspective scoring. This governs how the harness scores a fitness function's own text against RUBRIC.md's 5 criteria (step 1) — does not touch D2, which governs the fitness function's own execution against the candidate answer (step 4) |
+| D12 | Step 1 actor split, revisited: D9 said one skill authors both the narrowed question and the fitness function. Split further into two skills, or keep as one? | **Resolved — superseded D9's single-skill framing.** Split into two skills: `.github/skills/policy-question/SKILL.md` (Socratic narrowing only, grounded in `docs/artifacts/ps-domain-concepts.md`, outputs refined question text + a short labeled list of entities/edges it routes through — no fitness function, no retrieval, no answer) and a separate, not-yet-built fitness-authoring skill consuming that output. Placement also revisited: built under `.github/skills/` (matching the repo's only existing skill-packaging convention — `ps-domain`, `reasoning`) rather than spike-local as README originally said, since no prior spike had actually established a spike-local skill pattern to follow |
 
 ## Environment
 
@@ -41,7 +42,8 @@ Resumable build state for [README.md](./README.md)'s design.
 | README.md | done (rev. 2026-08-11: falsification step, rubric measured-vs-assumed note, step-2 freehand clarification) |
 | PROGRESS.md | this file |
 | Static rubric doc | done ([RUBRIC.md](./RUBRIC.md), v2 2026-08-11: criterion IDs, tiered scoring, gate logic, guardrails) |
-| Socratic authoring skill / stand-in | not started |
+| Socratic narrowing skill | done (`.github/skills/policy-question/SKILL.md`, rev. 2026-08-11, per D12) |
+| Fitness-authoring skill | not started |
 | Freehand-retrieval CLI surface | not started |
 | Fitness-loop harness | not started |
 | Falsification loop | not started |
@@ -51,5 +53,7 @@ Resumable build state for [README.md](./README.md)'s design.
 
 ## Next action
 
-Build the Socratic question+fitness-authoring skill as a spike-local skill
-(Setup step 2), authored against [RUBRIC.md](./RUBRIC.md).
+Build the fitness-authoring skill (Setup step 2, second half — the
+narrowing half is done), authored against [RUBRIC.md](./RUBRIC.md), taking
+`.github/skills/policy-question/SKILL.md`'s refined-question output as its
+input.

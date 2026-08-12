@@ -14,7 +14,20 @@ Can we disprove the answer from the data in the graph? So rather than looking fo
 
 ## Core loop
 
-1. **Socratic narrowing.** User poses an open/global question. A skill uses Socratic dialogue to narrow it into a scoped, answerable question. The same skill then authors a candidate fitness function; the harness validates it against the static rubric (executable pair, independent re-query, scope bound, counting unit, falsification statement) before it is shown to the user. Authorship lives in the skill; rubric enforcement lives in the harness. Harness presents the refined question when it passes the rubric. User approves the question text before anything runs.
+1. **Socratic narrowing, then fitness authoring — two separate skills.**
+   User poses an open/global question.
+   1a. `.github/skills/policy-question/SKILL.md` uses Socratic dialogue to
+       narrow it into a scoped, answerable question, grounded against
+       `docs/artifacts/ps-domain-concepts.md`, and outputs the refined
+       question text plus the entities/edges it routes through. User
+       approves this output before anything else runs.
+   1b. A separate, not-yet-built skill then authors a candidate fitness
+       function from the approved question; the harness validates it against
+       the static rubric (executable pair, independent re-query, scope
+       bound, counting unit, falsification statement) before it is shown to
+       the user. Authorship lives in the skill; rubric enforcement lives in
+       the harness. Harness presents the fitness function when it passes the
+       rubric. User approves the fitness function before anything runs.
 
 2. **Freehand retrieval.** Harness writes genuinely freehand, ad hoc Cypher
    against the graph to gather the data the question needs — deliberately
@@ -56,7 +69,7 @@ measured-vs-assumed provenance note and growth discipline.
 
 1. Write the static rubric as a standalone, reviewable doc.
 
-2. Build the Socratic question+fitness-authoring skill as a spike-local skill.
+2. Build the Socratic narrowing skill (`.github/skills/policy-question/SKILL.md` — done, per D12) and, separately, the fitness-authoring skill (not yet started).
 
 3. Build the freehand-retrieval CLI surface (reuse `ps.py`'s
    connection/query pattern, not its code).
