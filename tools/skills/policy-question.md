@@ -4,20 +4,22 @@
 
 Turn an open/global question into a single, scoped, answerable question,
 grounded in the Policy System's actual entities and relationships — not the
-user's assumed vocabulary — then run freehand retrieval against the graph
-and construct a first-pass answer. This covers step 1a (narrowing) plus
-steps 2-3 (freehand retrieval, answer construction) of the Guided Fitness
-Pipeline (spikes/pipeline2/README.md). It is an incremental extension, per
-PROGRESS.md D13: fitness-function authoring (step 1b), the independent
-verification loop (step 4), and falsification (step 5) are deliberately
-**not** included here — each is a separate future increment, added and
-tested on its own before the next is layered in.
+user's assumed vocabulary — then run freehand retrieval against the graph,
+construct a first-pass answer, and attempt to falsify it. This covers step
+1a (narrowing) plus steps 2-3 (freehand retrieval, answer construction) and
+step 5 (falsification) of the Guided Fitness Pipeline
+(spikes/pipeline2/README.md), the latter per spikes/pipeline3/README.md. It
+is an incremental extension, per PROGRESS.md D13: fitness-function
+authoring (step 1b) and the independent verification loop (step 4) are
+deliberately **not** included here — each is a separate future increment,
+added and tested on its own before the next is layered in.
 
 **Deliverable:** the refined question text (approved verbatim by the
 user), the entities/edges it routes through, the freehand Cypher query
-used to retrieve data, the retrieved data, and a constructed first-pass
-answer explicitly flagged as unverified (no fitness check, no
-falsification yet).
+used to retrieve data, the retrieved data, a constructed first-pass answer
+explicitly flagged as unverified (no fitness check yet), and a
+falsification report (attempts made, landed or missed, per
+`tools/skills/falsification-step.md`).
 
 ## On Load
 
@@ -147,10 +149,38 @@ falsification yet).
 6. **Construct the answer.** Build a plain-English answer directly from the
    retrieved rows. State only what the data supports; do not round up,
    extrapolate, or fill gaps with assumed domain knowledge.
-7. **Output**, in this shape:
+7. **Falsify.** Invoke `tools/skills/falsification-step.md` against the
+   constructed answer — read it fresh, follow its Process exactly
+   (including its scope-aware attempt-cap determination — 1 attempt if the
+   question's Entities stay within the ingested spine, 5 if `Policy`,
+   `Standard`, or `Control` are involved, or the user asked for deeper
+   scrutiny), and fold its Output shape into step 8 below. This step never
+   turns an unverified answer into a verified one; it only adds evidence
+   about whether the graph contradicts it.
+8. **Output**, in this shape:
 
    ```
    Question: <refined question text>
+
+   Answer: <constructed answer>
+
+   Status: unverified — no fitness-function check yet
+   (spikes/pipeline2/PROGRESS.md D13). Falsification ran under a
+   max_falsification_attempts cap of <1 | 5>, set per
+   spikes/pipeline3/PROGRESS.md D6 because <the question's Entities stay
+   within the ingested spine | Policy/Standard/Control is involved | the
+   user asked for deeper scrutiny> — state which reason applied, don't
+   just report the number. Falsification was attempted (see below);
+   surviving it is evidence, not a verified verdict. If the answer was
+   produced via an attribute/theme filter rather than a modeled traversal
+   (Edges line's second or third case), add a second sentence naming that
+   the result is also sensitive to the specific keyword/theme terms
+   chosen — not just unverified in the fitness-check sense. A different
+   keyword list could return a different result set.
+
+   Falsification: <N> attempt(s), <landed | none landed>
+     1. <query intent, one line> — <landed: what it contradicts | missed>
+     2. ...
 
    Entities: <Label, Label, ...>
    Edges: one of —
@@ -175,15 +205,6 @@ falsification yet).
    Retrieved data:
    <rows, or a compact summary if large>
 
-   Answer: <constructed answer>
-
-   Status: unverified — no fitness-function check or falsification pass
-   yet (spikes/pipeline2/PROGRESS.md D13). If the answer was produced via
-   an attribute/theme filter rather than a modeled traversal (Edges line's
-   second or third case), add a second sentence naming that the result is
-   also sensitive to the specific keyword/theme terms chosen — not just
-   unverified in the fitness-check sense. A different keyword list could
-   return a different result set.
    ```
 
 ## Guardrails
@@ -200,10 +221,17 @@ falsification yet).
   guard are reused.
 - Ground every Cypher clause in `ps-domain-concepts.md`'s actual property
   names, node labels, and edge directions — never invent one.
-- Do not author a rubric-gated fitness function, run an independent
-  verification/re-query loop, or attempt falsification — these are
-  separate, not-yet-added increments. Always present the constructed
-  answer as unverified, never as confirmed correct.
+- Do not author a rubric-gated fitness function or run an independent
+  verification/re-query loop (step 1b, step 4) — these remain separate,
+  not-yet-added increments. Always present the constructed answer as
+  unverified, never as confirmed correct, even after falsification runs.
+- Falsification (step 7) always runs at least once — never skip it
+  entirely, and never let it soften into confirmation-seeking. The number
+  of attempts beyond the first is scope-conditional (see
+  `falsification-step.md`'s attempt-cap determination), not the step
+  itself. Follow `falsification-step.md`'s own guardrails: no verdict
+  inflation, vary the attack angle between attempts, terminate at the cap
+  or the first landed disproof, report every attempt.
 - Don't silently collapse a compound question, force a same-node match
   across a non-convergent layer, or invent a status definition for an
   entity that has none — surface each as an explicit choice instead.
