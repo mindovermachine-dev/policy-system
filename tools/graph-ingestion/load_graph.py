@@ -23,7 +23,6 @@ from falkordb import FalkorDB
 
 DEFAULT_DATA_FILE = (
     Path(__file__).resolve().parents[2]
-    / "docs"
     / "test-data"
     / "eu-regulations"
     / "policy_system_graph.json"
