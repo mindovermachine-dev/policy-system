@@ -468,44 +468,11 @@
     },
     {
       "label": "Capability",
-      "id": "cap_secure_sdlc_execution_91a2ed",
-      "properties": {
-        "id": "cap_secure_sdlc_execution_91a2ed",
-        "name": "Secure SDLC Execution",
-        "description": "Capability to execute secure design and coding practices across the delivery lifecycle.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-    {
-      "label": "Capability",
-      "id": "cap_engineering_identity_access_6d2a4f",
-      "properties": {
-        "id": "cap_engineering_identity_access_6d2a4f",
-        "name": "Engineering Identity and Access Control",
-        "description": "Capability to enforce authentication, authorization, and least-privilege controls.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-    {
-      "label": "Capability",
       "id": "cap_release_change_control_2ec781",
       "properties": {
         "id": "cap_release_change_control_2ec781",
         "name": "Release and Change Control",
         "description": "Capability to govern release approvals, deploy safeguards, and rollback readiness.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-    {
-      "label": "Capability",
-      "id": "cap_software_supply_chain_integrity_54f1be",
-      "properties": {
-        "id": "cap_software_supply_chain_integrity_54f1be",
-        "name": "Software Supply Chain Integrity",
-        "description": "Capability to manage dependencies, licenses, and provenance of build artifacts.",
         "type": "technical",
         "status": "active"
       }
@@ -532,40 +499,6 @@
         "status": "active"
       }
     },
-    {
-      "label": "Capability",
-      "id": "cap_vulnerability_incident_operations_92f40d",
-      "properties": {
-        "id": "cap_vulnerability_incident_operations_92f40d",
-        "name": "Vulnerability and Incident Operations",
-        "description": "Capability to triage vulnerabilities and execute incident response workflows.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-    {
-      "label": "Capability",
-      "id": "cap_data_protection_privacy_controls_4f2bd6",
-      "properties": {
-        "id": "cap_data_protection_privacy_controls_4f2bd6",
-        "name": "Data Protection and Privacy Controls",
-        "description": "Capability to enforce privacy and data protection safeguards in engineering systems.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-    {
-      "label": "Capability",
-      "id": "cap_audit_logging_evidence_8bc1d3",
-      "properties": {
-        "id": "cap_audit_logging_evidence_8bc1d3",
-        "name": "Audit Logging and Evidence Management",
-        "description": "Capability to retain structured audit logs and evidence for verification.",
-        "type": "technical",
-        "status": "active"
-      }
-    },
-
     {
       "label": "Policy",
       "id": "pol_engineering_policy_governance_6b0f1a",
@@ -992,26 +925,26 @@
     { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.10" }, "to": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "properties": {} },
 
     { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_policy_governance_exception_management_92ca31" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_identity_access_enforcement_39d0b8" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "to": { "label": "Capability", "id": "cap_secure_development_lifecycle_9f3224" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_identity_access_enforcement_39d0b8" }, "to": { "label": "Capability", "id": "cap_access_control_authentication_151816" }, "properties": {} },
     { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_release_change_safety_8fbc74" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_supply_chain_assurance_25e1d4" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_supply_chain_assurance_25e1d4" }, "to": { "label": "Capability", "id": "cap_component_inventory_sbom_management_b5223c" }, "properties": {} },
     { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_quality_gate_enforcement_744bc9" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
     { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_reliability_operational_readiness_5a1e6f" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_vulnerability_incident_response_4dcb91" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_data_privacy_engineering_0af321" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_vulnerability_incident_response_4dcb91" }, "to": { "label": "Capability", "id": "cap_vulnerability_management_55d0c4" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_data_privacy_engineering_0af321" }, "to": { "label": "Capability", "id": "cap_data_protection_by_design_default_69e489" }, "properties": {} },
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl_logging_audit_traceability_2ebca8" }, "to": { "label": "Capability", "id": "cap_security_logging_c4d9e2" }, "properties": {} },
 
     { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_engineering_governance_exceptions_81d2bf" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_secure_sdlc_4a7c1d" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_identity_access_engineering_13fcb2" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_secure_sdlc_4a7c1d" }, "to": { "label": "Capability", "id": "cap_secure_development_lifecycle_9f3224" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_identity_access_engineering_13fcb2" }, "to": { "label": "Capability", "id": "cap_access_control_authentication_151816" }, "properties": {} },
     { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_change_release_deployment_safety_0f8da1" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_supply_chain_dependencies_7ce830" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_supply_chain_dependencies_7ce830" }, "to": { "label": "Capability", "id": "cap_component_inventory_sbom_management_b5223c" }, "properties": {} },
     { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_quality_test_assurance_a26d17" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
     { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_reliability_service_operations_c01be6" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_vulnerability_incident_management_2f7de3" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_data_privacy_engineering_9b73f0" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
-    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_observability_logging_audit_evidence_c8a2d9" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_vulnerability_incident_management_2f7de3" }, "to": { "label": "Capability", "id": "cap_vulnerability_management_55d0c4" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_data_privacy_engineering_9b73f0" }, "to": { "label": "Capability", "id": "cap_data_protection_by_design_default_69e489" }, "properties": {} },
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa_observability_logging_audit_evidence_c8a2d9" }, "to": { "label": "Capability", "id": "cap_security_logging_c4d9e2" }, "properties": {} },
 
     { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_engineering_governance_exceptions_81d2bf" }, "to": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "properties": {} },
     { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_secure_sdlc_4a7c1d" }, "to": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "properties": {} },
@@ -1025,26 +958,26 @@
     { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa_observability_logging_audit_evidence_c8a2d9" }, "to": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "properties": {} },
 
     { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_secure_development_lifecycle_9f3224" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_access_control_authentication_151816" }, "properties": {} },
     { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_supply_chain_risk_7f1d44" }, "to": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_supply_chain_risk_7f1d44" }, "to": { "label": "Capability", "id": "cap_component_inventory_sbom_management_b5223c" }, "properties": {} },
     { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_secure_build_release_d93f8a" }, "to": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "properties": {} },
     { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_reliable_service_operation_41abce" }, "to": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_incident_recovery_readiness_633ee1" }, "to": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_data_protection_privacy_2c51f0" }, "to": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "properties": {} },
-    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_incident_recovery_readiness_633ee1" }, "to": { "label": "Capability", "id": "cap_vulnerability_management_55d0c4" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_data_protection_privacy_2c51f0" }, "to": { "label": "Capability", "id": "cap_data_protection_by_design_default_69e489" }, "properties": {} },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp_traceability_auditability_0de7fa" }, "to": { "label": "Capability", "id": "cap_security_logging_c4d9e2" }, "properties": {} },
 
     { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_policy_exception_governance_3cfd12" }, "to": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_secure_sdlc_execution_91a2ed" }, "to": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_engineering_identity_access_6d2a4f" }, "to": { "label": "Policy", "id": "pol_engineering_access_control_3d9ec4" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_secure_development_lifecycle_9f3224" }, "to": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_access_control_authentication_151816" }, "to": { "label": "Policy", "id": "pol_engineering_access_control_3d9ec4" }, "properties": {} },
     { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_release_change_control_2ec781" }, "to": { "label": "Policy", "id": "pol_change_release_control_a95e17" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_software_supply_chain_integrity_54f1be" }, "to": { "label": "Policy", "id": "pol_supply_chain_license_2bc87d" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_component_inventory_sbom_management_b5223c" }, "to": { "label": "Policy", "id": "pol_supply_chain_license_2bc87d" }, "properties": {} },
     { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_quality_gate_assurance_10ab6e" }, "to": { "label": "Policy", "id": "pol_test_quality_gates_e7d8f2" }, "properties": {} },
     { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_service_reliability_management_a3c0fe" }, "to": { "label": "Policy", "id": "pol_reliability_operations_14ca8e" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_vulnerability_incident_operations_92f40d" }, "to": { "label": "Policy", "id": "pol_vulnerability_remediation_88a5c1" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_data_protection_privacy_controls_4f2bd6" }, "to": { "label": "Policy", "id": "pol_data_handling_privacy_561ceb" }, "properties": {} },
-    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_audit_logging_evidence_8bc1d3" }, "to": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_vulnerability_management_55d0c4" }, "to": { "label": "Policy", "id": "pol_vulnerability_remediation_88a5c1" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_data_protection_by_design_default_69e489" }, "to": { "label": "Policy", "id": "pol_data_handling_privacy_561ceb" }, "properties": {} },
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap_security_logging_c4d9e2" }, "to": { "label": "Policy", "id": "pol_logging_audit_retention_73cd90" }, "properties": {} },
 
     { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_engineering_policy_governance_6b0f1a" }, "to": { "label": "Standard", "id": "std_pol_engineering_policy_governance_6b0f1a_v1" }, "properties": {} },
     { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol_secure_sdlc_0f66a2" }, "to": { "label": "Standard", "id": "std_pol_secure_sdlc_0f66a2_v1" }, "properties": {} },

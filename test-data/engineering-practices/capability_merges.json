@@ -25,8 +25,18 @@
     "note": "Seed 'Data Protection and Privacy Controls' (enforce privacy/data-protection safeguards in engineering systems) is closest to existing 'Data Protection by Design & Default' (build data-protection measures into systems from design). Medium confidence -- seed capability is broader/engineering-general rather than design-time specific; review before applying."
   },
   {
-    "keep": "cap_availability_resilience_7caf2b",
+    "keep": "cap_vulnerability_management_55d0c4",
+    "drop": ["cap_vulnerability_incident_operations_92f40d"],
+    "note": "Seed 'Vulnerability and Incident Operations' (triage vulnerabilities, execute incident response workflows) maps onto existing 'Vulnerability Management' (remediate vulnerabilities in products) -- the canonical regulation-side capability for this duty. Medium confidence -- incident-response workflow scope is broader than the regulatory capability; incident handling remains partially ENGPRAC-specific via the Policy/Standard/Control chain."
+  },
+  {
+    "keep": null,
     "drop": ["cap_service_reliability_management_a3c0fe"],
-    "note": "Seed 'Service Reliability Management' (SLOs, observability, resilience controls) overlaps with existing 'Availability & Resilience' (protect availability, resilience against DoS). Medium-low confidence -- seed capability's SLO/observability scope is not represented in the existing capability at all; merging loses that nuance. Consider keeping separate or renaming the kept node's description to fold it in instead of a straight merge."
+    "note": "KEEP NATIVE (no merge). Seed 'Service Reliability Management' (SLOs, observability, resilience controls) has no true regulation-side counterpart: the nearest candidate 'cap_availability_resilience_7caf2b' (protect availability, resilience against DoS) does not represent SLO/observability scope, so merging would lose meaning. Left as an ENGPRAC-native capability per its own caution."
+  },
+  {
+    "keep": null,
+    "drop": ["cap_policy_exception_governance_3cfd12", "cap_release_change_control_2ec781", "cap_quality_gate_assurance_10ab6e"],
+    "note": "KEEP NATIVE (no merge). These three capabilities are internal engineering disciplines with no corresponding obligation/capability in CRA/GDPR/NIS2 (policy & exception governance, release/change control, quality-gate assurance). They remain ENGPRAC-native; the connection to regulations is via the other 6 merged capabilities."
   }
 ]
