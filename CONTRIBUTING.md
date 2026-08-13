@@ -36,15 +36,20 @@ NOTE: This is a destructure data load. It will reset the database and delete all
 ```
 tools/graph-ingestion/load_all.sh
 ```
+4. Start asking questions to the graph like:
 
+
+```
+Show me the names of the roles defined in CRA
+```
 
 ## Coding Standards
 
-List any coding style, formatting, linting, or naming conventions.
+To be defined.
 
 ## Testing
 
-Explain how to run tests and any requirements for test coverage.
+When implementing code use TDD as the default way to ensure appropriate test coverage.
 
 ## Pull Request Process
 

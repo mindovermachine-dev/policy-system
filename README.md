@@ -1,5 +1,7 @@
 # Policy System
 
+Quick start: Read the [CONTRIBUTING.md](./CONTRIBUTING.md)
+
 ## Executive Summary
 
 This repo is in an early experimentation phase where the purpose is to prove many of the concepts and ideas required to realize the vision.
