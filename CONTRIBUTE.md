@@ -31,6 +31,8 @@ podman run -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
 ```
 3. Load test data into graph
 
+NOTE: This is a destructure data load. It will reset the database and delete all existing data.
+
 ```
 tools/graph-ingestion/load_all.sh
 ```
