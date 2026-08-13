@@ -56,18 +56,28 @@ falsification yet).
    - Counting unit, if the question asks "how many" (e.g. distinct Controls
      vs. distinct chains — these yield different numbers over the same
      graph).
-   - Status/lifecycle bound, if relevant (current-only vs. including
-     deprecated/superseded/planned) — check the entity's own Properties
-     table in ps-domain-concepts.md first: if it carries no status/
-     lifecycle property itself (e.g. Obligation), say so and confirm with
-     the user how "active-only" should be defined transitively through its
-     chain, rather than improvising a definition silently. If more than one
-     entity in that chain carries its own independent status property (e.g.
-     both Regulation.status and Requirement.status exist separately), don't
-     silently pick one — ask whether "active-only" should key off the
-     regulation, the requirement, or require both, since they can diverge
-     (a Requirement can be individually deprecated while its Regulation
-     stays active).
+   - Status/lifecycle bound: default to active-only, applied automatically
+     without asking, for any entity in the chain whose status enum
+     literally includes an `active` value — currently `Regulation`
+     (`active`\|`superseded`\|`vacated`), `Requirement`, `PracticeArea`,
+     `RiskPath`, `Capability` (all `active`\|`deprecated`). Filter each
+     such entity in the chain independently on `status = 'active'` — they
+     can diverge (e.g. a Requirement individually deprecated under an
+     active Regulation), so filter every one that has the property, not
+     just one representative. Always state each applied filter explicitly
+     in the proposed question (step 3) so the user can catch and override
+     it — e.g. "including superseded/deprecated" opts out for a given
+     entity.
+     This default does **not** extend to `Policy`
+     (`draft`\|`approved`\|`deprecated`) or `Standard`/`Control`
+     (`implementation_status`: `planned`\|`draft`\|`implemented`\|
+     `reviewed`\|`deprecated`) — neither has a literal `active` value, so
+     still ask the user as before whether a lifecycle bound on these
+     matters to the question.
+     If an entity in the chain carries no status/lifecycle property at all
+     (e.g. `Role`, `Obligation`), don't invent one — it's covered
+     transitively by whichever adjacent entity's active-only filter
+     already applies.
    - Whether the question bundles more than one distinct ask (e.g. a count
      plus a separate specific-fact lookup) — if so, ask the user whether to
      keep it as one approved question with explicit clauses, or split into
@@ -96,12 +106,13 @@ falsification yet).
    proposal rather than collapsing them into one sentence.
 
    **Pre-flight gate, mandatory, not discretionary:** if the proposal
-   applies any status/lifecycle filter (e.g. "active-only"), confirm every
-   independently-statused entity in the filtered chain was explicitly
-   asked about in step 2 — not silently defaulted. If it wasn't asked, go
-   back and ask before proposing. This is a checklist item to verify, not
-   a judgment call about whether the ambiguity "feels" significant enough
-   to raise.
+   applies the default active-only filter to any entity, list each
+   filtered entity explicitly in the proposed question text — never apply
+   it silently/invisibly, even though it wasn't asked about. For `Policy`
+   and `Standard`/`Control`, confirm a lifecycle bound was explicitly
+   asked about in step 2 (per the bullet above) rather than defaulted or
+   omitted. This is a checklist item to verify, not a judgment call about
+   whether the ambiguity "feels" significant enough to raise.
 4. **Approval gate.** Ask the user to approve the question verbatim. If not
    approved, continue the loop on the specific part that's wrong — don't
    restart from scratch. Only continue to step 5 once approved.
@@ -154,6 +165,10 @@ falsification yet).
        understate a real traversal as "none" just because one filter
        term isn't modeled.
 
+   Filters: <status filters auto-applied by the active-only default, e.g.
+     "Regulation.status = active, Requirement.status = active">, or "none"
+     if no entity in the chain qualified for the default.
+
    Query:
    <the executed Cypher>
 
@@ -192,3 +207,7 @@ falsification yet).
 - Don't silently collapse a compound question, force a same-node match
   across a non-convergent layer, or invent a status definition for an
   entity that has none — surface each as an explicit choice instead.
+- The active-only default (see step 2) may be applied without asking, but
+  never invisibly — it must always appear in the proposed question and the
+  output's Filters line, and it never extends to `Policy`/`Standard`/
+  `Control`, which still require an explicit lifecycle question.
