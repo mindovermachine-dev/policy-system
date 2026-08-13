@@ -1,35 +1,23 @@
 # Policy System
 
-[//]: # (Table of Contents)
+## Executive Summary
 
-- [Governance Mechanism: How Decisions Are Made](#1-governance-mechanism-how-decisions-are-made)
-- [Policy Content: What Is Being Managed](#2-policy-content-what-is-being-managed)
-- [Query & Check Mechanism: Interaction Layer](#3-query--check-mechanism-interaction-layer)
-- [System Architecture Overview](#system-architecture-overview)
-- [Key Objectives](#key-objectives)
-- [Target Audiences](#target-audiences)
-- [Target Outcomes](#target-outcomes)
-- [Key Differentiators](#key-differentiators)
+This repo is in an early experimentation phase where the purpose is to prove many of the concepts and ideas required to realize the vision.
 
----
+EU has a heavy set of regulations that companies selling products on the european market must comply with. Some of these regulations are now becoming obligations.
 
-There is a wave and movement away from US based tech dependency towards EU.
+The heavy regulation can be perceived as a problem, because compliance processes are largely manual and bolt on, but imagine if we could turn the EU regulations into benefits for EU based companies by automating and streamlining as much of the compliance work as possible, such that it becomes a competitive advantage?
 
-EU has a heavy set of regulations that companies must manage and handle, and where they before were guidance they are now becoming obligations.
+The **Policy System** is composed of three interconnected components that work together to transform regulatory compliance from a manual burden into an automated, business-enabling capability, intended to serve a single legal entity:
 
-The heavy regulation is perceived as a problem because our compliance processes are largely manual and bolt on, but imagine if we could turn the EU regulations into a moat for EU based companies by automating and streamlining compliance work such that it becomes a competitive advantage?
 
 ## Vision
 
  By 2028 turn regulatory compliance from a manual burden into an automated competitive advantage for EU-based organizations — where every regulation and policy is instantly understood, mapped to business operations, and verified through systems that make compliance invisible yet inviolable. 
 
-## Executive Summary
+ ---
 
-The **Policy System** is composed of three interconnected components that work together to transform regulatory compliance from a manual burden into an automated, business-enabling capability, intended to serve a single legal entity:
-
----
-
-### 1. Governance Mechanism: How Policy Decisions Are Made
+### 1. Governance Mechanism: How Policies are managed
 
 This is the *process layer* that defines how organizations coordinate around regulations and policies. It answers questions like:
 - Who needs to review new regulations?
@@ -74,40 +62,6 @@ The system combines semantic search on text descriptions with graph pattern matc
 
 ---
 
-## System Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         GOVERNANCE LAYER                            │
-│  • Approval workflows                                               │
-│  • Review cycles & stakeholder assignments                          │
-│  • Decision logs & escalation paths                                 │
-└─────────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ defines/activates
-                              │
-┌─────────────────────────────┴───────────────────────────────────────┐
-│                       POLICY CONTENT LAYER                          │
-│  • External Regulations (read-only, versioned)                      │
-│  • Obligations (extracted from regulations)                         │
-│  • Business Policies (created/managed by org)                       │
-│  • Standards (policy implementations)                               │
-│  • Controls (technical validation checks)                           │
-│  • Semantic knowledge graph linking all elements                    │
-└─────────────────────────────┬───────────────────────────────────────┘
-                              │ queried by
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                       QUERY & CHECK LAYER                           │
-│  • Natural language questions                                       │
-│  • Situation understanding queries                                  │
-│  • Automated compliance checks (CI/CD integration)                  │
-│  • Gap analysis & compliance scoring                                │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
 ## Key Objectives
 
 1. **Governance**: Capture approval workflows and decision logs as executable content in the system
@@ -140,8 +94,6 @@ The system combines semantic search on text descriptions with graph pattern matc
 
 - **For EU-based companies**: Turn regulatory burden into competitive advantage through compliant-by-design operations by reducing manual compliance effort from days/weeks to minutes/hours
 - **For regulators**: Enable trusted, auditable demonstration of compliance (the "moat")
-
----
 
 ---
 
