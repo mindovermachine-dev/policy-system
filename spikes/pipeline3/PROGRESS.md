@@ -16,6 +16,8 @@ Resumable build state for [README.md](./README.md)'s design.
 
 | D7 | Whether the third pilot round (D6's flagged next step: test the untested Policy/Standard/Control 5-attempt cap) should be re-scoped after `9baacf4` ("connected engineering practices with eu regulations in the graph") merged 6 of ENGPRAC's 12 Capability nodes onto the existing CRA/GDPR/NIS2 canonical Capability nodes they duplicated, instead of leaving them as separate ENGPRAC-native nodes | **Resolved** — combine, not separate rounds (user's explicit choice). Confirmed live in the graph (queried directly, not assumed from the diff): `cap_secure_development_lifecycle_9f3224` now has 7 inbound `REQUIRES` edges spanning CRA-, NIS2-, and ENGPRAC-sourced Obligations. Full fan-in map queried: `cap_access_control_authentication_151816` converges GDPR+NIS2+CRA+ENGPRAC (4-way); `cap_secure_development_lifecycle_9f3224` and `cap_vulnerability_management_55d0c4` each converge 3 sources; `cap_component_inventory_sbom_management_b5223c`, `cap_data_protection_by_design_default_69e489`, `cap_security_logging_c4d9e2` each converge 2. `cap_security_logging_c4d9e2` converging CRA+ENGPRAC is the exact node `ps-domain-concepts.md`'s own Worked Example 2 / Convergence section names as the model's canonical illustration — the seed data just started actually instantiating what the model was always designed to produce, not a novel structure. 4 Capabilities remain ENGPRAC-native by design (no regulation-side counterpart, confirmed in `capability_merges.json`'s "KEEP NATIVE" notes): `cap_policy_exception_governance_3cfd12`, `cap_quality_gate_assurance_10ab6e`, `cap_release_change_control_2ec781`, `cap_service_reliability_management_a3c0fe`. This partially stales D5's "no cross-source-identity trap exists in this graph" finding: that finding was specifically about regulation-version identity (`SUPERSEDED_BY`, still genuinely absent), not about Obligation fan-in at a shared Capability across an ingested regulation and the customer-governed layer — which is now live and untested. Rationale for combining rather than running a separate round: all 6 merged Capabilities `GOVERNED_BY` a Policy, so a question that walks a converged Capability into Policy/Standard/Control naturally exercises both the still-untested 5-attempt cap (D6) and the new convergence-fan-in structure in one pass — accepted tradeoff (per the question asked before this decision) is that a landed disproof in a combined question may need extra judgment to attribute to one mechanism or the other, rather than cleanly isolating which one is at fault. Scope: `smoke-test/run-03-convergence-pilot.md`, same two-part structure as D5 (natural-hard self-play + seeded-defect isolated-subagent set) |
 
+| D8 | Whether to act on `run-03`'s Next-action items 2 (thin Policy/Standard/Control sample) and 3 (RiskPath/Role cross-cutting nuance) as the fourth pilot round, per the user's explicit request ("create questions and execute a test pass for 2 and 3, as those seem to be new areas") | **Resolved** — yes, executed as `smoke-test/run-04-psc-and-crosscutting-pilot.md`. Structural fact-check first (not assumed): Policy/Standard/Control has almost no lifecycle-status variety in this graph (all 10 Policies `approved`, Standards/Controls split 8 `implemented`/2 `reviewed` only, no draft/deprecated/planned/overdue anywhere) and the entire Capability→Policy→Standard→Control chain is strictly 1:1:1:1 across all 10 chains — `ps-domain-concepts.md`'s own worked example (one Policy governing several Capabilities, 2 Standards) remains unrepresented in seed data, same class of "documented design, not-yet-seeded" gap D7 found for Capability convergence before `9baacf4`. Also found directly: "Data Protection Officer" is two distinct `Role` nodes (GDPR-1.0, ENGPRAC-3.0) with zero Capability-reach overlap — the concrete instance of the Role Identity design's stated non-convergence. 6 natural-hard questions (NHQ4-1..6, 3 per area) ran 18 total falsification attempts, **0 landed**, no confirmation-theater. 3 seeded-defect pairs (SEED4-1..3, one per area plus a bridging one) dispatched blind to isolated subagents — **3/3 landed on attempt 1**, extending the now six-for-six first-attempt streak (`run-03`+`run-04`) to new defect *types*: a status-value misstatement, a cross-layer identity conflation (matching `Role` by `name` instead of node identity, silently merging two distinct Roles — SEED4-2, a genuinely new falsification angle distinct from D7's RiskPath/Role finding), and a partial-provenance overclaim. Key interpretive finding: the Policy/Standard/Control layer's near-total lack of structural variance in current seed data means D6's 5-attempt cap has a smaller structural surface to test here than the ingested-spine layer had across three rounds — this pilot adds evidence about data cleanliness at this layer, not about whether the cap itself is calibrated correctly, which remains reasoned from the domain model's Lifecycle text rather than fully measured |
+
 ## Environment
 
 Same as pipeline2 (see `spikes/pipeline2/PROGRESS.md`'s Environment
@@ -36,42 +38,47 @@ should expect this and use plain `MATCH ... WHERE prop = $var` instead.
 | Round 2 pilot (harder natural questions + seeded-defect isolated falsifiers) | done — `smoke-test/run-02-harder-pilot.md` (NHQ-1..5: 0/25 landed; SEED-1..3: 3/3 landed under blind isolation — see D5) |
 | Scope-aware attempt cap (D6) | done — `falsification-step.md` v0.2.0, wired into `policy-question.md` and `README.md`'s Core loop |
 | Round 3 pilot (EU-regulation/ENGPRAC convergence + first real exercise of the 5-attempt cap) | done — `smoke-test/run-03-convergence-pilot.md` (NHQ3-1..4: 0/12 landed, including one question walking a converged Capability through Policy/Standard/Control; SEED3-1..3: 3/3 landed under blind isolation — see D7) |
+| Round 4 pilot (Policy/Standard/Control systematic sweep + RiskPath/Role cross-cutting as its own angle) | done — `smoke-test/run-04-psc-and-crosscutting-pilot.md` (NHQ4-1..6: 0/18 landed; SEED4-1..3: 3/3 landed under blind isolation, including a new identity-conflation defect type — see D8) |
 
 ## Next action
 
-Review `smoke-test/run-03-convergence-pilot.md`'s findings, specifically:
+Review `smoke-test/run-04-psc-and-crosscutting-pilot.md`'s findings,
+specifically:
 
-1. D7 is now resolved with data: the 9baacf4 merge's convergence structure
-   (6 Capabilities now fan-in from both EU-regulation and ENGPRAC-sourced
-   Obligations) was directly targeted by 4 natural-hard questions and 3
-   seeded-defect pairs. 0/12 landed on the real questions; 3/3 seeded
-   defects landed on attempt 1 under blind isolation — the same
-   clean-data-not-weak-falsifier signature D4/D5 established, now
-   confirmed on this specific new structural shape rather than assumed to
-   generalize from it.
-2. D6's 5-attempt cap on Policy/Standard/Control got its first real
-   exercise (NHQ3-3, walking the Security Logging convergence through to
-   Control level) and ran its full 5 attempts cleanly, no false positive.
-   This is one question, not a systematic sweep of the
-   Policy/Standard/Control layer on its own terms (e.g. draft-status
-   Policies, deprecated Standards, or `Control`/`Standard` lifecycle edge
-   cases independent of Capability convergence) — still a thinner sample
-   than the ingested-spine layer's now three rounds of testing.
-3. Two non-landing attempts (NHQ3-3 attempt 3, NHQ3-4 attempts 3 and 5)
-   found that RiskPath and Role are deliberately cross-cutting across the
-   native/shared Capability boundary, while Policy and PracticeArea are
-   not — a scoping nuance an unscoped answer could overclaim. Candidate
-   for the same "flag, don't harden yet" treatment as NP-002/NP-005/NHQ-4
-   below, per README.md step 6.
+1. Both items D7 flagged as thin are now addressed with data: the
+   Policy/Standard/Control layer got a dedicated 3-question, 15-attempt
+   sweep (0 landed) plus its own seeded-defect pair; the RiskPath/Role
+   cross-cutting nuance got 3 dedicated questions (0 landed) plus a
+   seeded identity-conflation pair. Six-for-six seeded defects have now
+   landed on attempt 1 across `run-03`+`run-04`, covering five distinct
+   defect types (numeric misstatement, incomplete-retrieval overclaim,
+   raw-row/distinct-count confusion, status misstatement, cross-layer
+   identity conflation) — the broadest evidence yet that this isn't a
+   narrow trick the falsifier happens to catch.
+2. **New, still-open interpretive question D8 surfaced**: the
+   Policy/Standard/Control layer's near-total lack of structural variance
+   in current seed data (strict 1:1:1:1 chains throughout, only 2 of 4
+   documented status values ever used, nothing draft/deprecated/overdue)
+   means this round's 0/15 on that layer is weaker evidence than the
+   ingested-spine layer's now-three-rounds-deep 0/57 — there's simply
+   less structure to have gotten wrong yet. If more Policy/Standard/
+   Control variety gets seeded later (multi-Standard Policies, a
+   draft/deprecated Policy, a mismatched Standard/Control pair), this
+   layer should be re-tested rather than treated as closed.
+3. SEED4-2's landing mechanism (matching a node by a display property
+   like `name` instead of node identity, silently merging two distinct
+   Role nodes because the model deliberately keeps them non-convergent)
+   is a new falsification-angle candidate, additive to — not the same
+   as — `run-03`'s RiskPath/Role boundary finding. Both are still
+   candidates for hardening into a fixed angle, not yet acted on, per
+   README.md step 6.
 4. Carried forward, still open, still out of scope for this spike: NP-002's
    "shared (2+)" vs. "a few" framing gap, NP-005's keyword-sensitivity
    finding (D4), and NHQ-4's "does the ranking survive a third independent
-   proxy" check (D5) — all still candidates for hardening into a fixed
-   falsification angle, not yet acted on.
+   proxy" check (D5).
 5. The known FalkorDB `count(*)`/multi-`DISTINCT` under-reporting defect
-   (`pipeline2/run-02` Q4) did not reproduce again this round either
-   (NHQ3-2's distinct-regulation/distinct-obligation split matched a
-   direct recount exactly) — third round in a row it hasn't triggered,
-   still not proof it's fixed.
+   (`pipeline2/run-02` Q4) did not reproduce again this round (NHQ4-6's
+   raw-row-vs-`DISTINCT` check matched exactly) — fourth round in a row
+   it hasn't triggered, still not proof it's fixed.
 6. No other infrastructure/dialect issues surfaced this round — nothing
    new to add to the Environment section above.
