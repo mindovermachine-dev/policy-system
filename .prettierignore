@@ -1,0 +1,13 @@
+tmp/**
+
+# Generated/imported or experimental spike content
+
+spikes/**
+test-data/**
+tools/**
+
+# Imported regulation source material
+
+docs/regulations/**
+docs/architecture/**
+docs/artifacts/**

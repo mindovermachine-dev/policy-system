@@ -1,0 +1,31 @@
+{
+  "name": "ddd-project",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers-extra/features/npm-packages:1": {
+      "packages": ["cspell", "markdownlint-cli2", "prettier"]
+    }
+  },
+  "postCreateCommand": "gh ext install devx-cafe/gh-insitu && gh insitu run post-create",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.copilot",
+        "github.copilot-chat",
+        "DavidAnson.vscode-markdownlint",
+        "streetsidesoftware.code-spell-checker"
+      ]
+    }
+  },
+  "mounts": [
+    "source=${localEnv:HOME},target=/localhome,type=bind,consistency=cached"
+  ],
+  "remoteEnv": {
+    "GH_TOKEN": "${localEnv:GH_TOKEN}"
+  }
+}

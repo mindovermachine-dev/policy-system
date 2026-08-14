@@ -1,0 +1,119 @@
+# .insitu.yml - minimal TakT-ready setup
+
+defaults:
+  die-on-error: true
+  timeout: 5m
+  verbose: false
+
+inventory:
+  - id: gh-auth
+    name: GitHub Authentication
+    command: gh auth status
+
+  - id: install-gh-aw
+    name: Install gh-aw
+    command: gh extension install github/gh-aw || true
+
+  - id: install-gh-insitu
+    name: Install gh-insitu
+    command: gh extension install devx-cafe/gh-insitu || true
+
+  - id: install-gh-tt
+    name: Install gh-tt
+    command: gh extension install devx-cafe/gh-tt || true
+
+  - id: install-takt-shortcuts
+    name: Install TakT shortcuts
+    command: |
+      gh alias set workon '!gh tt workon "$@"' --clobber
+      gh alias set wrapup '!gh tt wrapup "$@"' --clobber
+      gh alias set deliver '!gh tt deliver "$@"' --clobber
+      gh alias set semver '!gh tt semver "$@"' --clobber
+
+  - id: safe-repo
+    name: Mark repository as safe for git operations
+    command: git config --global --add safe.directory "$(pwd)"
+
+  - id: repo-gitconfig
+    name: Use repo-root .gitconfig for consistent git settings
+    command: |
+      git config --local --get include.path | grep -e ../.gitconfig >/dev/null 2>&1 || \
+      git config --local --add include.path ../.gitconfig
+
+  - id: cspell
+    name: Run cspell
+    command: cspell "**/*.md"
+
+  - id: markdownlint
+    name: Run markdownlint
+    command: markdownlint-cli2 "**/*.md"
+
+  - id: prettier
+    name: Run prettier
+    command: prettier --check .
+
+  - id: "install-lint-tools"
+    name: "Install linting and checker tools"
+    command: |
+      npm install -g prettier markdownlint-cli2 cspell @cspell/dict-da-dk
+
+  - id: verify-lint-tools
+    name: Verify linting tools are available
+    command: |
+      command -v cspell
+      command -v markdownlint-cli2
+      command -v prettier
+
+  - id: version-txt
+    name: Generate version.txt
+    command: |
+      printf 'Build from %s\nRef: %s\nCommit: %s\n' "${BUILD_REPO:-$(git remote get-url origin)}" "${BUILD_REF:-$(git branch --show-current)}" "${BUILD_SHA:-$(git rev-parse HEAD)}" > version.txt
+
+  - id: "fix-markdown"
+    name: "Fix all fixable markdown issues"
+    command: |
+      markdownlint-cli2 --fix
+
+  - id: "fix-prettier"
+    name: "Fix all fixable prettier issues"
+    command: |
+      prettier --write .
+
+waves:
+  - id: post-create
+    name: Dev Container Post Create
+    parallel: true
+    checks:
+      - gh-auth
+      - install-gh-aw
+      - install-gh-insitu
+      - install-gh-tt
+      - install-takt-shortcuts
+      - safe-repo
+      - repo-gitconfig
+      - install-lint-tools
+
+  - id: "prep-runner"
+    name: "Run to prepare GitHub runner"
+    parallel: true
+    checks:
+      - gh-auth
+      - install-gh-insitu
+      - repo-gitconfig
+      - install-lint-tools
+      - version-txt
+
+  - id: trunk-worthy
+    name: Minimum quality checks before commit
+    parallel: true
+    checks:
+      - cspell
+      - markdownlint
+      - prettier
+
+  - id: "fix-all"
+    name: "Fix anything that can be fixed automatically"
+    parallel: true
+    checks:
+      - "fix-markdown"
+      - "fix-prettier"
