@@ -1,0 +1,2 @@
+graphrag-sdk[litellm,pdf]
+falkordb>=1.7.1
