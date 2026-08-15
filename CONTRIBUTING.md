@@ -66,6 +66,14 @@ tools/graph-ingestion/load_all.sh
 Show me the names of the roles defined in CRA
 ```
 
+If the skill (in the .claude/skills and .github/skills folder) does not automatically kick in the mention it explicitly:
+
+```
+Use the Policy Question skill. Show me the names of the roles defined in CRA
+```
+
+
+
 ## Coding Standards
 
 To be defined.
