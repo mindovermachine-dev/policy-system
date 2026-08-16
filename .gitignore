@@ -224,5 +224,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# TakT
+.tt_cache
+
 # FalkorDB local persistence volume (see CONTRIBUTING.md)
 .falkordb-data/
+
+# General temporary files
+tmp/
+temp/

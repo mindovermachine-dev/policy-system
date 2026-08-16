@@ -20,12 +20,29 @@ runs:
       run: |
         ${{ inputs.verify }} --mark-pending
 
-    - name: Set up Node.js
+    - name: Detect npm lockfile
+      id: npm-lock
+      shell: bash
+      run: |
+        if [[ -f package-lock.json ]]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "present=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Node.js (with npm cache)
+      if: ${{ steps.npm-lock.outputs.present == 'true' }}
       uses: actions/setup-node@v6
       with:
         node-version: 22
         cache: npm
         cache-dependency-path: package-lock.json
+
+    - name: Set up Node.js (no npm cache)
+      if: ${{ steps.npm-lock.outputs.present != 'true' }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: 22
 
     - name: Prepare runner environment
       shell: bash
