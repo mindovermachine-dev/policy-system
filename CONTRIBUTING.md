@@ -52,13 +52,18 @@ podman run -d --name falkordb \
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `podman exec falkordb redis-cli config set appendonly yes`.
 
-3. Create a virtual environment and install the Python dependencies for the graph-ingestion tools
+3. Create a virtual environment and install the Python dependencies for the graph-ingestion and graph-query tools
 
 ```
 uv venv
 source .venv/bin/activate
-uv pip install -r tools/graph-ingestion/requirements.txt
+uv pip install -r tools/graph-ingestion/requirements.txt -r tools/graph-query/requirements.txt
 ```
+
+Keep `.venv` activated (or otherwise on `PATH`) whenever you run
+`tools/graph-query/ps.py` or use the `policy-question`/`falsification-step`
+skills — `ps.py` resolves `python3` from `PATH` rather than a hardcoded
+interpreter, so it uses whichever environment is currently active.
 
 4. Load test data into graph
 

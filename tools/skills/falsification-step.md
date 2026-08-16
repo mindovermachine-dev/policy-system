@@ -11,15 +11,19 @@ time, never paraphrased from memory.
 ## Purpose
 
 Attempt to disprove a constructed answer from the graph's own data, rather
-than looking for confirmation. Where a fitness function (not yet built —
-see `spikes/pipeline2/README.md` step 1b/4) would verify an answer *within*
-the question's framing, falsification attacks the framing itself: it asks
-whether the graph contains data that contradicts the claim, not just
-whether the claim's own supporting query re-derives it.
+than looking for confirmation. Falsification attacks the answer's framing:
+it asks whether the graph contains data that contradicts the claim, not
+just whether the claim's own supporting query re-derives it. For
+`policy-question.md`, this is the skill's verification method — there is
+no separate rubric-gated fitness-function check (see that skill's Purpose
+section for why it's scoped out entirely, not deferred).
 
-This does not replace or imply a fitness-function check. An answer that
-survives falsification is still, separately, unverified in the
-fitness-check sense — say both things, never conflate them.
+An answer that survives falsification (no attempt lands a contradiction,
+within the attempt cap) is reported as verified by falsification — but the
+strength of that signal scales with the attempt cap actually used: a clean
+run at the 1-attempt floor is lighter evidence than one at the 5-attempt
+cap, and the invoking skill's Status line should reflect which cap applied
+rather than implying every clean run carries equal weight.
 
 ## Preconditions
 
@@ -30,9 +34,10 @@ The invoking skill must supply, verbatim:
 - The constructed answer
 - The retrieved data / query the answer was built from
 
-Never invoke this against an answer the user hasn't already seen framed as
-"unverified" — falsification is additive evidence, not a gate that turns
-unverified into verified.
+Never invoke this against an answer the user hasn't already seen as a
+first-pass construction — falsification is what turns that first-pass
+answer into a verified one (or surfaces a contradiction), not a
+post-hoc confirmation step layered on top of some other check.
 
 ## Determine the attempt cap (scope-aware, per spikes/pipeline3 D6)
 
@@ -75,7 +80,7 @@ State which cap applies, and why, before running attempt 1.
 2. **Execute each query** via the same guarded surface the invoking skill
    already uses:
    ```
-   /usr/bin/python3 spikes/e2e-pipeline/ps.py cypher "<QUERY>"
+   tools/graph-query/ps.py cypher "<QUERY>"
    ```
    (read-only guarded, `localhost:6379`, graph `policy_system`). Show every
    query run, not just the ones that land.
@@ -100,18 +105,21 @@ Falsification: <N> attempt(s), <landed | none landed>
   2. ...
 ```
 
-Never collapse this into a verdict. The pipeline does not conclude "answer
-is correct" — it reports "answer survived N falsification attempts" (if
-none landed) or reports the contradiction plainly (if one did), and lets
-the user judge what that means for the answer's reliability.
+The pipeline's verdict is exactly this: "verified — survived N
+falsification attempts" (if none landed) or the contradiction reported
+plainly (if one did). State the attempt cap alongside it, so the user can
+weigh a 1-attempt clean run against a 5-attempt one appropriately.
 
 ## Guardrails
 
 - Never skip this step entirely, regardless of scope — the 1-attempt floor
   applies even to questions confined to the ingested spine. Only the cap
   above 1 is scope-conditional, not whether the step runs at all.
-- No verdict inflation: never state or imply pass/fail, "confirmed,"
-  "verified," or "correct" — only what was attempted and what was found.
+- Report the outcome plainly: "verified — survived falsification" if
+  nothing landed within the attempt cap, or the contradiction itself if
+  one landed. Don't imply a scope or rigor beyond what was actually
+  attempted — always state the attempt cap used and why, so a 1-attempt
+  clean run isn't read as carrying the same weight as a 5-attempt one.
 - Never stop early because an attempt "probably" would miss — run it, or
   don't claim it was attempted.
 - Never report a miss as a landed disproof or soften a landed disproof

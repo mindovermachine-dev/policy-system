@@ -8,17 +8,16 @@ user's assumed vocabulary — then run freehand retrieval against the graph,
 construct a first-pass answer, and attempt to falsify it. This covers step
 1a (narrowing) plus steps 2-3 (freehand retrieval, answer construction) and
 step 5 (falsification) of the Guided Fitness Pipeline
-(spikes/pipeline2/README.md), the latter per spikes/pipeline3/README.md. It
-is an incremental extension, per PROGRESS.md D13: fitness-function
-authoring (step 1b) and the independent verification loop (step 4) are
-deliberately **not** included here — each is a separate future increment,
-added and tested on its own before the next is layered in.
+(spikes/pipeline2/README.md), the latter per spikes/pipeline3/README.md.
+Rubric-gated fitness-function authoring (step 1b) and the independent
+verification loop (step 4) are scoped out of this skill entirely —
+falsification (adversarial querying against the graph's own data) is this
+skill's verification method.
 
 **Deliverable:** the refined question text (approved verbatim by the
 user), the entities/edges it routes through, the freehand Cypher query
-used to retrieve data, the retrieved data, a constructed first-pass answer
-explicitly flagged as unverified (no fitness check yet), and a
-falsification report (attempts made, landed or missed, per
+used to retrieve data, the retrieved data, a constructed first-pass answer,
+and a falsification report (attempts made, landed or missed, per
 `tools/skills/falsification-step.md`).
 
 ## On Load
@@ -123,7 +122,7 @@ falsification report (attempts made, landed or missed, per
    template library. Execute it via:
 
    ```
-   /usr/bin/python3 spikes/e2e-pipeline/ps.py cypher "<QUERY>"
+   tools/graph-query/ps.py cypher "<QUERY>"
    ```
 
    (read-only guarded, `localhost:6379`, graph `policy_system` — reuses
@@ -154,9 +153,9 @@ falsification report (attempts made, landed or missed, per
    (including its scope-aware attempt-cap determination — 1 attempt if the
    question's Entities stay within the ingested spine, 5 if `Policy`,
    `Standard`, or `Control` are involved, or the user asked for deeper
-   scrutiny), and fold its Output shape into step 8 below. This step never
-   turns an unverified answer into a verified one; it only adds evidence
-   about whether the graph contradicts it.
+   scrutiny), and fold its Output shape into step 8 below. Falsification's
+   result (landed vs. none landed) is this skill's verification signal for
+   the answer.
 8. **Output**, in this shape:
 
    ```
@@ -164,19 +163,18 @@ falsification report (attempts made, landed or missed, per
 
    Answer: <constructed answer>
 
-   Status: unverified — no fitness-function check yet
-   (spikes/pipeline2/PROGRESS.md D13). Falsification ran under a
-   max_falsification_attempts cap of <1 | 5>, set per
-   spikes/pipeline3/PROGRESS.md D6 because <the question's Entities stay
-   within the ingested spine | Policy/Standard/Control is involved | the
-   user asked for deeper scrutiny> — state which reason applied, don't
-   just report the number. Falsification was attempted (see below);
-   surviving it is evidence, not a verified verdict. If the answer was
-   produced via an attribute/theme filter rather than a modeled traversal
-   (Edges line's second or third case), add a second sentence naming that
-   the result is also sensitive to the specific keyword/theme terms
-   chosen — not just unverified in the fitness-check sense. A different
-   keyword list could return a different result set.
+   Status: <Verified — survived falsification | Falsification landed a
+   contradiction>. Falsification ran under a max_falsification_attempts
+   cap of <1 | 5>, set per spikes/pipeline3/PROGRESS.md D6 because <the
+   question's Entities stay within the ingested spine | Policy/Standard/
+   Control is involved | the user asked for deeper scrutiny> — state which
+   reason applied, don't just report the number. Falsification is this
+   skill's verification method; no separate fitness-function check exists
+   or is planned. If the answer was produced via an attribute/theme filter
+   rather than a modeled traversal (Edges line's second or third case), add
+   a second sentence naming that the result is also sensitive to the
+   specific keyword/theme terms chosen — a different keyword list could
+   return a different result set, regardless of falsification outcome.
 
    Falsification: <N> attempt(s), <landed | none landed>
      1. <query intent, one line> — <landed: what it contradicts | missed>
@@ -222,16 +220,17 @@ falsification report (attempts made, landed or missed, per
 - Ground every Cypher clause in `ps-domain-concepts.md`'s actual property
   names, node labels, and edge directions — never invent one.
 - Do not author a rubric-gated fitness function or run an independent
-  verification/re-query loop (step 1b, step 4) — these remain separate,
-  not-yet-added increments. Always present the constructed answer as
-  unverified, never as confirmed correct, even after falsification runs.
+  verification/re-query loop (step 1b, step 4) — these are scoped out of
+  this skill entirely, not deferred. Falsification is the verification
+  method; report its outcome plainly (survived vs. landed a contradiction)
+  rather than hedging a clean run as still unverified.
 - Falsification (step 7) always runs at least once — never skip it
   entirely, and never let it soften into confirmation-seeking. The number
   of attempts beyond the first is scope-conditional (see
   `falsification-step.md`'s attempt-cap determination), not the step
-  itself. Follow `falsification-step.md`'s own guardrails: no verdict
-  inflation, vary the attack angle between attempts, terminate at the cap
-  or the first landed disproof, report every attempt.
+  itself. Follow `falsification-step.md`'s own guardrails: vary the attack
+  angle between attempts, terminate at the cap or the first landed
+  disproof, report every attempt.
 - Don't silently collapse a compound question, force a same-node match
   across a non-convergent layer, or invent a status definition for an
   entity that has none — surface each as an explicit choice instead.
