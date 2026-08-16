@@ -1,0 +1,56 @@
+
+=== BASELINE (current pipeline): graph 'policy_system' ===
+Node counts:
+  Capability     71
+  Control        10
+  Obligation     349
+  Policy         10
+  PracticeArea   10
+  Regulation     4
+  Requirement    287
+  RiskPath       6
+  Role           19
+  Standard       10
+Edge counts:
+  COVERS         10
+  DEFINES        19
+  EXPRESSES      287
+  GOVERNED_BY    10
+  HAS            349
+  IMPLEMENTED_BY 10
+  MITIGATED_BY   10
+  OWNS           10
+  REQUIRES       396
+  SATISFIED_BY   354
+  SUPERSEDED_BY  0
+  SUPPORTED_BY   10
+  VERIFIED_BY    10
+
+=== GRAPHRAG-SDK (this spike): graph 'policy_system_graphrag_native' ===
+Node counts:
+  Capability     2
+  Control        0
+  Obligation     2
+  Policy         0
+  PracticeArea   0
+  Regulation     14
+  Requirement    12
+  RiskPath       0
+  Role           16
+  Standard       1
+  UNEXPECTED LABELS (not in ps-domain-concepts.md): ['Chunk', 'Document', '__GraphRAGConfig__']
+Edge counts:
+  COVERS         0
+  DEFINES        14
+  EXPRESSES      9
+  GOVERNED_BY    0
+  HAS            5
+  IMPLEMENTED_BY 0
+  MITIGATED_BY   0
+  OWNS           0
+  REQUIRES       1
+  SATISFIED_BY   0
+  SUPERSEDED_BY  1
+  SUPPORTED_BY   0
+  VERIFIED_BY    0
+  UNEXPECTED EDGE TYPES (not in ps-domain-concepts.md): ['MENTIONED_IN', 'NEXT_CHUNK', 'PART_OF']

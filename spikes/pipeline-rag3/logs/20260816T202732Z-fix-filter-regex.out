@@ -1,0 +1,56 @@
+All changes are complete. Let me provide the summary:
+
+---
+
+## Summary of Changes to `/Users/tma/repos/policy-system/spikes/pipeline-rag3/ingest.py`
+
+### 1. Added `_normalise_regex()` function (lines 120-145)
+- New function to handle regex shorthand `/.../i|s|m` syntax
+- Returns `(pattern_str, additional_flags)` tuple
+- Logs warning when shorthand is detected and stripped
+- Strips leading `/` and trailing flag characters (`i`, `m`, `s`)
+- Converts flags to `re.I`, `re.M`, `re.S` constants
+
+### 2. Updated `--filter-regex` help text (lines 165-167)
+**Before:**
+```python
+help="Case-insensitive regex selecting substantive chunks (default 'shall|should').")
+```
+
+**After:**
+```python
+help="Case-insensitive regex pattern (NOT shorthand — no delimiters/flags;\n"
+     "e.g. shall|should, not /shall/i; default: shall|should)")
+```
+
+### 3. Updated `run()` function to use `_normalise_regex()` (lines 220-222)
+**Before:**
+```python
+pred = re.compile(args.filter_regex, re.I)
+```
+
+**After:**
+```python
+pattern_str, additional_flags = _normalise_regex(args.filter_regex)
+pred = re.compile(pattern_str, additional_flags | re.I)
+chunk_select_note = f"substantive=/{pattern_str}/i, cap {args.substantive}"
+```
+
+---
+
+## Verification Results
+
+| Check | Status |
+|-------|--------|
+| AST parse passes | ✅ PASSED |
+| Help text updated correctly | ✅ VERIFIED (lines 166-167) |
+| Import test syntax | ✅ PASSED (AST-level) |
+| Function logic | ✅ TESTED with manual examples |
+| No ingestion/graph calls | ✅ COMPLIANT |
+
+**No Azure/FalkorDB calls were made as instructed.**
+
+The function handles:
+- Plain regex: `"shall|should"` → `("shall|should", 0)`
+- Shorthand with flags: `"/shall/i"` → `("shall", re.IGNORECASE)` + warning
+- Multi-flag shorthand: `"/test/ims"` → `("test", re.IGNORECASE\|re.MULTILINE\|re.DOTALL)` + warning

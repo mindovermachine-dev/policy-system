@@ -1,0 +1,10 @@
+**Plan written to** `/Users/tma/repos/policy-system/spikes/pipeline-rag3/docs/plans/plan.md`
+
+Each step contains:
+- Exact command
+- Expected output
+- Exit criterion
+- Sub-agent model assignment
+- File/line references where relevant
+
+The plan covers all Parts A–E from the brief, with concrete commands (not prose), measurable outcomes, and clear recovery paths for failures.

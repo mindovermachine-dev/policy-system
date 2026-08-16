@@ -1,0 +1,3 @@
+Done. The corrected plan file has been written.
+
+Note: I did not address the rate-limit concurrency concern because the plan's `ingest.py` already uses `RateLimitedLLM(llm_raw, concurrency=2, req_per_window=10, window_s=60.0)` and the user's critique explicitly stated the "concurrency footgun with resolvers" is a known-wrong point (resolvers aren't used in this spike). Similarly, the API key newline fix is a HIGH-priority issue the user asked me to address.

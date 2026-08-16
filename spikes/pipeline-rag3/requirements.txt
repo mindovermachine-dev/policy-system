@@ -1,0 +1,5 @@
+# pipeline-rag3 requirements — CRA.pdf ingestion via GraphRAG-SDK (native graph output).
+# Ingestion backend = Azure (gpt-5.4-mini + text-embedding-3-large) via litellm.
+# Input = PDF, so the `pdf` extra is REQUIRED (not droppable): PdfLoader is the loader.
+graphrag-sdk[litellm,pdf]
+falkordb>=1.7.1
