@@ -52,14 +52,22 @@ podman run -d --name falkordb \
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `podman exec falkordb redis-cli config set appendonly yes`.
 
-3. Load test data into graph
+3. Create a virtual environment and install the Python dependencies for the graph-ingestion tools
+
+```
+uv venv
+source .venv/bin/activate
+uv pip install -r tools/graph-ingestion/requirements.txt
+```
+
+4. Load test data into graph
 
 NOTE: This is a destructure data load. It will reset the database and delete all existing data.
 
 ```
 tools/graph-ingestion/load_all.sh
 ```
-4. Start asking questions to the graph like:
+5. Start asking questions to the graph like:
 
 
 ```
