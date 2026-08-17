@@ -1,0 +1,82 @@
+{
+  "spot_items": [
+    {
+      "search": "Obligation: Risk Assessment",
+      "reference_count": 0,
+      "reference_nodes": [],
+      "candidate_count": 0,
+      "candidate_nodes": [],
+      "exact_id_matches": 0,
+      "name_matches": 0
+    },
+    {
+      "search": "Obligation: Vulnerability",
+      "reference_count": 0,
+      "reference_nodes": [],
+      "candidate_count": 0,
+      "candidate_nodes": [],
+      "exact_id_matches": 0,
+      "name_matches": 0
+    },
+    {
+      "search": "Capability: Security Logging",
+      "reference_count": 1,
+      "reference_nodes": [
+        [
+          "cap_security_logging_c4d9e2",
+          "Security Logging"
+        ]
+      ],
+      "candidate_count": 0,
+      "candidate_nodes": [],
+      "exact_id_matches": 0,
+      "name_matches": 0
+    },
+    {
+      "search": "Capability: Conformity Assessment",
+      "reference_count": 1,
+      "reference_nodes": [
+        [
+          "cap_conformity_assessment_certification_92c522",
+          "Conformity Assessment & Certification"
+        ]
+      ],
+      "candidate_count": 2,
+      "candidate_nodes": [
+        [
+          "impartiality_of_the_conformity_assessment_body_and_its_personnel__capability",
+          "Impartiality of the Conformity Assessment Body and Its Personnel"
+        ],
+        [
+          "conformity_assessment_process__capability",
+          "Conformity Assessment Process"
+        ]
+      ],
+      "exact_id_matches": 0,
+      "name_matches": 0
+    }
+  ],
+  "chain_ref_count": 10,
+  "chain_cand_count": 0,
+  "chain_ref_sample": [
+    [
+      null,
+      "CRA-1.0_req_art_13.1",
+      null,
+      "Secure Development Lifecycle"
+    ],
+    [
+      null,
+      "CRA-1.0_req_art_13.2",
+      null,
+      "Cybersecurity Risk Assessment Process"
+    ],
+    [
+      null,
+      "CRA-1.0_req_art_13.4",
+      null,
+      "Compliance Documentation Management"
+    ]
+  ],
+  "chain_cand_sample": []
+}

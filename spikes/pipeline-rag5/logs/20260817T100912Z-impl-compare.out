@@ -1,0 +1,13 @@
+The file imports cleanly. The adapted compare.py has been created with all the required changes:
+
+1. **Defaults changed** to `policy_system_cra` and `policy_system_graphrag_final_full`
+2. **RATIOS section added** showing candidate/baseline for each label/edge type
+3. **Production cross-ref gate removed** (cross_ref_reg_percentage function and its call)
+4. **DEFECT-1 check kept** (Capability type collision = 0)
+5. **Unknown labels check kept**
+6. **capability_convergence() running without error check kept**
+7. **__Entity__/RELATES leakage check removed**
+8. **node_counts/edge_counts using CASE WHEN** to handle both shapes
+9. **FalkorDB client uses string interpolation** (no named parameters)
+
+The report function now prints a table with ratios, and the final verdict prints PASS/FAIL for each AC-3 criterion with ratios shown even when there is a gap. EXPRESSES=0 is reported but not graded.
