@@ -1,0 +1,19 @@
+Now I have all the context. Let me ask for implicit confirmation before writing the plan:
+
+I've read all required files. Before generating the plan, I need to clarify one thing:
+
+1. **Issue #1 reconciliation (REQUIRES vs SATISFIED_BY)**: The README states that the native graph has `REQUIRES: Obligation→Capability` edges, but the domain model expects `SATISFIED_BY: Requirement→Obligation`. The goal is to enable `compare.py`'s `capability_convergence()` check, which requires the full chain: `EXPRESSES (Reg→Req) → SATISFIED_BY (Req→Obl) → REQUIRES (Obl→Cap)`.
+
+   The README says: *"without this, convergence check returns 0 always"* — but also *"without REQUIRES→SATISFIED_BY remap, convergence returns 0"* — these seem contradictory.
+
+   → Based on the `compare.py` code I read, `capability_convergence()` explicitly looks for `SATISFIED_BY` between `Requirement` and `Obligation`. Since the native graph does **not** have `SATISFIED_BY` edges (0 count), it will always find 0 converged capabilities unless `map_graph.py` synthesizes them.
+
+   **Confirm**: Should `map_graph.py` synthesize `SATISFIED_BY` edges by inferring the Requirement→Obligation link via the `REQUIRES` chain? Specifically:  
+   - For each `Obligation` node, find all incoming `REQUIRES` edges (Obl→Cap), then  
+   - Trace backwards to find the `Requirement` that defines it (via `EXPRESSES (Reg→Req)` → `SATISFIED_BY` should be added between that Requirement and the Obligation).
+
+   Or alternatively: Is there a one-to-one mapping where each `Obligation` in the native graph has a corresponding `Requirement` in the native graph (perhaps via a shared reference, like `source_ref`), and we just need to connect them with `SATISFIED_BY`?
+
+   Please clarify the algorithm.
+
+(1 question remaining)

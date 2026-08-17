@@ -1,0 +1,13 @@
+Done. `docs/critique.md` exists at `/Users/tma/repos/policy-system/spikes/pipeline-rag4/docs/critique.md` with:
+
+- **CONFIRMED CORRECT**: 8 items (T5-9, BUG#B, structural correctness, cross-ref filter intent)
+- **FLAWS**: 9 flaws ranked by severity (3 Blocker, 4 High, 2 Med/Low)
+- **FLAW-001 PROBE VERIFICATION**: Quantified cross-ref % helper is broken (0/19 match vs actual 18/19 = 94.7%)
+- **MUST-VERIFY-AT-IMPL**: 4 probes to run before coding
+- **VERDICT**: Plan NOT implementable — must fix 3 Blockers, 2 Highs before coding
+
+Key takeaways:
+- **Blocker FLAW-003**: DROP/CREATE Cypher invalid → must use `db.delete_graph(name, deleteNodes=True)`
+- **Blocker FLAW-001/007**: compare.py cross_ref_reg_percentage() pattern returns 0% when true is 94.7%
+- **Blocker FLAW-002/006**: Edge MERGE without existence check → pre-filter edges in Python
+- **High FLAW-004**: regulation_map.json keys must be native IDs (`cyber_resilience_act__regulation`), not canonical (`CRA-1.0`)

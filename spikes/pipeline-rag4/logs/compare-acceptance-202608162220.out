@@ -1,0 +1,104 @@
+
+=== BASELINE (current pipeline): graph 'policy_system' ===
+Node counts:
+  Capability     71
+  Control        10
+  Obligation     349
+  Policy         10
+  PracticeArea   10
+  Regulation     4
+  Requirement    287
+  RiskPath       6
+  Role           19
+  Standard       10
+Edge counts:
+  COVERS         10
+  DEFINES        19
+  EXPRESSES      287
+  GOVERNED_BY    10
+  HAS            349
+  IMPLEMENTED_BY 10
+  MITIGATED_BY   10
+  OWNS           10
+  REQUIRES       396
+  SATISFIED_BY   354
+  SUPERSEDED_BY  0
+  SUPPORTED_BY   10
+  VERIFIED_BY    10
+  ⚠ GOVERNANCE LAYER: near-absent, present={'Policy': 10, 'Standard': 10, 'Control': 10, 'RiskPath': 6} (EXPECTED for shall-filtered sample — ORCH-D1)
+  Cross-ref Regulations: 100.0% (FAIL – threshold <50%)
+Capabilities converged across >1 Regulation: 22
+  'Access Control & Authentication' <- 4 regulations
+  'Vulnerability Management' <- 3 regulations
+  'Security Incident Reporting' <- 3 regulations
+  'Vulnerability Reporting & User Communication' <- 3 regulations
+  'Secure Development Lifecycle' <- 3 regulations
+  'Data Encryption' <- 3 regulations
+  'Coordinated Vulnerability Disclosure Policy' <- 2 regulations
+  'Data Minimisation' <- 2 regulations
+  'Cybersecurity Risk Assessment Process' <- 2 regulations
+  'Component Inventory & SBOM Management' <- 2 regulations
+  'Business Continuity & Disaster Recovery' <- 2 regulations
+  'Cybersecurity Risk Management Program' <- 2 regulations
+  'Security Logging' <- 2 regulations
+  'Secure Data Removal & Portability' <- 2 regulations
+  'Availability & Resilience' <- 2 regulations
+  'Asset & Personnel Security Management' <- 2 regulations
+  'Security Control Effectiveness Assessment' <- 2 regulations
+  'Data Protection by Design & Default' <- 2 regulations
+  'Incident Handling' <- 2 regulations
+  'Compliance Documentation Management' <- 2 regulations
+  'Data & Configuration Integrity Protection' <- 2 regulations
+  'Regulatory Cooperation' <- 2 regulations
+
+=== FINAL VERDICT ===
+Domain entities: 776 (expected >=80) PASS
+Core chain edges (DEFINES=19, HAS=349, REQUIRES=396, SATISFIED_BY=354) PASS
+  EXPRESSES=287 (REPORTED, not graded: 0 expected -- cross-ref-filter consequence, ORCH-D10)
+Unknown labels: [] PASS
+DEFECT-1 (Capability type collision): 0 PASS
+Cross-ref Regulations: 100.0% FAIL
+cap_convergence ran: PASS
+
+FINAL: FAIL
+
+=== GRAPHRAG-SDK (this spike): graph 'policy_system_graphrag_final' ===
+Node counts:
+  Capability     20
+  Control        0
+  Obligation     24
+  Policy         0
+  PracticeArea   2
+  Regulation     1
+  Requirement    36
+  RiskPath       0
+  Role           26
+  Standard       1
+Edge counts:
+  COVERS         0
+  DEFINES        1
+  EXPRESSES      0
+  GOVERNED_BY    0
+  HAS            20
+  IMPLEMENTED_BY 0
+  MITIGATED_BY   0
+  OWNS           0
+  REQUIRES       9
+  SATISFIED_BY   12
+  SUPERSEDED_BY  0
+  SUPPORTED_BY   0
+  VERIFIED_BY    0
+  ⚠ GOVERNANCE LAYER: near-absent, present={'Standard': 1} (EXPECTED for shall-filtered sample — ORCH-D1)
+  Cross-ref Regulations: 0.0% (PASS – threshold <50%)
+Capabilities converged across >1 Regulation: 0
+
+=== FINAL VERDICT ===
+Domain entities: 110 (expected >=80) PASS
+Core chain edges (DEFINES=1, HAS=20, REQUIRES=9, SATISFIED_BY=12) PASS
+  EXPRESSES=0 (REPORTED, not graded: 0 expected -- cross-ref-filter consequence, ORCH-D10)
+Unknown labels: [] PASS
+DEFECT-1 (Capability type collision): 0 PASS
+Cross-ref Regulations: 0.0% PASS
+cap_convergence ran: PASS
+
+FINAL: PASS

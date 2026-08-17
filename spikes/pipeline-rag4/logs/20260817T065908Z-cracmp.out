@@ -1,0 +1,7 @@
+# Bottom-Line Verdict
+
+**Is the rag4 CRA final graph structurally similar to the CRA-scoped baseline subgraph?**
+
+**Answer: Qualified NO** — the final graph is a **sparse 30-chunk sample** (110 nodes / 42 edges) vs. the baseline CRA-scoped subgraph (776 nodes / 1475 edges). Core domain labels (Role, Requirement, Obligation, Capability, PracticeArea, Standard, Regulation) and key edge types (REQUIRES, SATISFIED_BY, HAS, DEFINES) are present and semantically correct, but 8/12 baseline edge types are absent (by design: filtering/sampling). Spot-checked REQUIRES chains match documented convergence points. **Defects: 0.**
+
+`docs/cra-scoped-comparison.md` has been written.
