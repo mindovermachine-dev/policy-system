@@ -65,7 +65,7 @@
     "<!--.*?-->", // ignore HTML comments
     "<a.*?>", // ignore HTML anchor tags,
     "<img.*?>", // ignore HTML image tags,
-    "'.*'", // ignore text in single quotes
+    "(?<![A-Za-z0-9])'[^'\\n]+'(?![A-Za-z0-9])", // ignore standalone text in single quotes, not apostrophes in words
     "https?://\\S+", // ignore http/https URLs
     "\\b[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(?:/\\S*)?", // ignore domain names and URLs like example.com or example.com/path
     "\\[\\^\\w+\\]", // ignore markdown footnotes
