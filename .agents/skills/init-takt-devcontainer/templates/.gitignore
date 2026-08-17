@@ -1,0 +1,16 @@
+# Node
+**/node_modules/
+
+# logs
+**/logs/
+
+# macOS
+.DS_Store
+
+# takt
+.tt_cache
+version.txt
+
+# General
+/tmp
+/temp

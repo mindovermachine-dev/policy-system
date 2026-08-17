@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+
+concurrency:
+  group: "stage"
+  cancel-in-progress: false
+
+jobs:
+  deploy_artifact_to_pages:
+    name: Stage flow, runs when a new commit is pushed to main
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      statuses: write
+      pages: write
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Placeholder deploy step
+        run: echo "Replace this step the appropriate build and deploy action for your stage environment"

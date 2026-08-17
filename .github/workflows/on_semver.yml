@@ -1,0 +1,52 @@
+name: Release to Production
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[a-zA-Z]+[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g., v1.0.0 or 1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: "production"
+  cancel-in-progress: false
+
+jobs:
+  verify-tag-on-main:
+    name: Verify tag is on main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        env:
+          TAG_NAME: ${{ github.ref_name || inputs.tag }}
+        run: |
+          tag_commit=$(git rev-list -n 1 $TAG_NAME)
+          main_commit=$(git rev-list -n 1 origin/main)
+          if ! git merge-base --is-ancestor $tag_commit origin/main; then
+            echo "Tag $TAG_NAME is not on the main branch!" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "Tag $TAG_NAME verified on main branch" >> $GITHUB_STEP_SUMMARY
+
+  deploy-to-prod:
+    name: Deploy to Production
+    needs: verify-tag-on-main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Placeholder deploy step
+        run: echo "Replace this step the appropriate build and deploy action for your production environment"

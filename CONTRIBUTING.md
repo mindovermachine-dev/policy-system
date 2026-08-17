@@ -14,19 +14,61 @@ Thank you for considering contributing to this project!
 
 ## Development Setup
 
-This is very early mostly exploration development. To load data into tthe graph database and ask questions, you will need:
+This is very early mostly exploration development. To load data into the graph database and ask questions, you will need FalkorDB and Python 3.14, set up either via the dev container (recommended) or locally.
+
+### Option A: Dev Container (recommended)
+
+Requires VSCode with the Dev Containers extension.
+
+The devcontainer (`.devcontainer/`) is a Docker Compose setup with two
+services:
+
+- `app` — the dev/backend container VS Code attaches to.
+- `falkordb` — the community-maintained `falkordb/falkordb:latest` image,
+  started automatically alongside `app`.
+
+Reopen the repo in the container (VS Code: "Reopen in Container") and both
+services start together — no manual `podman run`/`docker run` step needed.
+
+- `falkordb` uses `network_mode: service:app`, i.e. it shares the `app`
+  container's network namespace, so it's reachable at `localhost:6379` from
+  inside the dev container — matching every tool's default host (see
+  `tools/graph-ingestion`, `tools/graph-query`). Ports `6379` (FalkorDB) and
+  `3000` (FalkorDB Browser, at http://localhost:3000) are published on the
+  `app` service in `.devcontainer/docker-compose.yml`.
+- `.devcontainer/.falkordb-data` (bind-mounted to
+  `/var/lib/falkordb/data`) persists the graph to disk, so recreating the
+  containers doesn't lose data. `.falkordb-data/` is git-ignored; don't
+  commit it.
+- RDB snapshotting is on by default (`redis-cli config get save` →
+  `3600 1 300 100 60 10000`) — the volume mount is what makes those snapshots
+  durable, not an extra flag. AOF (`appendonly`) is off by default; turn it on
+  only if you need tighter durability than periodic RDB snapshots for local
+  work, e.g. `docker compose -f .devcontainer/docker-compose.yml exec falkordb redis-cli config set appendonly yes`.
+
+An alternative compose file, `.devcontainer/docker-compose.hostname.yml`,
+gives `falkordb` its own network namespace/hostname instead of sharing
+`app`'s — reachable as `falkordb:6379` rather than `localhost:6379`. Swap it
+in via `devcontainer.json`'s `dockerComposeFile` if you want to experiment
+with that topology; it requires passing `--host falkordb` (or
+`FALKORDB_HOST=falkordb`) to the tools below, since their defaults are
+`localhost`.
+
+Once the container is running, skip ahead to
+["Create a virtual environment"](#create-a-virtual-environment-and-install-dependencies) below.
+
+### Option B: Local setup (no dev container)
+
+Requires:
 
 - Podman
 - FalkorDB
-- VSCode
 - Python 3.14
 
-### Getting started
-
 1. Install Podman
-2. Setup a container with FalkorDB
+2. Set up a container with FalkorDB
 
-```
+```bash
 mkdir -p .falkordb-data
 podman run -d --name falkordb \
   -p 6379:6379 \
@@ -40,7 +82,7 @@ podman run -d --name falkordb \
   inside the container, but there's no way to reach it from the host.
 - `-v $(pwd)/.falkordb-data:/var/lib/falkordb/data` persists the graph to disk
   at that path (FalkorDB's own `dir` config, confirmed via `redis-cli config
-  get dir`), so `podman stop`/`start`, or even removing and recreating the
+get dir`), so `podman stop`/`start`, or even removing and recreating the
   container, doesn't lose data. Without a volume mount, the graph lives only
   in the container's writable layer — gone the moment the container is
   removed (`podman rm`), which is also the only way to add a port mapping
@@ -52,9 +94,11 @@ podman run -d --name falkordb \
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `podman exec falkordb redis-cli config set appendonly yes`.
 
-3. Create a virtual environment and install the Python dependencies for the graph-ingestion and graph-query tools
+### Create a virtual environment and install dependencies
 
-```
+Create a virtual environment and install the Python dependencies for the graph-ingestion and graph-query tools
+
+```bash
 uv venv
 source .venv/bin/activate
 uv pip install -r tools/graph-ingestion/requirements.txt -r tools/graph-query/requirements.txt
@@ -65,27 +109,25 @@ Keep `.venv` activated (or otherwise on `PATH`) whenever you run
 skills — `ps.py` resolves `python3` from `PATH` rather than a hardcoded
 interpreter, so it uses whichever environment is currently active.
 
-4. Load test data into graph
+1. Load test data into graph
 
 NOTE: This is a destructure data load. It will reset the database and delete all existing data.
 
-```
+```bash
 tools/graph-ingestion/load_all.sh
 ```
-5. Start asking questions to the graph like:
 
+1. Start asking questions to the graph like:
 
-```
+```text
 Show me the names of the roles defined in CRA
 ```
 
 If the skill (in the .claude/skills and .github/skills folder) does not automatically kick in the mention it explicitly:
 
-```
+```text
 Use the Policy Question skill. Show me the names of the roles defined in CRA
 ```
-
-
 
 ## Coding Standards
 

@@ -1,0 +1,78 @@
+{
+  "version": "0.2",
+  "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+  "import": ["@cspell/dict-da-dk/cspell-ext.json"],
+  "language": "en-US, en-GB, da-DK",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/dist/**",
+    "**/.git/**",
+    "**/.github/**",
+    "**/.cspell/**",
+    "**/coverage/**",
+    "**/logs/**",
+    "**/tmp/**",
+    "**/temp/**",
+    "**/_site/**",
+    ".cspell.jsonc",
+    "**/coverage.txt",
+    "**/coverage.html",
+    "spikes/**",
+    "test-data/**",
+    "docs/**",
+    "docs/regulations/**",
+    "tools/**",
+    "**/*.go",
+    "**/Makefile",
+    "**/go.mod",
+    "**/go.sum",
+    "**/htmlcov/**",
+    "output/**",
+    "config/*.yaml",
+    "**/background/**",
+  ],
+  "files": [
+    "**/*.md",
+    "**/*.mdx",
+    "**/*.markdown",
+    "**/*.txt",
+    "**/*.json",
+    "**/*.jsonc",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.html",
+  ],
+  "dictionaryDefinitions": [
+    {
+      "name": "Repo dictionary",
+      "path": "./.dict/repo.dictionary",
+    },
+  ],
+  "dictionaries": ["Repo dictionary"],
+  "languageSettings": [
+    {
+      "languageId": "markdown",
+      "dictionaries": ["Repo dictionary"],
+    },
+    {
+      "languageId": "plaintext",
+      "dictionaries": ["Repo dictionary"],
+    },
+  ],
+  "ignoreRegExpList": [
+    "{%[\\s\\S]*?%}", // ignore inline liquid tags
+    "^---[\\s\\S]*?^---$", // ignore YAML front matter
+    "^```[\\s\\S]*?^```$", // ignore code block
+    "(?:^|[\\s([{])'[^'\\n]+'", // ignore inline code
+    "<code>.*</code>", // ignore HTML code tags
+    "<!--.*?-->", // ignore HTML comments
+    "<a.*?>", // ignore HTML anchor tags,
+    "<img.*?>", // ignore HTML image tags,
+    "(?<![A-Za-z0-9])'[^'\\n]+'(?![A-Za-z0-9])", // ignore standalone text in single quotes, not apostrophes in words
+    "https?://\\S+", // ignore http/https URLs
+    "\\b[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(?:/\\S*)?", // ignore domain names and URLs like example.com or example.com/path
+    "\\[\\^\\w+\\]", // ignore markdown footnotes
+  ],
+}

@@ -1,0 +1,28 @@
+// Configuration for markdownlint-cli2
+{
+  "globs": [
+    "**/*.md",
+    "**/*.mdx",
+    "!**/node_modules/**",
+    "!**/tmp/**",
+    "!**/background/**",
+    "!**/dist/**",
+    "!**/spikes/**",
+    "!**/docs/**",
+    "!**/tools/**",
+    "!**/test-data/**",
+  ],
+  "config": {
+    "MD004": { "style": "dash" },
+    "MD013": false,
+    "MD026": { "punctuation": ".," },
+    "MD033": false,
+    "MD034": false,
+    "MD036": false,
+    "MD041": { "allow_preamble": true, "level": 1 },
+    "MD039": false,
+    "MD042": false,
+    "MD051": false,
+    "MD060": false,
+  },
+}

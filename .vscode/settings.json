@@ -1,0 +1,9 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.markdownlint": "always",
+    "source.fixAll.cspell": "explicit"
+  },
+  "files.autoSave": "afterDelay",
+  "markdownlint.configFile": ".markdownlint-cli2.jsonc"
+}

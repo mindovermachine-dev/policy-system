@@ -1,0 +1,21 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+    volumes:
+      - ../..:/workspaces:cached
+    command: sleep infinity
+    ports:
+      - "6379:6379"
+      - "3000:3000"
+
+  falkordb:
+    image: falkordb/falkordb:latest
+    # Shares the app container's network namespace so FalkorDB is reachable
+    # at localhost:6379 from inside the dev container, matching every
+    # tool's default host (see tools/graph-ingestion, tools/graph-query).
+    network_mode: service:app
+    volumes:
+      - ../.falkordb-data:/var/lib/falkordb/data
+    depends_on:
+      - app
+    restart: unless-stopped

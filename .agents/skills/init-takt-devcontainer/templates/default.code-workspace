@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+  ],
+  "settings": {
+    "chat.tools.terminal.autoApprove": {
+      "/^gh insitu run fix-all$/": {
+        "approve": true,
+        "matchCommandLine": true,
+      },
+    },
+  },
+}

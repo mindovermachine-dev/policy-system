@@ -1,0 +1,40 @@
+{
+  "name": "MoM takt basic",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/python": {
+      "version": "3.14"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers-extra/features/npm-packages:1": {
+      "packages": [
+        "cspell",
+        "@cspell/dict-da-dk",
+        "markdownlint-cli2",
+        "prettier"
+      ]
+    }
+  },
+  "postCreateCommand": "gh ext install devx-cafe/gh-insitu && gh insitu run post-create",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.copilot",
+        "DavidAnson.vscode-markdownlint",
+        "streetsidesoftware.code-spell-checker"
+      ]
+    }
+  },
+  "mounts": [
+    "source=${localEnv:HOME},target=/localhome,type=bind,consistency=cached"
+  ],
+  "remoteEnv": {
+    "GH_TOKEN": "${localEnv:GH_TOKEN}",
+    "GPG_KEY": "${localEnv:_GPG_KEY}",
+    "GPG_TTY": "${containerEnv:GPG_TTY}"
+  }
+}
