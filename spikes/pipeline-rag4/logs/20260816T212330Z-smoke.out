@@ -1,1 +1,0 @@
-SMOKE_OK

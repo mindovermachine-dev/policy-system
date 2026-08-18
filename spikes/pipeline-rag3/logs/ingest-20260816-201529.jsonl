@@ -1,5 +1,0 @@
-{"ts": "2026-08-16T20:15:29.156688+00:00", "event": "start", "graph": "policy_system_graphrag_native", "sources": ["cra"], "substantive": 15, "chunk_select": "substantive=/shall|should/i, cap 15", "max_chunks": null, "max_concurrency": 2, "chunker": "SentenceTokenCapChunking(512,2)", "model": "azure/gpt-5.4-mini", "embed": "azure/text-embedding-3-large"}
-{"ts": "2026-08-16T20:20:23.327563+00:00", "event": "source_done", "source": "cra", "document_id": "CRA-1.0", "wall_s": 294.14, "nodes_created": 47, "relationships_created": 93, "chunks_indexed": 15}
-{"ts": "2026-08-16T20:20:23.327626+00:00", "event": "chunk_select", "source": "cra", "note": "substantive=/shall|should/i, cap 15", "total_scanned": 266, "matched_filter": 250, "kept_for_ingest": 15}
-{"ts": "2026-08-16T20:20:23.876984+00:00", "event": "finalize_done"}
-{"ts": "2026-08-16T20:20:23.877258+00:00", "event": "summary", "total_s": 294.69, "sources_processed": 1, "errors_count": 0, "errors": []}

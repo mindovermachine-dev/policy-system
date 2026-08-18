@@ -1,6 +1,0 @@
-# pipeline-rag2 requirements — mirrors pipeline-rag/requirements.txt.
-# Ingestion backend = Azure (gpt-5.4-mini + text-embedding-3-large) via litellm.
-# Input = Markdown, so the `pdf` extra is belt-and-suspenders (droppable); kept
-# for parity with the proven pipeline-rag install until a leaner install is verified.
-graphrag-sdk[litellm,pdf]
-falkordb>=1.7.1

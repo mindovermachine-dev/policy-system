@@ -1,4 +1,0 @@
-{"ts": "2026-08-16T13:30:40.852281+00:00", "event": "start", "graph": "dryrun_native", "sources": ["cra"], "max_chunks": 1, "max_concurrency": 2, "chunker": "SentenceTokenCapChunking(512,2)", "model": "azure/gpt-5.4-mini", "embed": "azure/text-embedding-3-large"}
-{"ts": "2026-08-16T13:30:46.694310+00:00", "event": "source_done", "source": "cra", "document_id": "CRA-1.0", "wall_s": 5.84, "nodes_created": 1, "relationships_created": 1, "chunks_indexed": 1}
-{"ts": "2026-08-16T13:30:46.798725+00:00", "event": "finalize_done"}
-{"ts": "2026-08-16T13:30:46.799079+00:00", "event": "summary", "total_s": 5.95, "sources_processed": 1, "errors_count": 0, "errors": []}

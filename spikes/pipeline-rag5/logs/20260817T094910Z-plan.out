@@ -1,9 +1,0 @@
-The implementation plan has been created at `docs/plan.md`. The plan covers all 5 tasks:
-
-1. **PATCH ingest.py** - Runtime monkey-patch for `_prune`/`_filter_quality` with SDK version guard, CLI flag, and full-corpus defaults
-2. **ADAPT map_graph.py** - Change graph names to `_full` suffix versions
-3. **ADAPT compare.py** - CRA-vs-CRA adaptation with ratios and removed production gates
-4. **α/β/γ Attribution Logic** - New file to classify gaps and emit verdict
-5. **Content Spot-Check** - New file for manual qualitative comparison
-
-Each task includes concrete WHAT, WHERE, HOW, and EXIT CRITERIA sections with exact code changes.

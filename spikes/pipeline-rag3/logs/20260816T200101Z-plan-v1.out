@@ -1,8 +1,0 @@
-```json
-{
-  "name": "read",
-  "arguments": {
-    "path": "/Users/tma/repos/policy-system/spikes/pipeline-rag3/docs/briefs/plan.md"
-  }
-}
-```

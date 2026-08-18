@@ -1,1 +1,0 @@
-{"ts": "2026-08-17T10:18:44.865328+00:00", "event": "start", "graph": "policy_system_graphrag_native_full", "sources": ["cra"], "substantive": null, "chunk_select": "full_document (no substantive filter)", "max_chunks": null, "max_concurrency": 2, "chunker": "SentenceTokenCapChunking(512,2)", "model": "azure/gpt-5.4-mini", "embed": "azure/text-embedding-3-large"}

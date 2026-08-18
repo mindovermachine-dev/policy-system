@@ -1,7 +1,0 @@
-Done. I've read all the source files and created `docs/critique.md` with 10 documented flaws:
-
-- **3 BLOCKER**: Import path, GraphData fields, file handle management
-- **3 CRITICAL**: Patch restore scope, node_counts query assume `__Entity__` labels, FalkorDB parameters
-- **4 MINOR**: Attribution heuristics, PBUG verification, full-corpus logic, SDK version guard
-
-Each flaw includes severity, location in the plan, explanation of what's wrong, and a concrete FIX.
