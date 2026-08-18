@@ -129,6 +129,33 @@ If the skill (in the .claude/skills and .github/skills folder) does not automati
 Use the Policy Question skill. Show me the names of the roles defined in CRA
 ```
 
+### Claude Desktop (alternative to Claude Code)
+
+Requires the same FalkorDB setup and data load as above. Claude Desktop has
+no shell, so retrieval goes through `tools/graph-query/mcp_server.py` (MCP)
+instead of `ps.py` directly — install `tools/graph-query/requirements.txt`
+as above, which now includes `mcp`.
+
+1. Add to `claude_desktop_config.json` (macOS:
+   `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`):
+
+   ```json
+   {
+     "mcpServers": {
+       "policy-system-graph": {
+         "command": "/absolute/path/to/.venv/bin/python3",
+         "args": ["/absolute/path/to/tools/graph-query/mcp_server.py"]
+       }
+     }
+   }
+   ```
+
+   Non-default host/port/graph: set `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`/`PS_FALKORDB_GRAPH` in an `"env"` block.
+
+2. Restart Claude Desktop.
+3. Upload `tools/graph-query/policy-question.zip` as a skill in Desktop's settings.
+4. Ask a question (see above). If it doesn't auto-engage, say "Use the Policy Question skill" first.
+
 ## Coding Standards
 
 To be defined.
