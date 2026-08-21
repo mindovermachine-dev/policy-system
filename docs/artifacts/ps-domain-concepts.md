@@ -9,18 +9,20 @@
 
 1. [Document Purpose](#document-purpose)
 2. [Domain Concept Diagram](#domain-concept-diagram)
-3. [Domain Concepts](#domain-concepts)
+3. [Provenance Placement Rule](#provenance-placement-rule)
+4. [Edge Catalog](#edge-catalog)
+5. [Domain Concepts](#domain-concepts)
    - [Regulation](#regulation)
    - [Role](#role)
    - [Requirement](#requirement)
    - [Obligation](#obligation)
-    - [PracticeArea](#practicearea)
-    - [RiskPath](#riskpath)
+   - [PracticeArea](#practicearea)
+   - [RiskPath](#riskpath)
    - [Capability](#capability)
    - [Policy](#policy)
    - [Standard](#standard)
    - [Control](#control)
-4. [Worked Examples](#worked-examples)
+6. [Worked Examples](#worked-examples)
 
 ---
 
@@ -33,6 +35,27 @@ This document models the Policy System domain as a **property graph**; a semanti
 The model has two layers:
 - A **compliance spine** (`Regulation → Role/Requirement → Obligation → Capability → Policy → Standard → Control`) that carries regulatory provenance and implementation traceability.
 - A **classification layer** (`PracticeArea`, `RiskPath`) that organizes and analyzes the spine without changing its compliance semantics.
+
+**Orthogonal to that layering is a second axis: where a node's data actually originates.**
+- **Regulatory** (`Regulation`, `Role`, `Requirement`, `Obligation`, `Capability`) — every property on these nodes is either lifted directly from regulatory text or derived transitively from it (see [Provenance Placement Rule](#provenance-placement-rule)). Nothing here is authored by a consumer of the model.
+- **Governance** (`Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath`) — authored by the organization consuming the compliance spine: policy managers, engineering teams, risk owners. None of these nodes carries a `source_ref`; their provenance is organizational (`owner_id`, `status`, `evidence_ref`), not regulatory.
+
+The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes that stay on the compliance spine — audit traceability from `Regulation` to `Control` is unbroken even though the data on the last three hops is organizationally authored, not regulatory. `PracticeArea`/`RiskPath` are Governance nodes that sit outside the spine entirely.
+
+| Node | Layer | Origin |
+|------|-------|--------|
+| Regulation | Spine | Regulatory |
+| Role | Spine | Regulatory |
+| Requirement | Spine | Regulatory |
+| Obligation | Spine | Regulatory |
+| Capability | Spine | Regulatory |
+| Policy | Spine | Governance |
+| Standard | Spine | Governance |
+| Control | Spine | Governance |
+| PracticeArea | Classification | Governance |
+| RiskPath | Classification | Governance |
+
+No node is both Classification and Regulatory — everything regulation-derived stays on the spine; only spine-adjacent, consumer-authored nodes are ever classification-only.
 
 ---
 
@@ -63,12 +86,79 @@ graph LR
     Policy -->|"SUPPORTED_BY"| Standard
     Standard -->|"IMPLEMENTED_BY"| Control
     RiskPath -->|"VERIFIED_BY"| Control
+
+    classDef regulatory fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
+    classDef governance fill:#FFF3E0,stroke:#EF6C00,color:#E65100
+    class Regulation,Role,Requirement,Obligation,Capability regulatory
+    class Policy,Standard,Control,PracticeArea,RiskPath governance
 ```
 
 **Legend:**
 - Rounded nodes are labeled `(:Label)`, matching Cypher node syntax.
 - Edge labels are relationship types in `SCREAMING_SNAKE_CASE`, matching Cypher relationship syntax.
 - `{property}` under an edge label denotes an edge property — a fact about that specific relationship instance, not about either endpoint node.
+- Node fill color is the [Origin axis](#document-purpose), not the compliance-spine/classification-layer axis: blue = Regulatory, orange = Governance. `Policy`/`Standard`/`Control` are orange (Governance) despite remaining on the compliance spine — color here tracks who authored the data, not chain membership.
+
+---
+
+## Provenance Placement Rule
+
+Every edge's property set — whether it carries `source_ref`, or anything
+else — is decided by one rule, applied identically to every edge in the
+[Edge Catalog](#edge-catalog) below. No edge's properties are a local
+judgment call made inside that edge's endpoint node sections; those
+sections describe what an edge means, the catalog is the single place
+that says what it *carries* and why.
+
+1. **Edge-owned** — the edge is the *only* place the fact is true, and
+   the fact isn't a fixed structural feature of the source text (so it
+   can't safely be folded into either endpoint's identity instead).
+   `DEFINES` and `EXPRESSES` are the only edges that qualify: a Role's or
+   Requirement's defining/expressing location is an extraction decision,
+   not a structural constant, so it has to live somewhere mutable and
+   edge-scoped — correcting it later must not mint a new node.
+2. **Deliberately absent — recoverable transitively** — the fact is real
+   but already captured exactly once, one or more hops away; repeating
+   it here would duplicate the source of truth and risk drift between
+   the copies. `SATISFIED_BY` and `REQUIRES` fall here: an Obligation's
+   or Capability's regulatory provenance is always reachable by walking
+   `SATISFIED_BY`→`EXPRESSES` back to the originating Regulation article,
+   so neither edge repeats it.
+3. **Not applicable — no regulatory fact to place** — the edge doesn't
+   sit on the Regulation-provenance chain at all. Classification-layer
+   edges (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`) and
+   consumer-governance edges below Capability (`GOVERNED_BY`,
+   `SUPPORTED_BY`, `IMPLEMENTED_BY`) qualify: Policy/Standard/Control are
+   authored by the consumer of the compliance spine, not derived from
+   regulatory text, so there is no `source_ref` to omit in the first
+   place. Their provenance is a different kind of fact — who owns it,
+   what evidence backs it — carried on node properties (`owner_id`,
+   `evidence_ref`) where it actually belongs, not forced into this rule.
+
+---
+
+## Edge Catalog
+
+Single source of truth for every edge type in the model. Node sections
+under [Domain Concepts](#domain-concepts) describe each edge's meaning
+from that node's perspective; this table is the one place to see the
+full cross-model shape and provenance rationale at once.
+
+| Edge | Source → Target | Cardinality | Properties | Rule case ([above](#provenance-placement-rule)) |
+|------|------------------|-------------|------------|------|
+| `DEFINES` | Regulation → Role | 1 : 0..* | `source_ref` (required) | 1 — edge-owned |
+| `EXPRESSES` | Regulation → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
+| `SUPERSEDED_BY` | Regulation → Regulation | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
+| `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved |
+| `SATISFIED_BY` | Requirement → Obligation | 1..* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
+| `REQUIRES` | Obligation → Capability | 1..* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
+| `COVERS` | PracticeArea → Capability | 1 : 0..* | — | 3 — classification layer |
+| `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
+| `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
+| `VERIFIED_BY` | RiskPath → Control | 1 : 0..* | — | 3 — classification layer |
+| `GOVERNED_BY` | Capability → Policy | 1 : 0..* | — | 3 — consumer-governance, not regulation-derived |
+| `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 — consumer-governance |
+| `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 — consumer-governance |
 
 ---
 
@@ -124,6 +214,7 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 |----------|------|----------|-------|
 | `name` | string | Yes | |
 | `description` | string | No | |
+| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty that this candidate is genuinely a duty-bearing actor category the regulation names or creates — not conditioned on how the Role was minted; always recorded, since it's a fact about the extraction event itself and is unrecoverable once dropped. |
 
 #### Relationships
 
@@ -141,7 +232,7 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 **Lifecycle:** Ingested from regulatory text via LLM-driven extraction when a regulation is loaded. Read-only once created — never modified directly, only deprecated when superseded by a new regulation version.
 
 **Node label:** `Requirement`
-**Identity:** `{REG}_req_art_{ARTICLE}` (e.g. `CRA-1.0_req_art_11`) — generated from the regulatory source reference (regulation + article/section). Unlike Role and Obligation, this identity is deliberately non-opaque: a Requirement is expressed by exactly one Regulation article, so encoding that location directly in the ID is safe — there's no reuse across regulations to protect against.
+**Identity:** `{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]` (e.g. `CRA-1.0_req_art_13.8c`) — generated from the regulatory source reference (regulation + article + paragraph/sub-point). Paragraph-level, not article-level: a single article routinely bundles several independent "shall"/"shall not"/"should" duties in different numbered paragraphs, and a single paragraph is occasionally split further (the trailing letter) when it visibly bundles more than one independent duty of its own. Unlike Role and Obligation, this identity is deliberately non-opaque: a Requirement is expressed by exactly one paragraph/sub-point of one Regulation article, so encoding that location directly in the ID is safe — there's no reuse across regulations to protect against.
 
 #### Properties
 
@@ -150,6 +241,7 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 | `text` | string | Yes | |
 | `type` | enum: `requirement` \| `prohibition` \| `recommendation` | Yes | |
 | `status` | enum: `active` \| `deprecated` | No | |
+| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty that this paragraph/sub-point genuinely states an operative requirement, prohibition, or recommendation (vs. a borderline case — ambiguous modal strength, an embedded conditional, disputed granularity). Always recorded, unconditionally. |
 
 #### Relationships
 
@@ -174,10 +266,9 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `text` | string | Yes | The canonical duty statement, e.g. "Conduct Cybersecurity Risk Assessment" |
-| `confidence` | float, 0.0–1.0 | No | Extraction confidence, where minted from an unmatched Requirement rather than pre-seeded |
-| `obligation_type` | string | No | e.g. `technical`, `organizational` |
+| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether minting a new Obligation from an unmatched Requirement, or matching a Requirement to an existing canonical Obligation. Always recorded, unconditionally; not limited to the minted case. |
 
-Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by many Requirements potentially spanning several regulations (see `SATISFIED_BY` below), so a single source reference on the node would arbitrarily privilege one origin over the others — the same reasoning the [Document Purpose](#document-purpose) principle states generally. Provenance for an Obligation is established transitively: walk its inbound `SATISFIED_BY` edges back to the Requirements that satisfy it, then their `EXPRESSES` edges back to the defining Regulation article. An Obligation with no live `SATISFIED_BY` edge is unprovenanced.
+Deliberately **excluded**: a `source_ref` property, on the node or on any of its edges — see [Provenance Placement Rule, case 2](#provenance-placement-rule). An Obligation with no live `SATISFIED_BY` edge is unprovenanced.
 
 #### Relationships
 
@@ -262,6 +353,7 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 | `description` | string | No | |
 | `type` | string | No | e.g. `technical`, `organizational` |
 | `status` | enum: `active` \| `deprecated` | No | |
+| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally. |
 
 #### Relationships
 
@@ -371,8 +463,8 @@ Deliberately **excluded**: a `source_ref` property. Obligation is satisfied-by m
 |------|----------|-----------------|
 | `Regulation` | `CRA-1.0` | `source_type`: `external`, `title`: "Cyber Resilience Act", `jurisdiction`: "EU", `effective_date`: `2027-12-11`, `version`: `1.0`, `status`: `active` |
 | `Role` | `role_manufacturer_a1b2c3` | `name`: "Manufacturer" — `DEFINES` edge from `CRA-1.0`, `source_ref`: "Art. 13" |
-| `Requirement` | `CRA-1.0_req_art_11` | `text`: "Manufacturers shall ensure products with digital elements log relevant internal activity, including access to data", `type`: `requirement` — `EXPRESSES` edge from `CRA-1.0`, `source_ref`: "Art. 11" |
-| `Obligation` | `obl_security_monitoring_5e1f2a` | `text`: "Maintain Security Monitoring" — `HAS` from `Manufacturer`, `SATISFIED_BY` from `CRA-1.0_req_art_11` |
+| `Requirement` | `CRA-1.0_req_art_11.1` | `text`: "Manufacturers shall ensure products with digital elements log relevant internal activity, including access to data", `type`: `requirement` — `EXPRESSES` edge from `CRA-1.0`, `source_ref`: "Art. 11(1)" |
+| `Obligation` | `obl_security_monitoring_5e1f2a` | `text`: "Maintain Security Monitoring" — `HAS` from `Manufacturer`, `SATISFIED_BY` from `CRA-1.0_req_art_11.1` |
 | `Capability` | `cap_security_logging_c4d9e2` | `name`: "Security Logging" — `REQUIRES` from the Obligation above |
 | `Policy` | `pol_data_protection_a8f3b1` | `title`: "Data Protection Policy", `status`: `approved` — `GOVERNED_BY` from the Capability above |
 | `Standard` | `std_pol_data_protection_a8f3b1_v1` | `title`: "Security Log Retention Standard", `implementation_status`: `implemented` — `SUPPORTED_BY` from the Policy above |
@@ -402,7 +494,7 @@ Both chains are independent above `Capability`: different Regulations, different
 ```mermaid
 graph LR
     CRA["CRA-1.0<br/>(external)"] -->|DEFINES| Manufacturer["Manufacturer"]
-    CRA -->|EXPRESSES| ReqCRA["CRA-1.0_req_art_11"]
+    CRA -->|EXPRESSES| ReqCRA["CRA-1.0_req_art_11.1"]
     ReqCRA -->|SATISFIED_BY| OblCRA["Maintain Security<br/>Monitoring"]
     Manufacturer -->|HAS| OblCRA
     OblCRA -->|REQUIRES| Cap["Security Logging"]
