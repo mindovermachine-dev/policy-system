@@ -1,0 +1,17 @@
+[project]
+name = "ps-service"
+version = "0.1.0"
+description = "Policy System backend service: EU regulation ingestion, compliance knowledge graph, query interface"
+requires-python = ">=3.14"
+dependencies = [
+    "falkordb==1.7.1",
+    "litellm==1.97.0",
+    "mcp>=1.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ps_service"]

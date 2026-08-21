@@ -162,7 +162,7 @@ part of the repo-root `pyproject.toml`'s dependencies.
 
 ## Coding Standards
 
-To be defined.
+See [`docs/coding-standards/python.instructions.md`](docs/coding-standards/python.instructions.md).
 
 ## Testing
 
