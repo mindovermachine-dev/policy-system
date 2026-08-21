@@ -12,53 +12,23 @@ foundation for the system architecture: components and interfaces are derived
 from these use cases, not the other way around. Each use case is designed to
 be independently valuable to a customer.
 
-## Context
-
-Architectural decisions preceding this document (session 2026-08-08):
-
-- The Policy System is a **single-tenant, customer-deployed product**. There
-  is no multi-tenant platform layer and no vendor-operated runtime — nothing
-  runs on the vendor side.
-- Vendor involvement in EU regulation content is a **supply chain**, not part
-  of the system architecture. The product receives/works with regulation
-  content; how the vendor prepared any shipped content is outside the system
-  boundary.
-- The user interacts with the system through an **AI harness** (Pi, Claude
-  Code, OpenCode, GitHub Copilot, etc.) — the system is tool-backed, not a
-  chat product.
-- Licensing is contract-only; no technical enforcement mechanism.
-
 ## Primary Use Cases
 
-### UC-1: Prepare an external regulation
+### UC-1: Select and add a regulation to the system
 
-**A user prepares an external regulation (roles, requirements, obligations,
-and capabilities) for loading into the system.**
+**A user lists the EU regulations available via Cellar/ELI and selects one
+to add to the system.**
 
-Preparation is a capability of the product itself. It may be largely manual
-for the time being — the architecture defines the workflow (regulation text
-in → structured draft → human review → approved content), while how much of
-the drafting is automated is an implementation detail that can change without
-affecting the architecture.
+Selecting a regulation kicks off the full ingestion pipeline for that
+regulation: Regulatory Structural Ingestion (Stage 1) fetches and
+structurally tags the regulation's text from Cellar/ELI; Baseline Curation
+(Stage 2) maps it into the canonical, PS-domain-shaped baseline graph;
+Company Merge (Stage 3) merges it into the company's single-tenant
+regulatory graph. The result is a regulatory graph reflecting the selected
+regulation(s), ready to query. Content operations are add/merge-only:
+adding a regulation never modifies or deletes existing customer data.
 
-### UC-2: Load an external regulation
-
-**A user loads an external regulation into the system.**
-
-Loading applies prepared content to the knowledge graph. Content operations
-are add/merge-only: loading never modifies or deletes existing customer data.
-
-### UC-3: Ask questions about regulations and policies
-
-**A user asks the system questions about a regulation or policy.**
-
-Answers are faithful fact retrieval with full provenance back to source
-regulation text — the system returns facts with their provenance chain; the
-user's AI harness owns synthesis and narration. This use case spans both
-content layers of the domain model (regulatory content and organizational
-content), which is what makes it the architecturally central one.
-
-### UC-4: Govern internal regulations
+### UC-2: Govern internal regulations
 
 **A user governs internal regulations (roles, requirements, obligations, and
 capabilities).**
@@ -69,7 +39,7 @@ domain model as external ones (`source_type: internal` — see
 the same model chain, converging on the same canonical Obligation and
 Capability nodes as external regulations.
 
-### UC-5: Govern policy, standard, and control content
+### UC-3: Govern policy, standard, and control content
 
 **A user governs policy/standard/control content for regulations in the
 system.**
@@ -80,13 +50,12 @@ customer's own.
 
 ## Content Layers
 
-The five use cases split by which half of the domain model they touch:
+The three use cases split by which half of the domain model they touch:
 
 | Group | Use cases | Content layer |
 |---|---|---|
-| Regulatory content | UC-1, UC-2, UC-4 | Regulation → Role → Requirement → Obligation → Capability |
-| Organizational content | UC-5 | Capability → Policy → Standard → Control |
-| Spanning both | UC-3 | Full provenance chain |
+| Regulatory content | UC-1, UC-2 | Regulation → Role → Requirement → Obligation → Capability |
+| Organizational content | UC-3 | Capability → Policy → Standard → Control |
 
 ## Open Questions
 
