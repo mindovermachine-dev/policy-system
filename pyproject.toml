@@ -16,5 +16,5 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["ps-cli/src"]
-testpaths = ["ps-cli/tests"]
+pythonpath = ["ps-service/src", "ps-cli/src"]
+testpaths = ["ps-service/tests", "ps-cli/tests"]

@@ -97,7 +97,7 @@ get dir`), so `podman stop`/`start`, or even removing and recreating the
 ### Create a virtual environment and install dependencies
 
 A single `.venv` at the repo root (via the repo-root `pyproject.toml`/
-`uv.lock`) covers ps-cli and the graph-ingestion/graph-query tools --
+`uv.lock`) covers `spikes/ps-cli` and the graph-ingestion/graph-query tools --
 there is no separate per-tool environment to set up.
 
 ```bash
