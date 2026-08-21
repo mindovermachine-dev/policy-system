@@ -10,18 +10,21 @@ Reusable utilities for loading and converging Policy System graph datasets into 
 
 ## Typical workflow
 
+Run these from the repo root -- `uv run` resolves the single repo-root
+`.venv`/`pyproject.toml` regardless of which subdirectory a script lives in.
+
 1. Load baseline and regulation datasets into one graph namespace:
 
 ```bash
-python tools/graph-ingestion/load_graph.py \
+uv run python tools/graph-ingestion/load_graph.py \
   --file test-data/eu-regulations/cra.json \
   --graph-name policy_system --reset
 
-python tools/graph-ingestion/load_graph.py \
+uv run python tools/graph-ingestion/load_graph.py \
   --file test-data/eu-regulations/nis2.json \
   --graph-name policy_system
 
-python tools/graph-ingestion/load_graph.py \
+uv run python tools/graph-ingestion/load_graph.py \
   --file test-data/eu-regulations/gdpr.json \
   --graph-name policy_system
 ```
@@ -35,14 +38,14 @@ tools/graph-ingestion/load_all.sh
 2. Shortlist duplicate capabilities:
 
 ```bash
-python tools/graph-ingestion/find_capability_duplicates.py \
+uv run python tools/graph-ingestion/find_capability_duplicates.py \
   --graph-name policy_system --threshold 0.35
 ```
 
 3. Record decisions in test-data/eu-regulations/capability_merges.json, then apply:
 
 ```bash
-python tools/graph-ingestion/merge_capabilities.py \
+uv run python tools/graph-ingestion/merge_capabilities.py \
   --graph-name policy_system \
   --decisions test-data/eu-regulations/capability_merges.json
 ```

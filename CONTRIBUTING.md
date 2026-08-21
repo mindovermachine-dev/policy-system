@@ -96,18 +96,22 @@ get dir`), so `podman stop`/`start`, or even removing and recreating the
 
 ### Create a virtual environment and install dependencies
 
-Create a virtual environment and install the Python dependencies for the graph-ingestion and graph-query tools
+A single `.venv` at the repo root (via the repo-root `pyproject.toml`/
+`uv.lock`) covers ps-cli and the graph-ingestion/graph-query tools --
+there is no separate per-tool environment to set up.
 
 ```bash
-uv venv
-source .venv/bin/activate
-uv pip install -r tools/graph-ingestion/requirements.txt -r tools/graph-query/requirements.txt
+uv sync
 ```
 
 Keep `.venv` activated (or otherwise on `PATH`) whenever you run
 `tools/graph-query/ps.py` or use the `policy-question`/`falsification-step`
 skills — `ps.py` resolves `python3` from `PATH` rather than a hardcoded
-interpreter, so it uses whichever environment is currently active.
+interpreter (deliberately: this keeps `ps.py` itself, not a generic
+`python3`, as the thing the harness allowlists), so it uses whichever
+environment is currently active. Scripts invoked via `uv run` (e.g.
+`tools/graph-ingestion/load_all.sh`, `ps-ingestion`) don't need activation
+at all -- `uv run` resolves the repo-root `.venv` on its own.
 
 1. Load test data into graph
 
@@ -133,8 +137,8 @@ Use the Policy Question skill. Show me the names of the roles defined in CRA
 
 Requires the same FalkorDB setup and data load as above. Claude Desktop has
 no shell, so retrieval goes through `tools/graph-query/mcp_server.py` (MCP)
-instead of `ps.py` directly — install `tools/graph-query/requirements.txt`
-as above, which now includes `mcp`.
+instead of `ps.py` directly — `uv sync` as above already installs `mcp`,
+part of the repo-root `pyproject.toml`'s dependencies.
 
 1. Add to `claude_desktop_config.json` (macOS:
    `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`):

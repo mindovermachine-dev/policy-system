@@ -15,7 +15,7 @@ PORT="${FALKORDB_PORT:-6379}"
 load() {
   local file="$1"
   shift
-  python3 "${SCRIPT_DIR}/load_graph.py" \
+  uv run --project "${REPO_ROOT}" python3 "${SCRIPT_DIR}/load_graph.py" \
     --file "${file}" \
     --graph-name "${GRAPH_NAME}" \
     --host "${HOST}" \
