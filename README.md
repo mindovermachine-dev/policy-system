@@ -1,4 +1,4 @@
-# Policy Sub System
+# Policy System
 
 Quick start: Read the [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -13,27 +13,32 @@ What if we could ingest EU regulations into a unified data model along with busi
 - "What approved policies do we have in place that convert the Cyber Resiliency Act Obligations for Manufactures?"
 - "What do I need to consider if I use this technology / library XYZ in my the code base I'm working on?"
 
-## What is the Policy Sub System?
+## What is the Policy System?
 
-A single container that wrap the following functionality:
+The Policy System is deployed as two containers:
 
+**PS Service** — implements:
 - EU Regulations Meta-model
-- FalkorDB with graphRAG SDK
 - Ingestion pipeline
-- Q&A pipeline with falsification verification
 - LiteLLM interface to 100+ LLMs via Ollama, Azure Foundry, AWS Bedrock, Anthropic, OpenAI using the OpenAI format.
+
+**FalkorDB** — the graph database storing the compliance knowledge graph, deployed as a separate container so it can be patched independently without rebuilding or redeploying PS Service.
 
 ### DevContainer
 
-The dev container with all required dependencies installed and pinned that you will be using to develop or maintain PSS
+The dev container with all required dependencies installed and pinned that you will be using to develop or maintain the Policy System
 
-### PSSContainer
+### PS Service Container
 
-The deployable container that implement PSS functionality. This is what you will be using as a dependency in you project.
+The deployable container that implements PS Service functionality. This is what you will be using as a dependency in your project.
 
 ## Clients and Target Audiences
 
-The target audience outlined below will NOT be consuming PSS directly, they will be using one of multiple clients that consume PSS. The repo contains a Claude Desktop skill that can be uploaded into Claude Desktop and will function as a read-only client for asking questions to PSS.
+The target audience outlined below will NOT be consuming the Policy System directly, they will be using one of several clients that consume it:
+
+- **PS Question Skill** — a Claude Desktop / VS Code skill included in this repo, functioning as a read-only client for asking questions, including falsification verification of answers
+- **PS-Cli** — a command-line interface for starting, stopping, and configuring PS Service, and for driving a PDF ingestion pipeline for business regulations/policies (under exploration)
+- **Policy Editor** — a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration, client not yet designed)
 
 | Role                     | Primary Use Case                                                                                                                                     |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -47,4 +52,4 @@ The target audience outlined below will NOT be consuming PSS directly, they will
 | **Software Engineers**   | Check what a specific Standard/Control requires before shipping; ideally check "is my service compliant?"                                            |
 | **Security Engineers**   | Find coverage gaps below the Policy level (governed capabilities with no working Control yet); reason about blast radius if a specific control fails |
 | **Engineering Managers** | Get whole-team/whole-org posture summaries and prioritized punch lists — open-ended synthesis questions, not single-entity lookups                   |
-| **System Admin**         | Start, stop, and configure the PSS container via PS-Cli; run the PDF ingestion pipeline for business regulations and policies                        |
+| **System Admin**         | Start, stop, and configure PS Service via PS-Cli; run the PDF ingestion pipeline for business regulations and policies                        |
