@@ -47,3 +47,4 @@ The target audience outlined below will NOT be consuming PSS directly, they will
 | **Software Engineers**   | Check what a specific Standard/Control requires before shipping; ideally check "is my service compliant?"                                            |
 | **Security Engineers**   | Find coverage gaps below the Policy level (governed capabilities with no working Control yet); reason about blast radius if a specific control fails |
 | **Engineering Managers** | Get whole-team/whole-org posture summaries and prioritized punch lists — open-ended synthesis questions, not single-entity lookups                   |
+| **System Admin**         | Start, stop, and configure the PSS container via PS-Cli; run the PDF ingestion pipeline for business regulations and policies                        |
