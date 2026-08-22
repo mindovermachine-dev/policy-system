@@ -37,7 +37,7 @@
 
 ## Overview
 
-PS Service is the Policy System's backend container: it ingests EU regulations, maps them into the PS Conceptual Model compliance graph, merges them into a company's single-tenant graph, and serves read-only queries back to consuming clients.
+PS Service is the Policy System's backend container: it ingests EU regulations, maps them into the PS Conceptual Model (`ps-domain-concepts.md`) compliance graph, merges them into a company's single-tenant graph, and serves read-only queries back to consuming clients.
 
 ### Container Purpose
 
@@ -364,7 +364,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | ExtractRolesAndRequirements | Read the native structural graph via the paired Domain Mapping Adapter; LLM-driven extraction of Role/Requirement, with `DEFINES`/`EXPRESSES` edges carrying `source_ref` (the native graph's `citation_ref`) | No (deferred) | n/a (deferred) | `PersistNativeStructuralGraph` completed for this regulation | Role/Requirement nodes exist with confidence scores and provenance edges | Reads + writes FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set — bounded by LLM latency | No (LLM extraction is not guaranteed deterministic) | Low-confidence extractions are recorded, not dropped |
-| DeriveObligationsAndCapabilities | Match/mint Obligation per Requirement (`HAS`/`SATISFIED_BY`); match/mint Capability per Obligation (`REQUIRES`) | No (deferred) | n/a (deferred) | ExtractRolesAndRequirements completed | Every Requirement has ≥1 `SATISFIED_BY`; every Obligation has ≥1 `REQUIRES` | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set | No | A Requirement that can't be matched/satisfied is surfaced, not silently skipped |
+| DeriveObligationsAndCapabilities | Match/mint Obligation per Requirement (`SATISFIED_BY`), with `HAS` set from its Role; match/mint Capability per Obligation (`REQUIRES`) | No (deferred) | n/a (deferred) | ExtractRolesAndRequirements completed | Every Requirement has ≥1 `SATISFIED_BY`; every Obligation has ≥1 `REQUIRES` | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set | No | A Requirement that can't be matched/satisfied is surfaced, not silently skipped |
 | DeriveGovernanceArtifacts | For `source_type: internal` only, via the internal-source Domain Mapping Adapter: match/mint Policy per Capability (`GOVERNED_BY`), Standard per Policy (`SUPPORTED_BY`), Control per Standard (`IMPLEMENTED_BY`) | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed AND `Regulation.source_type == internal` | Every internal-source Capability has ≥1 `GOVERNED_BY`; every such Policy has ≥1 `SUPPORTED_BY`; every such Standard has ≥1 `IMPLEMENTED_BY` | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set — bounded by LLM latency | No (LLM extraction is not guaranteed deterministic) | A Capability that can't be matched/satisfied by a Policy is surfaced, not silently skipped; not run at all for `source_type: external` |
 
 ---

@@ -22,6 +22,8 @@
    - [Component Breakdown](#component-breakdown)
 5. [Use Case Coverage Mapping](#use-case-coverage-mapping)
    - [Query/Read-Only Roles Use Cases](#queryread-only-roles-use-cases)
+   - [Regulation Ingestion Use Cases](#regulation-ingestion-use-cases)
+   - [Regulatory Change Monitoring Use Cases](#regulatory-change-monitoring-use-cases)
    - [Policy Managers Use Cases](#policy-managers-use-cases)
    - [System Admin Use Cases](#system-admin-use-cases)
 6. [NFR Realization](#nfr-realization)
@@ -39,7 +41,7 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 
 **Key Capabilities**
 - Ingest EU Regulations via Cellar/ELI
-- Map raw EU regulation into PS Conceptual Model knowledge graph
+- Map raw EU regulation into the PS Conceptual Model (`ps-domain-concepts.md`) knowledge graph
 - Monitor ingested EU regulations for amendments and trigger re-ingestion of affected content
 - Ingest Business regulation and policies, minting Capability nodes plus governance-layer Policy/Standard/Control nodes
 - Cypher Query interface
@@ -212,8 +214,8 @@ graph TB
 | Component | Description | Key Responsibilities | Domain path |
 | :--- | :--- | :--- | :--- |
 | Ingestion | Ingests regulation content from a source (Cellar/ELI for EU regulations) instead of PDF, persisting it as a native structural graph | Fetch a regulation's structure/text via a source-specific Ingestion Adapter; persist that source's native structural graph to FalkorDB as-is — see Container Architecture for the adapter pattern | ps.service.ingestion |
-| Domain Mapper | Maps a regulation's native structural graph into the curated, PS-domain-shaped baseline graph — Role/Requirement/Obligation/Capability for external sources; continuing through Policy/Standard/Control for internal sources | Curate/derive PS Conceptual Model entities from a regulation's native structural graph, read via a Domain Mapping Adapter paired to the source's Ingestion Adapter, into a canonical per-regulation baseline. The adapter determines depth: external adapters stop at Capability, the internal-source adapter continues to Control | ps.service.domainmapper |
-| Company Merge | Dedupes and merges a company's selected regulation baseline graphs into one single-tenant graph | Merge selected baseline graphs per company — operates only on the canonical baseline graph Domain Mapper produces, so is unaffected by source-specific (Cellar/ELI) adapter changes | ps.service.companymerge |
+| Domain Mapper | Maps a regulation's native structural graph into the curated, PS-domain-shaped baseline graph — Role/Requirement/Obligation/Capability for external sources; continuing through Policy/Standard/Control for internal sources | Curate/derive PS Conceptual Model entities from a regulation's native structural graph, read via a Domain Mapping Adapter paired to the source's Ingestion Adapter, into a per-regulation baseline. The adapter determines depth: external adapters stop at Capability, the internal-source adapter continues to Control | ps.service.domainmapper |
+| Company Merge | Dedupes and merges a company's selected regulation baseline graphs into one single-tenant graph | Merge selected baseline graphs per company — operates only on the per-regulation baseline graph Domain Mapper produces, resolving it into the canonical, cross-regulation-deduped company graph; unaffected by source-specific (Cellar/ELI) adapter changes | ps.service.companymerge |
 | Query Engine | Executes Cypher queries against the compliance knowledge graph on behalf of PS Question Skill and returns results | Receive Cypher queries via PS Service's query interface; execute against FalkorDB; return results with provenance | ps.service.queryengine |
 | MCP Interface | Exposes the compliance knowledge graph's Cypher query capability to PS Question Skill via the Model Context Protocol (MCP) | Accept MCP tool calls from PS Question Skill; delegate query execution to Query Engine; return results over MCP | ps.service.mcpinterface |
 | Regulatory Change Monitor | Detects when an EU regulation is amended by polling Cellar/ELI, and triggers re-ingestion of the affected regulation | Poll Cellar/ELI for regulatory amendments; trigger a new Ingestion → Domain Mapper → Company Merge cycle for the changed regulation; surface a delta report of affected content — **delta report shape/mechanism is under exploration** | ps.service.changemonitor |
@@ -224,7 +226,7 @@ graph TB
 
 ## Use Case Coverage Mapping
 
-Use cases reference `ps-primary-use-cases.md`'s URS IDs (UC-1 through UC-3).
+Use cases reference `ps-primary-use-cases.md`'s URS IDs (UC-1 through UC-4).
 Roles are grouped where they share the same use case and implementing
 component(s), rather than listed individually.
 
@@ -244,6 +246,14 @@ Engineering Managers.
 | :--- | :--- | :--- | :--- |
 | Select and add a regulation | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge | UC-1 |
 | Govern internal regulations | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge (same pipeline as UC-1, `source_type: internal`; Domain Mapper continues past Capability through Policy/Standard/Control via the internal-source adapter) | UC-2 |
+
+### Regulatory Change Monitoring Use Cases
+
+Not user-triggered — Regulatory Change Monitor initiates this use case autonomously by polling Cellar/ELI.
+
+| Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
+| :--- | :--- | :--- | :--- |
+| Automatically detect and absorb a regulatory amendment | Regulatory Change Monitor → Cellar/ELI (poll) | Regulatory Change Monitor (triggers) → Ingestion → Domain Mapper → Company Merge | UC-4 |
 
 ### Policy Managers Use Cases
 
