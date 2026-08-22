@@ -217,6 +217,7 @@ graph TB
 | MCP Interface | Exposes the compliance knowledge graph's Cypher query capability to PS Question Skill via the Model Context Protocol (MCP) | Accept MCP tool calls from PS Question Skill; delegate query execution to Query Engine; return results over MCP | ps.service.mcpinterface |
 | Regulatory Change Monitor | Detects when an EU regulation is amended by polling Cellar/ELI, and triggers re-ingestion of the affected regulation | Poll Cellar/ELI for regulatory amendments; trigger a new Regulatory Structural Ingestion → Domain Mapper cycle for the changed regulation; surface a delta report of affected content — **delta report shape/mechanism is under exploration** | ps.service.changemonitor |
 | LLM Interface | Shared internal component wrapping LiteLLM, giving other components a single point of access to the configured LLM Provider | Route chat/embedding requests to the configured LLM Provider via LiteLLM; abstract provider-specific credentials/config away from consuming components (Domain Mapper, and potentially Query Engine/Regulatory Change Monitor) | ps.service.llminterface |
+| Logging | Shared internal component providing structured, semantic logging for every other PS Service component, giving detailed debug data during pipeline/query runs | Accept structured log entries from other components; write JSON-structured entries to the configured log sink; bind a correlation (run) ID at each primary-use-case entry point so a full pipeline/query run can be traced end to end | ps.service.logging |
 
 ---
 

@@ -1,6 +1,10 @@
 # logs
 ps-cli/logs/
 
+# PS Service structured logs (folder tracked, contents ignored — see ps-service Logging component)
+/logs/*
+!/logs/.gitkeep
+
 # Spikes
 spikes/
 
@@ -97,7 +101,6 @@ __marimo__/
 
 # Node and logs
 **/node_modules/
-**/logs/
 
 # TakT
 .tt_cache

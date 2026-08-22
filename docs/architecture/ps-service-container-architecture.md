@@ -28,6 +28,7 @@
    - [MCP Interface](#mcp-interface)
    - [Regulatory Change Monitor](#regulatory-change-monitor)
    - [LLM Interface](#llm-interface)
+   - [Logging](#logging)
 4. [Use Case Coverage Mapping](#use-case-coverage-mapping)
 5. [NFR Implementation](#nfr-implementation)
 6. [Implementation Guide](#implementation-guide)
@@ -52,7 +53,7 @@ Pipeline + query-surface split, not a layered web-app architecture:
 
 - **Ingestion pipeline** (sequential, per-regulation): Ingestion → Domain Mapper → Company Merge
 - **Query surface** (parallel, stateless, read-only): Query Engine, fronted by MCP Interface for the PS Question Skill client
-- **Support**: Regulatory Change Monitor (triggers the pipeline), LLM Interface (shared infra used by Domain Mapper today)
+- **Support**: Regulatory Change Monitor (triggers the pipeline), LLM Interface (shared infra used by Domain Mapper today), Logging (shared infra used by every component for structured/semantic debug logging)
 
 A thin REST entry-point layer routes external requests to these components but is not itself a named component in the Solution Architecture's Component Breakdown, so it isn't documented as one here — see [Implementation Guide](#implementation-guide).
 
@@ -86,6 +87,8 @@ graph TB
 
         ChangeMonitor[Regulatory Change Monitor]
         LLMInterface[LLM Interface]
+        Logging[Logging]
+        LogFiles[(logs/)]
     end
 
     FalkorDB[(FalkorDB)]
@@ -105,10 +108,20 @@ graph TB
     MCPInterface -->|"delegates to"| QueryEngine
     PSSkill -->|"MCP: submit query"| MCPInterface
 
+    Ingestion -->|"log entries"| Logging
+    DomainMapper -->|"log entries"| Logging
+    CompanyMerge -->|"log entries"| Logging
+    QueryEngine -->|"log entries"| Logging
+    MCPInterface -->|"log entries"| Logging
+    ChangeMonitor -->|"log entries"| Logging
+    LLMInterface -->|"log entries"| Logging
+    Logging -->|"write JSON lines"| LogFiles
+
     style Cellar fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style LLMProvider fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style PSSkill fill:#90CAF9,stroke:#333,stroke-width:2px,color:#333
     style FalkorDB fill:#81C784,stroke:#333,stroke-width:2px,color:#333
+    style LogFiles fill:#CFD8DC,stroke:#333,stroke-width:2px,color:#333
 
     style Ingestion fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style DomainMapper fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
@@ -117,6 +130,7 @@ graph TB
     style MCPInterface fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style ChangeMonitor fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style LLMInterface fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Logging fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
 ```
 
 **Diagram Legend:**
@@ -137,6 +151,7 @@ graph TB
 | MCP Interface | `ps.service.mcpinterface` | Expose Query Engine to PS Question Skill via MCP |
 | Regulatory Change Monitor | `ps.service.changemonitor` | Poll Cellar/ELI for amendments; trigger re-ingestion |
 | LLM Interface | `ps.service.llminterface` | Route chat/embedding requests to the configured LLM Provider via LiteLLM |
+| Logging | `ps.service.logging` | Provide structured, semantic logging for every component; write JSON entries to file; bind a correlation (run) ID at primary-use-case entry points |
 
 ### Domain Concepts to Component Mapping
 
@@ -442,9 +457,45 @@ None — shared infrastructure utility.
 
 ---
 
+### Logging
+
+#### Domain Concepts
+
+None — shared infrastructure utility.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | structlog | Python 3.14 | `ps-service/src/ps_service/logging/` | `ps_service.logging` |
+
+**Implementation Guidance:**
+- Correlation ID (`run_id`) is bound only at primary-use-case entry points — Ingestion's trigger (UC-1/UC-2) and MCP Interface's `HandleMcpToolCall` (query path) — not at every internal call; it then propagates automatically to all downstream log entries within that run.
+- Structured fields follow a documented convention (component, action, entity_id(s), outcome, duration_ms), not an enforced schema — **whether to formalize this into an enforced event catalog later is under exploration**.
+- Default sink is a git-tracked `logs/` folder at repo root (directory tracked, file contents gitignored) — **log file naming/rotation, and the future configurable-location mechanism, are under exploration**.
+- **Multi-process write safety is under exploration** — fine for the single-process walking skeleton, needs revisiting if PS Service's REST API later runs multi-worker.
+- A log write failure never propagates back to the calling component — logging must not break the pipeline it's observing.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/logging/__init__.py` | Package marker (scaffold only — no logic yet) | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| BindRunContext | Generate (or accept) a run ID and bind it so all subsequent log entries in this call chain include it | No (internal call) | n/a | Called at a primary-use-case entry point | `run_id` bound for the current call chain | None | None | < 1ms | Yes | n/a |
+| EmitLogEntry | Accept structured fields from a calling component and write a JSON entry to the active log file | No (internal call) | n/a | Logging initialized at process start | Entry appended to the active log file | Writes to file under `logs/` | Local filesystem | < 10ms, non-blocking | Yes (each entry independent) | Write failure falls back to stderr, never raised to the caller |
+
+---
+
 ## Action Sequence Diagrams
 
 ### Ingestion pipeline — happy path (UC-1)
+
+*Every action below may also emit a log entry to Logging; only the run-ID binding is diagrammed, to keep the flow focused on business data.*
 
 ```mermaid
 sequenceDiagram
@@ -455,8 +506,10 @@ sequenceDiagram
     participant LLM as LLM Interface
     participant Merge as Company Merge
     participant DB as FalkorDB
+    participant Logging
 
     Monitor->>Ingestion: TriggerReingestion (or manual UC-1 selection)
+    Ingestion->>Logging: BindRunContext(run_id)
     Ingestion->>Cellar: FetchRegulationStructure
     Cellar-->>Ingestion: structure + text + ELI citation
     Ingestion->>DB: RegisterRegulationVersion
@@ -474,14 +527,18 @@ sequenceDiagram
 
 ### Query path — happy path and error scenario
 
+*Every action below may also emit a log entry to Logging; only the run-ID binding is diagrammed, to keep the flow focused on business data.*
+
 ```mermaid
 sequenceDiagram
     participant Skill as PS Question Skill
     participant MCP as MCP Interface
     participant QE as Query Engine
     participant DB as FalkorDB
+    participant Logging
 
     Skill->>MCP: HandleMcpToolCall(cypher query)
+    MCP->>Logging: BindRunContext(run_id)
     MCP->>QE: ExecuteCypherQuery
 
     alt read-only query
