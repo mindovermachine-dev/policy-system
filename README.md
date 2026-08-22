@@ -42,7 +42,7 @@ The target audience outlined below will NOT be consuming the Policy System direc
 
 | Role                     | Primary Use Case                                                                                                                                     |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compliance Officers**  | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps                                   |
+| **Compliance Officers**  | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps. Select and ingest external regulations |
 | **Policy Managers**      | Create, edit, and approve business policies and standards; manage content lifecycle                                                                  |
 | **Legal Counsel**        | Review regulatory requirements and organizational responses; evaluate coverage gaps                                                                  |
 | **Security Architects**  | See technical controls mapped to obligations they fulfill; design compliant solutions                                                                |

@@ -16,22 +16,21 @@ be independently valuable to a customer.
 
 ### UC-1: Select and add a regulation to the system
 
-**A user lists the EU regulations available via Cellar/ELI and selects one
-to add to the system.**
+**A Compliance Officer lists the available EU Regulations and from the list select and ingest one regulation, followed by selecting and ingesting another regulation resulting in the company graph having two eu regulations in a merged unified knowledge graph.**
 
 Selecting a regulation kicks off the full ingestion pipeline for that
 regulation: Regulatory Structural Ingestion (Stage 1) fetches and
 structurally tags the regulation's text from Cellar/ELI; Baseline Curation
 (Stage 2) maps it into the canonical, PS-domain-shaped baseline graph;
 Company Merge (Stage 3) merges it into the company's single-tenant
-regulatory graph. The result is a regulatory graph reflecting the selected
+regulatory graph. The result is a regulatory knowledge graph reflecting the selected
 regulation(s), ready to query. Content operations are add/merge-only:
 adding a regulation never modifies or deletes existing customer data.
 
+
 ### UC-2: Govern internal regulations
 
-**A user governs internal regulations (roles, requirements, obligations, and
-capabilities).**
+**A Policy Manager ingest a generic template of Engineering Practices into the company knowledge graph**
 
 Internal regulations (e.g. an Engineering Practices standard) use the same
 domain model as external ones (`source_type: internal` — see
@@ -39,35 +38,12 @@ domain model as external ones (`source_type: internal` — see
 the same model chain, converging on the same canonical Obligation and
 Capability nodes as external regulations.
 
-### UC-3: Govern policy, standard, and control content
+### UC-3: Ask compliance questions
 
-**A user governs policy/standard/control content for regulations in the
-system.**
+**An engineering manager uses the policy question skill in claud desktop to answer questions via ps service and falkordb holding the comany knowledge graph.**
 
-This is the organizational-accountability layer: where capabilities become
-owned commitments with review cycles, and where the graph becomes the
-customer's own.
+This is the Policy System client layer: Whene an external client (Claude Desktop) interface with the Policy System container to answer questions about EU Regulations and Business policies
 
-## Content Layers
-
-The three use cases split by which half of the domain model they touch:
-
-| Group | Use cases | Content layer |
-|---|---|---|
-| Regulatory content | UC-1, UC-2 | Regulation → Role → Requirement → Obligation → Capability |
-| Organizational content | UC-3 | Capability → Policy → Standard → Control |
-
-## Open Questions
-
-*Deferred from the use-case discussion; to be resolved during architecture
-work or later.*
-
-1. Delta-only updates: loading is add/merge-only today — how superseded
-   content is retired (domain model has `SUPERSEDED_BY` / `deprecated`
-   statuses) is not yet specified.
-2. Extraction provenance: whether metadata about how content was prepared
-   (methodology, tooling versions) is attached to prepared content or kept
-   outside the product. Current decision: does not travel with the content.
 
 ---
 
