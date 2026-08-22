@@ -99,10 +99,12 @@ graph TB
 
     Ingestion -->|"write native graph"| FalkorDB
     DomainMapper -->|"read native graph"| FalkorDB
-    DomainMapper -->|"baseline graph"| CompanyMerge
-    CompanyMerge -->|"write"| FalkorDB
+    DomainMapper -->|"write per-regulation baseline graph"| FalkorDB
+    CompanyMerge -->|"read per-regulation baseline graph"| FalkorDB
+    CompanyMerge -->|"write company graph"| FalkorDB
 
     DomainMapper -->|"extraction calls"| LLMInterface
+    CompanyMerge -->|"semantic convergence calls"| LLMInterface
     LLMInterface -->|"chat/embedding"| LLMProvider
 
     QueryEngine -->|"read"| FalkorDB
@@ -162,9 +164,9 @@ graph TB
 | Native structural elements (adapter-defined, e.g. TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH for Cellar/ELI) | Ingestion (write, via source-specific Ingestion Adapter) + Domain Mapper (read, via paired Domain Mapping Adapter) | `ps.service.ingestion`, `ps.service.domainmapper` | Not a fixed, project-wide domain concept — each source's Ingestion Adapter persists its own native hierarchy as-is; only its paired Domain Mapping Adapter knows how to read that shape. A new regulatory source (e.g. SOX, HIPAA) means adding a new matched adapter pair, not extending a shared schema |
 | Role | Domain Mapper | `ps.service.domainmapper` | LLM-extracted from the native structural graph via the Domain Mapping Adapter; `DEFINES` edge with `source_ref` |
 | Requirement | Domain Mapper | `ps.service.domainmapper` | LLM-extracted; `EXPRESSES` edge with `source_ref` |
-| Obligation | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations via the content-hash identity |
+| Obligation | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations — an exact canonical-identity match, or a semantic-equivalence match (via LLM Interface) for differently-worded content expressing the same duty |
 | Capability | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation |
-| Policy | Domain Mapper (mint/match, internal sources only) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | External-source regulations stop at Capability — Policy is only mint/matched here for `source_type: internal`, via that source's Domain Mapping Adapter, linked from Capability via `GOVERNED_BY`. Human-authored Policy (via Policy Editor, outside this container) is the other origin; canonical, content-hash identity derived from the Policy's own `title` alone applies either way |
+| Policy | Domain Mapper (mint/match, internal sources only) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | External-source regulations stop at Capability — Policy is only mint/matched here for `source_type: internal`, via that source's Domain Mapping Adapter, linked from Capability via `GOVERNED_BY`. Human-authored Policy (via Policy Editor, outside this container) is the other origin; canonical identity derived from the Policy's own `title` alone applies either way, with the same exact-or-semantic convergence matching as Obligation/Capability |
 | Standard | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `SUPPORTED_BY` from its parent Policy. Weak-entity identity derived from its Policy + version — scoped to exactly one Policy, no cross-source dedup needed |
 | Control | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `IMPLEMENTED_BY` from its parent Standard. Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
 
@@ -347,6 +349,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 - Reads the native structural graph (see [Ingestion](#ingestion)) through a Domain Mapping Adapter (`ps_service.domain_mapper.adapters.base`), one per regulatory source, paired 1:1 with that source's Ingestion Adapter. The Cellar/ELI Domain Mapping Adapter is the only implementation for this walking skeleton.
 - A Domain Mapping Adapter's expected input shape must track its paired Ingestion Adapter's output shape exactly — the two are reviewed/changed together, never independently.
 - How far an adapter extracts down the compliance spine is adapter-specific: the Cellar/ELI adapter (`source_type: external`) stops at Capability. An internal-source adapter (paired with an internal-source Ingestion Adapter reading Business SoPs — not yet implemented in this walking skeleton) continues through Policy/Standard/Control via `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`, gated on `Regulation.source_type == internal`. See [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#document-purpose) for the canonical dual-origin model this reflects.
+- Everything this component writes (Role/Requirement/Obligation/Capability, and Policy/Standard/Control for internal sources) lands in a distinct **per-regulation baseline graph space** in FalkorDB — never directly in the company's merged single-tenant graph. [Company Merge](#company-merge) is the only component that reads this space and merges its contents into the company graph.
 
 #### Implementation Registration
 
@@ -427,9 +430,12 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 
 | Kind | Framework | Language | Project Pattern | Namespace Pattern |
 |---|---|---|---|---|
-| Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/company_merge/` | `ps_service.company_merge` |
+| Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/company_merge/` | `ps_service.company_merge` |
 
-**Implementation Guidance:** Add/merge-only — per UC-1, adding a regulation never modifies or deletes existing customer data.
+**Implementation Guidance:**
+- Add/merge-only — per UC-1, adding a regulation never modifies or deletes existing customer data.
+- Convergence matching is two-tier: canonical-identity equality first, then a semantic-equivalence check (via LLM Interface) for content that doesn't hash-match but expresses the same duty/capability/policy — carrying the same non-determinism caveat already accepted for Domain Mapper's LLM-driven decisions.
+- On a confirmed match (exact identity, or a confident semantic match), the existing canonical node's properties are never overwritten — it wins on any disagreement (e.g. `confidence`, `description`); the incoming duplicate is dropped and only its edges are rewired onto the canonical node, consistent with add/merge-only.
 
 #### Implementation Registration
 
@@ -441,8 +447,8 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| MergeBaselineGraph | Merge a regulation's baseline graph into the company's single-tenant graph | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed | All baseline nodes/edges exist in the company graph; existing data untouched | Writes to FalkorDB | FalkorDB | < 5s per regulation (draft target) | Yes | Abort with no partial write on ambiguous canonical-identity collisions; surface for manual resolution |
-| DedupeCanonicalNodes | Resolve Obligation/Capability/Policy convergence — merge onto an existing canonical node instead of duplicating (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope) | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Obligation/Capability/Policy for the same canonical identity; incoming edges rewired to the canonical node | Writes to FalkorDB (edge rewiring) | FalkorDB | Included in MergeBaselineGraph's SLA | Yes | Same as MergeBaselineGraph |
+| MergeBaselineGraph | Read a regulation's baseline graph from its per-regulation graph space and merge it into the company's single-tenant graph | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed AND (`Regulation.source_type == external` OR DeriveGovernanceArtifacts completed) | All baseline nodes/edges exist in the company graph; existing canonical nodes' properties untouched | Reads + writes FalkorDB | FalkorDB | Not yet set — bounded by DedupeCanonicalNodes's semantic-match latency (no longer a fixed target now that convergence isn't identity-only) | Yes | Abort with no partial write only when the semantic-match step can't confidently decide whether an incoming node is the same canonical concept as an existing one; surface for manual resolution. A confirmed match (exact identity, or a confident semantic match) never aborts |
+| DedupeCanonicalNodes | Resolve Obligation/Capability/Policy convergence — merge onto an existing canonical node instead of duplicating, whether matched by exact canonical identity or by semantic equivalence (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope) | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Obligation/Capability/Policy for the same canonical concept; incoming edges rewired to the canonical node; canonical node's own properties unchanged | Writes to FalkorDB (edge rewiring); calls LLM Interface for semantic-match candidates | LLM Interface, FalkorDB | Bounded by LLM latency for semantic-match calls; canonical-identity lookups remain fast | No (semantic-match decisions are not guaranteed deterministic, same caveat as Domain Mapper's LLM-driven decisions) | Same as MergeBaselineGraph — a low-confidence semantic-match candidate is surfaced, not silently merged or silently dropped |
 
 ---
 
@@ -623,8 +629,12 @@ sequenceDiagram
     LLM-->>Mapper: extraction result + confidence
     Mapper->>LLM: RouteCompletion (derive Obligation/Capability)
     LLM-->>Mapper: match/mint result + confidence
-    Mapper->>Merge: baseline graph
+    Mapper->>DB: write per-regulation baseline graph
 
+    Merge->>DB: read per-regulation baseline graph
+    DB-->>Merge: baseline graph
+    Merge->>LLM: RouteCompletion (semantic-match candidates)
+    LLM-->>Merge: match result + confidence
     Merge->>DB: MergeBaselineGraph + DedupeCanonicalNodes
     DB-->>Merge: merge complete
 ```
