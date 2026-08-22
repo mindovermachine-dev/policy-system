@@ -43,6 +43,14 @@ domain model as external ones (`source_type: internal` — see
 This is the Policy System client layer: Whene an external client (Claude Desktop) interface with the Policy System container to answer questions about EU Regulations and Business policies
 
 
+### UC-4: Automatically detect and absorb a regulatory amendment
+
+**A tracked EU Regulation is amended at the source; the Policy System detects the change without manual intervention and updates the company knowledge graph to reflect the new version, preserving full version history.**
+
+Regulatory Change Monitor periodically polls Cellar/ELI for amendments to Regulations already tracked in the system (`status: active`). When it detects a new consolidated version of a tracked regulation, it triggers a full re-ingestion cycle for that regulation — Ingestion → Domain Mapper → Company Merge — and links the prior version to the new one via `SUPERSEDED_BY` once the new version lands. The result is a compliance graph that stays current with the source regulation without a Compliance Officer needing to notice the change and manually re-trigger UC-1. Content operations remain add/merge-only: absorbing an amendment never modifies or deletes the prior version's history.
+
+**Test/acceptance scenario:** ingest an older consolidated version of a real EU regulation as the tracked baseline; confirm Regulatory Change Monitor's poll against Cellar surfaces the newer consolidated version (via Cellar's `cdm:consolidated_by`/`work_related_to` linkage) as a detected amendment, and that it triggers re-ingestion end to end.
+
 ---
 
 *End of Document*

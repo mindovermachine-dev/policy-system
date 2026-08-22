@@ -184,7 +184,7 @@ full cross-model shape and provenance rationale at once.
 
 Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Requirement chain unchanged, so an internal standard's Requirements converge onto the same canonical Obligation and Capability nodes as external regulations — e.g. an internal "Security Logging Practice" can land on the same `Capability` node that CRA and GDPR already converge on (see [Obligation](#obligation) and [Capability](#capability)).
 
-**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. Regulations are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY`, and updates are delta-only (the new version replaces the old, not a full re-ingestion), preserving a complete version history for traceability.
+**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. Regulations are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY` — detected by Regulatory Change Monitor polling the source, which triggers a full re-ingestion cycle (Ingestion → Domain Mapper → Company Merge) for the new version, preserving a complete version history for traceability.
 
 **Node label:** `Regulation`
 **Identity:** `{SHORT}-{VERSION}` (e.g. `CRA-1.0`) — natural key. Regulation is a root concept with no parent, so no weak-entity concern applies here.

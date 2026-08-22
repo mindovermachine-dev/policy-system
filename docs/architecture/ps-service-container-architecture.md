@@ -531,7 +531,9 @@ None new — maintains `Regulation.SUPERSEDED_BY`, documented under [Ingestion](
 |---|---|---|---|---|
 | Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/change_monitor/` | `ps_service.change_monitor` |
 
-**Implementation Guidance:** Delta report shape/mechanism is under exploration (per Solution Architecture) — do not assume a shape here that the SA doc doesn't already commit to.
+**Implementation Guidance:**
+- Delta report shape/mechanism is under exploration (per Solution Architecture) — do not assume a shape here that the SA doc doesn't already commit to.
+- Amendment detection is assumed to rely on Cellar/ELI's consolidated-version linkage (`cdm:consolidated_by`/`work_related_to` between a regulation's CELEX-numbered expressions) — this has not been verified against a live Cellar SPARQL query. Confirm this mechanism actually surfaces new consolidated versions before implementing `PollForAmendments` against it.
 
 #### Implementation Registration
 
@@ -543,7 +545,7 @@ None new — maintains `Regulation.SUPERSEDED_BY`, documented under [Ingestion](
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| PollForAmendments | Periodically poll Cellar/ELI for amendments to tracked regulations | No (deferred) | n/a (deferred) | ≥1 Regulation node with `status: active` exists | Delta report produced (shape under exploration) | None (read-only against Cellar/ELI) | Cellar/ELI, FalkorDB (read) | Polling interval not yet decided | Yes | A failed poll retries next cycle; does not block other regulations |
+| PollForAmendments | Periodically poll Cellar/ELI for amendments to tracked regulations | No (deferred) | n/a (deferred) | ≥1 Regulation node with `status: active` exists | New-version detected for the tracked Regulation (version comparison against Cellar/ELI's reported version) — required, gates `TriggerReingestion`. A delta report of affected content is also produced as a secondary output (shape under exploration — does not block triggering) | None (read-only against Cellar/ELI) | Cellar/ELI, FalkorDB (read) | Polling interval not yet decided | Yes | A failed poll retries next cycle; does not block other regulations |
 | TriggerReingestion | For an amended regulation, trigger a new Ingestion → Domain Mapper → Company Merge cycle; set `SUPERSEDED_BY` once the new version registers | No (deferred) | n/a (deferred) | PollForAmendments detected a real new ELI version | New Regulation version exists; `SUPERSEDED_BY` links old → new; new baseline merged per add/merge-only rule | Triggers Ingestion/Domain Mapper/Company Merge | Ingestion, Domain Mapper, Company Merge (internal calls) | Not yet set | Yes (re-triggering an already-processed version is a no-op) | A failed cycle leaves the prior version's status untouched — never record supersession without a landed replacement |
 
 ---
@@ -683,10 +685,11 @@ sequenceDiagram
 
 | Use Case | Components | Coverage Notes |
 |---|---|---|
-| UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Regulatory Change Monitor | Fully covered by this container's ingestion pipeline |
+| UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge | Fully covered by this container's ingestion pipeline |
 | UC-2: Govern internal regulations | Ingestion, Domain Mapper, Company Merge | Same pipeline as UC-1 (`source_type: internal`), but via an internal-source adapter pair that continues past Capability through Policy/Standard/Control (`DeriveGovernanceArtifacts`) — external regulations never reach this step. **Inherited gap from Solution Architecture, not resolved here:** no human role/component is confirmed as the one who triggers ingestion of internal regulations |
 | Govern policy/standard/control content (not yet defined in `ps-primary-use-cases.md`) | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
 | UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Fully covered for the validated setup (client and service on one machine, MCP stdio transport). Remote deployment — the stated production target — additionally requires the transport, authentication, and resource-bounding work flagged under [MCP Interface](#mcp-interface) |
+| UC-4: Automatically detect and absorb a regulatory amendment | Regulatory Change Monitor (triggers), Ingestion, Domain Mapper, Company Merge | Covered by RCM's poll/trigger cycle plus the same ingestion pipeline as UC-1. Amendment-detection mechanism against Cellar/ELI is unverified — see [Regulatory Change Monitor](#regulatory-change-monitor)'s Implementation Guidance |
 
 ---
 
