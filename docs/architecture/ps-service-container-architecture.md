@@ -162,8 +162,11 @@ graph TB
 | Requirement | Domain Mapper | `ps.service.domainmapper` | LLM-extracted; `EXPRESSES` edge with `source_ref` |
 | Obligation | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations via the content-hash identity |
 | Capability | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation |
+| Policy | Domain Mapper (mint/match) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation/Capability — canonical, content-hash identity derived from the Policy's own `title` alone |
+| Standard | Domain Mapper | `ps.service.domainmapper` | Weak-entity identity derived from its Policy + version — scoped to exactly one Policy, no cross-source dedup needed |
+| Control | Domain Mapper | `ps.service.domainmapper` | Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
 
-**Not implemented by any PS Service component:** `Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath` — these are Governance-layer concepts authored by policy managers through the Policy Editor client, which is a separate, not-yet-designed container per the Solution Architecture doc. This document does not invent a mapping for them.
+**Not implemented by any PS Service component:** `PracticeArea`, `RiskPath` — these are Governance-layer concepts authored by policy managers through the Policy Editor client, which is a separate, not-yet-designed container per the Solution Architecture doc. This document does not invent a mapping for them.
 
 ---
 
@@ -256,9 +259,47 @@ graph TB
 | `status` | `active` \| `deprecated` | enum | — | — | Optional |
 | `confidence` | Extraction confidence | float | 0.0 | 1.0 | Required, always recorded |
 
-##### Obligation / Capability
+##### Obligation / Capability / Policy
 
-See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-regulation match/mint step; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-regulation convergence for both.
+See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-source match/mint step for all three; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-source convergence for them.
+
+##### Standard
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Weak-entity identity | `std_{POLICY}_{VERSION}` — derived from the Policy it supports plus version; scoped to exactly one Policy, so no cross-source dedup is needed |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `title` | Standard title | string | — | — | Required |
+| `description` | Free-text description | string | — | — | Optional |
+| `implementation_status` | `draft` \| `implemented` \| `reviewed` \| `deprecated` | enum | — | — | Required |
+| `version` | Version identifier | string | — | — | Optional |
+
+##### Control
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Weak-entity identity | `ctrl_{STANDARD}_{TYPE}` — derived from the Standard it verifies plus control type; scoped to exactly one Standard, so no cross-source dedup is needed |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `type` | `automated` \| `manual` | enum | — | — | Required |
+| `title` | Control title | string | — | — | Required |
+| `description` | Free-text description | string | — | — | Optional |
+| `implementation_status` | `planned` \| `implemented` \| `reviewed` \| `deprecated` | enum | — | — | Required |
+| `execution_frequency` | Re-verification cadence | string | — | — | Optional |
+| `last_test_date` | Last verification date | date (ISO 8601) | — | — | Optional |
+| `next_review_date` | Next scheduled verification | date (ISO 8601) | — | — | Optional |
+| `evidence_ref` | Opaque pointer into an external evidence/audit store (out of scope for this document) | string | — | — | Optional |
 
 #### Kind
 
@@ -320,6 +361,24 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | `type` | e.g. `technical`, `organizational` | string | — | — | Optional |
 | `status` | `active` \| `deprecated` | enum | — | — | Optional |
 | `confidence` | Match/mint confidence | float | 0.0 | 1.0 | Required, always recorded |
+
+##### Policy
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Canonical, source-independent identity | `pol_{slug}_{hash}` derived from the Policy's own `title` alone — enables convergence across internal sources, deliberately not derived from a governed Capability |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `title` | Policy title | string | — | — | Required |
+| `description` | Free-text description | string | — | — | Optional |
+| `owner_id` | Owning policy manager/team | string | — | — | Optional |
+| `status` | `draft` \| `approved` \| `deprecated` | enum | — | — | Required |
+| `version` | Version identifier | string | — | — | Optional |
 
 #### Kind
 
@@ -560,8 +619,8 @@ sequenceDiagram
 |---|---|---|
 | UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Regulatory Change Monitor | Fully covered by this container's ingestion pipeline |
 | UC-2: Govern internal regulations | Ingestion, Domain Mapper, Company Merge | Same mechanism as UC-1 (`source_type: internal`). **Inherited gap from Solution Architecture, not resolved here:** no human role/component is confirmed as the one who triggers ingestion of internal regulations |
-| UC-3: Govern policy/standard/control content | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
-| Query regulations and policies (unlabeled in URS) | MCP Interface (delegates to Query Engine) | Fully covered |
+| Govern policy/standard/control content (not yet defined in `ps-primary-use-cases.md`) | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
+| UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Fully covered |
 
 ---
 
@@ -573,7 +632,7 @@ The Solution Architecture's own NFR Realization table is currently an unpopulate
 
 ## Implementation Guide
 
-Implementation details (packages, middleware, configuration, testing infrastructure) live in the project's L2 coding standards — [`docs/coding-standards/python.instructions.md`](../coding-standards/python.instructions.md) — not here. This document records WHAT components exist and HOW they interact; the L2 doc records HOW to build them.
+Implementation details (packages, middleware, configuration, testing infrastructure) live in the project's L2 coding standards — [`docs/coding-standards/level2-python-instructions.md`](../coding-standards/level2-python-instructions.md) — not here. This document records WHAT components exist and HOW they interact; the L2 doc records HOW to build them.
 
 The REST entry-point layer (`ps-service/src/ps_service/api/`) that routes external PS-Cli/Policy Editor requests to these components is implementation wiring, not a named component — see [Container Architectural Pattern](#container-architectural-pattern).
 

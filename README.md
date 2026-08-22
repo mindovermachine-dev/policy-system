@@ -37,7 +37,7 @@ The deployable container that implements PS Service functionality. This is what 
 The target audience outlined below will NOT be consuming the Policy System directly, they will be using one of several clients that consume it:
 
 - **PS Question Skill** — a Claude Desktop / VS Code skill included in this repo, functioning as a read-only client for asking questions, including falsification verification of answers
-- **PS-Cli** — a command-line interface for starting, stopping, and configuring PS Service, and for driving a PDF ingestion pipeline for business regulations/policies (under exploration)
+- **PS-Cli** — a command-line interface for starting, stopping, and configuring PS Service, and for driving regulation ingestion — selecting EU regulations for Cellar/ELI-sourced ingestion, and a PDF ingestion pipeline for business regulations/policies (under exploration)
 - **Policy Editor** — a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration, client not yet designed)
 
 | Role                     | Primary Use Case                                                                                                                                     |

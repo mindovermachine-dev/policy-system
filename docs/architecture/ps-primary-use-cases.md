@@ -34,9 +34,7 @@ adding a regulation never modifies or deletes existing customer data.
 
 Internal regulations (e.g. an Engineering Practices standard) use the same
 domain model as external ones (`source_type: internal` — see
-[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)) and flow through
-the same model chain, converging on the same canonical Obligation and
-Capability nodes as external regulations.
+[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)). This will populate the full compliance spine: the same Role/Requirement/Obligation/Capability chain as external regulations, continuing on to Policies, Standards and Control. Policies are mapped to Regulatory Capabilities where they already exist, or mint new Capabilities that link back to the internal Business Regulation.
 
 ### UC-3: Ask compliance questions
 

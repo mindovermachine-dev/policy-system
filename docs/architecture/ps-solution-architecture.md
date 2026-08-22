@@ -33,18 +33,19 @@
 ## Overview
 
 **System Purpose & Scope**
-The purpose of the Policy System is to provide a backend service that ingests, stores, and monitors EU regulations in a compliance knowledge graph, unifying a select set of EU regulations with a company's internal business regulations and policies. The service will expose a REST-based API for consuming services. The API will include a query mechanism allowing consuming services to query the knowledge graph.
+The purpose of the Policy System is to provide a backend service that ingests, stores, and monitors EU regulations in a compliance knowledge graph, unifying a select set of EU regulations with a company's internal business regulations and policies. The service will expose a REST API for lifecycle/config and authoring clients (PS-Cli, Policy Editor), and an MCP interface exposing a Cypher query mechanism for PS Question Skill to query the knowledge graph.
 
 
 
 **Key Capabilities**
 - Ingest EU Regulations via Cellar/ELI
 - Map raw EU regulation into PS Conceptual Model knowledge graph
-- Ingest Business regulation and policies enabling users to link governance layer to regulatory layer via Capability nodes
+- Monitor ingested EU regulations for amendments and trigger re-ingestion of affected content
+- Ingest Business regulation and policies, minting Capability nodes plus governance-layer Policy/Standard/Control nodes
 - Cypher Query interface
 
 **Consuming clients**
-- PS-Cli a command line interface for starting / stopping and configuring the PS Service, and for driving a PDF ingestion pipeline for business regulations/policies (under exploration)
+- PS-Cli a command line interface for starting / stopping and configuring the PS Service, and for driving regulation ingestion — selecting EU regulations for Cellar/ELI-sourced ingestion, and a PDF ingestion pipeline for business regulations/policies (under exploration)
 - PS Question Skill a skill that allows agents in VSCode or Claude Desktop ask questions, send Cypher queries to the PS Service and articulate answers to the users question
 - Policy Editor a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration — client not yet designed)
 
@@ -98,7 +99,7 @@ graph TB
         MainSystem[PS Service]
     end
 
-    PSCli -->|"REST: lifecycle/config; PDF ingestion pipeline (under exploration)"| MainSystem
+    PSCli -->|"REST: lifecycle/config; regulation ingestion (Cellar/ELI selection; PDF pipeline under exploration)"| MainSystem
     PSSkill -->|"MCP: submit query"| MainSystem
     MainSystem -->|"Query results"| PSSkill
     PolicyEditor -.->|"REST: author policy/standard/control (under exploration)"| MainSystem
@@ -122,7 +123,7 @@ graph TB
 | :--- | :--- | :--- | :--- | :--- |
 | Cellar/ELI | PS Service fetches EU regulatory document structure (TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH), verbatim text per element, ELI citation identity, and amendment history | Policy System | External platform service (EU Publications Office) | Ingest authoritative, structurally-addressable EU regulatory text to keep the compliance knowledge graph current, replacing non-deterministic PDF extraction as the source of truth |
 | LLM Provider | PS Service sends prompts/text for chat and embedding completions (provider-agnostic via LiteLLM: Ollama, Azure Foundry, AWS Bedrock, Anthropic, OpenAI, …) and receives generated text/embeddings back | Policy System | External platform service (LLM provider, swappable) | Enable LLM-assisted curation of regulatory/business content into the PS Conceptual Model, without coupling the system to a single LLM vendor |
-| PS-Cli | Starts, stops, and configures PS Service via its REST API. Also drives a PDF ingestion pipeline (single file or folder) producing proposed Policy/Standard/Control content and suggested edge links to existing Capabilities — **pipeline design is under exploration, not yet specified** | Policy System | External client application (command-line interface) | Enable operators to manage the PS Service lifecycle/configuration, and enable bulk ingestion of business regulation/policy documents into the governance layer |
+| PS-Cli | Starts, stops, and configures PS Service via its REST API. Also selects EU regulations for Cellar/ELI-sourced ingestion (UC-1), and drives a PDF ingestion pipeline (single file or folder) for business regulations/policies producing proposed Policy/Standard/Control content and suggested edge links to existing Capabilities — **pipeline design is under exploration, not yet specified** | Policy System | External client application (command-line interface) | Enable operators to manage the PS Service lifecycle/configuration, trigger EU regulation ingestion via Cellar/ELI, and enable bulk ingestion of business regulation/policy documents into the governance layer |
 | PS Question Skill | Sends Cypher queries to PS Service's MCP Interface and receives results, used to articulate answers to user questions | Policy System | External client application (Claude Desktop / VS Code skill) | Enable users in their agentic coding/chat environment to ask natural-language questions about regulations and policies, answered against the compliance knowledge graph |
 | Policy Editor | Enables a user to author a Policy/Standard/Control from scratch and link it via an edge to an existing Capability — **client and interaction design are under exploration, not yet specified** | Policy System | External client application (not yet designed) | Enable manual authoring of governance-layer content as an alternative to PDF-based ingestion |
 
@@ -154,7 +155,7 @@ graph TB
         PSService -->|"Cypher: read/write knowledge graph"| FalkorDB
     end
 
-    PSCli -->|"REST: lifecycle/config; PDF ingestion pipeline (under exploration)"| PSService
+    PSCli -->|"REST: lifecycle/config; regulation ingestion (Cellar/ELI selection; PDF pipeline under exploration)"| PSService
     PSSkill -->|"MCP: submit query"| PSService
     PSService -->|"Query results"| PSSkill
     PolicyEditor -.->|"REST: author policy/standard/control (under exploration)"| PSService
@@ -179,7 +180,7 @@ graph TB
 
 | Container/Service | Description | Key Responsibilities | Domain path |
 |-----|---|---|---|
-| PS Service | Backend REST API service, deployed as a single-tenant container (Podman/Kubernetes) | • Expose REST API for consuming clients (PS-Cli, Policy Editor) and an MCP interface for PS Question Skill<br/>• Ingest EU regulations via Cellar/ELI<br/>• Map raw EU regulation text into the PS Conceptual Model knowledge graph<br/>• Ingest business regulations/policies, linking governance layer to regulatory layer via Capability nodes<br/>• Expose a Cypher query interface to consuming services<br/>• Persist and query the compliance knowledge graph via FalkorDB<br/>• Access an LLM Provider via LiteLLM for content curation | ps.service |
+| PS Service | Backend REST API service, deployed as a single-tenant container (Podman/Kubernetes) | • Expose REST API for consuming clients (PS-Cli, Policy Editor) and an MCP interface for PS Question Skill<br/>• Ingest EU regulations via Cellar/ELI<br/>• Map raw EU regulation text into the PS Conceptual Model knowledge graph<br/>• Ingest business regulations/policies through the same regulatory-spine pipeline as external regulations, minting Capability nodes plus the governance-layer Policy, Standard, and Control nodes those internal sources require<br/>• Expose a Cypher query interface to consuming services<br/>• Persist and query the compliance knowledge graph via FalkorDB<br/>• Access an LLM Provider via LiteLLM for content curation | ps.service |
 | FalkorDB | Graph database storing the compliance knowledge graph, deployed as a separate container from PS Service to allow independent patching without rebuilding/redeploying PS Service | • Store the regulatory and organizational layers of the compliance knowledge graph<br/>• Execute Cypher queries issued by PS Service | ps.falkordb |
 
 
@@ -210,12 +211,12 @@ graph TB
 
 | Component | Description | Key Responsibilities | Domain path |
 | :--- | :--- | :--- | :--- |
-| Regulatory Structural Ingestion | Ingests EU regulation content from Cellar/ELI instead of PDF, producing a structurally-tagged regulation graph | Fetch regulation structure/text from Cellar/ELI; tag document structure — **exact output shape, and compatibility with Domain Mapper's input, is under exploration** | ps.service.ingestion |
+| Ingestion | Ingests EU regulation content from Cellar/ELI instead of PDF, producing a structurally-tagged regulation graph | Fetch regulation structure/text from Cellar/ELI; tag document structure — **exact output shape, and compatibility with Domain Mapper's input, is under exploration** | ps.service.ingestion |
 | Domain Mapper | Maps a regulation's structural graph into the curated, PS-domain-shaped baseline graph (Role/Requirement/Obligation/Capability) | Curate/derive PS Conceptual Model entities from structural regulation content into a canonical per-regulation baseline — **whether this component needs adaptation for Cellar-sourced input is under exploration** | ps.service.domainmapper |
 | Company Merge | Dedupes and merges a company's selected regulation baseline graphs into one single-tenant graph | Merge selected baseline graphs per company — **assumed unaffected by the Stage 1 change, not yet confirmed** | ps.service.companymerge |
 | Query Engine | Executes Cypher queries against the compliance knowledge graph on behalf of PS Question Skill and returns results | Receive Cypher queries via PS Service's query interface; execute against FalkorDB; return results with provenance | ps.service.queryengine |
 | MCP Interface | Exposes the compliance knowledge graph's Cypher query capability to PS Question Skill via the Model Context Protocol (MCP) | Accept MCP tool calls from PS Question Skill; delegate query execution to Query Engine; return results over MCP | ps.service.mcpinterface |
-| Regulatory Change Monitor | Detects when an EU regulation is amended by polling Cellar/ELI, and triggers re-ingestion of the affected regulation | Poll Cellar/ELI for regulatory amendments; trigger a new Regulatory Structural Ingestion → Domain Mapper cycle for the changed regulation; surface a delta report of affected content — **delta report shape/mechanism is under exploration** | ps.service.changemonitor |
+| Regulatory Change Monitor | Detects when an EU regulation is amended by polling Cellar/ELI, and triggers re-ingestion of the affected regulation | Poll Cellar/ELI for regulatory amendments; trigger a new Ingestion → Domain Mapper cycle for the changed regulation; surface a delta report of affected content — **delta report shape/mechanism is under exploration** | ps.service.changemonitor |
 | LLM Interface | Shared internal component wrapping LiteLLM, giving other components a single point of access to the configured LLM Provider | Route chat/embedding requests to the configured LLM Provider via LiteLLM; abstract provider-specific credentials/config away from consuming components (Domain Mapper, and potentially Query Engine/Regulatory Change Monitor) | ps.service.llminterface |
 | Logging | Shared internal component providing structured, semantic logging for every other PS Service component, giving detailed debug data during pipeline/query runs | Accept structured log entries from other components; write JSON-structured entries to the configured log sink; bind a correlation (run) ID at each primary-use-case entry point so a full pipeline/query run can be traced end to end | ps.service.logging |
 
@@ -235,19 +236,26 @@ Engineering Managers.
 
 | Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
 | :--- | :--- | :--- | :--- |
-| Query regulations and policies | PS Question Skill → PS Service MCP Interface | MCP Interface (delegates to Query Engine) | — (not a URS-defined PS Service use case; question-asking and answer synthesis are PS Question Skill's responsibility) |
+| Query regulations and policies | PS Question Skill → PS Service MCP Interface | MCP Interface (delegates to Query Engine) | UC-3 |
+
+### Regulation Ingestion Use Cases
+
+| Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
+| :--- | :--- | :--- | :--- |
+| Select and add a regulation | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge | UC-1 |
+| Govern internal regulations | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge (same pipeline as UC-1, `source_type: internal`) | UC-2 |
 
 ### Policy Managers Use Cases
 
 | Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
 | :--- | :--- | :--- | :--- |
-| Govern policy/standard/control content | Policy Editor → PS Service (under exploration) | Policy Editor backend (not yet defined) | UC-3 |
+| Govern policy/standard/control content | Policy Editor → PS Service (under exploration) | Policy Editor backend (not yet defined) | — (not yet defined in `ps-primary-use-cases.md`) |
 
 ### System Admin Use Cases
 
 | Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
 | :--- | :--- | :--- | :--- |
-| Govern policy/standard/control content (bulk PDF path) | PS-Cli → PS Service (under exploration) | PDF ingestion pipeline (not yet defined) | UC-3 |
+| Govern policy/standard/control content (bulk PDF path) | PS-Cli → PS Service (under exploration) | PDF ingestion pipeline (not yet defined) | — (not yet defined in `ps-primary-use-cases.md`) |
 
 **Purpose:** Provides traceability from user requirements (URS) to architectural implementation, ensuring all use cases are covered by the architecture.
 
