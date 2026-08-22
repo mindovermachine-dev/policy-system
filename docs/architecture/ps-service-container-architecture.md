@@ -44,7 +44,7 @@ PS Service is the Policy System's backend container: it ingests EU regulations, 
 - Ingest EU regulation structure/text from Cellar/ELI (replacing PDF extraction as the source of truth)
 - Map ingested regulatory content into the PS Conceptual Model — external regulations through Role/Requirement/Obligation/Capability; internal regulations (Business SoPs) continuing through Policy/Standard/Control via their own paired adapter
 - Merge per-regulation baselines into a single-tenant compliance graph, with cross-regulation canonical convergence (Obligation/Capability/Policy reuse)
-- Serve read-only Cypher queries to consuming clients, both directly (Query Engine) and via MCP (MCP Interface)
+- Serve read-only Cypher queries to consuming clients via MCP (MCP Interface), with guarded execution owned by Query Engine — MCP Interface is currently the only access path; no direct/REST query path exists yet
 - Detect regulatory amendments and re-trigger ingestion for the affected regulation
 
 ### Container Architectural Pattern
@@ -464,19 +464,23 @@ None — reads across all concepts, owns none.
 |---|---|---|---|---|
 | Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/query_engine/` | `ps_service.query_engine` |
 
-**Implementation Guidance:** Read-only enforcement (rejecting write clauses) happens once, here — MCP Interface delegates rather than reimplementing the guard.
+**Implementation Guidance:**
+- Read-only enforcement (rejecting write clauses) happens once, here — MCP Interface delegates rather than reimplementing the guard.
+- No query timeout or result-size cap is enforced here — acceptable while FalkorDB is only reachable locally. This becomes a real resource-exhaustion risk once it's reachable indirectly through a network-facing MCP Interface — see [MCP Interface](#mcp-interface) for the corresponding authentication gap and remote-deployment trigger.
+- **Known implementation gap:** the walking-skeleton prototype (`tools/graph-query/ps.py`, a local dev tool that talks directly to a local FalkorDB and is not itself part of this container's documented interface) was partially seeded into `ps_service/mcp_interface/cypher_cli.py` instead of here — the guard/execution logic currently lives one component over from where this document assigns it. Relocating it to `ps_service/query_engine/` and having MCP Interface call it in-process (not via `subprocess`) is outstanding work.
 
 #### Implementation Registration
 
 | Path | Purpose | Implements |
 |---|---|---|
 | `ps-service/src/ps_service/query_engine/__init__.py` | Package marker (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/mcp_interface/cypher_cli.py` | Guard/execution logic for `ExecuteCypherQuery` — implemented, but misplaced (see Implementation Guidance above); belongs here, not under `mcp_interface/` | `ExecuteCypherQuery` (pending relocation) |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ExecuteCypherQuery | Execute a read-only Cypher query against the graph, return results with structure suitable for provenance tracing | No (deferred) | Read-only enforced at execution (write clauses rejected before execution) | Query is syntactically valid Cypher | None (read-only) | None | FalkorDB | < 2s (draft target, not load-tested) | Yes | Reject write-clause queries with a clear `error:` result, not a stack trace; surface FalkorDB errors verbatim |
+| ExecuteCypherQuery | Execute a read-only Cypher query against the graph; returns raw tabular results — whether they carry provenance (`source_ref`, node IDs, etc.) depends on what the caller's `RETURN` clause selects, not on any enrichment this action performs | No (internal call — not directly network-reachable; see MCP Interface for the network-facing auth decision) | Read-only enforced at execution: `CREATE`/`MERGE`/`DELETE`/`SET`/`REMOVE`/`DROP`/`FOREACH` are rejected before execution | Query is syntactically valid Cypher | On success: `{columns: [...], rows: [...], row_count: N}`. On rejection or failure: an `error: <message>` string; a rejected write-clause query is never sent to FalkorDB | None | FalkorDB | < 2s (draft target, not load-tested); no query timeout or result-size cap defined yet — an open risk once reachable over the network rather than only locally (see Implementation Guidance) | Yes | Write-clause queries rejected with `error: <message>` before execution, not a stack trace; FalkorDB errors surfaced verbatim as `error: <exception message>` |
 
 ---
 
@@ -484,7 +488,7 @@ None — reads across all concepts, owns none.
 
 #### Domain Concepts
 
-None — transport layer.
+None — transport layer; it may serve read-only reference content (e.g. the domain schema itself) as an MCP resource, but owns no domain concept node or edge.
 
 #### Kind
 
@@ -492,19 +496,26 @@ None — transport layer.
 |---|---|---|---|---|
 | Internal component (Python package) | `mcp` SDK | Python 3.14 | `ps-service/src/ps_service/mcp_interface/` | `ps_service.mcp_interface` |
 
-**Implementation Guidance:** Seeded from the existing `tools/graph-query/{mcp_server.py, ps.py}` prototype. Delegates to Query Engine for execution — do not re-implement the write-clause guard here.
+**Implementation Guidance:**
+- Seeded from the existing `tools/graph-query/{mcp_server.py, ps.py}` prototype, which is a local dev tool (talks directly to a local FalkorDB) and is not itself part of this container's documented interface. Delegates to Query Engine for execution — do not re-implement the write-clause guard here.
+- **GetDomainConcepts** is served via MCP's Resources primitive (`resources/list`/`resources/read`), not the `cypher` tool — a different MCP mechanism for "fetch this content" vs. "execute this query." It returns `ps-domain-concepts.md` verbatim, deliberately with no derived/restructured schema representation of its own — a second copy of the same facts would just be another thing to keep in sync, the same duplication risk already avoided elsewhere in this document. This becomes necessary, not optional, once client and service no longer share a machine: the `policy-question` skill's current grounding step ("read `docs/artifacts/ps-domain-concepts.md` locally") has no equivalent for a remote client and needs to become "fetch this resource over MCP" instead — that's a follow-up change to the skill itself, out of scope for this document.
+- **Transport:** the prototype uses MCP's stdio transport — a locally-spawned child process, which is only appropriate when the client (Claude Desktop) and PS Service run on the same machine, the setup validated so far. Once PS Service is deployed as a remote backend, this component must instead speak a network-reachable MCP transport (Streamable HTTP, MCP's current recommended remote transport), hosted within the same process/container as the REST entry-point layer (`ps_service/api/`) rather than as a separate network service — see [Implementation Guide](#implementation-guide). No specific web framework is committed for this yet; that choice belongs to L2/implementation, not this document.
+- **Authentication is explicitly open, not resolved:** deferred while PS Service and its clients run on the same local machine (one trust boundary already covers both), but this must be decided before any remote deployment. Combined with Query Engine's lack of a query timeout/result-size cap (see [Query Engine](#query-engine)), a network-reachable MCP Interface without auth is an unbounded, unauthenticated Cypher endpoint — do not treat the current "No (deferred)" as safe-by-default once remote hosting is in scope.
 
 #### Implementation Registration
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/mcp_interface/__init__.py` | Package marker (scaffold only — no logic yet; seed migration from `tools/graph-query/` still pending) | — |
+| `ps-service/src/ps_service/mcp_interface/__init__.py` | Package marker | — |
+| `ps-service/src/ps_service/mcp_interface/mcp_server.py` | MCP stdio server wrapping guarded Cypher execution — implemented; transport needs updating for remote deployment (see Implementation Guidance above) | `HandleMcpToolCall` |
+| `ps-service/src/ps_service/mcp_interface/cypher_cli.py` | Guard/execution logic — implemented, but belongs under `query_engine/` (see [Query Engine](#query-engine)'s Implementation Guidance); not yet relocated | `ExecuteCypherQuery` (misplaced — see Query Engine) |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| HandleMcpToolCall | Accept an MCP `cypher` tool call from PS Question Skill, delegate to Query Engine, return results over MCP | No (deferred) | Same read-only enforcement as Query Engine (delegated, not reimplemented) | MCP client is connected | None (delegates to a read-only action) | None | Query Engine (internal call) | Bounded by Query Engine's SLA plus MCP transport overhead | Yes | Propagate Query Engine's error result verbatim; do not reinterpret or mask it |
+| HandleMcpToolCall | Accept an MCP `cypher` tool call from PS Question Skill, delegate to Query Engine, return results over MCP | No (deferred — safe while client and service share a machine; must be decided before remote deployment, see Implementation Guidance) | Same read-only enforcement as Query Engine (delegated, not reimplemented) | MCP client is connected (today: a locally-spawned stdio process; a remote transport's connection semantics are not yet defined) | Returns Query Engine's `{columns, rows, row_count}` or `error: <message>` result unmodified | None | Query Engine (internal call) | Bounded by Query Engine's SLA plus MCP transport overhead | Yes | Propagate Query Engine's error result verbatim; do not reinterpret or mask it |
+| GetDomainConcepts | Serve `ps-domain-concepts.md`'s current content as an MCP resource, so a client without local repo access (e.g. Claude Desktop connected to a remote PS Service) can ground itself in the canonical schema/vocabulary instead of assuming a local file path | No (deferred — same posture as HandleMcpToolCall; static, read-only reference content) | Read-only; serves static repo content, not graph data | `docs/artifacts/ps-domain-concepts.md` exists and is readable by the running process | Returns the file's current content verbatim, addressed by a stable MCP resource URI | None | Local filesystem (the repo's own `docs/artifacts/`, not FalkorDB) | < 100ms (static file read) | Yes | A missing/unreadable file surfaces a clear MCP resource-read error, not a stack trace |
 
 ---
 
@@ -658,11 +669,11 @@ sequenceDiagram
     alt read-only query
         QE->>DB: execute MATCH/RETURN
         DB-->>QE: columns, rows, row_count
-        QE-->>MCP: QueryResult
-        MCP-->>Skill: QueryResult
+        QE-->>MCP: {columns, rows, row_count}
+        MCP-->>Skill: {columns, rows, row_count}
     else write-clause query (CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH)
-        QE-->>MCP: error result (rejected before execution)
-        MCP-->>Skill: error result (propagated verbatim)
+        QE-->>MCP: error: <message> (rejected before execution)
+        MCP-->>Skill: error: <message> (propagated verbatim)
     end
 ```
 
@@ -675,7 +686,7 @@ sequenceDiagram
 | UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Regulatory Change Monitor | Fully covered by this container's ingestion pipeline |
 | UC-2: Govern internal regulations | Ingestion, Domain Mapper, Company Merge | Same pipeline as UC-1 (`source_type: internal`), but via an internal-source adapter pair that continues past Capability through Policy/Standard/Control (`DeriveGovernanceArtifacts`) — external regulations never reach this step. **Inherited gap from Solution Architecture, not resolved here:** no human role/component is confirmed as the one who triggers ingestion of internal regulations |
 | Govern policy/standard/control content (not yet defined in `ps-primary-use-cases.md`) | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
-| UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Fully covered |
+| UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Fully covered for the validated setup (client and service on one machine, MCP stdio transport). Remote deployment — the stated production target — additionally requires the transport, authentication, and resource-bounding work flagged under [MCP Interface](#mcp-interface) |
 
 ---
 
@@ -689,7 +700,7 @@ The Solution Architecture's own NFR Realization table is currently an unpopulate
 
 Implementation details (packages, middleware, configuration, testing infrastructure) live in the project's L2 coding standards — [`docs/coding-standards/level2-python-instructions.md`](../coding-standards/level2-python-instructions.md) — not here. This document records WHAT components exist and HOW they interact; the L2 doc records HOW to build them.
 
-The REST entry-point layer (`ps-service/src/ps_service/api/`) that routes external PS-Cli/Policy Editor requests to these components is implementation wiring, not a named component — see [Container Architectural Pattern](#container-architectural-pattern).
+The REST entry-point layer (`ps-service/src/ps_service/api/`) that routes external PS-Cli/Policy Editor requests to these components is implementation wiring, not a named component — see [Container Architectural Pattern](#container-architectural-pattern). Once MCP Interface is deployed remotely, its network transport is expected to be hosted within this same process rather than as a separate service — see [MCP Interface](#mcp-interface).
 
 ---
 
