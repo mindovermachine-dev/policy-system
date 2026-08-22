@@ -38,9 +38,11 @@ The model has two layers:
 
 **Orthogonal to that layering is a second axis: where a node's data actually originates.**
 - **Regulatory** (`Regulation`, `Role`, `Requirement`, `Obligation`, `Capability`) — every property on these nodes is either lifted directly from regulatory text or derived transitively from it (see [Provenance Placement Rule](#provenance-placement-rule)). Nothing here is authored by a consumer of the model.
-- **Governance** (`Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath`) — authored by the organization consuming the compliance spine: policy managers, engineering teams, risk owners. None of these nodes carries a `source_ref`; their provenance is organizational (`owner_id`, `status`, `evidence_ref`), not regulatory.
+- **Governance** (`Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath`) — authored by the organization consuming the compliance spine: policy managers, engineering teams, risk owners, via Policy Editor. None of these nodes carries a `source_ref`; their provenance is organizational (`owner_id`, `status`, `evidence_ref`), not regulatory.
 
-The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes that stay on the compliance spine — audit traceability from `Regulation` to `Control` is unbroken even though the data on the last three hops is organizationally authored, not regulatory. `PracticeArea`/`RiskPath` are Governance nodes that sit outside the spine entirely.
+`Policy`/`Standard`/`Control` have a second possible origin, specific to `internal` Regulations. An `external` Regulation's ingestion pipeline always stops at `Capability`. An `internal` Regulation (an organizationally-authored Business SoP) is paired with a Domain Mapping Adapter that instead extracts all the way down the spine to `Control` — the same LLM-driven mint/match mechanism already used for `Role`/`Requirement`/`Obligation`/`Capability`, extended one source type further. A `Policy`/`Standard`/`Control` instance produced this way carries a `confidence` score, same as every other LLM-derived node; a human-authored instance (via Policy Editor) carries no `confidence`. This is an instance-level distinction, not a node-type one — the same `Policy` node type can be reached either way.
+
+The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes that stay on the compliance spine — audit traceability from `Regulation` to `Control` is unbroken whether the last three hops are internal-SoP-derived or organizationally authored. `PracticeArea`/`RiskPath` are Governance nodes that sit outside the spine entirely, always human-authored.
 
 | Node | Layer | Origin |
 |------|-------|--------|
@@ -56,6 +58,8 @@ The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes 
 | RiskPath | Classification | Governance |
 
 No node is both Classification and Regulatory — everything regulation-derived stays on the spine; only spine-adjacent, consumer-authored nodes are ever classification-only.
+
+`Policy`/`Standard`/`Control`'s Governance origin is the default case (human-authored via Policy Editor); an instance derived from an `internal` Regulation via its Domain Mapping Adapter is the exception — see above.
 
 ---
 
@@ -126,14 +130,22 @@ that says what it *carries* and why.
    so neither edge repeats it.
 3. **Not applicable — no regulatory fact to place** — the edge doesn't
    sit on the Regulation-provenance chain at all. Classification-layer
-   edges (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`) and
-   consumer-governance edges below Capability (`GOVERNED_BY`,
-   `SUPPORTED_BY`, `IMPLEMENTED_BY`) qualify: Policy/Standard/Control are
-   authored by the consumer of the compliance spine, not derived from
-   regulatory text, so there is no `source_ref` to omit in the first
-   place. Their provenance is a different kind of fact — who owns it,
-   what evidence backs it — carried on node properties (`owner_id`,
-   `evidence_ref`) where it actually belongs, not forced into this rule.
+   edges (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`) qualify
+   unconditionally. `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` qualify
+   only when their target Policy/Standard/Control is human-authored (via
+   Policy Editor) — content the consumer authored directly has no
+   regulatory fact to omit. Their provenance in that case is a different
+   kind of fact — who owns it, what evidence backs it — carried on node
+   properties (`owner_id`, `evidence_ref`) where it actually belongs, not
+   forced into this rule.
+
+   When the target Policy/Standard/Control is instead derived from an
+   `internal` Regulation via its Domain Mapping Adapter,
+   `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` fall under **case 2**
+   instead: the originating Regulation article is recoverable by walking
+   `GOVERNED_BY`→`REQUIRES`→`SATISFIED_BY`→`EXPRESSES` back to it, the
+   same transitive treatment already given to `REQUIRES` one hop up —
+   no edge property is added for this case either.
 
 ---
 
@@ -156,9 +168,9 @@ full cross-model shape and provenance rationale at once.
 | `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
 | `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
 | `VERIFIED_BY` | RiskPath → Control | 1 : 0..* | — | 3 — classification layer |
-| `GOVERNED_BY` | Capability → Policy | 1 : 0..* | — | 3 — consumer-governance, not regulation-derived |
-| `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 — consumer-governance |
-| `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 — consumer-governance |
+| `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived |
+| `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 if Standard is human-authored; 2 (recoverable via `GOVERNED_BY` onward) if internal-SoP-derived |
+| `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 if Control is human-authored; 2 (recoverable via `SUPPORTED_BY` onward) if internal-SoP-derived |
 
 ---
 
@@ -362,7 +374,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `REQUIRES` (inbound) | Obligation | 0..* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
 | `COVERS` (inbound) | PracticeArea | 0..* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
 | `MITIGATED_BY` (inbound) | RiskPath | 0..* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
-| `GOVERNED_BY` (outbound) | Policy | 1 : 0..* | — | See [Policy → GOVERNED_BY](#policy). |
+| `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). |
 
 ---
 
@@ -371,6 +383,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 **Description:** An organizational commitment governing how one or more Capabilities must be achieved. Policy is where accountability actually attaches to the generic model: the "what capacity must exist" of a Capability becomes "who owns making it happen and how it's reviewed" (owner, review cycle, approval status) once it reaches Policy. A single Policy commonly governs several Capabilities at once — e.g. one "Data Protection Policy" governing encryption, logging, and access-control capabilities together — rather than each Capability answering to its own policy; different business contexts or risk tolerances are handled by minting a distinct Capability, not by a Capability answering to more than one Policy.
 
 **Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `approved` → `deprecated` status workflow.
+
+Alternatively, matched/minted by the internal-source Domain Mapping Adapter when derived from an `internal` Regulation (a Business SoP) — the same LLM-driven mechanism already used for Obligation/Capability, extended past `Capability` for internal sources only (external sources stop at `Capability`). A Policy instance is one or the other, never both; see [Document Purpose](#document-purpose).
 
 **Node label:** `Policy`
 **Identity:** `pol_{slug}_{hash}` (e.g. `pol_data_protection_a8f3b1`) — content-derived from the Policy's own `title`, deliberately **not** derived from a governed Capability. `ps-domain-concepts.md` originally specified `pol_{capability_slug}_{capability_type}`, but that formula only encodes a single Capability — incoherent the moment a Policy governs more than one, which is exactly its own worked example above. Deriving from the Policy's own title instead avoids that, the same fix already applied to Obligation and Capability: identity comes from what the node itself is, never from what it happens to be connected to.
@@ -384,13 +398,14 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `owner_id` | string | No | |
 | `status` | enum: `draft` \| `approved` \| `deprecated` | Yes | |
 | `version` | string | No | |
+| `confidence` | float, 0.0–1.0 | No | Present only when this Policy is internal-SoP-derived — the extracting LLM's own certainty in matching/minting this Policy for the governing Capability. Absent on human-authored (Policy Editor) instances, same as `jurisdiction` on Regulation is conditional on `source_type`. |
 
 #### Relationships
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `OWNS` (inbound) | PracticeArea | 0..* : 1 | — | See [PracticeArea → OWNS](#practicearea). Starter baseline should enforce exactly one owning PracticeArea per active Policy. |
-| `GOVERNED_BY` (inbound) | Capability | 1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
+| `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
 
 ---
@@ -400,6 +415,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 **Description:** Implementation guidance for how a Policy is actually to be achieved — procedures, technical specifications, and testing expectations that turn a Policy's organizational commitment into something concrete enough to build and verify. Standard is the "how" beneath Policy's "what," the same relationship Capability has to Obligation one layer up. Unlike Obligation, Capability, and Policy, a Standard is **not** a canonical, cross-context concept: it supports exactly one Policy, so a distinct Standard is minted per Policy rather than one Standard answering to several Policies — which is exactly why its identity (see below) can safely be derived from the Policy it supports.
 
 **Lifecycle:** Developed by policy managers or technical teams once a Policy exists; revised when that Policy changes or the underlying technology evolves. Moves through a `draft` → `implemented` → `reviewed` → `deprecated` status workflow, mirroring Policy's own governance cadence.
+
+Alternatively, matched/minted by the internal-source Domain Mapping Adapter once its parent Policy is internal-SoP-derived — see [Policy](#policy).
 
 **Node label:** `Standard`
 **Identity:** `std_{POLICY}_{VERSION}` (e.g. `std_pol_data_protection_a8f3b1_v1`) — derived from the Policy it supports plus version. This is the same weak-entity pattern used for Requirement's identity (not the canonical-hash pattern used for Obligation/Capability/Policy): a Standard exists only in the context of exactly one Policy, so encoding that ownership in the ID is safe — there's no cross-Policy reuse to protect against.
@@ -412,6 +429,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `description` | string | No | |
 | `implementation_status` | enum: `draft` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
 | `version` | string | No | |
+| `confidence` | float, 0.0–1.0 | No | Present only when this Standard is internal-SoP-derived — same conditional as Policy's `confidence`. Absent on human-authored instances. |
 
 #### Relationships
 
@@ -428,6 +446,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Lifecycle:** Implemented by engineering teams once a Standard exists; tested and revalidated on `execution_frequency`; updated when the Standard changes or the underlying technology evolves. Moves through a `planned` → `implemented` → `reviewed` → `deprecated` status workflow. Execution evidence is retained permanently for audit purposes; the evidence store itself is out of scope for this document — `evidence_ref` is an opaque pointer into it, not a modeled relationship.
 
+Alternatively, matched/minted by the internal-source Domain Mapping Adapter once its parent Standard is internal-SoP-derived — see [Policy](#policy). Operational fields (`execution_frequency`, `last_test_date`, `next_review_date`, `evidence_ref`) are never populated by the adapter on mint — they stay null until engineering teams fill them in during actual implementation/testing, the same as for a human-authored Control.
+
 **Node label:** `Control`
 **Identity:** `ctrl_{STANDARD}_{TYPE}` (e.g. `ctrl_std_pol_data_protection_a8f3b1_v1_automated`) — derived from the Standard it verifies plus control type, the same weak-entity pattern as Standard's own identity: a Control exists only to verify exactly one Standard, so there's no cross-Standard reuse to protect against.
 
@@ -443,6 +463,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `last_test_date` | date (ISO 8601) | No | |
 | `next_review_date` | date (ISO 8601) | No | |
 | `evidence_ref` | string | No | Opaque pointer into an external evidence/audit store; that store is out of scope for this document. |
+| `confidence` | float, 0.0–1.0 | No | Present only when this Control is internal-SoP-derived — same conditional as Policy's `confidence`. Absent on human-authored instances. |
 
 #### Relationships
 
@@ -487,9 +508,42 @@ Path: CRA Art. 11 obliges Manufacturers to "Maintain Security Monitoring" → th
 
 Path: internal Engineering Practices Sec. 4.2 obliges Service Owners to "Maintain Structured Access Logging" → that requires the *same* "Security Logging" Capability CRA already required → governed by the *same* "Data Protection Policy" → implemented via its own "Structured Access Log Format Standard" → verified by its own Control.
 
+### Example 3 — Internal SoP, Full-Depth Derivation (`source_type: internal`)
+
+Unlike Example 2, which converges onto Example 1's pre-existing, human-authored Policy, this chain has no existing Capability to match against — its internal-source Domain Mapping Adapter mints Policy/Standard/Control itself, all the way to Control, in the same pass. Every node from Capability down carries `confidence`, and Policy/Standard/Control default to the earliest state in their status workflow (`draft`/`draft`/`planned`) since no human has reviewed them yet.
+
+| Node | Identity | Key Properties |
+|------|----------|-----------------|
+| `Regulation` | `INFRASEC-1.0` | `source_type`: `internal`, `title`: "Infrastructure Security Practices", `jurisdiction`: *(not set — org-wide)*, `effective_date`: `2026-03-01`, `version`: `1.0`, `status`: `active` |
+| `Role` | `role_platform_engineer_6c1a9f` | `name`: "Platform Engineer" — `DEFINES` edge from `INFRASEC-1.0`, `source_ref`: "Sec. 2.1" |
+| `Requirement` | `INFRASEC-1.0_req_art_2.3` | `text`: "Platform engineers shall enforce least-privilege access on all production infrastructure credentials", `type`: `requirement` — `EXPRESSES` edge from `INFRASEC-1.0`, `source_ref`: "Sec. 2.3" |
+| `Obligation` | `obl_least_privilege_access_3d8e21` | `text`: "Enforce Least-Privilege Access" — `HAS` from `Platform Engineer`, `SATISFIED_BY` from `INFRASEC-1.0_req_art_2.3` |
+| `Capability` | `cap_credential_access_control_f4a712` | `name`: "Credential Access Control" — `REQUIRES` from the Obligation above; a new Capability, not matched to any existing one |
+| `Policy` | `pol_credential_governance_9b2c05` | `title`: "Credential Governance Policy", `status`: `draft`, `confidence`: `0.88` — minted (not matched) by the internal-source Domain Mapping Adapter, `GOVERNED_BY` from the Capability above |
+| `Standard` | `std_pol_credential_governance_9b2c05_v1` | `title`: "Least-Privilege IAM Role Standard", `implementation_status`: `draft`, `confidence`: `0.83` — `SUPPORTED_BY` from the Policy above |
+| `Control` | `ctrl_std_pol_credential_governance_9b2c05_v1_automated` | `type`: `automated`, `title`: "Automated IAM Policy Drift Check", `implementation_status`: `planned`, `confidence`: `0.79` — `IMPLEMENTED_BY` from the Standard above |
+
+Path: internal Infrastructure Security Practices Sec. 2.3 obliges Platform Engineers to "Enforce Least-Privilege Access" → that requires a new "Credential Access Control" Capability → the same adapter run mints a "Credential Governance Policy" to govern it → a "Least-Privilege IAM Role Standard" to implement that Policy → an automated Control to verify the Standard, each hop a mint/match decision the LLM records its own confidence for, none of it yet touched by a policy manager or engineering team.
+
+```mermaid
+graph LR
+    INFRASEC["INFRASEC-1.0<br/>(internal)"] -->|DEFINES| PlatformEng["Platform Engineer"]
+    INFRASEC -->|EXPRESSES| ReqInfra["INFRASEC-1.0_req_art_2.3"]
+    ReqInfra -->|SATISFIED_BY| OblInfra["Enforce Least-Privilege<br/>Access"]
+    PlatformEng -->|HAS| OblInfra
+    OblInfra -->|REQUIRES| CapInfra["Credential Access<br/>Control"]
+    CapInfra -->|"GOVERNED_BY<br/>{confidence: 0.88}"| PolInfra["Credential Governance<br/>Policy (draft)"]
+    PolInfra -->|"SUPPORTED_BY<br/>{confidence: 0.83}"| StdInfra["Least-Privilege IAM<br/>Role Standard (draft)"]
+    StdInfra -->|"IMPLEMENTED_BY<br/>{confidence: 0.79}"| CtrlInfra["Automated IAM Policy<br/>Drift Check (planned)"]
+```
+
+*(`{confidence}` is shown on the edge above only for diagram readability — per the [Edge Catalog](#edge-catalog), `confidence` is a node property on Policy/Standard/Control themselves, not an edge property.)*
+
 ### Convergence
 
 Both chains are independent above `Capability`: different Regulations, different Roles, different Requirements, different Obligation text. They merge at `cap_security_logging_c4d9e2` and stay merged through `Policy`, then diverge again at `Standard`/`Control` because CRA's retention concern and the internal format concern are implemented and verified differently. This is the shape the model is designed to produce — regulation-specific duties converging onto shared, reusable capacity and governance, without forcing a single implementation or verification path.
+
+Example 3 above is deliberately the opposite case: no existing Capability to converge onto, so the same internal-source adapter run that mints Role/Requirement/Obligation/Capability keeps going and mints Policy/Standard/Control too, all in one pass. Both are legitimate outcomes of the same internal-source adapter — which one happens depends only on whether a matching Capability (and, transitively, Policy) already exists at merge time.
 
 ```mermaid
 graph LR

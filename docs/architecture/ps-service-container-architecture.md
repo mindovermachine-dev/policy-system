@@ -42,8 +42,8 @@ PS Service is the Policy System's backend container: it ingests EU regulations, 
 ### Container Purpose
 
 - Ingest EU regulation structure/text from Cellar/ELI (replacing PDF extraction as the source of truth)
-- Map ingested regulatory content into the PS Conceptual Model (Regulation/Role/Requirement/Obligation/Capability)
-- Merge per-regulation baselines into a single-tenant compliance graph, with cross-regulation canonical convergence (Obligation/Capability reuse)
+- Map ingested regulatory content into the PS Conceptual Model — external regulations through Role/Requirement/Obligation/Capability; internal regulations (Business SoPs) continuing through Policy/Standard/Control via their own paired adapter
+- Merge per-regulation baselines into a single-tenant compliance graph, with cross-regulation canonical convergence (Obligation/Capability/Policy reuse)
 - Serve read-only Cypher queries to consuming clients, both directly (Query Engine) and via MCP (MCP Interface)
 - Detect regulatory amendments and re-trigger ingestion for the affected regulation
 
@@ -97,7 +97,8 @@ graph TB
     ChangeMonitor -->|"poll for amendments"| Cellar
     ChangeMonitor -->|"trigger re-ingestion"| Ingestion
 
-    Ingestion -->|"structural graph"| DomainMapper
+    Ingestion -->|"write native graph"| FalkorDB
+    DomainMapper -->|"read native graph"| FalkorDB
     DomainMapper -->|"baseline graph"| CompanyMerge
     CompanyMerge -->|"write"| FalkorDB
 
@@ -144,8 +145,8 @@ graph TB
 
 | Component name | Domain Path | Key responsibilities |
 |---|---|---|
-| Ingestion | `ps.service.ingestion` | Fetch regulation structure/text from Cellar/ELI; register Regulation bibliographic metadata |
-| Domain Mapper | `ps.service.domainmapper` | LLM-driven extraction of Role/Requirement; derive Obligation/Capability |
+| Ingestion | `ps.service.ingestion` | Fetch regulation structure/text via a pluggable Ingestion Adapter (Cellar/ELI first); register Regulation bibliographic metadata; persist the source's native structural graph to FalkorDB |
+| Domain Mapper | `ps.service.domainmapper` | Read a source's native structural graph via a paired Domain Mapping Adapter; LLM-driven extraction of Role/Requirement; derive Obligation/Capability |
 | Company Merge | `ps.service.companymerge` | Merge per-regulation baseline graphs into the single-tenant graph; dedupe canonical nodes |
 | Query Engine | `ps.service.queryengine` | Execute read-only Cypher queries against the graph |
 | MCP Interface | `ps.service.mcpinterface` | Expose Query Engine to PS Question Skill via MCP |
@@ -158,13 +159,14 @@ graph TB
 | Domain Concept | Component Name | Domain Path | Implementation Notes |
 |---|---|---|---|
 | Regulation | Ingestion | `ps.service.ingestion` | Bibliographic metadata (`title`, `jurisdiction`, `effective_date`, `version`) is direct Cellar/ELI structural data — no LLM extraction needed to create this node |
-| Role | Domain Mapper | `ps.service.domainmapper` | LLM-extracted from Ingestion's structural output; `DEFINES` edge with `source_ref` |
+| Native structural elements (adapter-defined, e.g. TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH for Cellar/ELI) | Ingestion (write, via source-specific Ingestion Adapter) + Domain Mapper (read, via paired Domain Mapping Adapter) | `ps.service.ingestion`, `ps.service.domainmapper` | Not a fixed, project-wide domain concept — each source's Ingestion Adapter persists its own native hierarchy as-is; only its paired Domain Mapping Adapter knows how to read that shape. A new regulatory source (e.g. SOX, HIPAA) means adding a new matched adapter pair, not extending a shared schema |
+| Role | Domain Mapper | `ps.service.domainmapper` | LLM-extracted from the native structural graph via the Domain Mapping Adapter; `DEFINES` edge with `source_ref` |
 | Requirement | Domain Mapper | `ps.service.domainmapper` | LLM-extracted; `EXPRESSES` edge with `source_ref` |
 | Obligation | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations via the content-hash identity |
 | Capability | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation |
-| Policy | Domain Mapper (mint/match) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation/Capability — canonical, content-hash identity derived from the Policy's own `title` alone |
-| Standard | Domain Mapper | `ps.service.domainmapper` | Weak-entity identity derived from its Policy + version — scoped to exactly one Policy, no cross-source dedup needed |
-| Control | Domain Mapper | `ps.service.domainmapper` | Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
+| Policy | Domain Mapper (mint/match, internal sources only) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | External-source regulations stop at Capability — Policy is only mint/matched here for `source_type: internal`, via that source's Domain Mapping Adapter, linked from Capability via `GOVERNED_BY`. Human-authored Policy (via Policy Editor, outside this container) is the other origin; canonical, content-hash identity derived from the Policy's own `title` alone applies either way |
+| Standard | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `SUPPORTED_BY` from its parent Policy. Weak-entity identity derived from its Policy + version — scoped to exactly one Policy, no cross-source dedup needed |
+| Control | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `IMPLEMENTED_BY` from its parent Standard. Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
 
 **Not implemented by any PS Service component:** `PracticeArea`, `RiskPath` — these are Governance-layer concepts authored by policy managers through the Policy Editor client, which is a separate, not-yet-designed container per the Solution Architecture doc. This document does not invent a mapping for them.
 
@@ -197,26 +199,53 @@ graph TB
 | `version` | Version string | string | — | — | Required |
 | `status` | `active` \| `superseded` \| `vacated` | enum | — | — | Required |
 
+##### Native Structural Graph (adapter-defined)
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Source-native shape, not a fixed schema | Each Ingestion Adapter persists whatever hierarchy its source actually has (e.g. Cellar/ELI: TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH) — no generic/common node schema is imposed across sources |
+| Implicit contract with Domain Mapper | The shape an Ingestion Adapter writes is only ever read by its paired Domain Mapping Adapter (see [Domain Mapper](#domain-mapper)) — adapter pairs are added and changed together |
+| Anchored to Regulation | Every native structural node links back to its Regulation node (directly or transitively) so the full verbatim text stays traceable after Domain Mapper's extraction pass |
+
+###### Attributes (Cellar/ELI Adapter)
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `element_type` | `TITLE` \| `CHAPTER` \| `SECTION` \| `ARTICLE` \| `PARAGRAPH` | enum | — | — | Required; Cellar/ELI-specific — other adapters define their own vocabulary |
+| `text` | Verbatim text of this structural element | string | — | — | Required |
+| `citation_ref` | ELI citation identifying this element | string | — | — | Required; used as `source_ref` by Domain Mapper's extraction edges |
+| `order` | Position among siblings | integer | — | — | Required |
+
 #### Kind
 
 | Kind | Framework | Language | Project Pattern | Namespace Pattern |
 |---|---|---|---|---|
-| Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/ingestion/` | `ps_service.ingestion` |
+| Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/ingestion/`, adapters under `ps-service/src/ps_service/ingestion/adapters/` | `ps_service.ingestion`, `ps_service.ingestion.adapters` |
 
-**Implementation Guidance:** Stateless — no persistent state of its own beyond what it writes to FalkorDB via `RegisterRegulationVersion`.
+**Implementation Guidance:**
+- Stateless — no persistent state of its own beyond what it writes to FalkorDB via `RegisterRegulationVersion` and `PersistNativeStructuralGraph`.
+- Source-specific fetch/persist logic lives behind an Ingestion Adapter interface (`ps_service.ingestion.adapters.base`), one concrete adapter per regulatory source. The Cellar/ELI Adapter is the only implementation for this walking skeleton; adding SOX/HIPAA/FDA later means adding a new adapter, not modifying Ingestion's core.
+- An Ingestion Adapter's output shape is an implicit contract with its paired Domain Mapping Adapter (see [Domain Mapper](#domain-mapper)) — not enforced by a shared schema, so the two must be reviewed/changed together.
+- Retry policy for Cellar/ELI fetch failures is deliberately not built into this component — `FetchRegulationStructure` fails clearly and lets the caller (manual UC-1 trigger, or Regulatory Change Monitor's next poll cycle) decide whether to retry.
+- Pagination/chunking strategy for very large regulations is an L2 implementation concern, not decided here.
 
 #### Implementation Registration
 
 | Path | Purpose | Implements |
 |---|---|---|
 | `ps-service/src/ps_service/ingestion/__init__.py` | Package marker (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/ingestion/adapters/base.py` | Ingestion Adapter interface (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli.py` | Cellar/ELI Ingestion Adapter (scaffold only — no logic yet) | — |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| FetchRegulationStructure | Fetch a regulation's document structure (TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH) and verbatim text from Cellar/ELI by ELI citation | No (deferred — see SA Risks & Concerns) | n/a (deferred) | ELI identifier is known/selected | Structural text staged for Domain Mapper; no graph writes yet | None (read-only against Cellar/ELI) | Cellar/ELI | Best-effort; no target set | Yes | Return a clear fetch error if the ELI reference doesn't resolve or Cellar/ELI is unreachable; no partial state |
+| FetchRegulationStructure | Fetch a regulation's document structure and verbatim text from Cellar/ELI by ELI citation, via the Cellar/ELI Ingestion Adapter | No (deferred — see SA Risks & Concerns) | n/a (deferred) | ELI identifier is known/selected | Structural text held in memory, ready for `PersistNativeStructuralGraph`; no graph writes yet | None (read-only against Cellar/ELI) | Cellar/ELI | Best-effort; no target set | Yes | Return a clear fetch error if the ELI reference doesn't resolve or Cellar/ELI is unreachable; no partial state |
 | RegisterRegulationVersion | Create/update the Regulation node's bibliographic metadata directly from Cellar/ELI's structured metadata | No (deferred) | n/a (deferred) | FetchRegulationStructure succeeded | Regulation node exists with `status: active`; prior version's `SUPERSEDED_BY` set if this is a new version | Writes to FalkorDB | FalkorDB | < 2s | Yes (same id+version → no duplicate) | Reject with a clear error if required properties are missing from Cellar/ELI metadata; no partial node |
+| PersistNativeStructuralGraph | Persist the fetched structure as native structural nodes (shape defined by the Cellar/ELI Adapter), linked to the Regulation node | No (deferred) | n/a (deferred) | RegisterRegulationVersion succeeded | Native structural graph exists in FalkorDB, anchored to the Regulation node; every element retains verbatim text and its ELI `citation_ref` | Writes to FalkorDB | FalkorDB | Not yet set — bounded by document size | Yes (structural nodes keyed by Regulation id+version + `citation_ref`; re-persisting an already-registered version is a no-op) | Abort with no partial write if structure can't be fully persisted; surface a clear error |
 
 ---
 
@@ -261,9 +290,11 @@ graph TB
 
 ##### Obligation / Capability / Policy
 
-See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-source match/mint step for all three; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-source convergence for them.
+See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-source match/mint step for Obligation/Capability always, and for Policy only when `source_type: internal`; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-source convergence for all three.
 
 ##### Standard
+
+Only mint/matched for `source_type: internal` — see [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping). Per [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#standard), a Standard's other origin (human-authored, once its Policy is human-authored) lies outside this container.
 
 ###### Constraints
 
@@ -279,8 +310,11 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | `description` | Free-text description | string | — | — | Optional |
 | `implementation_status` | `draft` \| `implemented` \| `reviewed` \| `deprecated` | enum | — | — | Required |
 | `version` | Version identifier | string | — | — | Optional |
+| `confidence` | Extraction confidence | float | 0.0 | 1.0 | Required whenever Domain Mapper mints/matches this Standard (i.e. always, for the internal-source path this component implements) |
 
 ##### Control
+
+Only mint/matched for `source_type: internal` — see [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping). Per [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#control), operational fields below are never populated on mint — they stay null until engineering teams fill them in during actual implementation/testing.
 
 ###### Constraints
 
@@ -296,31 +330,39 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | `title` | Control title | string | — | — | Required |
 | `description` | Free-text description | string | — | — | Optional |
 | `implementation_status` | `planned` \| `implemented` \| `reviewed` \| `deprecated` | enum | — | — | Required |
-| `execution_frequency` | Re-verification cadence | string | — | — | Optional |
-| `last_test_date` | Last verification date | date (ISO 8601) | — | — | Optional |
-| `next_review_date` | Next scheduled verification | date (ISO 8601) | — | — | Optional |
-| `evidence_ref` | Opaque pointer into an external evidence/audit store (out of scope for this document) | string | — | — | Optional |
+| `execution_frequency` | Re-verification cadence | string | — | — | Optional; never set by Domain Mapper on mint |
+| `last_test_date` | Last verification date | date (ISO 8601) | — | — | Optional; never set by Domain Mapper on mint |
+| `next_review_date` | Next scheduled verification | date (ISO 8601) | — | — | Optional; never set by Domain Mapper on mint |
+| `evidence_ref` | Opaque pointer into an external evidence/audit store (out of scope for this document) | string | — | — | Optional; never set by Domain Mapper on mint |
+| `confidence` | Extraction confidence | float | 0.0 | 1.0 | Required whenever Domain Mapper mints/matches this Control (i.e. always, for the internal-source path this component implements) |
 
 #### Kind
 
 | Kind | Framework | Language | Project Pattern | Namespace Pattern |
 |---|---|---|---|---|
-| Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/domain_mapper/` | `ps_service.domain_mapper` |
+| Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/domain_mapper/`, adapters under `ps-service/src/ps_service/domain_mapper/adapters/` | `ps_service.domain_mapper`, `ps_service.domain_mapper.adapters` |
 
-**Implementation Guidance:** LLM-extraction results always carry a `confidence` score — never dropped, even for low-confidence extractions (confidence review is a downstream/governance concern, not this component's job to gate).
+**Implementation Guidance:**
+- LLM-extraction results always carry a `confidence` score — never dropped, even for low-confidence extractions (confidence review is a downstream/governance concern, not this component's job to gate).
+- Reads the native structural graph (see [Ingestion](#ingestion)) through a Domain Mapping Adapter (`ps_service.domain_mapper.adapters.base`), one per regulatory source, paired 1:1 with that source's Ingestion Adapter. The Cellar/ELI Domain Mapping Adapter is the only implementation for this walking skeleton.
+- A Domain Mapping Adapter's expected input shape must track its paired Ingestion Adapter's output shape exactly — the two are reviewed/changed together, never independently.
+- How far an adapter extracts down the compliance spine is adapter-specific: the Cellar/ELI adapter (`source_type: external`) stops at Capability. An internal-source adapter (paired with an internal-source Ingestion Adapter reading Business SoPs — not yet implemented in this walking skeleton) continues through Policy/Standard/Control via `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`, gated on `Regulation.source_type == internal`. See [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#document-purpose) for the canonical dual-origin model this reflects.
 
 #### Implementation Registration
 
 | Path | Purpose | Implements |
 |---|---|---|
 | `ps-service/src/ps_service/domain_mapper/__init__.py` | Package marker (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/domain_mapper/adapters/base.py` | Domain Mapping Adapter interface (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/domain_mapper/adapters/cellar_eli.py` | Cellar/ELI Domain Mapping Adapter (scaffold only — no logic yet) | — |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ExtractRolesAndRequirements | LLM-driven extraction of Role/Requirement from structural text, with `DEFINES`/`EXPRESSES` edges carrying `source_ref` | No (deferred) | n/a (deferred) | `RegisterRegulationVersion` completed for this regulation | Role/Requirement nodes exist with confidence scores and provenance edges | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set — bounded by LLM latency | No (LLM extraction is not guaranteed deterministic) | Low-confidence extractions are recorded, not dropped |
+| ExtractRolesAndRequirements | Read the native structural graph via the paired Domain Mapping Adapter; LLM-driven extraction of Role/Requirement, with `DEFINES`/`EXPRESSES` edges carrying `source_ref` (the native graph's `citation_ref`) | No (deferred) | n/a (deferred) | `PersistNativeStructuralGraph` completed for this regulation | Role/Requirement nodes exist with confidence scores and provenance edges | Reads + writes FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set — bounded by LLM latency | No (LLM extraction is not guaranteed deterministic) | Low-confidence extractions are recorded, not dropped |
 | DeriveObligationsAndCapabilities | Match/mint Obligation per Requirement (`HAS`/`SATISFIED_BY`); match/mint Capability per Obligation (`REQUIRES`) | No (deferred) | n/a (deferred) | ExtractRolesAndRequirements completed | Every Requirement has ≥1 `SATISFIED_BY`; every Obligation has ≥1 `REQUIRES` | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set | No | A Requirement that can't be matched/satisfied is surfaced, not silently skipped |
+| DeriveGovernanceArtifacts | For `source_type: internal` only, via the internal-source Domain Mapping Adapter: match/mint Policy per Capability (`GOVERNED_BY`), Standard per Policy (`SUPPORTED_BY`), Control per Standard (`IMPLEMENTED_BY`) | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed AND `Regulation.source_type == internal` | Every internal-source Capability has ≥1 `GOVERNED_BY`; every such Policy has ≥1 `SUPPORTED_BY`; every such Standard has ≥1 `IMPLEMENTED_BY` | Writes to FalkorDB; calls LLM Interface | LLM Interface, FalkorDB | Not yet set — bounded by LLM latency | No (LLM extraction is not guaranteed deterministic) | A Capability that can't be matched/satisfied by a Policy is surfaced, not silently skipped; not run at all for `source_type: external` |
 
 ---
 
@@ -379,6 +421,7 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | `owner_id` | Owning policy manager/team | string | — | — | Optional |
 | `status` | `draft` \| `approved` \| `deprecated` | enum | — | — | Required |
 | `version` | Version identifier | string | — | — | Optional |
+| `confidence` | Extraction confidence | float | 0.0 | 1.0 | Present only when this Policy is internal-SoP-derived (Domain Mapper's mint/match decision); absent on human-authored (Policy Editor) instances |
 
 #### Kind
 
@@ -399,7 +442,7 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | MergeBaselineGraph | Merge a regulation's baseline graph into the company's single-tenant graph | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed | All baseline nodes/edges exist in the company graph; existing data untouched | Writes to FalkorDB | FalkorDB | < 5s per regulation (draft target) | Yes | Abort with no partial write on ambiguous canonical-identity collisions; surface for manual resolution |
-| DedupeCanonicalNodes | Resolve Obligation/Capability convergence — merge onto an existing canonical node instead of duplicating | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Obligation/Capability for the same canonical identity; incoming edges rewired to the canonical node | Writes to FalkorDB (edge rewiring) | FalkorDB | Included in MergeBaselineGraph's SLA | Yes | Same as MergeBaselineGraph |
+| DedupeCanonicalNodes | Resolve Obligation/Capability/Policy convergence — merge onto an existing canonical node instead of duplicating (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope) | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Obligation/Capability/Policy for the same canonical identity; incoming edges rewired to the canonical node | Writes to FalkorDB (edge rewiring) | FalkorDB | Included in MergeBaselineGraph's SLA | Yes | Same as MergeBaselineGraph |
 
 ---
 
@@ -569,11 +612,13 @@ sequenceDiagram
 
     Monitor->>Ingestion: TriggerReingestion (or manual UC-1 selection)
     Ingestion->>Logging: BindRunContext(run_id)
-    Ingestion->>Cellar: FetchRegulationStructure
+    Ingestion->>Cellar: FetchRegulationStructure (via Cellar/ELI Adapter)
     Cellar-->>Ingestion: structure + text + ELI citation
     Ingestion->>DB: RegisterRegulationVersion
-    Ingestion->>Mapper: structural graph
+    Ingestion->>DB: PersistNativeStructuralGraph
 
+    Mapper->>DB: read native structural graph (via Cellar/ELI Domain Mapping Adapter)
+    DB-->>Mapper: native structural elements
     Mapper->>LLM: RouteCompletion (extract Role/Requirement)
     LLM-->>Mapper: extraction result + confidence
     Mapper->>LLM: RouteCompletion (derive Obligation/Capability)
@@ -618,7 +663,7 @@ sequenceDiagram
 | Use Case | Components | Coverage Notes |
 |---|---|---|
 | UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Regulatory Change Monitor | Fully covered by this container's ingestion pipeline |
-| UC-2: Govern internal regulations | Ingestion, Domain Mapper, Company Merge | Same mechanism as UC-1 (`source_type: internal`). **Inherited gap from Solution Architecture, not resolved here:** no human role/component is confirmed as the one who triggers ingestion of internal regulations |
+| UC-2: Govern internal regulations | Ingestion, Domain Mapper, Company Merge | Same pipeline as UC-1 (`source_type: internal`), but via an internal-source adapter pair that continues past Capability through Policy/Standard/Control (`DeriveGovernanceArtifacts`) — external regulations never reach this step. **Inherited gap from Solution Architecture, not resolved here:** no human role/component is confirmed as the one who triggers ingestion of internal regulations |
 | Govern policy/standard/control content (not yet defined in `ps-primary-use-cases.md`) | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
 | UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Fully covered |
 

@@ -211,8 +211,8 @@ graph TB
 
 | Component | Description | Key Responsibilities | Domain path |
 | :--- | :--- | :--- | :--- |
-| Ingestion | Ingests EU regulation content from Cellar/ELI instead of PDF, producing a structurally-tagged regulation graph | Fetch regulation structure/text from Cellar/ELI; tag document structure — **exact output shape, and compatibility with Domain Mapper's input, is under exploration** | ps.service.ingestion |
-| Domain Mapper | Maps a regulation's structural graph into the curated, PS-domain-shaped baseline graph (Role/Requirement/Obligation/Capability) | Curate/derive PS Conceptual Model entities from structural regulation content into a canonical per-regulation baseline — **whether this component needs adaptation for Cellar-sourced input is under exploration** | ps.service.domainmapper |
+| Ingestion | Ingests regulation content from a source (Cellar/ELI for EU regulations) instead of PDF, persisting it as a native structural graph | Fetch a regulation's structure/text via a source-specific Ingestion Adapter; persist that source's native structural graph to FalkorDB as-is — see Container Architecture for the adapter pattern | ps.service.ingestion |
+| Domain Mapper | Maps a regulation's native structural graph into the curated, PS-domain-shaped baseline graph — Role/Requirement/Obligation/Capability for external sources; continuing through Policy/Standard/Control for internal sources | Curate/derive PS Conceptual Model entities from a regulation's native structural graph, read via a Domain Mapping Adapter paired to the source's Ingestion Adapter, into a canonical per-regulation baseline. The adapter determines depth: external adapters stop at Capability, the internal-source adapter continues to Control | ps.service.domainmapper |
 | Company Merge | Dedupes and merges a company's selected regulation baseline graphs into one single-tenant graph | Merge selected baseline graphs per company — **assumed unaffected by the Stage 1 change, not yet confirmed** | ps.service.companymerge |
 | Query Engine | Executes Cypher queries against the compliance knowledge graph on behalf of PS Question Skill and returns results | Receive Cypher queries via PS Service's query interface; execute against FalkorDB; return results with provenance | ps.service.queryengine |
 | MCP Interface | Exposes the compliance knowledge graph's Cypher query capability to PS Question Skill via the Model Context Protocol (MCP) | Accept MCP tool calls from PS Question Skill; delegate query execution to Query Engine; return results over MCP | ps.service.mcpinterface |
@@ -243,7 +243,7 @@ Engineering Managers.
 | Use Case | API Entry Point | Implementing Container/Component | URS Requirement |
 | :--- | :--- | :--- | :--- |
 | Select and add a regulation | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge | UC-1 |
-| Govern internal regulations | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge (same pipeline as UC-1, `source_type: internal`) | UC-2 |
+| Govern internal regulations | PS-Cli → PS Service | Ingestion → Domain Mapper → Company Merge (same pipeline as UC-1, `source_type: internal`; Domain Mapper continues past Capability through Policy/Standard/Control via the internal-source adapter) | UC-2 |
 
 ### Policy Managers Use Cases
 
