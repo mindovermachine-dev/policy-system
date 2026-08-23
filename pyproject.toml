@@ -4,6 +4,7 @@ members = ["ps-service", "ps-cli"]
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "ruff>=0.16.4",
 ]
 
 [tool.pytest.ini_options]

@@ -599,7 +599,7 @@ None — shared infrastructure utility.
 **Implementation Guidance:**
 - Correlation ID (`run_id`) is bound only at primary-use-case entry points — Ingestion's trigger (UC-1/UC-2) and MCP Interface's `HandleMcpToolCall` (query path) — not at every internal call; it then propagates automatically to all downstream log entries within that run.
 - Structured fields follow a documented convention (component, action, entity_id(s), outcome, duration_ms), not an enforced schema — **whether to formalize this into an enforced event catalog later is under exploration**.
-- Default sink is a git-tracked `logs/` folder at repo root (directory tracked, file contents gitignored) — **log file naming/rotation, and the future configurable-location mechanism, are under exploration**.
+- Default sink is a git-tracked `logs/` folder at repo root (directory tracked, file contents gitignored), file name `ps-service.jsonl`; the location is configurable via the `PS_LOGGING_DIR` environment variable, overriding the repo-root default — **log rotation is under exploration**.
 - **Multi-process write safety is under exploration** — fine for the single-process walking skeleton, needs revisiting if PS Service's REST API later runs multi-worker — no constraint currently prevents that layer from doing so before this is resolved.
 - A log write failure never propagates back to the calling component — logging must not break the pipeline it's observing.
 - Current logging is operational/pipeline tracing, not a tamper-evident record of caller identity or access — a distinct security-audit logging mechanism is not yet designed.
@@ -608,7 +608,14 @@ None — shared infrastructure utility.
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/logging/__init__.py` | Package marker (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/logging/errors.py` | Component-specific exception types (`LoggingConfigurationError`, `LoggingLifecycleError`) — implemented | — |
+| `ps-service/src/ps_service/logging/models.py` | Log entry record shape and JSON serialization — implemented | EmitLogEntry (record shape) |
+| `ps-service/src/ps_service/logging/run_context.py` | Correlation-ID bind/unbind for a call chain — implemented | BindRunContext |
+| `ps-service/src/ps_service/logging/emitter.py` | Non-blocking write path, including the write-failure fallback — implemented | EmitLogEntry (write path) |
+| `ps-service/src/ps_service/logging/facade.py` | Process-wide entry point and default sink resolution — implemented | EmitLogEntry (public API), BindRunContext (via re-export) |
+| `ps-service/src/ps_service/logging/__init__.py` | Package front door — re-exports only | — |
+
+**Caller wiring status:** `BindRunContext` is implemented and tested but not yet called by any real caller — Ingestion's trigger (UC-1/UC-2) and MCP Interface's `HandleMcpToolCall` do not yet invoke it. End-to-end `run_id` correlation across a full pipeline/query run is therefore not yet live, even though the component itself is complete. This is a deliberate scope boundary (issue #20 scoped only the Logging component's own actions), not an oversight — wiring the two call sites is a follow-up.
 
 #### Actions
 

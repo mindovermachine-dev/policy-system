@@ -334,3 +334,4 @@ __marimo__/
 
 # FalkorDB local persistence volume (see CONTRIBUTING.md)
 .falkordb-data/
+.orchestrator/
