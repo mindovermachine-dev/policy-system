@@ -133,6 +133,27 @@ If the skill (in the .claude/skills and .github/skills folder) does not automati
 Use the Policy Question skill. Show me the names of the roles defined in CRA
 ```
 
+### Start PS Service (process harness)
+
+`ps-service` currently exposes only a minimal process harness: a FastAPI app
+served by uvicorn with `/health` (liveness) and `/ready` (readiness)
+endpoints, no domain routes yet.
+
+```bash
+uv sync
+uv run python -m ps_service
+```
+
+Once it's running, verify it's alive:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+To stop it, press Ctrl-C in the terminal it's running in, or send it
+`SIGTERM` from another terminal (`kill -TERM <pid>`) — either way, uvicorn's
+built-in graceful shutdown handles it: no forced kill needed.
+
 ### Claude Desktop (alternative to Claude Code)
 
 Requires the same FalkorDB setup and data load as above. Claude Desktop has

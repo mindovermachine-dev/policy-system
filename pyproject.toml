@@ -3,9 +3,13 @@ members = ["ps-service", "ps-cli"]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=8.0.0",
     "ruff>=0.16.4",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["ps-service/tests", "ps-cli/tests"]
+markers = [
+    "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
+]
