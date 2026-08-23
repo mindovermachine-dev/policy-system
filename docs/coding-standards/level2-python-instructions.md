@@ -106,7 +106,18 @@
 
 ### API Patterns
 
-[TBD — REST framework for `ps_service/api/` not yet decided; decide when `api/` is actually implemented, not before.]
+- REST framework: **FastAPI** — chosen for its native Pydantic integration (already mandated above for REST/MCP request/response payloads), async support matching the rest of `ps-service`, and auto-generated OpenAPI docs.
+- Routing, middleware, and dependency-injection conventions for `ps_service/api/` are not yet decided — establish them when `api/` endpoints beyond a health check are actually implemented, not before.
+
+### Entrypoint / Process Lifecycle Patterns
+
+- The `ps-service` entrypoint runs as a FastAPI app served by `uvicorn`, invoked programmatically — no custom `asyncio` signal handling. SIGTERM/SIGINT graceful shutdown is delegated entirely to uvicorn's built-in handling, with `timeout_graceful_shutdown` set explicitly rather than left at its default.
+- Startup and shutdown logic lives in FastAPI's `lifespan` context manager, not the deprecated `@app.on_event(...)` decorators.
+- Health is split into two endpoints, matching the standard liveness/readiness distinction — do not collapse them into one:
+  - `/health` (liveness) — reports "alive" as soon as the ASGI server is accepting connections, independent of startup progress. Must never check external dependencies: a dependency outage should never cause a liveness failure/restart.
+  - `/ready` (readiness) — reports "ready" only once `lifespan`'s startup block completes (today: Logging `configure()` + startup log entry). This is the extension point for future dependency checks (FalkorDB, LLM provider) as components get wired in — the endpoint shape does not change when those checks are added later.
+- Both endpoints are localhost-only and unauthenticated, matching the posture already established for `ps_service/api/` in Open Decisions below.
+- Readiness state is process-local (e.g. a module-level flag set inside `lifespan`) — valid under the current single-worker assumption; revisit if `ps_service/api/` ever runs multi-worker (same open item already flagged for Logging's multi-process write safety).
 
 ### MCP Interface Patterns
 
@@ -166,5 +177,5 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 
 Not yet coding patterns — each needs a decision before the area it touches ships, tracked here instead of as asides inside the topic sections above.
 
-- **API authentication/authorization**: must be decided alongside the REST framework choice (ps-service → API Patterns). Do not ship an unauthenticated API by default.
+- **API authentication/authorization**: REST framework is now decided (FastAPI, ps-service → API Patterns) but auth/authz is still open — decide before any `ps_service/api/` endpoint beyond a health check ships. Do not ship an unauthenticated API by default.
 - **PII handling**: ingested content may contain PII (this system explicitly models GDPR). Needs a product/legal decision on retention/logging limits and third-party LLM data-processing terms before ingesting real business data.
