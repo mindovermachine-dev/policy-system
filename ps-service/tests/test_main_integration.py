@@ -5,18 +5,23 @@ spawn *real* subprocesses and interact with them over real HTTP/OS
 primitives, unlike `test_main.py`'s `TestClient`-based unit tests. See
 PLAN_REVIEWED.md §4/§6 (increment 11) for the technique rationale.
 
-Because `PORT = 8000` is hardcoded (not configurable) in `ps_service.main`,
-only one server process can be bound at a time. Tests (a) "process starts and
-stays running" and (b) "binds localhost-only" share a single class-scoped
-server (`running_server`, on `TestSharedServer`) to minimize repeated binds.
-Class scope (not module scope) is deliberate: it guarantees the shared server
-is torn down — freeing the hardcoded port — before tests (c)/(d) run, which
-need exclusive use of the port for their own dedicated process lifecycle (one
-gets SIGTERM'd, the other is expected to fail to bind). Module scope would
-keep the shared server alive for the whole file, colliding with (c)/(d)'s own
-bind attempts (confirmed empirically: an early draft using module scope hit
-"Address already in use" in test (d) because the module-scoped server from
-(a)/(b) was still bound).
+The port is configurable via `PS_SERVICE_PORT` (see
+`test_ps_service_port_env_override_serves_health_on_overridden_port` below,
+which proves it end-to-end via a real subprocess bound to a non-default
+port) — the shared-server-fixture design below is retained purely for
+efficiency on the default (no-env-override) path, not because the port is
+technically unconfigurable. Tests (a) "process starts and stays running" and
+(b) "binds localhost-only" both only need "is the server up and reachable"
+on the default port, so they share a single class-scoped server
+(`running_server`, on `TestSharedServer`) to avoid spinning up a redundant
+subprocess for each. Class scope (not module scope) is deliberate: it
+guarantees the shared server is torn down — freeing `_PORT` — before tests
+(c)/(d) run, which need exclusive use of that same default port for their
+own dedicated process lifecycle (one gets SIGTERM'd, the other is expected
+to fail to bind). Module scope would keep the shared server alive for the
+whole file, colliding with (c)/(d)'s own bind attempts (confirmed
+empirically: an early draft using module scope hit "Address already in use"
+in test (d) because the module-scoped server from (a)/(b) was still bound).
 
 Two spawn helpers, empirically justified:
 
@@ -64,10 +69,11 @@ if sys.platform == "win32":  # pragma: no cover - documented platform caveat, no
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOST = "127.0.0.1"
 _PORT = 8000
+_OVERRIDE_PORT = 8010  # distinct from _PORT so this test can run independently of TestSharedServer's lifecycle
 _HEALTH_URL = f"http://{_HOST}:{_PORT}/health"
 _READY_POLL_TIMEOUT_SECONDS = 5.0
 _READY_POLL_INTERVAL_SECONDS = 0.05
-_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10  # must match ps_service.main.TIMEOUT_GRACEFUL_SHUTDOWN_SECONDS
+_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10  # the default graceful-shutdown timeout, in seconds
 _SHUTDOWN_WAIT_BUFFER_SECONDS = 5
 _TERMINATE_WAIT_TIMEOUT_SECONDS = 10
 
@@ -117,7 +123,7 @@ def _spawn_direct(log_dir: Path, *, extra_env: dict[str, str] | None = None) -> 
 def _terminate(proc: subprocess.Popen[bytes]) -> None:
     """Best-effort clean shutdown of a spawned subprocess: SIGTERM, then SIGKILL if needed.
 
-    Ensures no test leaves an orphaned process bound to the hardcoded port,
+    Ensures no test leaves an orphaned process bound to its listening port,
     even when the test itself fails or raises before reaching its own
     cleanup logic.
     """
@@ -131,27 +137,34 @@ def _terminate(proc: subprocess.Popen[bytes]) -> None:
         proc.wait(timeout=_TERMINATE_WAIT_TIMEOUT_SECONDS)
 
 
-def _try_get_health() -> httpx.Response | None:
+def _try_get_health(url: str = _HEALTH_URL) -> httpx.Response | None:
     """Attempt a single `GET /health` call, returning `None` if the server isn't accepting connections yet.
 
     Factored out of `_wait_until_healthy`'s polling loop so the `try`/`except`
     lives in a single call, not inline inside the loop body (ruff PERF203).
+    `url` defaults to `_HEALTH_URL` (the default, no-env-override port) but
+    accepts an override so tests spawning a subprocess on a non-default
+    `PS_SERVICE_PORT` can poll the right address.
     """
     try:
-        return httpx.get(_HEALTH_URL, timeout=1.0)
+        return httpx.get(url, timeout=1.0)
     except httpx.HTTPError:
         return None
 
 
-def _wait_until_healthy(deadline_seconds: float = _READY_POLL_TIMEOUT_SECONDS) -> httpx.Response:
+def _wait_until_healthy(
+    deadline_seconds: float = _READY_POLL_TIMEOUT_SECONDS, url: str = _HEALTH_URL
+) -> httpx.Response:
     """Poll `GET /health` with a short bounded retry loop until it responds or the deadline is hit.
 
     Raises `TimeoutError` if the deadline is reached with no successful
-    response, so callers get a clear failure rather than a hang.
+    response, so callers get a clear failure rather than a hang. `url`
+    defaults to `_HEALTH_URL` but accepts an override for subprocesses
+    spawned with a non-default `PS_SERVICE_PORT`.
     """
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
-        response = _try_get_health()
+        response = _try_get_health(url)
         if response is not None:
             return response
         time.sleep(_READY_POLL_INTERVAL_SECONDS)
@@ -163,9 +176,9 @@ class TestSharedServer:
     """Tests (a) and (b): both only need "is the server up and reachable", so they share one process.
 
     Grouped in a class so `running_server` can be `scope="class"` — shared
-    across this class's tests, but torn down (freeing the hardcoded port)
-    before any test outside the class runs. See module docstring for why
-    module scope is unsafe here.
+    across this class's tests, but torn down (freeing `_PORT`, the default
+    port this shared server binds to) before any test outside the class
+    runs. See module docstring for why module scope is unsafe here.
     """
 
     @pytest.fixture(scope="class")
@@ -222,10 +235,10 @@ class TestSharedServer:
         spawned via the `uv run` wrapper (see module docstring), whose own
         pid is NOT the pid that actually holds the listening socket (`uv
         run` forks a real child rather than `exec`-replacing itself —
-        confirmed empirically). Since `PORT = 8000` is the harness's single
-        hardcoded port and no other service in this repo's dev setup uses it
-        (per PLAN_REVIEWED.md §3), a port-scoped `lsof` query unambiguously
-        identifies the server's socket.
+        confirmed empirically). Since `_PORT = 8000` is this class's shared
+        server's default (no-env-override) port and no other service in this
+        repo's dev setup uses it (per PLAN_REVIEWED.md §3), a port-scoped
+        `lsof` query unambiguously identifies the server's socket.
         """
         lsof_path = shutil.which("lsof")
         if lsof_path is None:
@@ -295,7 +308,7 @@ def test_sigterm_triggers_clean_bounded_exit(tmp_path: Path) -> None:
 def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_path: Path) -> None:
     """AC-BI-010 (subprocess half): a port-bind failure exits nonzero and reports it without leaking secrets.
 
-    Occupies the hardcoded port with a raw socket first, then spawns the
+    Occupies the default port (`_PORT`) with a raw socket first, then spawns the
     subprocess pointed at the same port; uvicorn's own bind attempt should
     fail quickly. Per D4 in DECISIONS.md, a resolved file-path appearing in
     the failure traceback is an ACCEPTABLE, non-secret detail (out of
@@ -323,3 +336,58 @@ def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_pa
         assert secret_sentinel not in stderr_text
     finally:
         occupying_socket.close()
+
+
+@pytest.mark.integration
+def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path: Path) -> None:
+    """AC-BI-003 (subprocess/behavioral proof): PS_SERVICE_PORT actually rebinds the real listening port.
+
+    Spawns its own dedicated subprocess with `PS_SERVICE_PORT=_OVERRIDE_PORT`
+    (distinct from `_PORT`, the default-path constant used by
+    `TestSharedServer`'s shared server and the SIGTERM/bind-failure tests),
+    so it can run independently of that fixture's class-scoped lifecycle.
+    This is the test that actually proves the issue's motivating pain
+    point — the previously-hardcoded port — is fixed: the unit-level tests
+    in `test_main.py` only prove `uvicorn.run` was *called* with the right
+    `port` kwarg; this proves a real process actually bound there.
+    """
+    proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(_OVERRIDE_PORT)})
+    try:
+        response = _wait_until_healthy(url=f"http://{_HOST}:{_OVERRIDE_PORT}/health")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "alive"}
+    finally:
+        _terminate(proc)
+
+
+@pytest.mark.integration
+def test_invalid_ps_service_port_env_exits_nonzero_without_binding(tmp_path: Path) -> None:
+    """AC-BI-009 (subprocess/behavioral proof): an invalid PS_SERVICE_PORT fails before uvicorn ever binds.
+
+    `main()` calls `load_config()` first; an unparseable `PS_SERVICE_PORT`
+    makes `_parse_port` raise `ServiceConfigurationError` synchronously,
+    before `create_app`/`uvicorn.run` are ever reached — so the process must
+    exit promptly (bounded `communicate` timeout, mirroring
+    `test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content`'s
+    pattern) with a nonzero exit code. Confirmed empirically (manual run
+    during test development) that the resulting stderr traceback bottoms out
+    at `config.py`'s `_parse_port`/`load_config`, never reaching `main.py`'s
+    `create_app`/`uvicorn.run` lines — asserting `PS_SERVICE_PORT` appears in
+    stderr is therefore direct evidence uvicorn's bind was never attempted,
+    stronger than an absence-of-LISTEN-socket check (which an already-exited
+    process would trivially satisfy regardless of cause).
+    """
+    proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": "not-a-number"})
+    try:
+        try:
+            _, stderr = proc.communicate(timeout=_READY_POLL_TIMEOUT_SECONDS + _SHUTDOWN_WAIT_BUFFER_SECONDS)
+        except subprocess.TimeoutExpired:
+            pytest.fail("process did not exit promptly after an invalid PS_SERVICE_PORT")
+
+        assert proc.returncode != 0
+        stderr_text = stderr.decode("utf-8", errors="replace")
+        assert "PS_SERVICE_PORT" in stderr_text
+        assert "ServiceConfigurationError" in stderr_text
+    finally:
+        _terminate(proc)
