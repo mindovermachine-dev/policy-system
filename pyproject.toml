@@ -13,4 +13,6 @@ testpaths = ["ps-service/tests", "ps-cli/tests"]
 markers = [
     "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
     "llm_live: hits the live, configured LLM Provider over the network via LiteLLM (slow, costs tokens, requires real provider credentials)",
+    "cellar_live: hits the live Cellar/ELI service over the network (slow, environment-dependent)",
+    "falkordb_live: requires a real, reachable FalkorDB instance (slow, environment-dependent)",
 ]

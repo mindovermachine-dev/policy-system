@@ -17,6 +17,8 @@ _DEFAULT_PORT = 8000
 _DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 10
 _MIN_PORT = 1
 _MAX_PORT = 65535
+_DEFAULT_FALKORDB_HOST = "127.0.0.1"
+_DEFAULT_FALKORDB_PORT = 6379
 
 
 class ServiceConfigurationError(Exception):
@@ -34,6 +36,14 @@ class ServiceConfig:
     `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`) are `<provider>/<model>`
     strings passed straight through to `litellm.completion`/`litellm.embedding` —
     see `_parse_model_string` and CONTRIBUTING.md for format/examples.
+
+    `falkordb_host`/`falkordb_port` (from `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`)
+    are the connection knobs `ps_service.ingestion.falkordb_client.connect_from_config`
+    (Increment 12) uses to build the real FalkorDB connection — see
+    PLAN_REVIEWED.md §6.1/§6.4. No `falkordb_graph` field: `PS_FALKORDB_GRAPH`
+    already names a different thing (the query-surface's single company
+    graph name); Ingestion computes its own per-regulation graph name from
+    `short_name` via `native_graph_name`, not from config.
     """
 
     host: str
@@ -42,6 +52,8 @@ class ServiceConfig:
     logging_dir: Path | None
     llm_interface_model: str | None = None
     llm_interface_embed_model: str | None = None
+    falkordb_host: str = _DEFAULT_FALKORDB_HOST
+    falkordb_port: int = _DEFAULT_FALKORDB_PORT
 
 
 def _parse_port(raw: str) -> int:
@@ -88,6 +100,39 @@ def _parse_graceful_shutdown_seconds(raw: str) -> int:
         )
         raise ServiceConfigurationError(message)
     return graceful_shutdown_seconds
+
+
+def _parse_falkordb_port(raw: str) -> int:
+    """Parse and range-check `PS_FALKORDB_PORT`, failing closed on any invalid value.
+
+    Mirrors `_parse_port`'s exact validation shape (same integer parse,
+    same `_MIN_PORT`/`_MAX_PORT` range check) — a separate function, not a
+    reused one, because the error message must name `PS_FALKORDB_PORT`, not
+    `PS_SERVICE_PORT`.
+    """
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        message = f"PS_FALKORDB_PORT must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not (_MIN_PORT <= port <= _MAX_PORT):
+        message = f"PS_FALKORDB_PORT must be between {_MIN_PORT} and {_MAX_PORT}, got {port}"
+        raise ServiceConfigurationError(message)
+    return port
+
+
+def _parse_falkordb_host(raw: str) -> str:
+    """Validate `PS_FALKORDB_HOST`, rejecting an explicitly-set empty/whitespace-only value.
+
+    Mirrors `_parse_host`'s exact validation shape (never widens to a
+    fallback value on a bad value — "fails closed" means raising) — a
+    separate function, not a reused one, because the error message must
+    name `PS_FALKORDB_HOST`, not `PS_SERVICE_HOST`.
+    """
+    if not raw.strip():
+        message = "PS_FALKORDB_HOST must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
 
 
 def _parse_model_string(raw: str, *, env_var_name: str) -> str:
@@ -144,6 +189,13 @@ def load_config() -> ServiceConfig:
         else None
     )
 
+    falkordb_host = _parse_falkordb_host(
+        os.environ.get("PS_FALKORDB_HOST", _DEFAULT_FALKORDB_HOST)
+    )
+    falkordb_port = _parse_falkordb_port(
+        os.environ.get("PS_FALKORDB_PORT", str(_DEFAULT_FALKORDB_PORT))
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -151,4 +203,6 @@ def load_config() -> ServiceConfig:
         logging_dir=logging_dir,
         llm_interface_model=llm_interface_model,
         llm_interface_embed_model=llm_interface_embed_model,
+        falkordb_host=falkordb_host,
+        falkordb_port=falkordb_port,
     )

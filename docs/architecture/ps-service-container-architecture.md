@@ -207,7 +207,8 @@ graph TB
 
 | Constraint | Description |
 |---|---|
-| Source-native shape, not a fixed schema | Each Ingestion Adapter persists whatever hierarchy its source actually has (e.g. Cellar/ELI: TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH) — no generic/common node schema is imposed across sources |
+| Source-native shape, not a fixed schema | Each Ingestion Adapter persists whatever hierarchy its source actually has (e.g. Cellar/ELI: TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH/ANNEX/RECITAL) — no generic/common node schema is imposed across sources |
+| One FalkorDB graph per regulation | The Cellar/ELI Adapter persists each regulation's native structural graph into its own FalkorDB graph, named `{short_name}_native` (e.g. `cra_native`) — not a shared graph across regulations. Avoids one regulation's re-ingest/reset affecting another's data; other adapters may choose differently, this isn't a project-wide requirement |
 | Implicit contract with Domain Mapper | The shape an Ingestion Adapter writes is only ever read by its paired Domain Mapping Adapter (see [Domain Mapper](#domain-mapper)) — adapter pairs are added and changed together |
 | Contract is unenforced | Nothing (shared schema, contract test, or otherwise) currently catches drift between an Ingestion Adapter's output shape and its paired Domain Mapping Adapter's expected input shape — the "changed together" discipline above is process-only, not enforced |
 | Anchored to Regulation | Every native structural node links back to its Regulation node (directly or transitively) so the full verbatim text stays traceable after Domain Mapper's extraction pass |
@@ -216,7 +217,7 @@ graph TB
 
 | Attribute | Description | Type | Min | Max | Rules |
 |---|---|---|---|---|---|
-| `element_type` | `TITLE` \| `CHAPTER` \| `SECTION` \| `ARTICLE` \| `PARAGRAPH` | enum | — | — | Required; Cellar/ELI-specific — other adapters define their own vocabulary |
+| `element_type` | `TITLE` \| `CHAPTER` \| `SECTION` \| `ARTICLE` \| `PARAGRAPH` \| `ANNEX` \| `RECITAL` | enum | — | — | Required; Cellar/ELI-specific — other adapters define their own vocabulary. `TITLE` is walked but not minted as its own node by the shipped Cellar/ELI Adapter (a `TITLE`-shaped element is a transparent pass-through container — its children attach to the current parent); no CRA/GDPR/NIS2 document exercises `TITLE`-level markup, so this is untested rather than a deliberate design choice for a source that does use it |
 | `text` | Verbatim text of this structural element | string | — | — | Required |
 | `citation_ref` | ELI citation identifying this element | string | — | — | Required; used as `source_ref` by Domain Mapper's extraction edges |
 | `order` | Position among siblings | integer | — | — | Required |
@@ -239,9 +240,18 @@ graph TB
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/ingestion/__init__.py` | Package marker (scaffold only — no logic yet) | — |
-| `ps-service/src/ps_service/ingestion/adapters/base.py` | Ingestion Adapter interface (scaffold only — no logic yet) | — |
-| `ps-service/src/ps_service/ingestion/adapters/cellar_eli.py` | Cellar/ELI Ingestion Adapter (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/ingestion/__init__.py` | Package front door, re-exports `ingest_regulation` | — |
+| `ps-service/src/ps_service/ingestion/pipeline.py` | `ingest_regulation()` — the primary-use-case entry point (fetch → register → persist → verify, one `bind_run_context()` run per call) | FetchRegulationStructure, RegisterRegulationVersion, PersistNativeStructuralGraph |
+| `ps-service/src/ps_service/ingestion/models.py` | `RegulationMetadata`, `StructuralNode`, `StructuralEdge`, `FetchedRegulationStructure`, `ReachabilityCount`, `IngestResult` | — |
+| `ps-service/src/ps_service/ingestion/errors.py` | `IngestionPersistenceError`, `IngestionConfigurationError` | — |
+| `ps-service/src/ps_service/ingestion/graph_writer.py` | `register_regulation_version`, `persist_native_structural_graph`, `verify_structural_graph_reachable` | RegisterRegulationVersion, PersistNativeStructuralGraph |
+| `ps-service/src/ps_service/ingestion/falkordb_client.py` | `connect`/`connect_from_config`, `check_connectivity`, `select_graph`, `native_graph_name`, `GraphHandle` Protocol | — |
+| `ps-service/src/ps_service/ingestion/adapters/base.py` | `IngestionAdapter` Protocol | — |
+| `ps-service/src/ps_service/ingestion/adapters/errors.py` | `CellarFetchError`, `CellarParseError` | — |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/adapter.py` | `CellarEliAdapter` — the Cellar/ELI `IngestionAdapter` implementation, CELEX-identifier-driven (ELI URI as a literal identifier is not currently supported — no verified live HTTP path resolves one to Cellar content without an unbuilt SPARQL-based resolution step) | FetchRegulationStructure |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/fetch.py` | `fetch_xhtml` — live Cellar/ELI HTTP fetch by CELEX, injectable transport | — |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/metadata.py` | `extract_metadata` — bibliographic metadata extraction, incl. AC-007's transposition-deadline convention | — |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/structure.py` | `parse_structure` — native ELI structural graph parsing | — |
 
 #### Actions
 

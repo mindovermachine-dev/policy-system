@@ -1,0 +1,115 @@
+"""ps_service.ingestion pipeline — the primary-use-case entry point.
+
+Implements PLAN_REVIEWED.md §7 Increment 11: `ingest_regulation()` wires
+Increments 1-10 (adapter Protocol, FalkorDB persistence) into the
+fetch -> register -> persist -> verify sequence that is Ingestion's whole
+job for one regulation-ingestion run (CA doc's `FetchRegulationStructure` /
+`RegisterRegulationVersion` / `PersistNativeStructuralGraph` actions, plus
+this component's own AC-004 reachability check).
+
+AC-005 (structured logging correlation, closing CA doc line 618's flagged
+gap): this is the first real caller of `bind_run_context()` for Ingestion.
+One `with bind_run_context() as run_id:` block wraps the whole pipeline;
+every `emit_log_entry(...)` call inside it auto-bakes that run_id via the
+`run_context` ContextVar mechanism (never passed explicitly — see
+`ps_service.llm_interface._logging_support._log`'s identical precedent).
+Two separate `ingest_regulation()` calls therefore carry two distinct
+run_ids in their emitted log entries.
+
+AC-006 (regulation-independence, verifiable at the code level): `short_name`
+(e.g. "CRA") and `version` (e.g. "1.0") are CALLER-SUPPLIED parameters —
+never derived by inspecting `structure.metadata.title` or branching on
+`identifier`'s value. This file contains no `if`/`elif`/comparison naming a
+specific regulation anywhere in its executable code. The only place
+"CRA"/"GDPR"/"NIS2" appear in this module is this docstring's illustrative
+prose, right here — `tests/ingestion/test_pipeline.py`'s AST-based scan
+explicitly excludes docstring nodes from its check, so naming regulations
+here as examples does not trip it; only executable if/elif/comparison logic
+naming a regulation would.
+"""
+
+from __future__ import annotations
+
+from ps_service.ingestion.adapters.base import IngestionAdapter
+from ps_service.ingestion.falkordb_client import GraphHandle
+from ps_service.ingestion.graph_writer import (
+    persist_native_structural_graph,
+    register_regulation_version,
+    verify_structural_graph_reachable,
+)
+from ps_service.ingestion.models import IngestResult
+from ps_service.logging import LogEmitter, bind_run_context, emit_log_entry
+
+_COMPONENT = "ingestion"
+
+
+def ingest_regulation(
+    identifier: str,
+    short_name: str,
+    *,
+    version: str,
+    adapter: IngestionAdapter,
+    graph: GraphHandle,
+    emitter: LogEmitter | None = None,
+) -> IngestResult:
+    """Ingest one regulation end to end: fetch, register, persist, verify.
+
+    The primary-use-case entry point (UC-1's manual trigger; UC-4's
+    TriggerReingestion calls this too, later — out of scope here). Binds a
+    fresh run_id for the whole call (AC-005), then runs, in order:
+    `adapter.fetch_regulation_structure(identifier)` ->
+    `register_regulation_version` -> `persist_native_structural_graph` ->
+    `verify_structural_graph_reachable`, emitting one log entry per
+    completed stage. `identifier` is whatever the injected `adapter`
+    expects (a CELEX number for `CellarEliAdapter`); `short_name`/`version`
+    are caller-supplied and combined into the Regulation's natural-key id
+    (`f"{short_name}-{version}"`, e.g. "CRA-1.0") — never derived from the
+    fetched document or from `identifier`'s value, which is what keeps this
+    function regulation-independent (AC-006).
+
+    Raises whatever the underlying adapter/`graph_writer` calls raise
+    (`CellarFetchError`/`CellarParseError` from the adapter,
+    `IngestionPersistenceError` from `graph_writer`) — this function adds no
+    error handling of its own; a failure at any stage aborts the run with no
+    further stage's log entry emitted.
+    """
+    with bind_run_context() as run_id:
+        regulation_id = f"{short_name}-{version}"
+
+        structure = adapter.fetch_regulation_structure(identifier)
+        _emit(component=_COMPONENT, action="fetch_regulation_structure", regulation_id=regulation_id, emitter=emitter)
+
+        register_regulation_version(graph, regulation_id, structure.metadata)
+        _emit(component=_COMPONENT, action="register_regulation_version", regulation_id=regulation_id, emitter=emitter)
+
+        persist_native_structural_graph(graph, regulation_id, structure.nodes, structure.edges)
+        _emit(
+            component=_COMPONENT,
+            action="persist_native_structural_graph",
+            regulation_id=regulation_id,
+            emitter=emitter,
+        )
+
+        counts = verify_structural_graph_reachable(graph, regulation_id)
+        _emit(
+            component=_COMPONENT,
+            action="verify_structural_graph_reachable",
+            regulation_id=regulation_id,
+            emitter=emitter,
+        )
+
+        return IngestResult(regulation_id=regulation_id, run_id=run_id, counts=counts)
+
+
+def _emit(*, component: str, action: str, regulation_id: str, emitter: LogEmitter | None) -> None:
+    """One completed-stage log entry. `run_id` is never passed explicitly —
+    `emit_log_entry` auto-bakes the currently bound run context (AC-005's
+    mechanism; mirrors `ps_service.llm_interface._logging_support._log`).
+    """
+    emit_log_entry(
+        component=component,
+        action=action,
+        entity_id=regulation_id,
+        outcome="succeeded",
+        emitter=emitter,
+    )

@@ -219,3 +219,61 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
+
+
+def test_load_config_with_no_ps_falkordb_env_vars_set_returns_default_falkordb_host_and_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` set -> defaults `127.0.0.1`/`6379`."""
+    monkeypatch.delenv("PS_FALKORDB_HOST", raising=False)
+    monkeypatch.delenv("PS_FALKORDB_PORT", raising=False)
+
+    result = load_config()
+
+    assert result.falkordb_host == "127.0.0.1"
+    assert result.falkordb_port == 6379
+
+
+def test_load_config_honors_ps_falkordb_host_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_FALKORDB_HOST` override takes effect."""
+    monkeypatch.setenv("PS_FALKORDB_HOST", "falkordb.internal")
+
+    assert load_config().falkordb_host == "falkordb.internal"
+
+
+def test_load_config_honors_ps_falkordb_port_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_FALKORDB_PORT` override takes effect."""
+    monkeypatch.setenv("PS_FALKORDB_PORT", "16379")
+
+    assert load_config().falkordb_port == 16379
+
+
+@pytest.mark.parametrize("invalid_falkordb_host", ["", "   ", "\t"])
+def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_ps_falkordb_host(
+    invalid_falkordb_host: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_FALKORDB_HOST` fails closed, never falls back."""
+    monkeypatch.setenv("PS_FALKORDB_HOST", invalid_falkordb_host)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+@pytest.mark.parametrize(
+    "invalid_falkordb_port",
+    ["not-a-number", "0", "-1", "65536", "99999"],
+)
+def test_load_config_raises_service_configuration_error_for_invalid_ps_falkordb_port(
+    invalid_falkordb_port: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-integer, zero, negative, or out-of-range `PS_FALKORDB_PORT` fails closed."""
+    monkeypatch.setenv("PS_FALKORDB_PORT", invalid_falkordb_port)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
