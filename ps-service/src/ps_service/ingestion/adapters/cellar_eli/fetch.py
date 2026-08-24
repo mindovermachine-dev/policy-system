@@ -17,12 +17,15 @@ LEARNINGS.md`):
 
 from __future__ import annotations
 
+import urllib.error
 import urllib.request
 from typing import Protocol, Self
 
+from ps_service.dependency_health import CELLAR_ELI, mark_healthy, mark_unhealthy
 from ps_service.ingestion.adapters.errors import CellarFetchError
 
 _RESOURCE_URL = "https://publications.europa.eu/resource/celex/{celex}"
+_CONNECTIVITY_URL = "https://publications.europa.eu/"
 _HEADERS = {
     "Accept": "application/xhtml+xml",
     "Accept-Language": "eng",
@@ -67,6 +70,32 @@ def fetch_xhtml(celex: str, *, transport: CellarTransport = urllib.request.urlop
     request = urllib.request.Request(url, headers=_HEADERS)
     try:
         with transport(request, timeout=_TIMEOUT_SECONDS) as response:
-            return response.read()
+            body = response.read()
     except Exception as exc:
+        mark_unhealthy(CELLAR_ELI, error=exc)
         raise CellarFetchError(f"Cellar/ELI fetch failed for CELEX {celex!r} ({url}): {exc}") from exc
+    mark_healthy(CELLAR_ELI)
+    return body
+
+
+def check_connectivity(*, transport: CellarTransport = urllib.request.urlopen) -> None:
+    """Confirm the Cellar/ELI host itself is reachable, independent of any
+    specific CELEX identifier — the cheapest real round-trip available,
+    mirroring `falkordb_client.check_connectivity`'s pattern. An HTTP error
+    status (`urllib.error.HTTPError`, e.g. a 404 on the bare domain) still
+    means the host responded, so it counts as reachable; only a genuine
+    network-level failure (DNS, connection refused, timeout — every other
+    `URLError`/`OSError`) counts as unreachable.
+    """
+    request = urllib.request.Request(_CONNECTIVITY_URL, headers=_HEADERS)
+    try:
+        with transport(request, timeout=_TIMEOUT_SECONDS) as response:
+            response.read()
+    except urllib.error.HTTPError:
+        pass
+    except Exception as exc:
+        mark_unhealthy(CELLAR_ELI, error=exc)
+        raise CellarFetchError(
+            f"Cellar/ELI connectivity check failed ({_CONNECTIVITY_URL}): {exc}"
+        ) from exc
+    mark_healthy(CELLAR_ELI)

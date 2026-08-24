@@ -21,23 +21,45 @@ import ps_service.main as main_module
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from ps_service import dependency_health
 from ps_service.config import ServiceConfig
+from ps_service.ingestion.errors import IngestionConfigurationError
+from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
 from ps_service.logging.facade import reset_for_tests
 from ps_service.main import create_app
 
 _FORBIDDEN_IMPORT_PREFIXES = (
     "ps_service.api",
-    "ps_service.ingestion",
     "ps_service.domain_mapper",
     "ps_service.company_merge",
     "ps_service.query_engine",
     "ps_service.mcp_interface",
     "ps_service.change_monitor",
-    "ps_service.llm_interface",
 )
 
 _LEAK_SHAPED_KEYS = frozenset({"path", "config", "env", "traceback"})
+
+
+@pytest.fixture(autouse=True)
+def _stub_dependency_checks_as_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default every dependency probe `_check_dependencies_at_startup` (issue #22) calls
+    to succeed, so every pre-existing test below (written before real dependencies
+    existed) keeps working without a real FalkorDB/LLM Provider/Cellar-ELI to talk to.
+
+    Tests that specifically exercise the readiness-gating behavior override
+    one of these via their own `monkeypatch` fixture argument — the same
+    function-scoped `MonkeyPatch` instance as this fixture's, so a test's own
+    `setattr` composes with (and can override) this default. A stub that
+    succeeds never calls `mark_healthy`/`mark_unhealthy` itself, which is
+    fine: `ps_service.dependency_health`'s registry already treats a
+    never-recorded dependency as healthy by default, and `conftest.py`'s
+    autouse fixture resets it before every test.
+    """
+    monkeypatch.setattr(main_module, "connect_from_config", lambda config: object())
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", lambda db, host, port: None)
+    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", lambda config: None)
+    monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", lambda: None)
 
 
 @pytest.fixture
@@ -213,7 +235,17 @@ def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -
 
 
 def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_component() -> None:
-    """AC-BI-006: `main.py` never imports `ps_service/api/` or any pipeline/query-surface component.
+    """AC-BI-006 (narrowed by issue #22): `main.py` never imports `ps_service/api/` or any
+    pipeline/query-surface component it doesn't need for its own readiness contract.
+
+    `ps_service.ingestion`/`ps_service.llm_interface` were dropped from
+    `_FORBIDDEN_IMPORT_PREFIXES` by issue #22: `main.py` now imports each
+    component's `check_connectivity` (and `ingestion.falkordb_client.
+    connect_from_config`) as `/ready`'s startup dependency probes — a
+    deliberate, narrow exception to AC-BI-006's original decoupling, not a
+    reopening of it. Domain Mapper, Company Merge, Query Engine, MCP
+    Interface, and Regulatory Change Monitor stay forbidden; `main.py` has
+    no readiness relationship with any of them.
 
     Statically parses `main.py`'s source via `ast` and walks `Import`/
     `ImportFrom` nodes, rather than checking `sys.modules`, so it can't be
@@ -585,3 +617,93 @@ def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -
 
     assert len(warning_entries) == 0
     assert len(success_entries) == 1
+
+
+# --- Dependency-gated readiness (issue #22) --------------------------------
+
+
+def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    def failing_connect(config: ServiceConfig) -> object:
+        raise IngestionConfigurationError("FalkorDB connection failed at 127.0.0.1:6379")
+
+    monkeypatch.setattr(main_module, "connect_from_config", failing_connect)
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "not_ready"}
+
+
+def test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI, tmp_path: Path
+) -> None:
+    def failing_llm_check(config: ServiceConfig) -> None:
+        raise LlmProviderError("PS_LLMINTERFACE_MODEL is not configured")
+
+    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", failing_llm_check)
+
+    with TestClient(app):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    warning_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "warning"]
+
+    assert any(entry.get("dependency") == "llm_interface" for entry in warning_entries)
+
+
+def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """A FalkorDB failure must not short-circuit the LLM Interface/Cellar-ELI
+    checks — a single startup should surface every failing dependency, not
+    just the first one hit."""
+    called: list[str] = []
+
+    def failing_connect(config: ServiceConfig) -> object:
+        called.append("falkordb")
+        raise IngestionConfigurationError("boom")
+
+    def succeeding_llm_check(config: ServiceConfig) -> None:
+        called.append("llm_interface")
+
+    def succeeding_cellar_check() -> None:
+        called.append("cellar_eli")
+
+    monkeypatch.setattr(main_module, "connect_from_config", failing_connect)
+    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", succeeding_llm_check)
+    monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", succeeding_cellar_check)
+
+    with TestClient(app):
+        pass
+
+    assert called == ["falkordb", "llm_interface", "cellar_eli"]
+
+
+def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(
+    app: FastAPI,
+) -> None:
+    """The live gate (`dependency_health.all_healthy`), not just the one-time
+    startup gate: a call site elsewhere (e.g. `graph_writer`'s write path)
+    marking FalkorDB unhealthy mid-run must be reflected on the next
+    `/ready` poll, without needing a restart."""
+    with TestClient(app) as client:
+        assert client.get("/ready").json() == {"status": "ready"}
+
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
+
+        assert client.get("/ready").json() == {"status": "not_ready"}
+
+
+def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
+        assert client.get("/ready").json() == {"status": "not_ready"}
+
+        dependency_health.mark_healthy(dependency_health.FALKORDB)
+
+        assert client.get("/ready").json() == {"status": "ready"}

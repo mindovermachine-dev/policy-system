@@ -42,6 +42,7 @@ from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb sh
 )
 
 from ps_service.config import ServiceConfig
+from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.ingestion.errors import IngestionConfigurationError
 
 _NATIVE_GRAPH_SUFFIX = "_native"
@@ -117,15 +118,21 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
 
     Raises `FalkorDBConnectionError` (wrapping the underlying cause) if
     `db` cannot list its graphs — the cheapest real round-trip available to
-    confirm the connection is actually usable.
+    confirm the connection is actually usable. Records the outcome in
+    `ps_service.dependency_health` either way, so a caller using this as
+    `main.py`'s startup probe also feeds the live readiness signal that
+    `graph_writer`'s write-path exception handling updates on every
+    subsequent real write.
     """
     try:
         db.list_graphs()
     except Exception as exc:
+        mark_unhealthy(FALKORDB, error=exc)
         raise FalkorDBConnectionError(
             f"FalkorDB connection failed at {host}:{port}. "
             f"Is FalkorDB running? Error: {exc}"
         ) from exc
+    mark_healthy(FALKORDB)
 
 
 def select_graph(db: FalkorDB, name: str) -> GraphHandle:

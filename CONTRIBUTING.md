@@ -152,6 +152,21 @@ Once it's running, verify it's alive:
 curl http://127.0.0.1:8000/health
 ```
 
+`/ready` is stricter than `/health` — it only reports `ready` once FalkorDB,
+the LLM Interface, and Cellar/ELI are all confirmed reachable at startup, and
+stays that way only as long as each keeps succeeding on real traffic
+(self-heals on the next success if one fails mid-run, no restart needed):
+
+```bash
+curl http://127.0.0.1:8000/ready
+```
+
+If you haven't set up FalkorDB (see [Option B](#option-b-local-setup-no-dev-container)
+above) or configured the LLM Interface (see the next section) yet, `/ready`
+will report `not_ready` — check `logs/ps-service.jsonl` for a `startup`/
+`warning` entry naming which dependency failed. Cellar/ELI needs no local
+setup (it's a public endpoint), so it only fails here if you're offline.
+
 To stop it, press Ctrl-C in the terminal it's running in, or send it
 `SIGTERM` from another terminal (`kill -TERM <pid>`) — either way, uvicorn's
 built-in graceful shutdown handles it: no forced kill needed.

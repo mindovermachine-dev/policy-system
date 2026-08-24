@@ -25,6 +25,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from ps_service.dependency_health import (
+    reset_for_tests as reset_dependency_health_for_tests,
+)
 from ps_service.logging import EmitterConfig, LogEmitter
 from ps_service.logging.emitter import TextSink
 from ps_service.logging.facade import reset_for_tests
@@ -43,13 +46,19 @@ def _isolate_logging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     repo's real `.env` values for `PS_LLMINTERFACE_MODEL`/
     `PS_LLMINTERFACE_EMBED_MODEL` into `os.environ` for every subsequent
     test in the same pytest session.
+
+    Also resets `ps_service.dependency_health`'s process-wide registry, the
+    same leak-across-tests risk `reset_for_tests()` already guards against
+    for Logging's own process-wide default emitter.
     """
     monkeypatch.setenv("PS_LOGGING_DIR", str(tmp_path))
     monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
     reset_for_tests()
+    reset_dependency_health_for_tests()
     yield
     reset_for_tests()
+    reset_dependency_health_for_tests()
 
 
 @pytest.fixture

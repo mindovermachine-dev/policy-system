@@ -9,6 +9,7 @@ import httpx
 import openai
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
+from ps_service.dependency_health import LLM_INTERFACE, is_healthy
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.llm_interface.models import EmbeddingResult
@@ -72,3 +73,43 @@ def test_route_embedding_raises_llm_provider_error_when_provider_returns_no_data
         route_embedding(
             "some text", model="fake-embed-model", call_embedding=fake_call_embedding, emitter=emitter
         )
+
+
+def test_route_embedding_marks_llm_interface_healthy_on_success(emitter: LogEmitter) -> None:
+    fake_response = EmbeddingResponse(
+        model="fake-embed-model",
+        data=[Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding")],
+    )
+
+    def fake_call_embedding(*, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
+        return fake_response
+
+    route_embedding("some text", model="fake-embed-model", call_embedding=fake_call_embedding, emitter=emitter)
+
+    assert is_healthy(LLM_INTERFACE) is True
+
+
+def test_route_embedding_marks_llm_interface_unhealthy_when_provider_call_raises(emitter: LogEmitter) -> None:
+    def fake_call_embedding(*, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
+        raise openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
+
+    with pytest.raises(LlmProviderError):
+        route_embedding(
+            "some text", model="fake-embed-model", call_embedding=fake_call_embedding, emitter=emitter
+        )
+
+    assert is_healthy(LLM_INTERFACE) is False
+
+
+def test_route_embedding_empty_data_does_not_mark_llm_interface_unhealthy(emitter: LogEmitter) -> None:
+    fake_response = EmbeddingResponse(model="fake-embed-model", data=[])
+
+    def fake_call_embedding(*, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
+        return fake_response
+
+    with pytest.raises(LlmProviderError):
+        route_embedding(
+            "some text", model="fake-embed-model", call_embedding=fake_call_embedding, emitter=emitter
+        )
+
+    assert is_healthy(LLM_INTERFACE) is True

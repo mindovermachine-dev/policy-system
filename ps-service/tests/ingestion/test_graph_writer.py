@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import date
 
 import pytest
+import redis.exceptions
+from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import (
@@ -338,6 +340,59 @@ def test_verify_structural_graph_reachable_raises_on_gap() -> None:
 
     with pytest.raises(IngestionPersistenceError, match="ARTICLE"):
         verify_structural_graph_reachable(graph, "CRA-1.0")
+
+
+# --- Dependency health wiring ----------------------------------------------
+
+
+class _FakeGraphThatRaisesConnectionError:
+    """Satisfies `GraphHandle` structurally; every `query()` call raises
+    `redis.exceptions.ConnectionError` — the same exception shape a real
+    unreachable FalkorDB instance raises mid-write."""
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        raise redis.exceptions.ConnectionError("Error 111 connecting to 127.0.0.1:6379")
+
+
+def test_register_regulation_version_marks_falkordb_unhealthy_on_connection_error() -> None:
+    graph = _FakeGraphThatRaisesConnectionError()
+
+    with pytest.raises(IngestionPersistenceError):
+        register_regulation_version(graph, "CRA-1.0", _metadata())
+
+    assert is_healthy(FALKORDB) is False
+
+
+def test_register_regulation_version_marks_falkordb_healthy_on_success() -> None:
+    graph = _FakeGraph()
+
+    register_regulation_version(graph, "CRA-1.0", _metadata())
+
+    assert is_healthy(FALKORDB) is True
+
+
+def test_falkordb_self_heals_after_a_later_successful_write() -> None:
+    failing_graph = _FakeGraphThatRaisesConnectionError()
+    with pytest.raises(IngestionPersistenceError):
+        register_regulation_version(failing_graph, "CRA-1.0", _metadata())
+    assert is_healthy(FALKORDB) is False
+
+    healthy_graph = _FakeGraph()
+    register_regulation_version(healthy_graph, "CRA-1.0", _metadata())
+
+    assert is_healthy(FALKORDB) is True
+
+
+def test_data_validation_error_does_not_mark_falkordb_unhealthy() -> None:
+    """A B1-style validation failure (bad `element_type`) never reaches
+    `graph.query()` at all — it must not be mistaken for a FalkorDB outage."""
+    graph = _FakeGraph()
+    nodes = (_node("NOT_A_REAL_TYPE", "CRA#bad"),)
+
+    with pytest.raises(IngestionPersistenceError, match="element_type"):
+        persist_native_structural_graph(graph, "CRA-1.0", nodes, ())
+
+    assert is_healthy(FALKORDB) is True
 
 
 # --- Live FalkorDB wiring proof -------------------------------------------

@@ -8,6 +8,7 @@ import pytest
 from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 from ps_service import config as config_module
 from ps_service.config import load_config
+from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.ingestion import falkordb_client as falkordb_client_module
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.ingestion.falkordb_client import (
@@ -55,6 +56,23 @@ def test_check_connectivity_does_not_raise_when_list_graphs_succeeds() -> None:
     probe = _FakeConnectivityProbeThatSucceeds()
 
     check_connectivity(probe, host="127.0.0.1", port=6379)
+
+
+def test_check_connectivity_marks_falkordb_unhealthy_on_failure() -> None:
+    probe = _FakeConnectivityProbeThatRaises()
+
+    with pytest.raises(FalkorDBConnectionError):
+        check_connectivity(probe, host="127.0.0.1", port=6379)
+
+    assert is_healthy(FALKORDB) is False
+
+
+def test_check_connectivity_marks_falkordb_healthy_on_success() -> None:
+    probe = _FakeConnectivityProbeThatSucceeds()
+
+    check_connectivity(probe, host="127.0.0.1", port=6379)
+
+    assert is_healthy(FALKORDB) is True
 
 
 @pytest.mark.parametrize(

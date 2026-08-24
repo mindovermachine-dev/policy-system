@@ -7,6 +7,7 @@ import time
 import openai
 from litellm.types.utils import ModelResponse
 
+from ps_service.dependency_health import LLM_INTERFACE, mark_healthy, mark_unhealthy
 from ps_service.llm_interface._logging_support import _log
 from ps_service.llm_interface.client import CompletionCaller, default_completion_caller
 from ps_service.llm_interface.errors import LlmProviderError
@@ -30,10 +31,12 @@ def route_completion(
     started = time.perf_counter()
     try:
         response = caller(model=model, messages=payload, timeout=timeout)
-        result = _to_completion_result(response, model=model)
     except openai.OpenAIError as exc:
+        mark_unhealthy(LLM_INTERFACE, error=exc)
         _log(action="route_completion", outcome="error", started=started, model=model, emitter=emitter)
         raise LlmProviderError(f"RouteCompletion failed for model {model!r}: {exc}") from exc
+    mark_healthy(LLM_INTERFACE)
+    result = _to_completion_result(response, model=model)
     _log(action="route_completion", outcome="success", started=started, model=model, emitter=emitter)
     return result
 

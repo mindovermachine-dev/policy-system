@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import urllib.error
 import urllib.request
 from typing import Self
 
 import pytest
-from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
+from ps_service.dependency_health import CELLAR_ELI, is_healthy
+from ps_service.ingestion.adapters.cellar_eli.fetch import (
+    check_connectivity,
+    fetch_xhtml,
+)
 from ps_service.ingestion.adapters.errors import CellarFetchError
 
 
@@ -76,6 +81,54 @@ def test_fetch_xhtml_wraps_transport_failure_in_cellar_fetch_error_preserving_ca
 
     assert isinstance(exc_info.value.__cause__, TimeoutError)
     assert "32024R2847" in str(exc_info.value)
+
+
+def test_fetch_xhtml_marks_cellar_eli_healthy_on_success() -> None:
+    transport = _RecordingTransport(b"<html></html>")
+
+    fetch_xhtml("32024R2847", transport=transport)
+
+    assert is_healthy(CELLAR_ELI) is True
+
+
+def test_fetch_xhtml_marks_cellar_eli_unhealthy_on_failure() -> None:
+    transport = _FailingTransport()
+
+    with pytest.raises(CellarFetchError):
+        fetch_xhtml("32024R2847", transport=transport)
+
+    assert is_healthy(CELLAR_ELI) is False
+
+
+def test_check_connectivity_marks_cellar_eli_healthy_on_success() -> None:
+    transport = _RecordingTransport(b"<html></html>")
+
+    check_connectivity(transport=transport)
+
+    assert is_healthy(CELLAR_ELI) is True
+
+
+def test_check_connectivity_marks_cellar_eli_unhealthy_on_transport_failure() -> None:
+    transport = _FailingTransport()
+
+    with pytest.raises(CellarFetchError):
+        check_connectivity(transport=transport)
+
+    assert is_healthy(CELLAR_ELI) is False
+
+
+def test_check_connectivity_treats_http_error_status_as_reachable() -> None:
+    """A 404 on the bare domain still means the host responded — the point
+    of this probe is confirming network reachability, not that any
+    particular resource exists there."""
+
+    class _HttpErrorTransport:
+        def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> None:
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", None, None)
+
+    check_connectivity(transport=_HttpErrorTransport())
+
+    assert is_healthy(CELLAR_ELI) is True
 
 
 @pytest.mark.cellar_live

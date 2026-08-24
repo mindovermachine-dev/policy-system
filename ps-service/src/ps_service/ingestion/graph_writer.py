@@ -82,6 +82,9 @@ from __future__ import annotations
 
 from typing import cast
 
+import redis.exceptions
+
+from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
 from ps_service.ingestion.models import (
@@ -102,6 +105,31 @@ _KNOWN_ELEMENT_TYPES = frozenset({
     "ANNEX",
     "RECITAL",
 })
+
+
+def _execute_query(
+    graph: GraphHandle, query: str, params: dict[str, object] | None = None
+) -> GraphQueryResult:
+    """The one call site every `graph.query()` write/read in this module goes
+    through, so FalkorDB connectivity failures get recorded in
+    `ps_service.dependency_health` for `/ready`'s live signal, self-healing
+    on the next successful call the same way `falkordb_client.check_connectivity`
+    already does for the startup probe.
+
+    Wraps `redis.exceptions.RedisError` — the base class every
+    connection/timeout error the underlying `falkordb`/`redis-py` stack
+    raises subclasses — into `IngestionPersistenceError`, distinct from this
+    module's own data-validation `IngestionPersistenceError`s
+    (`_validate_element_types`, `verify_structural_graph_reachable`), which
+    are raised directly by this module's own logic and never reach here.
+    """
+    try:
+        result = graph.query(query, params=params)
+    except redis.exceptions.RedisError as exc:
+        mark_unhealthy(FALKORDB, error=exc)
+        raise IngestionPersistenceError(f"FalkorDB write failed: {exc}") from exc
+    mark_healthy(FALKORDB)
+    return result
 
 
 def register_regulation_version(
@@ -127,7 +155,8 @@ def register_regulation_version(
         "status": metadata.status,
         "source_type": metadata.source_type,
     }
-    graph.query(
+    _execute_query(
+        graph,
         "MERGE (n:Regulation {id: $id}) SET n += $properties",
         params={"id": regulation_id, "properties": properties},
     )
@@ -197,7 +226,8 @@ def persist_native_structural_graph(
 def _upsert_node(graph: GraphHandle, node: StructuralNode) -> None:
     # element_type already validated by _validate_element_types above —
     # this function only ever issues the write, never the check.
-    graph.query(
+    _execute_query(
+        graph,
         f"MERGE (n:{node.element_type} {{id: $id}}) SET n += $properties",
         params={"id": node.id, "properties": node.properties},
     )
@@ -214,7 +244,8 @@ def _upsert_edge(graph: GraphHandle, regulation_id: str, edge: StructuralEdge) -
     # every other edge's `parent_id` (a StructuralNode's own id) is used
     # unchanged.
     parent_id = regulation_id if edge.parent_element_type == _REGULATION_LABEL else edge.parent_id
-    graph.query(
+    _execute_query(
+        graph,
         f"MATCH (a:{edge.parent_element_type} {{id: $parent_id}}), "
         f"(b:{edge.child_element_type} {{id: $child_id}}) "
         "MERGE (a)-[:HAS]->(b)",
@@ -237,12 +268,13 @@ def _scalar_count(result: GraphQueryResult) -> int:
 
 
 def _count_nodes(graph: GraphHandle, label: str) -> int:
-    return _scalar_count(graph.query(f"MATCH (n:{label}) RETURN count(n)"))
+    return _scalar_count(_execute_query(graph, f"MATCH (n:{label}) RETURN count(n)"))
 
 
 def _count_reachable(graph: GraphHandle, regulation_id: str, label: str) -> int:
     return _scalar_count(
-        graph.query(
+        _execute_query(
+            graph,
             f"MATCH (:Regulation {{id: $id}})-[:HAS*1..]->(n:{label}) RETURN count(DISTINCT n)",
             params={"id": regulation_id},
         )
