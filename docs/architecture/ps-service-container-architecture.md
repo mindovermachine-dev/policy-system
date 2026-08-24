@@ -376,9 +376,17 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/domain_mapper/__init__.py` | Package marker (scaffold only — no logic yet) | — |
-| `ps-service/src/ps_service/domain_mapper/adapters/base.py` | Domain Mapping Adapter interface (scaffold only — no logic yet) | — |
-| `ps-service/src/ps_service/domain_mapper/adapters/cellar_eli.py` | Cellar/ELI Domain Mapping Adapter (scaffold only — no logic yet) | — |
+| `ps-service/src/ps_service/domain_mapper/__init__.py` | Package front door, re-exports `extract_roles_and_requirements`, `derive_obligations_and_capabilities` | — |
+| `ps-service/src/ps_service/domain_mapper/errors.py` | `DomainMapperExtractionError`, `DomainMapperDerivationError`, `DomainMapperPersistenceError`, `DomainMapperConfigurationError` | — |
+| `ps-service/src/ps_service/domain_mapper/models.py` | `ExtractionUnit`, `RequirementCandidate`, `ExtractionResult`, `RoleRequirements`, `ObligationAssignment`, `CapabilityDecision`, `DerivationResult`, plus the internal node/edge shapes `graph_writer.py` persists | — |
+| `ps-service/src/ps_service/domain_mapper/identity.py` | `role_id`, `requirement_id`, `obligation_id`, `capability_id` — pure functions implementing `ps-domain-concepts.md`'s canonical identity formulas, including the collision-aware, duty-text-only `obligation_id()` | — |
+| `ps-service/src/ps_service/domain_mapper/prompts.py` | System prompts and response-parsing helpers for all three LLM calls (extraction, obligation derivation, capability derivation) | ExtractRolesAndRequirements, DeriveObligationsAndCapabilities |
+| `ps-service/src/ps_service/domain_mapper/extraction.py` | `extract_roles_and_requirements()` — reads native units via the Domain Mapping Adapter, calls the LLM per unit, canonicalizes Roles, builds the Requirement graph with collision disambiguation, persists via `graph_writer.py` | ExtractRolesAndRequirements |
+| `ps-service/src/ps_service/domain_mapper/derivation.py` | `derive_obligations_and_capabilities()` — reads Requirements back from the baseline graph by Role, runs the whole-run collision-aware Obligation mint/match, then whole-run Capability mint/match, persists via `graph_writer.py` | DeriveObligationsAndCapabilities |
+| `ps-service/src/ps_service/domain_mapper/graph_writer.py` | `persist_role_and_requirement_graph` (validate-then-write, mirrors #14's B1 fix), `persist_obligation_and_capability_graph` | ExtractRolesAndRequirements, DeriveObligationsAndCapabilities |
+| `ps-service/src/ps_service/domain_mapper/falkordb_client.py` | `connect`/`connect_from_config`, `check_connectivity`, `select_graph`, `native_graph_name`, `baseline_graph_name`, `GraphHandle` Protocol | CheckConnectivity (FalkorDB) |
+| `ps-service/src/ps_service/domain_mapper/adapters/base.py` | `DomainMappingAdapter` Protocol | — |
+| `ps-service/src/ps_service/domain_mapper/adapters/cellar_eli.py` | `CellarEliDomainMappingAdapter` — reads a regulation's native structural graph (`{short}_native`), paired 1:1 with #14's Cellar/ELI Ingestion Adapter, returns ordered `ExtractionUnit`s (one per `PARAGRAPH`, or per whole `ARTICLE` when it has none) | ExtractRolesAndRequirements |
 
 #### Actions
 
