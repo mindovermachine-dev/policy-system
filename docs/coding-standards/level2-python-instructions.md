@@ -138,6 +138,7 @@
 ### Configuration & Secrets
 
 - Environment variable convention: `PS_<COMPONENT>_<SETTING>`, e.g. `PS_FALKORDB_HOST`, `PS_FALKORDB_PORT`, `PS_FALKORDB_GRAPH` — matches the existing precedent in `tools/graph-query/ps.py`, which `mcp_interface` inherits from.
+- LLM Interface routing config: `PS_LLMINTERFACE_MODEL` (chat model for `RouteCompletion`), `PS_LLMINTERFACE_EMBED_MODEL` (embedding model for `RouteEmbedding`) — plain model-name strings passed directly to `litellm.completion(model=...)`/`litellm.embedding(model=...)`, no router/fallback config. Both are new fields on the same `ServiceConfig` (`ps_service/config.py`), resolved by the same `load_config()` call as `PS_SERVICE_*`/`PS_LOGGING_DIR` — no separate config module. Provider credentials are never part of this config; LiteLLM resolves them from its own provider-specific env vars per the Common section's Configuration & Secrets rule above.
 
 ---
 

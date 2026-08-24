@@ -164,3 +164,58 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
+
+
+def test_load_config_with_no_llm_interface_env_vars_set_returns_none_for_both_model_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` set → both fields default to `None`."""
+    monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
+    monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
+
+    result = load_config()
+
+    assert result.llm_interface_model is None
+    assert result.llm_interface_embed_model is None
+
+
+def test_load_config_honors_ps_llm_interface_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_LLMINTERFACE_MODEL` override takes effect."""
+    monkeypatch.setenv("PS_LLMINTERFACE_MODEL", "azure/gpt-5.4-mini")
+
+    assert load_config().llm_interface_model == "azure/gpt-5.4-mini"
+
+
+def test_load_config_honors_ps_llm_interface_embed_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_LLMINTERFACE_EMBED_MODEL` override takes effect."""
+    monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embedding-3-large")
+
+    assert load_config().llm_interface_embed_model == "azure/text-embedding-3-large"
+
+
+@pytest.mark.parametrize("invalid_model", ["", "   ", "\t"])
+def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_ps_llm_interface_model(
+    invalid_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_LLMINTERFACE_MODEL` fails closed, never falls back."""
+    monkeypatch.setenv("PS_LLMINTERFACE_MODEL", invalid_model)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+@pytest.mark.parametrize("invalid_embed_model", ["", "   ", "\t"])
+def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_ps_llm_interface_embed_model(
+    invalid_embed_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_LLMINTERFACE_EMBED_MODEL` fails closed, never falls back."""
+    monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", invalid_embed_model)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()

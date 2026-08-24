@@ -12,4 +12,5 @@ dev = [
 testpaths = ["ps-service/tests", "ps-cli/tests"]
 markers = [
     "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
+    "llm_live: hits the live, configured LLM Provider over the network via LiteLLM (slow, costs tokens, requires real provider credentials)",
 ]

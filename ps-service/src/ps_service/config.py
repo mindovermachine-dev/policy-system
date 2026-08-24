@@ -29,12 +29,19 @@ class ServiceConfig:
 
     Immutable by design: once `load_config()` resolves the environment into
     a `ServiceConfig`, nothing downstream may mutate it.
+
+    `llm_interface_model`/`llm_interface_embed_model` (from
+    `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`) are `<provider>/<model>`
+    strings passed straight through to `litellm.completion`/`litellm.embedding` —
+    see `_parse_model_string` and CONTRIBUTING.md for format/examples.
     """
 
     host: str
     port: int
     graceful_shutdown_seconds: int
     logging_dir: Path | None
+    llm_interface_model: str | None = None
+    llm_interface_embed_model: str | None = None
 
 
 def _parse_port(raw: str) -> int:
@@ -83,6 +90,26 @@ def _parse_graceful_shutdown_seconds(raw: str) -> int:
     return graceful_shutdown_seconds
 
 
+def _parse_model_string(raw: str, *, env_var_name: str) -> str:
+    """Validate a `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` value.
+
+    Mirrors `_parse_host`'s "never widen to a fallback" style: rejects an
+    explicitly-set empty/whitespace-only value rather than silently treating
+    it as unset.
+
+    Only checks non-empty — this is *not* where format is enforced. The
+    expected shape is a LiteLLM-recognized `<provider>/<model-or-deployment-name>`
+    string, e.g. `azure/gpt-5.4-mini` or `ollama/phi3:mini`. Provider
+    credentials (API keys, base URLs) are separate env vars that LiteLLM
+    resolves itself — never part of `ServiceConfig`. See CONTRIBUTING.md
+    ("Configure the LLM Interface") for the full worked examples.
+    """
+    if not raw.strip():
+        message = f"{env_var_name} must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
 def load_config() -> ServiceConfig:
     """Resolve `PS_SERVICE_*`/`PS_LOGGING_DIR` into a `ServiceConfig`.
 
@@ -102,9 +129,26 @@ def load_config() -> ServiceConfig:
     logging_dir_raw = os.environ.get("PS_LOGGING_DIR")
     logging_dir = Path(logging_dir_raw) if logging_dir_raw is not None else None
 
+    llm_interface_model_raw = os.environ.get("PS_LLMINTERFACE_MODEL")
+    llm_interface_model = (
+        _parse_model_string(llm_interface_model_raw, env_var_name="PS_LLMINTERFACE_MODEL")
+        if llm_interface_model_raw is not None
+        else None
+    )
+    llm_interface_embed_model_raw = os.environ.get("PS_LLMINTERFACE_EMBED_MODEL")
+    llm_interface_embed_model = (
+        _parse_model_string(
+            llm_interface_embed_model_raw, env_var_name="PS_LLMINTERFACE_EMBED_MODEL"
+        )
+        if llm_interface_embed_model_raw is not None
+        else None
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
         graceful_shutdown_seconds=graceful_shutdown_seconds,
         logging_dir=logging_dir,
+        llm_interface_model=llm_interface_model,
+        llm_interface_embed_model=llm_interface_embed_model,
     )

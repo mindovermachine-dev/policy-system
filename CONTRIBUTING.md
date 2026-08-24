@@ -2,6 +2,8 @@
 
 Thank you for considering contributing to this project!
 
+Note: We are in the transition from prototype to full implementation and the instructions here are a mix of both. As the actual implementation progresses, prototype instructions will be removed.
+
 ## Getting Started
 
 1. Fork the repository.
@@ -153,6 +155,90 @@ curl http://127.0.0.1:8000/health
 To stop it, press Ctrl-C in the terminal it's running in, or send it
 `SIGTERM` from another terminal (`kill -TERM <pid>`) — either way, uvicorn's
 built-in graceful shutdown handles it: no forced kill needed.
+
+### Configure the LLM Interface
+
+`ps_service.llm_interface` (`route_completion`/`route_embedding`) routes to
+whatever LLM Provider `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`
+name, via LiteLLM. Both are `<provider>/<model-or-deployment-name>` strings
+passed straight through to `litellm.completion`/`litellm.embedding` — the
+provider prefix (`azure/`, `ollama/`, ...) is what tells LiteLLM which
+credential env vars to resolve. `ServiceConfig` only ever carries the two
+model-name strings; it never sees credentials. Copy
+[`.env.example`](.env.example) to `.env` (git-ignored) and fill in one of
+the two options below.
+
+#### Azure
+
+```bash
+PS_LLMINTERFACE_MODEL=azure/gpt-5.4-mini
+PS_LLMINTERFACE_EMBED_MODEL=azure/text-embedding-3-large
+AZURE_API_KEY=<your key>
+AZURE_API_BASE=<your resource endpoint>
+```
+
+This is the exact configuration live acceptance tests run
+against. LiteLLM resolves `AZURE_API_KEY`/`AZURE_API_BASE` itself — never
+pass them explicitly to `litellm`/`route_completion`/`route_embedding`.
+
+Sanity-check via the public API (`set -a && source .env && set +a` first so
+the shell has the Azure vars, then):
+
+```bash
+uv run --project ps-service python3 -c "
+from ps_service.logging.facade import configure
+configure()
+from ps_service.llm_interface import route_completion, route_embedding, ChatMessage
+
+r = route_completion([ChatMessage(role='user', content='Say OK')], model='azure/gpt-5.4-mini')
+print(r.model, r.text)
+
+e = route_embedding('hello world', model='azure/text-embedding-3-large')
+print(e.model, len(e.vector))
+"
+```
+
+`configure()` is needed because `route_completion`/`route_embedding` log
+through the Logging component, which requires a configured default emitter
+before first use outside of `main.py`'s normal process startup.
+
+#### Ollama (local, no cloud credentials/cost)
+
+Requires a local [Ollama](https://ollama.com) install with a chat and an
+embedding model pulled (`ollama list` to check first):
+
+```bash
+ollama pull phi3:mini
+ollama pull nomic-embed-text
+```
+
+```bash
+PS_LLMINTERFACE_MODEL=ollama/phi3:mini
+PS_LLMINTERFACE_EMBED_MODEL=ollama/nomic-embed-text
+```
+
+No credential env vars are needed against a default-config local Ollama
+instance (`localhost:11434`) — confirmed empirically: LiteLLM connects with
+nothing else set. Only set `OLLAMA_API_BASE` if Ollama is reachable
+somewhere other than the default host/port (also confirmed empirically: a
+wrong `OLLAMA_API_BASE` produces a clear `APIConnectionError` rather than
+silently falling back).
+
+Sanity-check the same way as Azure, just swap the models:
+
+```bash
+uv run --project ps-service python3 -c "
+from ps_service.logging.facade import configure
+configure()
+from ps_service.llm_interface import route_completion, route_embedding, ChatMessage
+
+r = route_completion([ChatMessage(role='user', content='Say OK')], model='ollama/phi3:mini')
+print(r.model, r.text)
+
+e = route_embedding('hello world', model='ollama/nomic-embed-text')
+print(e.model, len(e.vector))
+"
+```
 
 ### Claude Desktop (alternative to Claude Code)
 
