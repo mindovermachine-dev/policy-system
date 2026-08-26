@@ -44,6 +44,16 @@ class ServiceConfig:
     already names a different thing (the query-surface's single company
     graph name); Ingestion computes its own per-regulation graph name from
     `short_name` via `native_graph_name`, not from config.
+
+    `company_merge_similarity_threshold` (from
+    `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is deliberately optional with no
+    default here: this field only records what the environment resolved to,
+    if anything. Whether a value is *required* is enforced at
+    `ps_service.company_merge.merge.merge_baseline_graph`'s own call site,
+    not here — `load_config()` is called unconditionally by every process
+    entrypoint (`main.py`) and by tests for components that have nothing to
+    do with Company Merge, so this layer must never fail closed on the env
+    var simply being absent. See PLAN_REVIEWED.md §8 (issue #16, B1's fix).
     """
 
     host: str
@@ -54,6 +64,7 @@ class ServiceConfig:
     llm_interface_embed_model: str | None = None
     falkordb_host: str = _DEFAULT_FALKORDB_HOST
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
+    company_merge_similarity_threshold: float | None = None
 
 
 def _parse_port(raw: str) -> int:
@@ -135,6 +146,34 @@ def _parse_falkordb_host(raw: str) -> str:
     return raw
 
 
+def _parse_similarity_threshold(raw: str) -> float:
+    """Parse and range-check `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`, failing
+    closed on any invalid value.
+
+    Mirrors `_parse_falkordb_port`'s exact validation shape (parse, then
+    range-check, raising `ServiceConfigurationError` naming the env var and
+    the invalid value on either failure). Only ever called when the env var
+    is actually set — absence is not an error at this layer (B1's fix: the
+    "fail closed on missing" requirement is enforced by
+    `merge_baseline_graph`'s own call site, not here — `load_config()` has
+    no way to know whether Company Merge is even going to be used in a given
+    process invocation, and every other unrelated caller of `load_config()`
+    must keep working with this env var unset).
+    """
+    try:
+        threshold = float(raw)
+    except ValueError as exc:
+        message = f"PS_COMPANYMERGE_SIMILARITY_THRESHOLD must be a float, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not (0.0 < threshold <= 1.0):
+        message = (
+            "PS_COMPANYMERGE_SIMILARITY_THRESHOLD must be greater than 0.0 and at "
+            f"most 1.0, got {threshold}"
+        )
+        raise ServiceConfigurationError(message)
+    return threshold
+
+
 def _parse_model_string(raw: str, *, env_var_name: str) -> str:
     """Validate a `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` value.
 
@@ -196,6 +235,15 @@ def load_config() -> ServiceConfig:
         os.environ.get("PS_FALKORDB_PORT", str(_DEFAULT_FALKORDB_PORT))
     )
 
+    company_merge_similarity_threshold_raw = os.environ.get(
+        "PS_COMPANYMERGE_SIMILARITY_THRESHOLD"
+    )
+    company_merge_similarity_threshold = (
+        _parse_similarity_threshold(company_merge_similarity_threshold_raw)
+        if company_merge_similarity_threshold_raw is not None
+        else None
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -205,4 +253,5 @@ def load_config() -> ServiceConfig:
         llm_interface_embed_model=llm_interface_embed_model,
         falkordb_host=falkordb_host,
         falkordb_port=falkordb_port,
+        company_merge_similarity_threshold=company_merge_similarity_threshold,
     )

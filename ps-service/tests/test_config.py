@@ -14,6 +14,7 @@ import dataclasses
 import inspect
 
 import pytest
+
 from ps_service import config as config_module
 from ps_service.config import ServiceConfig, ServiceConfigurationError, load_config
 
@@ -277,3 +278,71 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_falkordb_
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
+
+
+def test_load_config_with_no_ps_companymerge_similarity_threshold_set_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` set -> `None`, no exception raised at this layer.
+
+    Issue #16's B1 fix: "required" enforcement lives at
+    `merge_baseline_graph`'s own call site, not in `load_config()` — every
+    other unrelated caller of `load_config()` must keep working with this
+    env var unset.
+    """
+    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+
+    result = load_config()
+
+    assert result.company_merge_similarity_threshold is None
+
+
+def test_load_config_honors_ps_companymerge_similarity_threshold_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` override takes effect and parses to a float."""
+    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.85")
+
+    assert load_config().company_merge_similarity_threshold == 0.85
+
+
+@pytest.mark.parametrize(
+    "invalid_similarity_threshold",
+    ["0.0", "1.5", "-0.1"],
+)
+def test_load_config_raises_service_configuration_error_for_out_of_range_ps_companymerge_similarity_threshold(
+    invalid_similarity_threshold: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Out-of-range (not `0.0 < value <= 1.0`) `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` fails closed, when present."""
+    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", invalid_similarity_threshold)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_load_config_raises_service_configuration_error_for_non_numeric_ps_companymerge_similarity_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` fails closed, when present."""
+    monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "high")
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_service_config_pre_existing_four_field_construction_still_succeeds_with_none_threshold() -> None:
+    """Regression proof (issue #16's B1): the exact pre-existing 4-positional-field
+    `ServiceConfig(...)` construction other tests in this file already use, with no
+    `company_merge_similarity_threshold` argument, still succeeds and the new field
+    defaults to `None` — proving this field's addition does not break any
+    pre-existing `ServiceConfig(...)` call site anywhere in the codebase.
+    """
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+    )
+
+    assert config.company_merge_similarity_threshold is None

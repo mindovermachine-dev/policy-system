@@ -1,0 +1,133 @@
+"""Tests for `ps_service.company_merge.falkordb_client`.
+
+Mirrors `ps_service.domain_mapper.tests.test_falkordb_client`'s shape
+exactly (PLAN_REVIEWED.md §10 Increment 4) -- this is a deliberate
+near-duplicate component (own copy, not a shared import; see the module's
+own docstring), so its tests are a deliberate near-duplicate too.
+"""
+
+from __future__ import annotations
+
+from typing import cast
+
+import pytest
+from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
+
+from ps_service import config as config_module
+from ps_service.company_merge import falkordb_client as falkordb_client_module
+from ps_service.company_merge.errors import CompanyMergeConfigurationError
+from ps_service.company_merge.falkordb_client import (
+    check_connectivity,
+    connect,
+    connect_from_config,
+    single_tenant_graph_name,
+)
+from ps_service.config import load_config
+from ps_service.dependency_health import FALKORDB, is_healthy
+
+
+class _FakeConnectivityProbeThatRaises:
+    """Satisfies `_ConnectivityProbe` structurally; `list_graphs` always
+    fails, simulating an unreachable FalkorDB instance."""
+
+    def list_graphs(self) -> list[str]:
+        raise ConnectionRefusedError("connection refused")
+
+
+class _FakeConnectivityProbeThatSucceeds:
+    """Satisfies `_ConnectivityProbe` structurally; `list_graphs` returns
+    normally, simulating a reachable FalkorDB instance."""
+
+    def list_graphs(self) -> list[str]:
+        return ["policy_system"]
+
+
+def test_check_connectivity_raises_company_merge_configuration_error_on_failure() -> None:
+    probe = _FakeConnectivityProbeThatRaises()
+
+    with pytest.raises(CompanyMergeConfigurationError) as exc_info:
+        check_connectivity(probe, host="127.0.0.1", port=6379)
+
+    assert "127.0.0.1:6379" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ConnectionRefusedError)
+
+
+def test_check_connectivity_does_not_raise_when_list_graphs_succeeds() -> None:
+    probe = _FakeConnectivityProbeThatSucceeds()
+
+    check_connectivity(probe, host="127.0.0.1", port=6379)
+
+
+def test_check_connectivity_marks_falkordb_unhealthy_on_failure() -> None:
+    probe = _FakeConnectivityProbeThatRaises()
+
+    with pytest.raises(CompanyMergeConfigurationError):
+        check_connectivity(probe, host="127.0.0.1", port=6379)
+
+    assert is_healthy(FALKORDB) is False
+
+
+def test_check_connectivity_marks_falkordb_healthy_on_success() -> None:
+    probe = _FakeConnectivityProbeThatSucceeds()
+
+    check_connectivity(probe, host="127.0.0.1", port=6379)
+
+    assert is_healthy(FALKORDB) is True
+
+
+def test_single_tenant_graph_name_defaults_to_policy_system_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PS_FALKORDB_GRAPH", raising=False)
+
+    assert single_tenant_graph_name() == "policy_system"
+
+
+def test_single_tenant_graph_name_uses_env_override_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_FALKORDB_GRAPH", "custom_name")
+
+    assert single_tenant_graph_name() == "custom_name"
+
+
+def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`connect_from_config` threads `ServiceConfig.falkordb_host`/
+    `falkordb_port` -- resolved from `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` by
+    `load_config()` -- into `connect()`, not a hardcoded default. Mocks the
+    module-level `connect` (the underlying call) to capture exactly what it
+    was invoked with, so this fails if `connect_from_config` ever hardcodes
+    a literal instead of reading `config`.
+    """
+    env_host = "10.20.30.40"
+    env_port = 7000
+    assert env_host != config_module._DEFAULT_FALKORDB_HOST
+    assert env_port != config_module._DEFAULT_FALKORDB_PORT
+    monkeypatch.setenv("PS_FALKORDB_HOST", env_host)
+    monkeypatch.setenv("PS_FALKORDB_PORT", str(env_port))
+    captured: dict[str, object] = {}
+    sentinel = cast(FalkorDB, object())
+
+    def _fake_connect(host: str, port: int) -> FalkorDB:
+        captured["host"] = host
+        captured["port"] = port
+        return sentinel
+
+    monkeypatch.setattr(falkordb_client_module, "connect", _fake_connect)
+
+    config = load_config()
+    result = connect_from_config(config)
+
+    assert captured == {"host": env_host, "port": env_port}
+    assert result is sentinel
+
+
+@pytest.mark.falkordb_live
+def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
+    """Real connect to 127.0.0.1:6379 -- requires a reachable FalkorDB
+    instance."""
+    db = connect(host="127.0.0.1", port=6379)
+
+    check_connectivity(db, host="127.0.0.1", port=6379)
