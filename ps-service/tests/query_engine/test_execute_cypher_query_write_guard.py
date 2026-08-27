@@ -6,8 +6,8 @@ the seven write clauses, upper/lower/mixed case; a word-boundary negative
 case proves the regex doesn't false-positive on an identifier substring; an
 exact-message-text assertion (Q3 fix) pins the rejection wording so drift is
 caught mechanically, not just by manual review; and `is_write_clause` is
-also tested directly (S2's shared-helper fix), since a later increment's
-`cypher_cli.py` calls it independently of `execute_cypher_query`.
+also tested directly, since an independent caller (`mcp_interface`) also
+goes through it.
 
 Batch 4/Increment 6 wired `_log` into `execute_cypher_query`'s rejected
 path, so every call here now needs a live emitter (or a configured process

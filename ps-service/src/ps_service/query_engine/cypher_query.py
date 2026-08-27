@@ -1,4 +1,4 @@
-"""`ExecuteCypherQuery` -- the relocated guard/execution core.
+"""`ExecuteCypherQuery` -- the guard/execution core.
 
 Batch 3 / Increments 3-5 scope (PLAN_REVIEWED.md §5): the write-clause guard
 (`is_write_clause`, `_WRITE_CLAUSE_REJECTION_MESSAGE`) and `execute_cypher_query`'s
@@ -35,24 +35,20 @@ _COMPONENT = "query_engine"
 _ACTION = "execute_cypher_query"
 
 # Cypher clauses that mutate the graph. Best-effort textual guard, not a
-# security boundary. Relocated unchanged from the original
-# `ps_service/mcp_interface/cypher_cli.py` (PLAN_REVIEWED.md §0.4).
+# security boundary. Single-sourced here; not duplicated anywhere else.
 _WRITE_CLAUSE = re.compile(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b", re.IGNORECASE)
 
 _WRITE_CLAUSE_REJECTION_MESSAGE = (
     "this command is read-only -- query contains a write clause "
     "(CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH). Not executed."
-)  # S1 fix: exact original cypher_cli.py stderr text minus its "error: " prefix
+)  # returned to the caller verbatim, prefixed with "error: "
 
 
 def is_write_clause(query: str) -> bool:
-    """Single source of truth for the write-clause check, used both by
-    `execute_cypher_query` (the AC-002 boundary every caller goes through)
-    and, in a later increment, `cypher_cli.py`'s `cmd_cypher` (S2 fix: a
-    pre-connect short-circuit so a rejected query never triggers
-    `_connect(args)`). Exported, not duplicated as a second regex, so
-    AC-003's "guard/execution logic exists in exactly one place" holds even
-    though it will end up with two call sites."""
+    """Single source of truth for the write-clause check -- the AC-002
+    boundary every caller goes through, including `mcp_interface`'s
+    in-process `handle_mcp_tool_call`. It has one call site
+    (`execute_cypher_query`); exported, not duplicated as a second regex."""
     return bool(_WRITE_CLAUSE.search(query))
 
 
@@ -65,9 +61,8 @@ def execute_cypher_query(
     """ExecuteCypherQuery: execute a read-only Cypher query against `graph`.
 
     Rejects any query containing a write clause by raising
-    `WriteClauseRejectedError` BEFORE `graph.query` is ever called (AC-002)
-    -- the exact same `_WRITE_CLAUSE` regex `cypher_cli.py` used, unchanged,
-    via `is_write_clause`.
+    `WriteClauseRejectedError` BEFORE `graph.query` is ever called (AC-002),
+    via the shared `is_write_clause` helper.
 
     Any exception from `graph.query` itself is caught and re-raised as
     `QueryEngineExecutionError`, preserving the original message verbatim.

@@ -13,10 +13,10 @@ NAMES from `result.header` (`[type, name]` pairs), not just `result_set`.
 
 Deliberately NOT included here, unlike the company_merge/domain_mapper
 copies: `check_connectivity`/`dependency_health` wiring. No AC requires a
-startup connectivity probe for Query Engine; the original `cypher_cli.py`'s
-`_connect` does not probe connectivity either (lazy connection, first
-`.query()` call) -- this preserves that behavior exactly (PLAN_REVIEWED.md
-§2.3).
+separate startup connectivity probe for Query Engine. Note the `falkordb`
+client constructor itself issues a Redis round-trip (sentinel/cluster
+detection), so construction fails fast when the server is unreachable;
+`connect()` adds no further explicit probe (PLAN_REVIEWED.md §2.3).
 """
 
 from __future__ import annotations
@@ -51,9 +51,9 @@ class GraphHandle(Protocol):
 
 
 def connect(host: str, port: int) -> FalkorDB:
-    """Construct a FalkorDB client. Does not itself verify connectivity --
-    the underlying client connects lazily on first use, mirroring the
-    original `cypher_cli.py`'s `_connect` behavior exactly."""
+    """Construct a FalkorDB client. The `falkordb` constructor issues a
+    Redis round-trip (sentinel/cluster detection), so it fails fast if the
+    server is unreachable; this function adds no further explicit probe."""
     return FalkorDB(host=host, port=port)
 
 

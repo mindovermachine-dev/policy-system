@@ -1,68 +1,151 @@
 #!/usr/bin/env python3
-"""MCP stdio server exposing read-only Cypher access to the policy_system
-graph, for clients (e.g. Claude Desktop) that have no shell of their own.
+"""MCP stdio server: in-process read-only Cypher access to the policy_system graph
+plus the ps-domain-concepts resource, for clients (e.g. Claude Desktop) with no shell.
 
-Deliberately a thin wrapper around `query_engine/cypher_cli.py cypher`, not a
-reimplementation: every query is executed via subprocess through the exact
-same script the policy-question skill's guardrails already document, so the
-write-clause guard (see query_engine/cypher_cli.py's _WRITE_CLAUSE) and
-connection logic live in exactly one place. Do not duplicate that regex here.
-
-Host/port/graph defaults can be overridden per call, or globally via
-PS_FALKORDB_HOST / PS_FALKORDB_PORT / PS_FALKORDB_GRAPH env vars (useful
-when FalkorDB is reachable at a non-default address, e.g. the devcontainer's
-`falkordb` hostname instead of `localhost`).
+Calls ps_service.query_engine.execute_cypher_query IN-PROCESS. The write-clause guard
+and all execution live in Query Engine and are never duplicated here. No network
+transport, no auth, no query timeout / result-size cap (issues #38 / #39).
 """
 
-import json
+from __future__ import annotations
+
+import functools
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 from mcp.server import MCPServer
 
-CYPHER_CLI = Path(__file__).resolve().parents[1] / "query_engine" / "cypher_cli.py"
+from ps_service.config import load_config
+from ps_service.logging import bind_run_context, configure, emit_log_entry
+from ps_service.logging.emitter import LogEmitter
+from ps_service.mcp_interface.errors import (
+    McpGraphUnavailableError,
+    McpResourceUnavailableError,
+)
+from ps_service.query_engine import (
+    QueryEngineExecutionError,
+    QueryResult,
+    WriteClauseRejectedError,
+    execute_cypher_query,
+)
+from ps_service.query_engine.falkordb_client import (
+    GraphHandle,
+    connect_from_config,
+    select_graph,
+)
 
-DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
-DEFAULT_PORT = os.environ.get("PS_FALKORDB_PORT", "6379")
-DEFAULT_GRAPH = os.environ.get("PS_FALKORDB_GRAPH", "policy_system")
+_COMPONENT = "mcp_interface"
+_ACTION = "handle_mcp_tool_call"
+_DEFAULT_GRAPH_NAME = "policy_system"
+_DOMAIN_CONCEPTS_URI = "psdomain://concepts"
+_GRAPH_UNAVAILABLE_DETAIL = "the policy graph database is not reachable"
+_GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
+
+
+@functools.cache
+def _domain_concepts_path() -> Path:
+    """Absolute path to docs/artifacts/ps-domain-concepts.md, resolved from the repo
+    checkout by a fixed parent count (mirrors how CYPHER_CLI was computed with
+    parents[1] today). Lazy + cached: never touched at import, so the module imports
+    outside a checkout / in a wheel. Wheel-packaging docs/ is part of the same
+    remote-deployment migration already flagged for the transport.
+    """
+    return Path(__file__).resolve().parents[4] / "docs" / "artifacts" / "ps-domain-concepts.md"
+
+
+def _graph_name() -> str:
+    """The single company-graph name. Reads PS_FALKORDB_GRAPH directly (config.py
+    deliberately has no falkordb_graph field -- see PLAN_REVIEWED §2 Q4). Rejects an
+    explicitly-empty value, mirroring config._parse_falkordb_host.
+    """
+    name = os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_GRAPH_NAME)
+    if not name.strip():
+        raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL)
+    return name
+
 
 server = MCPServer(
     name="policy-system-graph",
     instructions=(
         "Read-only Cypher access to the policy_system compliance graph. "
-        "Ground every query in docs/artifacts/ps-domain-concepts.md's actual "
-        "node labels, properties, and edge directions -- never invent one. "
-        "Write clauses (CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH) are "
-        "rejected before execution by the underlying read-only Cypher CLI."
+        "Ground every query in the ps-domain-concepts resource's actual node labels, "
+        "properties, and edge directions -- never invent one. "
+        "Write clauses are rejected before execution and returned as an 'error:' line."
     ),
 )
 
 
-@server.tool()
-def cypher(query: str, host: str = "", port: str = "", graph: str = "") -> str:
-    """Run a read-only MATCH/RETURN-shaped Cypher query against the graph.
-
-    Returns JSON with `columns`, `rows`, and `row_count` on success, or an
-    `error: ...` line (unexecuted) if the query contains a write clause or
-    FalkorDB rejects it.
+def handle_mcp_tool_call(
+    query: str, *, graph: GraphHandle, emitter: LogEmitter | None = None
+) -> dict[str, object] | str:
+    """HandleMcpToolCall: bind a fresh run_id, delegate to Query Engine in-process,
+    return {columns, rows, row_count} or an 'error: <message>' string verbatim.
     """
-    cmd = [
-        sys.executable,
-        str(CYPHER_CLI),
-        "--host", host or DEFAULT_HOST,
-        "--port", str(port or DEFAULT_PORT),
-        "--graph", graph or DEFAULT_GRAPH,
-        "--format", "json",
-        "cypher",
-        query,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode != 0:
-        return result.stderr.strip() or "error: cypher_cli.py exited non-zero with no stderr output"
-    return result.stdout
+    with bind_run_context():
+        try:
+            result: QueryResult = execute_cypher_query(query, graph=graph, emitter=emitter)
+        except (WriteClauseRejectedError, QueryEngineExecutionError) as exc:
+            return f"error: {exc}"
+    return {"columns": result.columns, "rows": result.rows, "row_count": result.row_count}
+
+
+def _resolve_graph() -> GraphHandle:
+    """Acquire a GraphHandle for one tool call. ANY failure here -- bad PS_FALKORDB_*
+    config, DB unreachable/refused, driver I/O in the eager FalkorDB constructor or in
+    select_graph -- is sanitised to a fixed generic McpGraphUnavailableError. Host,
+    port, driver, and env-var text must not cross the MCP boundary (L2 MCP Interface
+    Patterns; PLAN_REVIEWED §2 Q6 / F-01 / F-17).
+    """
+    try:
+        return select_graph(connect_from_config(load_config()), _graph_name())
+    except McpGraphUnavailableError:
+        raise
+    except Exception as exc:  # broad by design: every failure here is sanitised to a fixed message and chained, never re-raised raw
+        raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
+
+
+@server.tool()
+def cypher(query: str) -> dict[str, object] | str:
+    """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
+
+    On success returns an object with `columns`, `rows`, and `row_count`. Returns a
+    string beginning `error: ` when the query contains a write clause
+    (CREATE, MERGE, DELETE, SET, REMOVE, DROP, FOREACH -- rejected before execution),
+    when FalkorDB rejects the query, or when the graph database cannot be reached.
+    """
+    try:
+        graph = _resolve_graph()
+    except McpGraphUnavailableError:
+        emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    return handle_mcp_tool_call(query, graph=graph)
+
+
+@server.resource(
+    _DOMAIN_CONCEPTS_URI,
+    name="ps-domain-concepts",
+    title="PS domain concepts",
+    description="The canonical PS compliance-graph vocabulary and schema, served verbatim.",
+    mime_type="text/markdown",
+)
+def _read_domain_concepts() -> str:
+    """GetDomainConcepts: serve docs/artifacts/ps-domain-concepts.md verbatim. Zero
+    parameters -- no client-supplied input reaches the read (AC-012). Resolves from a
+    repo checkout only.
+    """
+    try:
+        return _domain_concepts_path().read_text(encoding="utf-8")
+    except OSError as exc:
+        raise McpResourceUnavailableError(
+            "the ps-domain-concepts resource is currently unavailable"
+        ) from exc
+
+
+def main() -> None:
+    """Install the process-wide default LogEmitter, then serve MCP over stdio."""
+    configure()
+    server.run()
 
 
 if __name__ == "__main__":
-    server.run()
+    main()

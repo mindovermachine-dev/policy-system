@@ -34,7 +34,7 @@
 
 ### Subprocess & Process Execution
 
-- Never `shell=True`. Pass command arguments as a list, never as a concatenated/interpolated string — matches the existing precedent in `mcp_server.py`'s `subprocess.run(cmd, ...)`, where `cmd` is a list.
+- Never `shell=True`. Pass command arguments as a list, never as a concatenated/interpolated string.
 - Always set an explicit timeout on any subprocess or external-process call.
 
 ### Testing Patterns
@@ -102,7 +102,7 @@
 - Parameterize Cypher queries: pass values via `params={...}`, never interpolate them into the query string — follow the existing precedent in `tools/graph-ingestion/merge_capabilities.py`'s `graph.query(query, params={"id": ...})`.
 - The one exception is labels/relationship types, which Cypher cannot parameterize (see `load_graph.py`'s `f"MATCH (n:{label})"`) — validate against the allow-list of known schema labels (`docs/artifacts/ps-domain-concepts.md`) before interpolating; never interpolate a raw user- or LLM-supplied string there.
 - The write-clause regex guard (`query_engine/cypher_query.py`'s `_WRITE_CLAUSE`) is defense-in-depth, not the boundary — the real boundary is the FalkorDB connection's own privileges: the read-only query surface (Query Engine, MCP Interface) must connect as a database user/role restricted to read-only operations.
-- Bound query cost: enforce a result-size/row-count limit and a query execution timeout at the FalkorDB driver/connection level — the `timeout=60` in `mcp_server.py` only bounds the wrapping subprocess call, not the query itself.
+- Bound query cost: no query execution timeout or result-size cap exists yet in the read-only query surface (Query Engine / MCP Interface) — an open risk once FalkorDB is reachable over a network (issue #38). Enforce both at the FalkorDB driver/connection level when addressed.
 
 ### API Patterns
 
@@ -121,7 +121,7 @@
 
 ### MCP Interface Patterns
 
-- **Delegate, don't reimplement**: an MCP tool function is a thin wrapper over existing CLI/engine logic — e.g. `mcp_server.py`'s `cypher` tool subprocesses `query_engine/cypher_cli.py` rather than reimplementing query execution or the write-clause guard. Validation and guards live in exactly one place; the MCP layer never duplicates them.
+- **Delegate, don't reimplement**: an MCP tool function is a thin wrapper over existing engine logic — e.g. `mcp_server.py`'s `cypher` tool calls `ps_service.query_engine.execute_cypher_query` in-process rather than reimplementing query execution or the write-clause guard, which live only in `ps_service.query_engine.cypher_query`. Validation and guards live in exactly one place; the MCP layer never duplicates them.
 - **Errors are return values, not exceptions**: a tool function catches failures from its delegate and returns an `error: ...` string/JSON payload rather than raising — propagate the delegate's *result-shaped* error verbatim (e.g. a Cypher syntax error), but sanitize anything lower-level (driver internals, connection details, file paths) before it crosses the MCP boundary. Differs from ps-service's domain-specific-exception pattern and ps-cli's `PsCliError` pattern: the MCP protocol conveys failure through the result payload, not a raised exception.
 - **Tool docstrings are client-facing**: a `@server.tool()` function's docstring is read by the calling LLM client to decide how and when to invoke the tool — it is tool-usage guidance (expected input shape, return shape, what triggers the error case), not an internal implementation note for other developers.
 
