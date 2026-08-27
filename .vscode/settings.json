@@ -5,5 +5,6 @@
     "source.fixAll.cspell": "explicit"
   },
   "files.autoSave": "afterDelay",
-  "markdownlint.configFile": ".markdownlint-cli2.jsonc"
+  "markdownlint.configFile": ".markdownlint-cli2.jsonc",
+  "python.analysis.typeCheckingMode": "strict"
 }

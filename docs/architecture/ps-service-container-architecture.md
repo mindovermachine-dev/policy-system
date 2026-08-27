@@ -505,14 +505,18 @@ None — reads across all concepts, owns none.
 **Implementation Guidance:**
 - Read-only enforcement (rejecting write clauses) happens once, here — MCP Interface delegates rather than reimplementing the guard.
 - No query timeout or result-size cap is enforced here — acceptable while FalkorDB is only reachable locally. This becomes a real resource-exhaustion risk once it's reachable indirectly through a network-facing MCP Interface — see [MCP Interface](#mcp-interface) for the corresponding authentication gap and remote-deployment trigger.
-- **Known implementation gap:** the walking-skeleton prototype (`tools/graph-query/ps.py`, a local dev tool that talks directly to a local FalkorDB and is not itself part of this container's documented interface) was partially seeded into `ps_service/mcp_interface/cypher_cli.py` instead of here — the guard/execution logic currently lives one component over from where this document assigns it. Relocating it to `ps_service/query_engine/` and having MCP Interface call it in-process (not via `subprocess`) is outstanding work.
+- **Known implementation gap:** MCP Interface calls this component's guard/execution logic out-of-process, via `subprocess`, rather than in-process. The guard/execution logic itself now lives here, under `ps_service/query_engine/`, as this document assigns it; having MCP Interface call it in-process (not via `subprocess`) remains outstanding work.
 
 #### Implementation Registration
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/query_engine/__init__.py` | Package marker (scaffold only — no logic yet) | — |
-| `ps-service/src/ps_service/mcp_interface/cypher_cli.py` | Guard/execution logic for `ExecuteCypherQuery` — implemented, but misplaced (see Implementation Guidance above); belongs here, not under `mcp_interface/` | `ExecuteCypherQuery` (pending relocation) |
+| `ps-service/src/ps_service/query_engine/__init__.py` | Package front door, re-exports `execute_cypher_query`, `QueryResult`, `WriteClauseRejectedError`, `QueryEngineExecutionError` | — |
+| `ps-service/src/ps_service/query_engine/errors.py` | `WriteClauseRejectedError`, `QueryEngineExecutionError` | — |
+| `ps-service/src/ps_service/query_engine/models.py` | `QueryResult(columns, rows, row_count)` — the generic tabular-result envelope | — |
+| `ps-service/src/ps_service/query_engine/falkordb_client.py` | `connect`/`connect_from_config`/`select_graph`, `GraphHandle`/`GraphQueryResult` Protocols | — |
+| `ps-service/src/ps_service/query_engine/cypher_query.py` | `_WRITE_CLAUSE` guard, `is_write_clause`, `execute_cypher_query` — the guard/execution core | `ExecuteCypherQuery` |
+| `ps-service/src/ps_service/query_engine/cypher_cli.py` | Dev CLI wrapper (`build_parser`/`main`), delegates guard+execution to `cypher_query.py` | `ExecuteCypherQuery` |
 
 #### Actions
 
@@ -546,7 +550,7 @@ None — transport layer; it may serve read-only reference content (e.g. the dom
 |---|---|---|
 | `ps-service/src/ps_service/mcp_interface/__init__.py` | Package marker | — |
 | `ps-service/src/ps_service/mcp_interface/mcp_server.py` | MCP stdio server wrapping guarded Cypher execution — implemented; transport needs updating for remote deployment (see Implementation Guidance above) | `HandleMcpToolCall` |
-| `ps-service/src/ps_service/mcp_interface/cypher_cli.py` | Guard/execution logic — implemented, but belongs under `query_engine/` (see [Query Engine](#query-engine)'s Implementation Guidance); not yet relocated | `ExecuteCypherQuery` (misplaced — see Query Engine) |
+| `ps-service/src/ps_service/query_engine/cypher_cli.py` | Guard/execution logic, relocated to `query_engine/` (see [Query Engine](#query-engine)'s Implementation Registration); `mcp_server.py` subprocesses this file | `ExecuteCypherQuery` (see Query Engine) |
 
 #### Actions
 

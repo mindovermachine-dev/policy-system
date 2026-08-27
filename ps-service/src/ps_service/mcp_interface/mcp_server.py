@@ -2,11 +2,11 @@
 """MCP stdio server exposing read-only Cypher access to the policy_system
 graph, for clients (e.g. Claude Desktop) that have no shell of their own.
 
-Deliberately a thin wrapper around `cypher_cli.py cypher`, not a
+Deliberately a thin wrapper around `query_engine/cypher_cli.py cypher`, not a
 reimplementation: every query is executed via subprocess through the exact
 same script the policy-question skill's guardrails already document, so the
-write-clause guard (see cypher_cli.py's _WRITE_CLAUSE) and connection logic
-live in exactly one place. Do not duplicate that regex here.
+write-clause guard (see query_engine/cypher_cli.py's _WRITE_CLAUSE) and
+connection logic live in exactly one place. Do not duplicate that regex here.
 
 Host/port/graph defaults can be overridden per call, or globally via
 PS_FALKORDB_HOST / PS_FALKORDB_PORT / PS_FALKORDB_GRAPH env vars (useful
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from mcp.server import MCPServer
 
-CYPHER_CLI = Path(__file__).resolve().with_name("cypher_cli.py")
+CYPHER_CLI = Path(__file__).resolve().parents[1] / "query_engine" / "cypher_cli.py"
 
 DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
 DEFAULT_PORT = os.environ.get("PS_FALKORDB_PORT", "6379")
@@ -35,7 +35,7 @@ server = MCPServer(
         "Ground every query in docs/artifacts/ps-domain-concepts.md's actual "
         "node labels, properties, and edge directions -- never invent one. "
         "Write clauses (CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH) are "
-        "rejected before execution by the underlying cypher_cli.py CLI."
+        "rejected before execution by the underlying read-only Cypher CLI."
     ),
 )
 
