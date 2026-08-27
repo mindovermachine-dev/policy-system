@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from pydantic import ValidationError
+
 from ps_service.ingestion.models import (
     FetchedRegulationStructure,
     IngestResult,
@@ -13,7 +15,6 @@ from ps_service.ingestion.models import (
     StructuralEdge,
     StructuralNode,
 )
-from pydantic import ValidationError
 
 
 def _metadata(**overrides: object) -> RegulationMetadata:

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import pytest
 import redis.exceptions
+
 from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.domain_mapper.errors import DomainMapperPersistenceError
 from ps_service.domain_mapper.graph_writer import (

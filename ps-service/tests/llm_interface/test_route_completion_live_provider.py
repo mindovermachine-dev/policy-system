@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage, CompletionResult
 from ps_service.logging.emitter import EmitterConfig, LogEmitter

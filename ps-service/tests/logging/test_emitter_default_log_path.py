@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from ps_service.logging import LoggingConfigurationError
 from ps_service.logging.facade import resolve_default_log_path
 

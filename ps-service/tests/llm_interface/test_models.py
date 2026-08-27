@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pydantic
 import pytest
+
 from ps_service.llm_interface.models import ChatMessage
 
 

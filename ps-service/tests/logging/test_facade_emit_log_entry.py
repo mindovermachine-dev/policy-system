@@ -47,6 +47,7 @@ def test_emit_log_entry_when_two_threads_bind_and_emit_through_same_emitter_then
 
 def test_emit_log_entry_when_no_emitter_and_no_default_then_raises_logging_lifecycle_error() -> None:
     import pytest
+
     from ps_service.logging import LoggingLifecycleError
 
     with pytest.raises(LoggingLifecycleError):

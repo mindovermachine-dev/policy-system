@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from ps_service.domain_mapper.errors import (
     DomainMapperDerivationError,
     DomainMapperExtractionError,

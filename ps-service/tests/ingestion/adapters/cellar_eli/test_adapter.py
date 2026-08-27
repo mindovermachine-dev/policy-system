@@ -15,6 +15,7 @@ import inspect
 from datetime import date
 
 import pytest
+
 from ps_service.ingestion.adapters.base import IngestionAdapter
 from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml

@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
+
 from ps_service import config as config_module
 from ps_service.config import load_config
 from ps_service.dependency_health import FALKORDB, is_healthy

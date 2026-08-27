@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from litellm.types.utils import Embedding, EmbeddingResponse
+
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.logging import bind_run_context
 

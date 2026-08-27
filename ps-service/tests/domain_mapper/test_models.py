@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
     DerivationResult,
@@ -11,7 +13,6 @@ from ps_service.domain_mapper.models import (
     ObligationAssignment,
     RequirementCandidate,
 )
-from pydantic import ValidationError
 
 
 def _candidate(**overrides: object) -> RequirementCandidate:

@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
 from ps_service.logging import EmitterConfig, LogEmitter
 from ps_service.logging.emitter import TextSink
 from ps_service.logging.facade import reset_for_tests

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from ps_service.llm_interface.client import default_completion_caller
 
 

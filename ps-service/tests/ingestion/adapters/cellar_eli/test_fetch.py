@@ -7,6 +7,7 @@ import urllib.request
 from typing import Self
 
 import pytest
+
 from ps_service.dependency_health import CELLAR_ELI, is_healthy
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity,

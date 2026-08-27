@@ -14,6 +14,7 @@ from datetime import date
 
 import pytest
 import redis.exceptions
+
 from ps_service.dependency_health import FALKORDB, is_healthy
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph

@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
 from ps_service.dependency_health import (
     reset_for_tests as reset_dependency_health_for_tests,
 )

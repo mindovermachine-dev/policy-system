@@ -96,7 +96,7 @@ def _spawn_via_documented_command(
     `returncode`/pid are not suitable for the SIGTERM/port-bind-failure
     tests, which use `_spawn_direct` instead.
     """
-    return subprocess.Popen(  # noqa: S603 - fixed argument list, no shell, no user input
+    return subprocess.Popen(
         ["uv", "run", "python", "-m", "ps_service"],
         cwd=_REPO_ROOT,
         env=_build_env(log_dir, extra_env),
@@ -111,7 +111,7 @@ def _spawn_direct(log_dir: Path, *, extra_env: dict[str, str] | None = None) -> 
     Used where the spawned pid must be the actual server process so
     SIGTERM/exit-code assertions are meaningful (see module docstring).
     """
-    return subprocess.Popen(  # noqa: S603 - fixed argument list, no shell, no user input
+    return subprocess.Popen(
         [sys.executable, "-m", "ps_service"],
         cwd=_REPO_ROOT,
         env=_build_env(log_dir, extra_env),
@@ -246,7 +246,7 @@ class TestSharedServer:
 
         _wait_until_healthy()  # ensure the listening socket is definitely open
 
-        result = subprocess.run(  # noqa: S603 - fixed argument list, no shell
+        result = subprocess.run(
             [lsof_path, "-n", "-P", f"-iTCP:{_PORT}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
@@ -319,7 +319,7 @@ def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_pa
     """
     occupying_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     occupying_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    secret_sentinel = "sk-test-sentinel-should-never-appear-in-stderr"  # noqa: S105 - test fixture value, not a real credential
+    secret_sentinel = "sk-test-sentinel-should-never-appear-in-stderr"
     try:
         occupying_socket.bind((_HOST, _PORT))
         occupying_socket.listen(1)

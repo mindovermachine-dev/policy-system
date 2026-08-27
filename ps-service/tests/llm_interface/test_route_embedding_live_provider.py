@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.llm_interface.models import EmbeddingResult
 from ps_service.logging.emitter import EmitterConfig, LogEmitter

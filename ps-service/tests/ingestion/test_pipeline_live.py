@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+
 from ps_service.config import load_config
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
 from ps_service.ingestion.falkordb_client import (

@@ -17,10 +17,11 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import httpx
-import ps_service.main as main_module
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+import ps_service.main as main_module
 from ps_service import dependency_health
 from ps_service.config import ServiceConfig
 from ps_service.ingestion.errors import IngestionConfigurationError

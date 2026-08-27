@@ -32,6 +32,7 @@ from typing import cast
 
 import pytest
 from falkordb import FalkorDB
+
 from ps_service.config import load_config
 from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter

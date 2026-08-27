@@ -16,6 +16,7 @@ import httpx
 import openai
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
+
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.extraction import (
     _build_requirement_graph,

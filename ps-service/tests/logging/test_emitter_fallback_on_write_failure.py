@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from ps_service.logging import EmitterConfig, LogEmitter
 from ps_service.logging.models import LogEntry
 

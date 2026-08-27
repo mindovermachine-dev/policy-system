@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
+
 from ps_service.domain_mapper.derivation import (
     _derive_capabilities,
     _derive_obligations,

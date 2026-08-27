@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
+
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
 from ps_service.domain_mapper.falkordb_client import (
