@@ -86,15 +86,18 @@ class _ScriptedReachabilityGraph:
         return _FakeQueryResult([[value]])
 
 
-def _metadata() -> RegulationMetadata:
-    return RegulationMetadata(
-        title="Cyber Resilience Act",
-        jurisdiction="EU",
-        effective_date=date(2027, 12, 11),
-        version="1.0",
-        status="active",
-        source_type="external",
-    )
+def _metadata(**overrides: object) -> RegulationMetadata:
+    fields: dict[str, object] = {
+        "title": "Cyber Resilience Act",
+        "jurisdiction": "EU",
+        "effective_date": date(2027, 12, 11),
+        "version": "1.0",
+        "status": "active",
+        "source_type": "external",
+        "instrument_type": "regulation",
+    }
+    fields.update(overrides)
+    return RegulationMetadata(**{k: v for k, v in fields.items() if v is not None})
 
 
 def _node(element_type: str, node_id: str) -> StructuralNode:
@@ -129,6 +132,7 @@ def test_register_regulation_version_merges_regulation_node_with_parameterized_m
             "version": "1.0",
             "status": "active",
             "source_type": "external",
+            "instrument_type": "regulation",
         },
     }
 
@@ -149,9 +153,39 @@ def test_register_regulation_version_never_interpolates_metadata_into_query_stri
         "1.0",
         "active",
         "external",
+        "regulation",
         "CRA-1.0",
     ):
         assert value not in query
+
+
+def test_register_regulation_version_writes_instrument_type_when_present() -> None:
+    graph = _FakeGraph()
+
+    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+
+    assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
+
+
+def test_register_regulation_version_omits_instrument_type_key_for_internal_source() -> None:
+    graph = _FakeGraph()
+
+    register_regulation_version(
+        graph, "ENGPRAC-3.0", _metadata(source_type="internal", instrument_type=None)
+    )
+
+    assert "instrument_type" not in graph.calls[0].params["properties"]
+
+
+def test_register_regulation_version_is_idempotent_on_instrument_type() -> None:
+    graph = _FakeGraph()
+
+    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+
+    assert graph.calls[0].params == graph.calls[1].params
+    assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
+    assert graph.calls[1].params["properties"]["instrument_type"] == "directive"
 
 
 # --- Increment 9: persist_native_structural_graph (THE B1 FIX) ----------
@@ -438,9 +472,10 @@ def test_graph_writer_functions_work_against_real_falkordb() -> None:
             assert counts[label] == ReachabilityCount(total=0, reachable=0)
 
         regulation_row = graph.query(
-            "MATCH (n:RegulatoryInstrument {id: $id}) RETURN n.title, n.effective_date",
+            "MATCH (n:RegulatoryInstrument {id: $id}) "
+            "RETURN n.title, n.effective_date, n.instrument_type",
             params={"id": "GWTEST-1.0"},
         ).result_set[0]
-        assert regulation_row == ["Cyber Resilience Act", "2027-12-11"]
+        assert regulation_row == ["Cyber Resilience Act", "2027-12-11", "regulation"]
     finally:
         _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)

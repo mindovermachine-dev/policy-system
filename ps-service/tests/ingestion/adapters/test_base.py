@@ -20,6 +20,7 @@ class _FakeAdapter:
             version="1.0",
             status="active",
             source_type="external",
+            instrument_type="regulation",
         )
         return FetchedRegulationStructure(metadata=metadata, nodes=(), edges=())
 

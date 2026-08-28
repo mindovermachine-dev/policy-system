@@ -25,9 +25,12 @@ def _metadata(**overrides: object) -> RegulationMetadata:
         "version": "1.0",
         "status": "active",
         "source_type": "external",
+        "instrument_type": "regulation",
     }
     fields.update(overrides)
-    return RegulationMetadata.model_validate(fields)
+    return RegulationMetadata.model_validate(
+        {k: v for k, v in fields.items() if v is not None}
+    )
 
 
 def test_regulation_metadata_mutation_raises() -> None:
@@ -50,6 +53,40 @@ def test_regulation_metadata_parses_iso_date_string_into_date_object() -> None:
     metadata = _metadata(effective_date="2024-10-17")
     assert metadata.effective_date == date(2024, 10, 17)
     assert isinstance(metadata.effective_date, date)
+
+
+def test_regulation_metadata_rejects_instrument_type_outside_enum() -> None:
+    with pytest.raises(ValidationError):
+        _metadata(instrument_type="decision")
+
+
+def test_regulation_metadata_rejects_external_source_without_instrument_type() -> None:
+    with pytest.raises(ValidationError):
+        RegulationMetadata.model_validate(
+            {
+                "title": "Regulation (EU) 2024/2847",
+                "jurisdiction": "EU",
+                "effective_date": "2027-12-11",
+                "version": "1.0",
+                "status": "active",
+                "source_type": "external",
+            }
+        )
+
+
+def test_regulation_metadata_rejects_internal_source_with_instrument_type() -> None:
+    with pytest.raises(ValidationError):
+        _metadata(source_type="internal", instrument_type="regulation")
+
+
+def test_regulation_metadata_accepts_internal_source_without_instrument_type() -> None:
+    metadata = _metadata(source_type="internal", instrument_type=None)
+    assert metadata.instrument_type is None
+
+
+def test_regulation_metadata_accepts_national_transposition_instrument_type() -> None:
+    metadata = _metadata(instrument_type="national_transposition")
+    assert metadata.instrument_type == "national_transposition"
 
 
 def test_structural_node_mutation_raises() -> None:

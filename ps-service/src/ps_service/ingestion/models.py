@@ -11,12 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RegulationStatus = Literal["active", "superseded", "vacated"]
 SourceType = Literal["external", "internal"]
+InstrumentType = Literal["regulation", "directive", "national_transposition"]
 
 
 class RegulationMetadata(BaseModel):
@@ -41,6 +42,18 @@ class RegulationMetadata(BaseModel):
     version: str = Field(min_length=1)
     status: RegulationStatus
     source_type: SourceType
+    instrument_type: InstrumentType | None = None
+
+    @model_validator(mode="after")
+    def _check_instrument_type_matches_source_type(self) -> Self:
+        """`instrument_type` is required for external sources and must be
+        absent for internal ones (`ps-domain-concepts.md`, Regulatory
+        instrument -> Properties)."""
+        if self.source_type == "external" and self.instrument_type is None:
+            raise ValueError("instrument_type is required when source_type is 'external'")
+        if self.source_type == "internal" and self.instrument_type is not None:
+            raise ValueError("instrument_type must be absent when source_type is 'internal'")
+        return self
 
 
 @dataclass(frozen=True, slots=True)

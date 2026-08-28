@@ -121,6 +121,31 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     }
 
 
+def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
+    """AC-BI-011 (Company Merge, write side): `instrument_type` rides
+    through the Regulation MERGE verbatim inside `params["properties"]` —
+    `regulation_properties` is `dict[str, object]` with no key allow-list,
+    so the key propagates by construction with NO src change."""
+    graph = _FakeGraph()
+
+    persist_role_and_requirement_passthrough(
+        graph,
+        "NIS2-1.0",
+        {"title": "NIS2 Directive", "jurisdiction": "EU", "instrument_type": "directive"},
+        (),
+        (),
+        (),
+    )
+
+    assert len(graph.calls) == 1
+    regulation_call = graph.calls[0]
+    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulation_call.params is not None
+    properties = regulation_call.params["properties"]
+    assert isinstance(properties, dict)
+    assert properties["instrument_type"] == "directive"
+
+
 def test_persist_is_idempotent_across_repeated_calls() -> None:
     """Re-running with identical input twice against the same fake graph
     produces the same two sets of calls each time (trivial idempotency

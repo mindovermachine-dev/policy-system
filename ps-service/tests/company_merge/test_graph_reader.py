@@ -242,6 +242,34 @@ def test_read_baseline_graph_returns_empty_tuples_when_no_obligation_or_capabili
     assert result.provenance_edges != ()
 
 
+def test_read_regulation_properties_includes_instrument_type() -> None:
+    """AC-BI-011 (Company Merge, read side): the Regulation property bag is
+    read back whole (`dict(node.properties)`, no field filter), so
+    `instrument_type` reaches `BaselineGraph.regulation_properties` with NO
+    src change."""
+    graph = _ScriptedFakeGraph(
+        regulation_properties={
+            "id": "NIS2-1.0",
+            "title": "NIS2 Directive",
+            "jurisdiction": "EU",
+            "instrument_type": "directive",
+        },
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+    )
+
+    result = read_baseline_graph(graph, "NIS2-1.0")
+
+    assert result.regulation_properties["instrument_type"] == "directive"
+
+
 @pytest.mark.falkordb_live
 def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -> None:
     """Live smoke test: writes a minimal baseline graph via a direct Cypher

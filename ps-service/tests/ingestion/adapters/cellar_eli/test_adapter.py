@@ -68,8 +68,8 @@ necessary to comply with this Directive.</div>
 """
 
 _FIXTURES_BY_IDENTIFIER = {
-    "CELEX_A": _FIXTURE_REGULATION_A,
-    "CELEX_B": _FIXTURE_DIRECTIVE_B,
+    "32020R1111": _FIXTURE_REGULATION_A,
+    "32020L2222": _FIXTURE_DIRECTIVE_B,
 }
 
 
@@ -89,7 +89,7 @@ def test_default_fetch_is_the_real_fetch_xhtml() -> None:
 def test_satisfies_ingestion_adapter_protocol() -> None:
     adapter: IngestionAdapter = CellarEliAdapter(fetch=_dispatching_fetch)
 
-    result = adapter.fetch_regulation_structure("CELEX_A")
+    result = adapter.fetch_regulation_structure("32020R1111")
 
     assert result.metadata.title == "Regulation (EU) 1111/1111 Fixture A"
 
@@ -99,14 +99,16 @@ def test_fetch_regulation_structure_produces_different_results_for_different_ide
 ):
     adapter = CellarEliAdapter(fetch=_dispatching_fetch)
 
-    result_a = adapter.fetch_regulation_structure("CELEX_A")
-    result_b = adapter.fetch_regulation_structure("CELEX_B")
+    result_a = adapter.fetch_regulation_structure("32020R1111")
+    result_b = adapter.fetch_regulation_structure("32020L2222")
 
     # Different metadata.
     assert result_a.metadata.title == "Regulation (EU) 1111/1111 Fixture A"
     assert result_b.metadata.title == "Directive (EU) 2222/2222 Fixture B"
     assert result_a.metadata.effective_date == date(2030, 1, 1)
     assert result_b.metadata.effective_date == date(2031, 1, 1)
+    assert result_a.metadata.instrument_type == "regulation"
+    assert result_b.metadata.instrument_type == "directive"
 
     # Different structure: Fixture A has no recital/annex, Fixture B does.
     assert len(result_a.nodes) == 2  # CHAPTER, ARTICLE
@@ -117,8 +119,8 @@ def test_fetch_regulation_structure_produces_different_results_for_different_ide
     # `identifier` flows through unmodified as the structural-node-id
     # prefix — proof the adapter passed it straight through, not a
     # hardcoded/derived value.
-    assert all(node.id.startswith("CELEX_A#") for node in result_a.nodes)
-    assert all(node.id.startswith("CELEX_B#") for node in result_b.nodes)
+    assert all(node.id.startswith("32020R1111#") for node in result_a.nodes)
+    assert all(node.id.startswith("32020L2222#") for node in result_b.nodes)
 
 
 def test_fetch_regulation_structure_propagates_cellar_fetch_error_unchanged() -> None:
@@ -128,7 +130,7 @@ def test_fetch_regulation_structure_propagates_cellar_fetch_error_unchanged() ->
     adapter = CellarEliAdapter(fetch=_failing_fetch)
 
     with pytest.raises(CellarFetchError):
-        adapter.fetch_regulation_structure("CELEX_A")
+        adapter.fetch_regulation_structure("32020R1111")
 
 
 def test_fetch_regulation_structure_propagates_cellar_parse_error_unchanged() -> None:
@@ -152,4 +154,4 @@ def test_fetch_regulation_structure_propagates_cellar_parse_error_unchanged() ->
     adapter = CellarEliAdapter(fetch=_fetch)
 
     with pytest.raises(CellarParseError):
-        adapter.fetch_regulation_structure("CELEX_A")
+        adapter.fetch_regulation_structure("32020R1111")

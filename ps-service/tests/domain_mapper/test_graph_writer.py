@@ -152,6 +152,32 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     }
 
 
+def test_persist_writes_instrument_type_verbatim_when_present_in_regulation_properties() -> None:
+    """AC-BI-010 (Domain Mapper, write side): `instrument_type` rides
+    through the Regulation MERGE verbatim inside `params["properties"]` —
+    `regulation_properties` is `dict[str, object]` with no key allow-list,
+    so the key propagates by construction with NO src change."""
+    graph = _FakeGraph()
+
+    persist_role_and_requirement_graph(
+        graph,
+        "NIS2-1.0",
+        {"title": "NIS2 Directive", "jurisdiction": "EU", "instrument_type": "directive"},
+        (),
+        (),
+        (),
+        (),
+    )
+
+    assert len(graph.calls) == 1
+    regulation_call = graph.calls[0]
+    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulation_call.params is not None
+    properties = regulation_call.params["properties"]
+    assert isinstance(properties, dict)
+    assert properties["instrument_type"] == "directive"
+
+
 def test_persist_never_interpolates_source_ref_value_into_query_string() -> None:
     """`source_ref` is present in the DEFINES/EXPRESSES edge params, and its
     VALUE never appears in the query string itself — only the property key

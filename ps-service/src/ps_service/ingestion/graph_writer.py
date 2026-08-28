@@ -139,7 +139,7 @@ def register_regulation_version(
     (`{SHORT}-{VERSION}`, computed by the caller — see `pipeline.py`, never
     by this function or an adapter).
 
-    All 6 bibliographic fields flow through `params` only, never
+    All bibliographic fields flow through `params` only, never
     interpolated into the query string (L2 Query Safety's parameterization
     rule) — the query string itself contains no metadata value, only
     `RegulatoryInstrument` (a fixed literal, not user/adapter-sourced) and the `$id`/
@@ -155,6 +155,8 @@ def register_regulation_version(
         "status": metadata.status,
         "source_type": metadata.source_type,
     }
+    if metadata.instrument_type is not None:
+        properties["instrument_type"] = metadata.instrument_type
     _execute_query(
         graph,
         "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",

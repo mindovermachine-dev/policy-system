@@ -67,16 +67,19 @@ _GROUND_TRUTH: dict[str, dict[str, object]] = {
         "identifier": "32024R2847",
         "counts": {"ARTICLE": 71, "ANNEX": 8, "RECITAL": 130},
         "effective_date": date(2027, 12, 11),
+        "instrument_type": "regulation",
     },
     "NIS2": {
         "identifier": "32022L2555",
         "counts": {"ARTICLE": 46, "ANNEX": 3, "RECITAL": 144},
         "effective_date": date(2024, 10, 17),
+        "instrument_type": "directive",
     },
     "GDPR": {
         "identifier": "32016R0679",
         "counts": {"ARTICLE": 99, "ANNEX": 0, "RECITAL": 173},
         "effective_date": date(2018, 5, 25),
+        "instrument_type": "regulation",
     },
 }
 
@@ -147,11 +150,12 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
 
 
 def _regulation_row(run: _LiveRun) -> list[object]:
-    """Fetch the persisted Regulation node's 6 bibliographic fields back
+    """Fetch the persisted Regulation node's bibliographic fields back
     from FalkorDB, by the exact id `ingest_regulation()` reported."""
     result = run.graph.query(
         "MATCH (n:RegulatoryInstrument {id: $id}) "
-        "RETURN n.title, n.jurisdiction, n.effective_date, n.version, n.status, n.source_type",
+        "RETURN n.title, n.jurisdiction, n.effective_date, n.version, n.status, n.source_type, "
+        "n.instrument_type",
         params={"id": run.ingest_result.regulation_id},
     )
     rows = cast("list[list[object]]", result.result_set)
@@ -186,7 +190,9 @@ def test_ac002_regulation_node_id_and_bibliographic_fields(
     expected_id = f"{short_name}-{_VERSION}"
     assert run.ingest_result.regulation_id == expected_id
 
-    title, jurisdiction, effective_date_raw, version, status, source_type = _regulation_row(run)
+    title, jurisdiction, effective_date_raw, version, status, source_type, instrument_type = (
+        _regulation_row(run)
+    )
 
     assert isinstance(title, str) and title.strip()
     assert isinstance(jurisdiction, str) and jurisdiction.strip()
@@ -206,6 +212,8 @@ def test_ac002_regulation_node_id_and_bibliographic_fields(
     assert isinstance(effective_date_raw, str)
     retrieved_date = date.fromisoformat(effective_date_raw)
     assert retrieved_date == _GROUND_TRUTH[short_name]["effective_date"]
+
+    assert instrument_type == _GROUND_TRUTH[short_name]["instrument_type"]
 
 
 # --- AC-003: every recital/article/annex persisted --------------------------
@@ -294,7 +302,7 @@ def test_ac007_nis2_effective_date_is_the_transposition_deadline(
     Member-State transposition deadline (Art. 41), not the Directive's own
     EU-level entry-into-force date — the CA doc's Regulation mapping row
     convention (PLAN_REVIEWED.md §0.1/§3.2)."""
-    _, _, effective_date_raw, _, _, _ = _regulation_row(live_runs["NIS2"])
+    _, _, effective_date_raw, _, _, _, _ = _regulation_row(live_runs["NIS2"])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == date(2024, 10, 17)
 
@@ -313,6 +321,6 @@ def test_ac007_regulation_effective_dates_are_the_application_date(
     the "shall apply from" application date, via the same unconditional,
     text-driven search NIS2 uses — confirming the Entry-into-force fallback
     path generalizes across two independent Regulations, not just one."""
-    _, _, effective_date_raw, _, _, _ = _regulation_row(live_runs[short_name])
+    _, _, effective_date_raw, _, _, _, _ = _regulation_row(live_runs[short_name])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == expected_date

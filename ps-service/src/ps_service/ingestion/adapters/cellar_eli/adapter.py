@@ -61,6 +61,6 @@ class CellarEliAdapter:
         failure, so this method never catches or re-wraps them.
         """
         xhtml = self._fetch(identifier)
-        metadata = extract_metadata(xhtml)
+        metadata = extract_metadata(xhtml, identifier)
         nodes, edges = parse_structure(xhtml, identifier)
         return FetchedRegulationStructure(metadata=metadata, nodes=nodes, edges=edges)

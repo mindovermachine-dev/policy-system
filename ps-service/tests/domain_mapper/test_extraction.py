@@ -22,6 +22,7 @@ from ps_service.domain_mapper.extraction import (
     _build_requirement_graph,
     _canonicalize_roles,
     _extract_candidates_for_unit,
+    _read_regulation_properties,
     extract_roles_and_requirements,
 )
 from ps_service.domain_mapper.falkordb_client import GraphHandle
@@ -722,3 +723,19 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
     ]
     assert len(collision_entries) == 1
     assert collision_entries[0]["entity_id"] == collided_id
+
+
+# --- _read_regulation_properties: whole-bag read, instrument_type included --
+
+
+def test_read_regulation_properties_includes_instrument_type() -> None:
+    """AC-BI-010 (Domain Mapper, read side): `_read_regulation_properties`
+    returns `dict(node.properties)` — the whole property bag, no field
+    filter — so `instrument_type` is carried through with NO src change."""
+    native_graph = _FakeNativeGraph(
+        {"id": "NIS2-1.0", "title": "NIS2 Directive", "instrument_type": "directive"}
+    )
+
+    result = _read_regulation_properties(native_graph, "NIS2-1.0")
+
+    assert result["instrument_type"] == "directive"

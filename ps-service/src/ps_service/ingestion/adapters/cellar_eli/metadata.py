@@ -21,12 +21,22 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime
 
 from ps_service.ingestion.adapters.errors import CellarParseError
-from ps_service.ingestion.models import RegulationMetadata
+from ps_service.ingestion.models import InstrumentType, RegulationMetadata
 
 _TITLE_CLASS = "eli-title"
 _DATE_PATTERN = r"(\d{1,2} [A-Z][a-z]+ \d{4})"
 _TRANSPOSITION_DATE_RE = re.compile(rf"By {_DATE_PATTERN}, Member States shall adopt and publish")
 _ENTRY_INTO_FORCE_DATE_RE = re.compile(rf"shall apply from {_DATE_PATTERN}")
+
+_CELEX_TYPE_CODE_RE = re.compile(r"^\d{5}([A-Z]{1,2})\d+$")
+"""CELEX legislation form: 1 sector digit + 4-digit year + 1-2 letter descriptor
+(the type code) + running number. e.g. `32016R0679` -> `R`, `32022L2555` -> `L`.
+Greedy `[A-Z]{1,2}` backtracks to 1 letter because the next char is a digit."""
+
+_INSTRUMENT_TYPE_BY_CELEX_CODE: dict[str, InstrumentType] = {
+    "R": "regulation",
+    "L": "directive",
+}
 
 _BASE_ACT_VERSION = "1.0"
 """Every regulation this adapter ingests gets this constant version.
@@ -96,17 +106,41 @@ def _find_effective_date(root: ET.Element) -> date | None:
     return None
 
 
-def extract_metadata(xhtml: bytes) -> RegulationMetadata:
+def _instrument_type_from_celex(identifier: str) -> InstrumentType:
+    """Map a CELEX identifier's type-code letter to its `instrument_type`
+    (`R` -> regulation, `L` -> directive). Structural document metadata,
+    not per-instrument knowledge — same code path for every CELEX. Raises
+    `CellarParseError` naming the code for any other descriptor (e.g. `D`
+    decision), never a default (AC-BI-012)."""
+    match = _CELEX_TYPE_CODE_RE.match(identifier)
+    if match is None:
+        raise CellarParseError(
+            f"could not parse a CELEX type code from identifier {identifier!r}"
+        )
+    code = match.group(1)
+    try:
+        return _INSTRUMENT_TYPE_BY_CELEX_CODE[code]
+    except KeyError:
+        raise CellarParseError(
+            f"unsupported CELEX type code {code!r} in identifier {identifier!r}: "
+            f"only 'R' (regulation) and 'L' (directive) are supported"
+        ) from None
+
+
+def extract_metadata(xhtml: bytes, identifier: str) -> RegulationMetadata:
     """Bibliographic metadata sourced directly from the document's own
     text — no LLM extraction (AC-002), no per-regulation branching
-    (AC-006). Raises `CellarParseError` if `effective_date` can't be
-    resolved (neither a "Transposition" nor an "Entry into force and
-    application" Article heading is present) and `pydantic.ValidationError`
-    if any other required field is missing (e.g. an empty title) —
-    `RegulationMetadata`'s own boundary validation. Both satisfy
-    `RegisterRegulationVersion`'s CA-doc contract: "Reject with a clear
-    error if required properties are missing."
+    (AC-006). `identifier` is the source CELEX number, used only to derive
+    `instrument_type` from its type code. Raises `CellarParseError` if the
+    CELEX type code is unsupported or if `effective_date` can't be resolved
+    (neither a "Transposition" nor an "Entry into force and application"
+    Article heading is present) and `pydantic.ValidationError` if any other
+    required field is missing (e.g. an empty title) — `RegulationMetadata`'s
+    own boundary validation. Both satisfy `RegisterRegulationVersion`'s
+    CA-doc contract: "Reject with a clear error if required properties are
+    missing."
     """
+    instrument_type = _instrument_type_from_celex(identifier)
     root = ET.fromstring(xhtml)
     _strip_namespace(root)
 
@@ -127,4 +161,5 @@ def extract_metadata(xhtml: bytes) -> RegulationMetadata:
         version=_BASE_ACT_VERSION,
         status="active",
         source_type="external",
+        instrument_type=instrument_type,
     )

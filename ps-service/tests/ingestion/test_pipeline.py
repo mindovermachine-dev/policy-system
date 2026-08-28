@@ -91,6 +91,7 @@ def _structure(title: str) -> FetchedRegulationStructure:
         version="1.0",
         status="active",
         source_type="external",
+        instrument_type="regulation",
     )
     nodes = (StructuralNode("ARTICLE", f"{title}#art_1", {"text": "t", "citation_ref": "Art. 1", "order": 1}),)
     edges = (StructuralEdge("RegulatoryInstrument", f"{title}-id", "ARTICLE", f"{title}#art_1"),)
@@ -193,7 +194,9 @@ def test_ingest_regulation_uses_currently_bound_run_id_when_nested_in_an_outer_c
 
 # --- (b) AC-006: AST-based regulation-name-conditional scan (B2/B3 fix) ---
 
-_FORBIDDEN_NAMES = frozenset({"CRA", "GDPR", "NIS2"})
+_FORBIDDEN_REGULATION_NAMES = frozenset({"CRA", "GDPR", "NIS2"})
+_FORBIDDEN_CELEX_IDENTIFIERS = frozenset({"32024R2847", "32016R0679", "32022L2555"})
+_FORBIDDEN_LITERALS = _FORBIDDEN_REGULATION_NAMES | _FORBIDDEN_CELEX_IDENTIFIERS
 
 _DOCSTRING_HOST_TYPES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -214,7 +217,7 @@ def _docstring_constant_ids(tree: ast.AST) -> set[int]:
     `AsyncFunctionDef` body, when it is a bare string-literal expression.
 
     Kept as an explicit, separate exclusion (per PLAN_REVIEWED.md's B3 fix
-    wording) even though `_find_regulation_name_literals` below only ever
+    wording) even though `_find_forbidden_literals` below only ever
     walks a conditional construct's *decision* subtree — a docstring
     statement can never structurally be part of one, so this exclusion is
     defense-in-depth, not load-bearing; see this module's own docstring.
@@ -251,11 +254,13 @@ def _conditional_decision_subtrees(tree: ast.AST) -> list[ast.AST]:
     return subtrees
 
 
-def _find_regulation_name_literals(tree: ast.AST) -> list[ast.Constant]:
+def _find_forbidden_literals(tree: ast.AST) -> list[ast.Constant]:
     """B3 fix: AST-based walk, not a substring `"CRA" not in source` check.
 
     Flags a string-literal `Constant` node whose value is a forbidden
-    regulation name (`CRA`/`GDPR`/`NIS2`) when it appears inside a
+    literal — a regulation name (`CRA`/`GDPR`/`NIS2`) or one of the real
+    CELEX identifiers of the instruments ingested today
+    (`32024R2847`/`32016R0679`/`32022L2555`) — when it appears inside a
     conditional/branching construct's decision
     (`_conditional_decision_subtrees`) — i.e. a genuine
     `short_name == "CRA"`-shaped regulation-name conditional. Comments are
@@ -270,7 +275,7 @@ def _find_regulation_name_literals(tree: ast.AST) -> list[ast.Constant]:
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
-                and node.value in _FORBIDDEN_NAMES
+                and node.value in _FORBIDDEN_LITERALS
                 and id(node) not in docstring_ids
                 and id(node) not in seen
             ):
@@ -279,12 +284,12 @@ def _find_regulation_name_literals(tree: ast.AST) -> list[ast.Constant]:
     return violations
 
 
-def test_no_regulation_name_conditionals_in_ingestion_package() -> None:
+def test_no_forbidden_literal_conditionals_in_ingestion_package() -> None:
     for path in _files_to_scan():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        violations = _find_regulation_name_literals(tree)
+        violations = _find_forbidden_literals(tree)
         assert not violations, (
-            f"{path}: regulation-name conditional found at "
+            f"{path}: forbidden-literal conditional found at "
             f"{[(v.value, v.lineno) for v in violations]}"
         )
 
@@ -315,7 +320,7 @@ def test_files_to_scan_covers_every_known_ingestion_module() -> None:
     assert expected <= scanned_relative_paths
 
 
-def test_find_regulation_name_literals_flags_a_hypothetical_conditional() -> None:
+def test_find_forbidden_literals_flags_a_hypothetical_conditional() -> None:
     """Proves the scan's positive case: a `short_name == "CRA"` comparison
     inside an `if` test is flagged, wherever it occurs — not just against
     this package's real files (which contain none)."""
@@ -326,21 +331,44 @@ def test_find_regulation_name_literals_flags_a_hypothetical_conditional() -> Non
         "    return False\n"
     )
 
-    violations = _find_regulation_name_literals(tree)
+    violations = _find_forbidden_literals(tree)
 
     assert [v.value for v in violations] == ["CRA"]
 
 
-def test_find_regulation_name_literals_ignores_docstring_examples() -> None:
+def test_find_forbidden_literals_flags_a_hypothetical_celex_conditional() -> None:
+    """Proves the scan now also flags a branch on a specific CELEX
+    identifier — the same per-instrument conditional AC-BI-013 forbids,
+    just keyed on the source identifier rather than the short name."""
+    tree = ast.parse(
+        "def f(identifier):\n"
+        "    if identifier == '32016R0679':\n"
+        "        return True\n"
+        "    return False\n"
+    )
+
+    assert [v.value for v in _find_forbidden_literals(tree)] == ["32016R0679"]
+
+
+def test_find_forbidden_literals_ignores_docstring_examples() -> None:
     """Proves the scan's negative case: a docstring naming all three
-    regulations as illustrative examples (exactly `pipeline.py`'s own
-    module docstring's shape) is not flagged."""
+    regulations (and their CELEX identifiers) as illustrative examples
+    (exactly `pipeline.py`'s / `metadata.py`'s own docstring shape) is not
+    flagged."""
     tree = ast.parse(
         '"""Ingests a regulation, e.g. CRA, GDPR, or NIS2, from its source."""\n'
         "def f(short_name: str) -> None:\n"
         "    pass\n"
     )
 
-    violations = _find_regulation_name_literals(tree)
+    violations = _find_forbidden_literals(tree)
 
     assert violations == []
+
+    celex_tree = ast.parse(
+        '"""Ingests CRA (32024R2847) / NIS2 (32022L2555)."""\n'
+        "def g(identifier: str) -> None:\n"
+        "    pass\n"
+    )
+
+    assert _find_forbidden_literals(celex_tree) == []
