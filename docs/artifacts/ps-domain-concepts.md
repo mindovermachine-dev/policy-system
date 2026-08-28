@@ -621,7 +621,7 @@ graph LR
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `RegulatoryInstrument` | `NIS2-1.0` | `source_type`: `external`, `instrument_type`: `directive`, `title`: "Directive (EU) 2022/2555 (NIS2)", `jurisdiction`: `EU`, `effective_date`: `2024-10-18` (transposition deadline), `version`: `1.0`, `status`: `active` |
+| `RegulatoryInstrument` | `NIS2-1.0` | `source_type`: `external`, `instrument_type`: `directive`, `title`: "Directive (EU) 2022/2555 (NIS2)", `jurisdiction`: `EU`, `effective_date`: `2024-10-17` (transposition deadline), `version`: `1.0`, `status`: `active` |
 | `Role` | `role_essential_entity_c0a509` | `name`: "Essential entity" — `DEFINES` from `NIS2-1.0`, `source_ref`: "Art. 3" |
 | `Requirement` | `NIS2-1.0_req_art_23.4a` | `text`: "Essential and important entities shall submit to the CSIRT an early warning of any significant incident without undue delay and within 24 hours of becoming aware of it", `type`: `requirement` — `EXPRESSES` from `NIS2-1.0`, `source_ref`: "Art. 23(4)(a)" |
 | `Obligation` | `obl_report_significant_incident_csirt_1a2b3c` | `text`: "Report Significant Incidents to the CSIRT" — `HAS` from `role_essential_entity_c0a509`, `SATISFIED_BY` from `NIS2-1.0_req_art_23.4a` |
