@@ -2,7 +2,7 @@
   "graph_name": "policy_system",
   "nodes": [
     {
-      "label": "Regulation",
+      "label": "RegulatoryInstrument",
       "id": "GDPR-1.0",
       "properties": {
         "id": "GDPR-1.0",
@@ -4481,7 +4481,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4495,7 +4495,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4509,7 +4509,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4523,7 +4523,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4537,7 +4537,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4551,7 +4551,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4601,7 +4601,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4651,7 +4651,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4701,7 +4701,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4751,7 +4751,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4801,7 +4801,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4851,7 +4851,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4901,7 +4901,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -4951,7 +4951,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5001,7 +5001,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5051,7 +5051,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5101,7 +5101,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5151,7 +5151,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5201,7 +5201,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5251,7 +5251,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5301,7 +5301,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5351,7 +5351,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5401,7 +5401,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5451,7 +5451,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5501,7 +5501,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5551,7 +5551,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5601,7 +5601,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5651,7 +5651,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5701,7 +5701,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5751,7 +5751,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5801,7 +5801,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5851,7 +5851,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5901,7 +5901,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -5951,7 +5951,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6001,7 +6001,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6051,7 +6051,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6101,7 +6101,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6151,7 +6151,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6201,7 +6201,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6251,7 +6251,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6301,7 +6301,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6351,7 +6351,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6401,7 +6401,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6451,7 +6451,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6501,7 +6501,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6551,7 +6551,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6601,7 +6601,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6627,7 +6627,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6677,7 +6677,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6703,7 +6703,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6729,7 +6729,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6755,7 +6755,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6805,7 +6805,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6831,7 +6831,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6881,7 +6881,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6931,7 +6931,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -6981,7 +6981,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7031,7 +7031,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7081,7 +7081,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7131,7 +7131,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7181,7 +7181,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7231,7 +7231,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7281,7 +7281,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7331,7 +7331,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7381,7 +7381,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7431,7 +7431,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7481,7 +7481,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7531,7 +7531,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7581,7 +7581,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7631,7 +7631,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7681,7 +7681,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7731,7 +7731,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7781,7 +7781,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7831,7 +7831,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7881,7 +7881,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7931,7 +7931,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -7981,7 +7981,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8031,7 +8031,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8081,7 +8081,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8131,7 +8131,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8181,7 +8181,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8231,7 +8231,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8281,7 +8281,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8331,7 +8331,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8381,7 +8381,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8431,7 +8431,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8493,7 +8493,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8543,7 +8543,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8593,7 +8593,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8679,7 +8679,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8729,7 +8729,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8779,7 +8779,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8829,7 +8829,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8915,7 +8915,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -8965,7 +8965,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9015,7 +9015,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9065,7 +9065,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9115,7 +9115,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9165,7 +9165,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9251,7 +9251,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9301,7 +9301,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9351,7 +9351,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9401,7 +9401,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9487,7 +9487,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9537,7 +9537,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9587,7 +9587,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9637,7 +9637,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9687,7 +9687,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9737,7 +9737,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9787,7 +9787,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9837,7 +9837,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9887,7 +9887,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9937,7 +9937,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -9987,7 +9987,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10037,7 +10037,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10087,7 +10087,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10173,7 +10173,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10283,7 +10283,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10369,7 +10369,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10455,7 +10455,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10541,7 +10541,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10675,7 +10675,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10761,7 +10761,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10847,7 +10847,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10933,7 +10933,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -10983,7 +10983,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11033,7 +11033,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11083,7 +11083,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11133,7 +11133,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11183,7 +11183,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11245,7 +11245,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11295,7 +11295,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11345,7 +11345,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11395,7 +11395,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11445,7 +11445,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11495,7 +11495,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11545,7 +11545,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11595,7 +11595,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11657,7 +11657,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11707,7 +11707,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11757,7 +11757,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11807,7 +11807,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11857,7 +11857,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11907,7 +11907,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -11957,7 +11957,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12007,7 +12007,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12057,7 +12057,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12107,7 +12107,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12193,7 +12193,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12279,7 +12279,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12365,7 +12365,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12451,7 +12451,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12537,7 +12537,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12623,7 +12623,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12673,7 +12673,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12759,7 +12759,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12809,7 +12809,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12859,7 +12859,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12909,7 +12909,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -12959,7 +12959,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13009,7 +13009,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13059,7 +13059,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13145,7 +13145,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13231,7 +13231,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13341,7 +13341,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13427,7 +13427,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13513,7 +13513,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13599,7 +13599,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13685,7 +13685,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13771,7 +13771,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13857,7 +13857,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -13943,7 +13943,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14029,7 +14029,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14115,7 +14115,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14201,7 +14201,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14287,7 +14287,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14373,7 +14373,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14459,7 +14459,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14545,7 +14545,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14631,7 +14631,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14717,7 +14717,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14767,7 +14767,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14841,7 +14841,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {
@@ -14891,7 +14891,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "GDPR-1.0"
       },
       "to": {

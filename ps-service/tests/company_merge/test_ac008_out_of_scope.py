@@ -120,7 +120,7 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:Regulation {id: $regulation_id}) RETURN n" in q:
+        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
             return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
         raise AssertionError(f"unexpected query issued: {q!r}")
 

@@ -2,7 +2,7 @@
   "graph_name": "policy_system",
   "nodes": [
     {
-      "label": "Regulation",
+      "label": "RegulatoryInstrument",
       "id": "ENGPRAC-3.0",
       "properties": {
         "id": "ENGPRAC-3.0",
@@ -884,23 +884,23 @@
   ],
 
   "edges": [
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_service_owner_9f2e4d" }, "properties": { "source_ref": "Sec. 3.1" } },
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_engineering_manager_3c7a11" }, "properties": { "source_ref": "Sec. 3.2" } },
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_security_engineer_a65d20" }, "properties": { "source_ref": "Sec. 3.3" } },
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_sre_lead_5b2fd3" }, "properties": { "source_ref": "Sec. 3.4" } },
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_qa_lead_7de4a2" }, "properties": { "source_ref": "Sec. 3.5" } },
-    { "type": "DEFINES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_data_protection_officer_b5ac9e" }, "properties": { "source_ref": "Sec. 3.6" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_service_owner_9f2e4d" }, "properties": { "source_ref": "Sec. 3.1" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_engineering_manager_3c7a11" }, "properties": { "source_ref": "Sec. 3.2" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_security_engineer_a65d20" }, "properties": { "source_ref": "Sec. 3.3" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_sre_lead_5b2fd3" }, "properties": { "source_ref": "Sec. 3.4" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_qa_lead_7de4a2" }, "properties": { "source_ref": "Sec. 3.5" } },
+    { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role_data_protection_officer_b5ac9e" }, "properties": { "source_ref": "Sec. 3.6" } },
 
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.1" }, "properties": { "source_ref": "Sec. 4.1" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.2" }, "properties": { "source_ref": "Sec. 4.2" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.3" }, "properties": { "source_ref": "Sec. 4.3" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.4" }, "properties": { "source_ref": "Sec. 4.4" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.5" }, "properties": { "source_ref": "Sec. 4.5" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.6" }, "properties": { "source_ref": "Sec. 4.6" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.7" }, "properties": { "source_ref": "Sec. 4.7" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.8" }, "properties": { "source_ref": "Sec. 4.8" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.9" }, "properties": { "source_ref": "Sec. 4.9" } },
-    { "type": "EXPRESSES", "from": { "label": "Regulation", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.10" }, "properties": { "source_ref": "Sec. 4.10" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.1" }, "properties": { "source_ref": "Sec. 4.1" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.2" }, "properties": { "source_ref": "Sec. 4.2" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.3" }, "properties": { "source_ref": "Sec. 4.3" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.4" }, "properties": { "source_ref": "Sec. 4.4" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.5" }, "properties": { "source_ref": "Sec. 4.5" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.6" }, "properties": { "source_ref": "Sec. 4.6" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.7" }, "properties": { "source_ref": "Sec. 4.7" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.8" }, "properties": { "source_ref": "Sec. 4.8" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.9" }, "properties": { "source_ref": "Sec. 4.9" } },
+    { "type": "EXPRESSES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Requirement", "id": "ENGPRAC-3.0_req_art_4.10" }, "properties": { "source_ref": "Sec. 4.10" } },
 
     { "type": "HAS", "from": { "label": "Role", "id": "role_engineering_manager_3c7a11" }, "to": { "label": "Obligation", "id": "obl_policy_governance_exception_management_92ca31" }, "properties": {} },
     { "type": "HAS", "from": { "label": "Role", "id": "role_security_engineer_a65d20" }, "to": { "label": "Obligation", "id": "obl_secure_sdlc_execution_5ad2ef" }, "properties": {} },

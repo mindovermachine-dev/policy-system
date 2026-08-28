@@ -3,7 +3,7 @@
   "_comment": "CRA (Cyber Resilience Act, Regulation (EU) 2024/2847) extraction from docs/regulations/CRA.md, formatted per docs/artifacts/ps-domain-concepts.md for generic loading by graph-ingestion3/load_graph.py. Scope: Art. 3 (role definitions), Art. 13-24 (economic-operator and open-source-steward obligations, including the manufacturer-deeming provisions in Art. 21-22 and the traceability duty in Art. 23), and Annex I Parts I-II (essential cybersecurity requirements). Institutional/procedural articles (market surveillance powers, notified bodies, penalties, committee procedure, delegated/implementing act mechanics) are out of scope, as are two sub-provisions that are permissive rather than mandatory (Art. 13(10)'s optional compliance mechanism for modified software versions) or purely institutional within an otherwise-included article (Art. 13(24)-(25) Commission/ADCO powers, Art. 14(5) definitional, Art. 14(7) submission-routing mechanics, Art. 14(9)-(10) delegated/implementing act powers, Art. 18(1)-(2) mandate-formation mechanics). Extraction is at paragraph/sub-point granularity: each numbered paragraph or lettered sub-point imposing a distinct 'shall' duty has its own Requirement and Obligation node. The one deliberate merge is Annex I Part II point (5), which Art. 13(8) already expresses by direct cross-reference -- see CRA-1.0_req_art_13.8c. Capability nodes are shared across Roles and across Articles/Annex points wherever the underlying capacity converges (e.g. Conformity Assessment & Certification is REQUIRES'd by Manufacturer, Importer and Distributor obligations; Security Logging reuses the same node id as policy_system_graph.json's worked example, cap_security_logging_c4d9e2, demonstrating convergence across both data files). Obligation is 1:1 with Role per the domain model, so where the same duty text recurs for two Roles (e.g. importer/distributor escalating a vulnerability, or the Art. 21/22 manufacturer-deeming provisions), each Role gets its own distinct Obligation node rather than sharing one. Extraction stops at Capability; Policy/Standard/Control are organisation-internal governance layers not defined by the CRA itself.",
   "nodes": [
     {
-      "label": "Regulation",
+      "label": "RegulatoryInstrument",
       "id": "CRA-1.0",
       "properties": {
         "id": "CRA-1.0",
@@ -1913,7 +1913,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1927,7 +1927,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1941,7 +1941,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1955,7 +1955,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1969,7 +1969,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1983,7 +1983,7 @@
     {
       "type": "DEFINES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -1997,7 +1997,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2047,7 +2047,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2097,7 +2097,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2147,7 +2147,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2197,7 +2197,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2247,7 +2247,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2297,7 +2297,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2347,7 +2347,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2397,7 +2397,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2447,7 +2447,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2497,7 +2497,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2547,7 +2547,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2597,7 +2597,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2647,7 +2647,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2697,7 +2697,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2747,7 +2747,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2797,7 +2797,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2847,7 +2847,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2897,7 +2897,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2947,7 +2947,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -2997,7 +2997,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3047,7 +3047,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3097,7 +3097,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3147,7 +3147,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3197,7 +3197,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3247,7 +3247,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3297,7 +3297,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3347,7 +3347,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3397,7 +3397,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3447,7 +3447,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3497,7 +3497,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3547,7 +3547,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3597,7 +3597,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3647,7 +3647,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3697,7 +3697,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3747,7 +3747,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3797,7 +3797,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3847,7 +3847,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3897,7 +3897,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3947,7 +3947,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -3997,7 +3997,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4047,7 +4047,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4097,7 +4097,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4147,7 +4147,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4197,7 +4197,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4247,7 +4247,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4297,7 +4297,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4347,7 +4347,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4601,7 +4601,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4735,7 +4735,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4893,7 +4893,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4943,7 +4943,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -4993,7 +4993,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5043,7 +5043,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5093,7 +5093,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5143,7 +5143,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5193,7 +5193,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5243,7 +5243,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5293,7 +5293,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5343,7 +5343,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5393,7 +5393,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5443,7 +5443,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5493,7 +5493,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5543,7 +5543,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5593,7 +5593,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5643,7 +5643,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5693,7 +5693,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5743,7 +5743,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5793,7 +5793,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5843,7 +5843,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5893,7 +5893,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5943,7 +5943,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -5993,7 +5993,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {
@@ -6043,7 +6043,7 @@
     {
       "type": "EXPRESSES",
       "from": {
-        "label": "Regulation",
+        "label": "RegulatoryInstrument",
         "id": "CRA-1.0"
       },
       "to": {

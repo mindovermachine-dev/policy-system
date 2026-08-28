@@ -40,7 +40,7 @@ _ACTION = "extract_roles_and_requirements"
 
 class _RegulationNode(Protocol):
     """Structural stand-in for the `falkordb.Node` this module's own
-    `MATCH (r:Regulation) RETURN r` read returns -- only `.properties` is
+    `MATCH (r:RegulatoryInstrument) RETURN r` read returns -- only `.properties` is
     ever read, mirroring `falkordb_client.GraphQueryResult`'s own minimal
     structural-Protocol style. A hand-written test fake needs only this one
     attribute to satisfy it."""
@@ -135,7 +135,7 @@ def extract_roles_and_requirements(
 def _read_regulation_properties(
     native_graph: GraphHandle, regulation_id: str
 ) -> dict[str, object]:
-    """PLAN_REVIEWED.md §5.2 step 1: `MATCH (r:Regulation) RETURN r`, read
+    """PLAN_REVIEWED.md §5.2 step 1: `MATCH (r:RegulatoryInstrument) RETURN r`, read
     back as a plain properties dict for `persist_role_and_requirement_graph`
     to MERGE into `baseline_graph`.
 
@@ -144,7 +144,7 @@ def _read_regulation_properties(
     (`PersistNativeStructuralGraph` completed for this regulation) was not
     met.
     """
-    result = native_graph.query("MATCH (r:Regulation) RETURN r")
+    result = native_graph.query("MATCH (r:RegulatoryInstrument) RETURN r")
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
         raise DomainMapperExtractionError(

@@ -49,7 +49,7 @@ and a falsification report (attempts made, landed or missed, per
    user is actually trying to learn. Confirm or correct before proceeding.
 2. **Socratic narrowing loop.** Ask one question at a time to resolve, only
    where still ambiguous:
-   - Which entity type(s) the question is really about (Regulation, Role,
+   - Which entity type(s) the question is really about (RegulatoryInstrument, Role,
      Requirement, Obligation, Capability, Policy, Standard, Control,
      PracticeArea, RiskPath).
    - Which relationship(s)/traversal direction the question implies.
@@ -59,12 +59,12 @@ and a falsification report (attempts made, landed or missed, per
      graph).
    - Status/lifecycle bound: default to active-only, applied automatically
      without asking, for any entity in the chain whose status enum
-     literally includes an `active` value — currently `Regulation`
+     literally includes an `active` value — currently `RegulatoryInstrument`
      (`active`\|`superseded`\|`vacated`), `Requirement`, `PracticeArea`,
      `RiskPath`, `Capability` (all `active`\|`deprecated`). Filter each
      such entity in the chain independently on `status = 'active'` — they
      can diverge (e.g. a Requirement individually deprecated under an
-     active Regulation), so filter every one that has the property, not
+     active RegulatoryInstrument), so filter every one that has the property, not
      just one representative. Always state each applied filter explicitly
      in the proposed question (step 3) so the user can catch and override
      it — e.g. "including superseded/deprecated" opts out for a given
@@ -194,7 +194,7 @@ and a falsification report (attempts made, landed or missed, per
        term isn't modeled.
 
    Filters: <status filters auto-applied by the active-only default, e.g.
-     "Regulation.status = active, Requirement.status = active">, or "none"
+     "RegulatoryInstrument.status = active, Requirement.status = active">, or "none"
      if no entity in the chain qualified for the default.
 
    Query:

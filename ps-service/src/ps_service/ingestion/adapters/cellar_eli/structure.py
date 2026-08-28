@@ -38,7 +38,7 @@ import xml.etree.ElementTree as ET
 from ps_service.ingestion.adapters.errors import CellarParseError
 from ps_service.ingestion.models import StructuralEdge, StructuralNode
 
-REGULATION = "Regulation"
+REGULATION = "RegulatoryInstrument"
 CHAPTER = "CHAPTER"
 SECTION = "SECTION"
 ARTICLE = "ARTICLE"

@@ -12,7 +12,7 @@
 3. [Provenance Placement Rule](#provenance-placement-rule)
 4. [Edge Catalog](#edge-catalog)
 5. [Domain Concepts](#domain-concepts)
-   - [Regulation](#regulation)
+   - [Regulatory instrument](#regulatory-instrument)
    - [Role](#role)
    - [Requirement](#requirement)
    - [Obligation](#obligation)
@@ -34,20 +34,20 @@ This document models the Policy System domain as a **property graph**; a semanti
 **A fact belongs on the node or the edge, whichever it's actually about.** Properties that describe one specific relationship instance (a provenance reference for example) live on the edge, not on the node — otherwise a reused/canonical node ends up with a single property value that can't be true for all of its relationships at once.
 
 The model has two layers:
-- A **compliance spine** (`Regulation → Role/Requirement → Obligation → Capability → Policy → Standard → Control`) that carries regulatory provenance and implementation traceability.
+- A **compliance spine** (`RegulatoryInstrument → Role/Requirement → Obligation → Capability → Policy → Standard → Control`) that carries regulatory provenance and implementation traceability.
 - A **classification layer** (`PracticeArea`, `RiskPath`) that organizes and analyzes the spine without changing its compliance semantics.
 
 **Orthogonal to that layering is a second axis: where a node's data actually originates.**
-- **Regulatory** (`Regulation`, `Role`, `Requirement`, `Obligation`, `Capability`) — every property on these nodes is either lifted directly from regulatory text or derived transitively from it (see [Provenance Placement Rule](#provenance-placement-rule)). Nothing here is authored by a consumer of the model.
+- **Regulatory** (`RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`) — every property on these nodes is either lifted directly from regulatory text or derived transitively from it (see [Provenance Placement Rule](#provenance-placement-rule)). Nothing here is authored by a consumer of the model.
 - **Governance** (`Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath`) — authored by the organization consuming the compliance spine: policy managers, engineering teams, risk owners, via Policy Editor. None of these nodes carries a `source_ref`; their provenance is organizational (`owner_id`, `status`, `evidence_ref`), not regulatory.
 
-`Policy`/`Standard`/`Control` have a second possible origin, specific to `internal` Regulations. An `external` Regulation's ingestion pipeline always stops at `Capability`. An `internal` Regulation (an organizationally-authored Business SoP) is paired with a Domain Mapping Adapter that instead extracts all the way down the spine to `Control` — the same LLM-driven mint/match mechanism already used for `Role`/`Requirement`/`Obligation`/`Capability`, extended one source type further. A `Policy`/`Standard`/`Control` instance produced this way carries a `confidence` score, same as every other LLM-derived node; a human-authored instance (via Policy Editor) carries no `confidence`. This is an instance-level distinction, not a node-type one — the same `Policy` node type can be reached either way.
+`Policy`/`Standard`/`Control` have a second possible origin, specific to `internal` RegulatoryInstruments. An `external` RegulatoryInstrument's ingestion pipeline always stops at `Capability`. An `internal` RegulatoryInstrument (an organizationally-authored Business SoP) is paired with a Domain Mapping Adapter that instead extracts all the way down the spine to `Control` — the same LLM-driven mint/match mechanism already used for `Role`/`Requirement`/`Obligation`/`Capability`, extended one source type further. A `Policy`/`Standard`/`Control` instance produced this way carries a `confidence` score, same as every other LLM-derived node; a human-authored instance (via Policy Editor) carries no `confidence`. This is an instance-level distinction, not a node-type one — the same `Policy` node type can be reached either way.
 
-The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes that stay on the compliance spine — audit traceability from `Regulation` to `Control` is unbroken whether the last three hops are internal-SoP-derived or organizationally authored. `PracticeArea`/`RiskPath` are Governance nodes that sit outside the spine entirely, always human-authored.
+The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes that stay on the compliance spine — audit traceability from `RegulatoryInstrument` to `Control` is unbroken whether the last three hops are internal-SoP-derived or organizationally authored. `PracticeArea`/`RiskPath` are Governance nodes that sit outside the spine entirely, always human-authored.
 
 | Node | Layer | Origin |
 |------|-------|--------|
-| Regulation | Spine | Regulatory |
+| RegulatoryInstrument | Spine | Regulatory |
 | Role | Spine | Regulatory |
 | Requirement | Spine | Regulatory |
 | Obligation | Spine | Regulatory |
@@ -60,7 +60,7 @@ The two axes don't coincide. `Policy`/`Standard`/`Control` are Governance nodes 
 
 No node is both Classification and Regulatory — everything regulation-derived stays on the spine; only spine-adjacent, consumer-authored nodes are ever classification-only.
 
-`Policy`/`Standard`/`Control`'s Governance origin is the default case (human-authored via Policy Editor); an instance derived from an `internal` Regulation via its Domain Mapping Adapter is the exception — see above.
+`Policy`/`Standard`/`Control`'s Governance origin is the default case (human-authored via Policy Editor); an instance derived from an `internal` RegulatoryInstrument via its Domain Mapping Adapter is the exception — see above.
 
 ---
 
@@ -68,7 +68,7 @@ No node is both Classification and Regulatory — everything regulation-derived 
 
 ```mermaid
 graph LR
-    Regulation("(:Regulation)")
+    RegulatoryInstrument("(:RegulatoryInstrument)")
     Role("(:Role)")
     Requirement("(:Requirement)")
     Obligation("(:Obligation)")
@@ -79,8 +79,8 @@ graph LR
     Standard("(:Standard)")
     Control("(:Control)")
 
-    Regulation -->|"DEFINES<br/>{source_ref}"| Role
-    Regulation -->|"EXPRESSES<br/>{source_ref}"| Requirement
+    RegulatoryInstrument -->|"DEFINES<br/>{source_ref}"| Role
+    RegulatoryInstrument -->|"EXPRESSES<br/>{source_ref}"| Requirement
     Role -->|"HAS"| Obligation
     Requirement -->|"SATISFIED_BY"| Obligation
     Obligation -->|"REQUIRES"| Capability
@@ -94,7 +94,7 @@ graph LR
 
     classDef regulatory fill:#E3F2FD,stroke:#1565C0,color:#0D47A1
     classDef governance fill:#FFF3E0,stroke:#EF6C00,color:#E65100
-    class Regulation,Role,Requirement,Obligation,Capability regulatory
+    class RegulatoryInstrument,Role,Requirement,Obligation,Capability regulatory
     class Policy,Standard,Control,PracticeArea,RiskPath governance
 ```
 
@@ -127,10 +127,10 @@ that says what it *carries* and why.
    it here would duplicate the source of truth and risk drift between
    the copies. `SATISFIED_BY` and `REQUIRES` fall here: an Obligation's
    or Capability's regulatory provenance is always reachable by walking
-   `SATISFIED_BY`→`EXPRESSES` back to the originating Regulation article,
+   `SATISFIED_BY`→`EXPRESSES` back to the originating RegulatoryInstrument article,
    so neither edge repeats it.
 3. **Not applicable — no regulatory fact to place** — the edge doesn't
-   sit on the Regulation-provenance chain at all. Classification-layer
+   sit on the RegulatoryInstrument-provenance chain at all. Classification-layer
    edges (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`) qualify
    unconditionally. `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` qualify
    only when their target Policy/Standard/Control is human-authored (via
@@ -141,9 +141,9 @@ that says what it *carries* and why.
    forced into this rule.
 
    When the target Policy/Standard/Control is instead derived from an
-   `internal` Regulation via its Domain Mapping Adapter,
+   `internal` RegulatoryInstrument via its Domain Mapping Adapter,
    `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` fall under **case 2**
-   instead: the originating Regulation article is recoverable by walking
+   instead: the originating RegulatoryInstrument article is recoverable by walking
    `GOVERNED_BY`→`REQUIRES`→`SATISFIED_BY`→`EXPRESSES` back to it, the
    same transitive treatment already given to `REQUIRES` one hop up —
    no edge property is added for this case either.
@@ -159,10 +159,10 @@ full cross-model shape and provenance rationale at once.
 
 | Edge | Source → Target | Cardinality | Properties | Rule case ([above](#provenance-placement-rule)) |
 |------|------------------|-------------|------------|------|
-| `DEFINES` | Regulation → Role | 1 : 0..* | `source_ref` (required) | 1 — edge-owned |
-| `EXPRESSES` | Regulation → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
-| `SUPERSEDED_BY` | Regulation → Regulation | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
-| `TRANSPOSES` | Regulation → Regulation | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
+| `DEFINES` | RegulatoryInstrument → Role | 1 : 0..* | `source_ref` (required) | 1 — edge-owned |
+| `EXPRESSES` | RegulatoryInstrument → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
+| `SUPERSEDED_BY` | RegulatoryInstrument → RegulatoryInstrument | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
+| `TRANSPOSES` | RegulatoryInstrument → RegulatoryInstrument | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
 | `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved |
 | `SATISFIED_BY` | Requirement → Obligation | 1..* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
 | `REQUIRES` | Obligation → Capability | 1..* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
@@ -178,9 +178,9 @@ full cross-model shape and provenance rationale at once.
 
 ## Domain Concepts
 
-### Regulation
+### Regulatory instrument
 
-**Description:** A regulation source, identified by an official identifier, title, effective date, version, and status. Regulation is the root of the domain model: it is the authoritative source Role and Requirement are derived from, and the point every other concept's provenance ultimately traces back to. `source_type` distinguishes two kinds of source that both fit this shape:
+**Description:** A regulation source, identified by an official identifier, title, effective date, version, and status. RegulatoryInstrument is the root of the domain model: it is the authoritative source Role and Requirement are derived from, and the point every other concept's provenance ultimately traces back to. `source_type` distinguishes two kinds of source that both fit this shape:
 - **`external`** — EU legislation (GDPR, CRA, NIS2), an international standard, or national law, ingested from an official regulatory source.
 - **`internal`** — an organizationally-authored "Business Regulation," e.g. an Engineering Practices standard, governed through normal internal engineering governance rather than official-source ingestion.
 
@@ -193,9 +193,9 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 `instrument_type` is required for `source_type: external` and absent for `internal`. The Directive/transposition pattern is described in full under [Directives and National Transposition](#directives-and-national-transposition).
 
-**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. Regulations are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY` — detected by Regulatory Change Monitor polling the source, which triggers a full re-ingestion cycle (Ingestion → Domain Mapper → Company Merge) for the new version, preserving a complete version history for traceability. A `directive` source adds a second ingestion shape: the Directive text is ingested as the framework node, and each member state's transposing statute is ingested separately as its own `national_transposition` node once real transposition text is available. A member state that has not yet transposed — or whose transposition has not yet been ingested — simply has no node; the model does not distinguish those two cases.
+**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. RegulatoryInstruments are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY` — detected by Regulatory Change Monitor polling the source, which triggers a full re-ingestion cycle (Ingestion → Domain Mapper → Company Merge) for the new version, preserving a complete version history for traceability. A `directive` source adds a second ingestion shape: the Directive text is ingested as the framework node, and each member state's transposing statute is ingested separately as its own `national_transposition` node once real transposition text is available. A member state that has not yet transposed — or whose transposition has not yet been ingested — simply has no node; the model does not distinguish those two cases.
 
-**Node label:** `Regulation`
+**Node label:** `RegulatoryInstrument`
 **Identity:** natural key, shaped by `instrument_type`:
 
 | `instrument_type` | Identity pattern | Example |
@@ -204,7 +204,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | `directive` | `{SHORT}-{VERSION}` | `NIS2-1.0` |
 | `national_transposition` | `{SHORT}-{JURISDICTION}-{VERSION}` | `NIS2-DE-1.0`, `NIS2-FR-1.0` |
 
-`{JURISDICTION}` is the ISO 3166-1 alpha-2 code and always equals the node's own `jurisdiction`. `{VERSION}` on a `national_transposition` tracks that national statute's own revision history, independent of the Directive's version — when a member state amends its transposing law the national node is superseded via `SUPERSEDED_BY` while the `directive` node is untouched. Regulation is a root concept; a `national_transposition`'s link to its `directive` is carried entirely by the `TRANSPOSES` edge, never by a hashed identity segment, so the forms above stay stable human-readable keys rather than weak-entity encodings.
+`{JURISDICTION}` is the ISO 3166-1 alpha-2 code and always equals the node's own `jurisdiction`. `{VERSION}` on a `national_transposition` tracks that national statute's own revision history, independent of the Directive's version — when a member state amends its transposing law the national node is superseded via `SUPERSEDED_BY` while the `directive` node is untouched. RegulatoryInstrument is a root concept; a `national_transposition`'s link to its `directive` is carried entirely by the `TRANSPOSES` edge, never by a hashed identity segment, so the forms above stay stable human-readable keys rather than weak-entity encodings.
 
 #### Properties
 
@@ -223,21 +223,21 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `DEFINES` | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation defines this Role. Lives on the edge, not on Role, because the defining act is specific to this Regulation–Role pair. |
-| `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this Regulation–Requirement pair. |
-| `SUPERSEDED_BY` | Regulation | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
-| `TRANSPOSES` (outbound) | Regulation | 0..* : 1 | — | Only on `national_transposition` nodes: links the national statute to the EU `directive` it implements. Each national node transposes exactly one `directive`; a `directive` is transposed by zero-or-more national nodes. Structural bibliographic link — no `source_ref`, since this node's real provenance is on its own `DEFINES`/`EXPRESSES` edges. |
+| `DEFINES` | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument defines this Role. Lives on the edge, not on Role, because the defining act is specific to this RegulatoryInstrument–Role pair. |
+| `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this RegulatoryInstrument–Requirement pair. |
+| `SUPERSEDED_BY` | RegulatoryInstrument | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
+| `TRANSPOSES` (outbound) | RegulatoryInstrument | 0..* : 1 | — | Only on `national_transposition` nodes: links the national statute to the EU `directive` it implements. Each national node transposes exactly one `directive`; a `directive` is transposed by zero-or-more national nodes. Structural bibliographic link — no `source_ref`, since this node's real provenance is on its own `DEFINES`/`EXPRESSES` edges. |
 
 ---
 
 ### Role
 
-**Description:** An actor type defined by a regulation that carries duties and responsibilities — e.g. "Manufacturer" (CRA), "Data Controller" (GDPR), "Operator of Essential Services" (NIS2). Role answers "who must do what" under a given regulation. Because Role's identity is tied to its defining Regulation (see Identity below), roles that are semantically similar across different regulations remain distinct nodes rather than converging onto one — that convergence happens one layer down, at Obligation, which is exactly why Obligation (not Role) is designed to be regulation-independent. Without the structured source reference carried on the `DEFINES` edge, a Role's definition would be an unverifiable assertion — the reference is what lets "Manufacturer" be checked against the regulation that actually defines it, rather than merely claimed.
+**Description:** An actor type defined by a regulation that carries duties and responsibilities — e.g. "Manufacturer" (CRA), "Data Controller" (GDPR), "Operator of Essential Services" (NIS2). Role answers "who must do what" under a given regulation. Because Role's identity is tied to its defining RegulatoryInstrument (see Identity below), roles that are semantically similar across different regulations remain distinct nodes rather than converging onto one — that convergence happens one layer down, at Obligation, which is exactly why Obligation (not Role) is designed to be regulation-independent. Without the structured source reference carried on the `DEFINES` edge, a Role's definition would be an unverifiable assertion — the reference is what lets "Manufacturer" be checked against the regulation that actually defines it, rather than merely claimed.
 
 **Lifecycle:** Extracted when a regulation is loaded, or sourced from official regulatory glossaries/definitions. Immutable reference data once created — a stable point that Obligations attach to via `HAS`.
 
 **Node label:** `Role`
-**Identity:** `role_{slug}_{hash}` (e.g. `role_manufacturer_a1b2c3`) — content-derived from `name` + defining Regulation, opaque hash suffix. The defining-Regulation relationship is expressed only via the inbound `DEFINES` edge, never re-encoded into the ID string.
+**Identity:** `role_{slug}_{hash}` (e.g. `role_manufacturer_a1b2c3`) — content-derived from `name` + defining RegulatoryInstrument, opaque hash suffix. The defining-RegulatoryInstrument relationship is expressed only via the inbound `DEFINES` edge, never re-encoded into the ID string.
 
 #### Properties
 
@@ -251,7 +251,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `DEFINES` (inbound) | Regulation | 0..* : 1 | `source_ref` (string, required) | See [Regulation → DEFINES](#regulation). |
+| `DEFINES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → DEFINES](#regulatory-instrument). |
 | `HAS` | Obligation | 1 : 0..* | — | A Role has zero or more canonical Obligations assigned to it. |
 
 ---
@@ -263,7 +263,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 **Lifecycle:** Ingested from regulatory text via LLM-driven extraction when a regulation is loaded. Read-only once created — never modified directly, only deprecated when superseded by a new regulation version.
 
 **Node label:** `Requirement`
-**Identity:** `{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]` (e.g. `CRA-1.0_req_art_13.8c`) — generated from the regulatory source reference (regulation + article + paragraph/sub-point). Paragraph-level, not article-level: a single article routinely bundles several independent "shall"/"shall not"/"should" duties in different numbered paragraphs, and a single paragraph is occasionally split further (the trailing letter) when it visibly bundles more than one independent duty of its own. Unlike Role and Obligation, this identity is deliberately non-opaque: a Requirement is expressed by exactly one paragraph/sub-point of one Regulation article, so encoding that location directly in the ID is safe — there's no reuse across regulations to protect against.
+**Identity:** `{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]` (e.g. `CRA-1.0_req_art_13.8c`) — generated from the regulatory source reference (regulation + article + paragraph/sub-point). Paragraph-level, not article-level: a single article routinely bundles several independent "shall"/"shall not"/"should" duties in different numbered paragraphs, and a single paragraph is occasionally split further (the trailing letter) when it visibly bundles more than one independent duty of its own. Unlike Role and Obligation, this identity is deliberately non-opaque: a Requirement is expressed by exactly one paragraph/sub-point of one RegulatoryInstrument article, so encoding that location directly in the ID is safe — there's no reuse across regulations to protect against.
 
 #### Properties
 
@@ -278,7 +278,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `EXPRESSES` (inbound) | Regulation | 0..* : 1 | `source_ref` (string, required) | See [Regulation → EXPRESSES](#regulation). `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge. |
+| `EXPRESSES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → EXPRESSES](#regulatory-instrument). `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge. |
 | `SATISFIED_BY` | Obligation | 1..* : 0..* | — | Bridges this regulation-specific condition to one or more canonical Obligations. Many-to-many: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies Requirements from several different regulations — that reuse is the entire point of Obligation being canonical (see [Obligation](#obligation)). |
 
 ---
@@ -313,7 +313,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 ### PracticeArea
 
-**Description:** A stable engineering taxonomy used to group related capabilities and govern ownership of policies — e.g. "Secure Development Lifecycle" or "Reliability and Service Operations." PracticeArea is organizational classification, not compliance provenance: it improves assignment, scoping, and reporting without altering the `Regulation`-anchored traceability chain.
+**Description:** A stable engineering taxonomy used to group related capabilities and govern ownership of policies — e.g. "Secure Development Lifecycle" or "Reliability and Service Operations." PracticeArea is organizational classification, not compliance provenance: it improves assignment, scoping, and reporting without altering the `RegulatoryInstrument`-anchored traceability chain.
 
 **Lifecycle:** Curated by engineering governance and updated infrequently as operating models change. Usually long-lived reference data with occasional renames, merges, or deprecations.
 
@@ -403,7 +403,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `approved` → `deprecated` status workflow.
 
-Alternatively, matched/minted by the internal-source Domain Mapping Adapter when derived from an `internal` Regulation (a Business SoP) — the same LLM-driven mechanism already used for Obligation/Capability, extended past `Capability` for internal sources only (external sources stop at `Capability`). A Policy instance is one or the other, never both; see [Document Purpose](#document-purpose).
+Alternatively, matched/minted by the internal-source Domain Mapping Adapter when derived from an `internal` RegulatoryInstrument (a Business SoP) — the same LLM-driven mechanism already used for Obligation/Capability, extended past `Capability` for internal sources only (external sources stop at `Capability`). A Policy instance is one or the other, never both; see [Document Purpose](#document-purpose).
 
 **Node label:** `Policy`
 **Identity:** `pol_{slug}_{hash}` (e.g. `pol_data_protection_a8f3b1`) — content-derived from the Policy's own `title`, deliberately **not** derived from a governed Capability. `ps-domain-concepts.md` originally specified `pol_{capability_slug}_{capability_type}`, but that formula only encodes a single Capability — incoherent the moment a Policy governs more than one, which is exactly its own worked example above. Deriving from the Policy's own title instead avoids that, the same fix already applied to Obligation and Capability: identity comes from what the node itself is, never from what it happens to be connected to.
@@ -417,7 +417,7 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter when
 | `owner_id` | string | No | |
 | `status` | enum: `draft` \| `approved` \| `deprecated` | Yes | |
 | `version` | string | No | |
-| `confidence` | float, 0.0–1.0 | No | Present only when this Policy is internal-SoP-derived — the extracting LLM's own certainty in matching/minting this Policy for the governing Capability. Absent on human-authored (Policy Editor) instances, same as `jurisdiction` on Regulation is conditional on `source_type`. |
+| `confidence` | float, 0.0–1.0 | No | Present only when this Policy is internal-SoP-derived — the extracting LLM's own certainty in matching/minting this Policy for the governing Capability. Absent on human-authored (Policy Editor) instances, same as `jurisdiction` on RegulatoryInstrument is conditional on `source_type`. |
 
 #### Relationships
 
@@ -495,7 +495,7 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter once
 
 ## Directives and National Transposition
 
-An EU **Directive** does not bind companies directly. It binds each member state to transpose it into national law by a deadline, with genuine discretion over scope thresholds, sanctions, sector coverage, and reporting detail. A company operating in Germany owes what the German transposing statute says; a company operating in France owes what the French one says; the two can differ materially even though both derive from the same Directive. Modelling a Directive as a single `Regulation` node with one set of `source_ref`s would either invent a fictional single source location or silently erase that national variance — either way breaking the guarantee that every regulatory node's provenance is a real, checkable location in an authoritative text.
+An EU **Directive** does not bind companies directly. It binds each member state to transpose it into national law by a deadline, with genuine discretion over scope thresholds, sanctions, sector coverage, and reporting detail. A company operating in Germany owes what the German transposing statute says; a company operating in France owes what the French one says; the two can differ materially even though both derive from the same Directive. Modelling a Directive as a single `RegulatoryInstrument` node with one set of `source_ref`s would either invent a fictional single source location or silently erase that national variance — either way breaking the guarantee that every regulatory node's provenance is a real, checkable location in an authoritative text.
 
 ### Node shape
 
@@ -508,7 +508,7 @@ Both kinds of node are extracted **independently and fully** — a `national_tra
 
 Because the same downstream nodes are reachable from both the `directive` and its `national_transposition`s, queries must be explicit about which lens they want; `instrument_type` and `jurisdiction` are the discriminators.
 
-- **Jurisdiction-scoped compliance** ("what does a company operating in Germany owe under NIS2?") — the in-scope set of `Regulation` nodes for a company operating in jurisdictions *J* is: every `regulation` node, plus, for every `directive`, its `national_transposition` nodes whose `jurisdiction ∈ J`. Where a `national_transposition` and its `directive` both lead to the same canonical duty, the **national `source_ref` is the operative one** — it is the text that actually binds the company. The `directive`'s own provision is the fallback source only when the relevant jurisdiction has no `national_transposition` node.
+- **Jurisdiction-scoped compliance** ("what does a company operating in Germany owe under NIS2?") — the in-scope set of `RegulatoryInstrument` nodes for a company operating in jurisdictions *J* is: every `regulation` node, plus, for every `directive`, its `national_transposition` nodes whose `jurisdiction ∈ J`. Where a `national_transposition` and its `directive` both lead to the same canonical duty, the **national `source_ref` is the operative one** — it is the text that actually binds the company. The `directive`'s own provision is the fallback source only when the relevant jurisdiction has no `national_transposition` node.
 - **Framework completeness** ("how many distinct obligations does NIS2 impose?") — traverse from the `directive` and its `national_transposition`s together, then deduplicate on canonical node identity. Counting `Requirement`s would double-count every unchanged re-enactment.
 - **Transposition gap analysis** ("where does Germany's transposition fall short of the Directive?") — the set difference between what is reachable from `NIS2-1.0` and what is reachable from `NIS2-DE-1.0`. Partial transposition is surfaced this way, as a query result — never stored as a status flag.
 - **Pre-entry due diligence** ("what would we owe if we opened an office in Italy?") — the jurisdiction-scoped query above, run with a prospective jurisdiction. Every ingested `national_transposition` is present in the company graph regardless of where the company currently operates, specifically so this question can be answered before entering the market rather than after.
@@ -527,7 +527,7 @@ The model records what has been ingested and can be traced to real text. It does
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `CRA-1.0` | `source_type`: `external`, `title`: "Cyber Resilience Act", `jurisdiction`: "EU", `effective_date`: `2027-12-11`, `version`: `1.0`, `status`: `active` |
+| `RegulatoryInstrument` | `CRA-1.0` | `source_type`: `external`, `title`: "Cyber Resilience Act", `jurisdiction`: "EU", `effective_date`: `2027-12-11`, `version`: `1.0`, `status`: `active` |
 | `Role` | `role_manufacturer_a1b2c3` | `name`: "Manufacturer" — `DEFINES` edge from `CRA-1.0`, `source_ref`: "Art. 13" |
 | `Requirement` | `CRA-1.0_req_art_11.1` | `text`: "Manufacturers shall ensure products with digital elements log relevant internal activity, including access to data", `type`: `requirement` — `EXPRESSES` edge from `CRA-1.0`, `source_ref`: "Art. 11(1)" |
 | `Obligation` | `obl_security_monitoring_5e1f2a` | `text`: "Maintain Security Monitoring" — `HAS` from `Manufacturer`, `SATISFIED_BY` from `CRA-1.0_req_art_11.1` |
@@ -542,7 +542,7 @@ Path: CRA Art. 11 obliges Manufacturers to "Maintain Security Monitoring" → th
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `ENGPRAC-2.1` | `source_type`: `internal`, `title`: "Engineering Practices Standard", `jurisdiction`: *(not set — org-wide, no jurisdiction applies)*, `effective_date`: `2026-01-15`, `version`: `2.1`, `status`: `active` |
+| `RegulatoryInstrument` | `ENGPRAC-2.1` | `source_type`: `internal`, `title`: "Engineering Practices Standard", `jurisdiction`: *(not set — org-wide, no jurisdiction applies)*, `effective_date`: `2026-01-15`, `version`: `2.1`, `status`: `active` |
 | `Role` | `role_service_owner_9f2e4d` | `name`: "Service Owner" — `DEFINES` edge from `ENGPRAC-2.1`, `source_ref`: "Sec. 4.1" |
 | `Requirement` | `ENGPRAC-2.1_req_art_4.2` | `text`: "Service owners shall ensure all production services emit structured access logs, retained for 90 days", `type`: `requirement` — `EXPRESSES` edge from `ENGPRAC-2.1`, `source_ref`: "Sec. 4.2" |
 | `Obligation` | `obl_structured_access_logging_7b3c9d` | `text`: "Maintain Structured Access Logging" — `HAS` from `Service Owner`, `SATISFIED_BY` from `ENGPRAC-2.1_req_art_4.2` |
@@ -559,7 +559,7 @@ Unlike Example 2, which converges onto Example 1's pre-existing, human-authored 
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `INFRASEC-1.0` | `source_type`: `internal`, `title`: "Infrastructure Security Practices", `jurisdiction`: *(not set — org-wide)*, `effective_date`: `2026-03-01`, `version`: `1.0`, `status`: `active` |
+| `RegulatoryInstrument` | `INFRASEC-1.0` | `source_type`: `internal`, `title`: "Infrastructure Security Practices", `jurisdiction`: *(not set — org-wide)*, `effective_date`: `2026-03-01`, `version`: `1.0`, `status`: `active` |
 | `Role` | `role_platform_engineer_6c1a9f` | `name`: "Platform Engineer" — `DEFINES` edge from `INFRASEC-1.0`, `source_ref`: "Sec. 2.1" |
 | `Requirement` | `INFRASEC-1.0_req_art_2.3` | `text`: "Platform engineers shall enforce least-privilege access on all production infrastructure credentials", `type`: `requirement` — `EXPRESSES` edge from `INFRASEC-1.0`, `source_ref`: "Sec. 2.3" |
 | `Obligation` | `obl_least_privilege_access_3d8e21` | `text`: "Enforce Least-Privilege Access" — `HAS` from `Platform Engineer`, `SATISFIED_BY` from `INFRASEC-1.0_req_art_2.3` |
@@ -586,7 +586,7 @@ graph LR
 
 ### Convergence (Examples 1–3)
 
-Examples 1 and 2 are independent above `Capability`: different Regulations, different Roles, different Requirements, different Obligation text. They merge at `cap_security_logging_c4d9e2` and stay merged through `Policy`, then diverge again at `Standard`/`Control` because CRA's retention concern and the internal format concern are implemented and verified differently. This is the shape the model is designed to produce — regulation-specific duties converging onto shared, reusable capacity and governance, without forcing a single implementation or verification path.
+Examples 1 and 2 are independent above `Capability`: different RegulatoryInstruments, different Roles, different Requirements, different Obligation text. They merge at `cap_security_logging_c4d9e2` and stay merged through `Policy`, then diverge again at `Standard`/`Control` because CRA's retention concern and the internal format concern are implemented and verified differently. This is the shape the model is designed to produce — regulation-specific duties converging onto shared, reusable capacity and governance, without forcing a single implementation or verification path.
 
 Example 3 is deliberately the opposite case: no existing Capability to converge onto, so the same internal-source adapter run that mints Role/Requirement/Obligation/Capability keeps going and mints Policy/Standard/Control too, all in one pass. Both are legitimate outcomes of the same internal-source adapter — which one happens depends only on whether a matching Capability (and, transitively, Policy) already exists at merge time.
 
@@ -621,7 +621,7 @@ graph LR
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `NIS2-1.0` | `source_type`: `external`, `instrument_type`: `directive`, `title`: "Directive (EU) 2022/2555 (NIS2)", `jurisdiction`: `EU`, `effective_date`: `2024-10-18` (transposition deadline), `version`: `1.0`, `status`: `active` |
+| `RegulatoryInstrument` | `NIS2-1.0` | `source_type`: `external`, `instrument_type`: `directive`, `title`: "Directive (EU) 2022/2555 (NIS2)", `jurisdiction`: `EU`, `effective_date`: `2024-10-18` (transposition deadline), `version`: `1.0`, `status`: `active` |
 | `Role` | `role_essential_entity_c0a509` | `name`: "Essential entity" — `DEFINES` from `NIS2-1.0`, `source_ref`: "Art. 3" |
 | `Requirement` | `NIS2-1.0_req_art_23.4a` | `text`: "Essential and important entities shall submit to the CSIRT an early warning of any significant incident without undue delay and within 24 hours of becoming aware of it", `type`: `requirement` — `EXPRESSES` from `NIS2-1.0`, `source_ref`: "Art. 23(4)(a)" |
 | `Obligation` | `obl_report_significant_incident_csirt_1a2b3c` | `text`: "Report Significant Incidents to the CSIRT" — `HAS` from `role_essential_entity_c0a509`, `SATISFIED_BY` from `NIS2-1.0_req_art_23.4a` |
@@ -630,7 +630,7 @@ graph LR
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `NIS2-DE-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "NIS-2-Umsetzungsgesetz", `jurisdiction`: `DE`, `effective_date`: `2025-03-01`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
+| `RegulatoryInstrument` | `NIS2-DE-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "NIS-2-Umsetzungsgesetz", `jurisdiction`: `DE`, `effective_date`: `2025-03-01`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
 | `Role` | `role_besonders_wichtige_einrichtung_7d31f4` | `name`: "Besonders wichtige Einrichtung" — `DEFINES` from `NIS2-DE-1.0`, `source_ref`: "§ 28 BSIG" |
 | `Requirement` | `NIS2-DE-1.0_req_art_32.1` | `text`: "Besonders wichtige und wichtige Einrichtungen melden dem BSI eine Erstmeldung eines erheblichen Sicherheitsvorfalls unverzüglich, spätestens innerhalb von 24 Stunden nach Kenntniserlangung", `type`: `requirement` — `EXPRESSES` from `NIS2-DE-1.0`, `source_ref`: "§ 32 Abs. 1 BSIG" |
 | `Obligation` | `obl_report_significant_incident_bsi_4d5e6f` | `text`: "Report Significant Incidents to the BSI" — `HAS` from `role_besonders_wichtige_einrichtung_7d31f4`, `SATISFIED_BY` from `NIS2-DE-1.0_req_art_32.1` |
@@ -639,7 +639,7 @@ graph LR
 
 | Node | Identity | Key Properties |
 |------|----------|-----------------|
-| `Regulation` | `NIS2-FR-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "Loi relative à la résilience des activités d'importance vitale et à la cybersécurité", `jurisdiction`: `FR`, `effective_date`: `2025-01-15`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
+| `RegulatoryInstrument` | `NIS2-FR-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "Loi relative à la résilience des activités d'importance vitale et à la cybersécurité", `jurisdiction`: `FR`, `effective_date`: `2025-01-15`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
 | `Role` | `role_entite_essentielle_b90c22` | `name`: "Entité essentielle" — `DEFINES` from `NIS2-FR-1.0`, `source_ref`: "Art. 8" |
 | `Requirement` | `NIS2-FR-1.0_req_art_14.1` | `text`: "Les entités essentielles et importantes notifient à l'ANSSI, sans délai et au plus tard dans les 24 heures après en avoir eu connaissance, tout incident important", `type`: `requirement` — `EXPRESSES` from `NIS2-FR-1.0`, `source_ref`: "Art. 14" |
 | `Obligation` | `obl_report_significant_incident_anssi_7a8b9c` | `text`: "Report Significant Incidents to the ANSSI" — `HAS` from `role_entite_essentielle_b90c22`, `SATISFIED_BY` from `NIS2-FR-1.0_req_art_14.1` |

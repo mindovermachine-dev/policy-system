@@ -119,7 +119,7 @@ def test_register_regulation_version_merges_regulation_node_with_parameterized_m
 
     assert len(graph.calls) == 1
     call = graph.calls[0]
-    assert call.query == "MERGE (n:Regulation {id: $id}) SET n += $properties"
+    assert call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
     assert call.params == {
         "id": "CRA-1.0",
         "properties": {
@@ -164,7 +164,7 @@ def test_persist_native_structural_graph_writes_every_valid_node_and_edge() -> N
         _node("PARAGRAPH", "CRA#art_1.001"),
     )
     edges = (
-        _edge("Regulation", "CRA-1.0", "ARTICLE", "CRA#art_1"),
+        _edge("RegulatoryInstrument", "CRA-1.0", "ARTICLE", "CRA#art_1"),
         _edge("ARTICLE", "CRA#art_1", "PARAGRAPH", "CRA#art_1.001"),
     )
 
@@ -182,7 +182,7 @@ def test_persist_native_structural_graph_writes_every_valid_node_and_edge() -> N
     }
 
     assert first_edge_call.query == (
-        "MATCH (a:Regulation {id: $parent_id}), (b:ARTICLE {id: $child_id}) "
+        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ARTICLE {id: $child_id}) "
         "MERGE (a)-[:HAS]->(b)"
     )
     assert first_edge_call.params == {"parent_id": "CRA-1.0", "child_id": "CRA#art_1"}
@@ -253,7 +253,7 @@ def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_ed
     graph = _FakeGraph()
     nodes = (_node("ARTICLE", "CRA#art_1"),)
     edges = (
-        _edge("Regulation", "CRA-1.0", "ARTICLE", "CRA#art_1"),  # valid, listed first
+        _edge("RegulatoryInstrument", "CRA-1.0", "ARTICLE", "CRA#art_1"),  # valid, listed first
         _edge("ARTICLE", "CRA#art_1", "BOGUS", "CRA#bogus_1"),  # invalid, listed second
     )
 
@@ -273,7 +273,7 @@ def test_persist_native_structural_graph_substitutes_real_regulation_id_for_cele
     regulation id — `parse_structure` stamps every Regulation-anchored
     edge's `parent_id` with the raw CELEX identifier it was given instead
     (e.g. `"32024R2847"`), a placeholder. Every other test in this file
-    accidentally masks this: their own `_edge("Regulation", ...)` fixtures
+    accidentally masks this: their own `_edge("RegulatoryInstrument", ...)` fixtures
     set `parent_id` equal to the `regulation_id` passed to
     `persist_native_structural_graph` by construction, which never happens
     for real adapter output. This test deliberately uses a *different*
@@ -284,13 +284,13 @@ def test_persist_native_structural_graph_substitutes_real_regulation_id_for_cele
     """
     graph = _FakeGraph()
     nodes = (_node("ANNEX", "32024R2847#anx_I"),)
-    edges = (_edge("Regulation", "32024R2847", "ANNEX", "32024R2847#anx_I"),)
+    edges = (_edge("RegulatoryInstrument", "32024R2847", "ANNEX", "32024R2847#anx_I"),)
 
     persist_native_structural_graph(graph, "CRA-1.0", nodes, edges)
 
     edge_call = graph.calls[-1]
     assert edge_call.query == (
-        "MATCH (a:Regulation {id: $parent_id}), (b:ANNEX {id: $child_id}) MERGE (a)-[:HAS]->(b)"
+        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ANNEX {id: $child_id}) MERGE (a)-[:HAS]->(b)"
     )
     assert edge_call.params == {"parent_id": "CRA-1.0", "child_id": "32024R2847#anx_I"}
 
@@ -298,7 +298,7 @@ def test_persist_native_structural_graph_substitutes_real_regulation_id_for_cele
 def test_persist_native_structural_graph_raises_on_invalid_parent_element_type() -> None:
     """Bonus coverage: the parent-side allow-list check (the one branch of
     `_validate_element_types` not otherwise exercised above — every other
-    test's valid edges use `"Regulation"` as `parent_element_type`)."""
+    test's valid edges use `"RegulatoryInstrument"` as `parent_element_type`)."""
     graph = _FakeGraph()
     nodes = (_node("ARTICLE", "CRA#art_1"),)
     edges = (_edge("BOGUS", "CRA#bogus_1", "ARTICLE", "CRA#art_1"),)
@@ -312,7 +312,7 @@ def test_persist_native_structural_graph_raises_on_invalid_parent_element_type()
 # --- Increment 10: verify_structural_graph_reachable ---------------------
 
 _ALL_LABELS_NO_GAP: dict[str, tuple[int, int]] = {
-    "Regulation": (1, 1),
+    "RegulatoryInstrument": (1, 1),
     "TITLE": (0, 0),
     "CHAPTER": (5, 5),
     "SECTION": (3, 3),
@@ -427,18 +427,18 @@ def test_graph_writer_functions_work_against_real_falkordb() -> None:
         register_regulation_version(graph, "GWTEST-1.0", _metadata())
 
         nodes = (_node("ARTICLE", "GWTEST#art_1"),)
-        edges = (_edge("Regulation", "GWTEST-1.0", "ARTICLE", "GWTEST#art_1"),)
+        edges = (_edge("RegulatoryInstrument", "GWTEST-1.0", "ARTICLE", "GWTEST#art_1"),)
         persist_native_structural_graph(graph, "GWTEST-1.0", nodes, edges)
 
         counts = verify_structural_graph_reachable(graph, "GWTEST-1.0")
 
-        assert counts["Regulation"] == ReachabilityCount(total=1, reachable=1)
+        assert counts["RegulatoryInstrument"] == ReachabilityCount(total=1, reachable=1)
         assert counts["ARTICLE"] == ReachabilityCount(total=1, reachable=1)
         for label in ("TITLE", "CHAPTER", "SECTION", "PARAGRAPH", "ANNEX", "RECITAL"):
             assert counts[label] == ReachabilityCount(total=0, reachable=0)
 
         regulation_row = graph.query(
-            "MATCH (n:Regulation {id: $id}) RETURN n.title, n.effective_date",
+            "MATCH (n:RegulatoryInstrument {id: $id}) RETURN n.title, n.effective_date",
             params={"id": "GWTEST-1.0"},
         ).result_set[0]
         assert regulation_row == ["Cyber Resilience Act", "2027-12-11"]

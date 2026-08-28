@@ -150,7 +150,7 @@ def _regulation_row(run: _LiveRun) -> list[object]:
     """Fetch the persisted Regulation node's 6 bibliographic fields back
     from FalkorDB, by the exact id `ingest_regulation()` reported."""
     result = run.graph.query(
-        "MATCH (n:Regulation {id: $id}) "
+        "MATCH (n:RegulatoryInstrument {id: $id}) "
         "RETURN n.title, n.jurisdiction, n.effective_date, n.version, n.status, n.source_type",
         params={"id": run.ingest_result.regulation_id},
     )

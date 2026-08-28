@@ -163,14 +163,14 @@ def _assert_ac001_provenance(
     defines_refs = [
         row[0]
         for row in _query_rows(
-            baseline_graph, "MATCH (:Regulation)-[e:DEFINES]->(:Role) RETURN e.source_ref"
+            baseline_graph, "MATCH (:RegulatoryInstrument)-[e:DEFINES]->(:Role) RETURN e.source_ref"
         )
     ]
     expresses_refs = [
         row[0]
         for row in _query_rows(
             baseline_graph,
-            "MATCH (:Regulation)-[e:EXPRESSES]->(:Requirement) RETURN e.source_ref",
+            "MATCH (:RegulatoryInstrument)-[e:EXPRESSES]->(:Requirement) RETURN e.source_ref",
         )
     ]
     assert defines_refs, f"{regulation_id}: no DEFINES edges written"
@@ -234,7 +234,7 @@ def _assert_ac003_derivation_shape(
 
 
 def _assert_ac005_regulation_scope(baseline_graph: GraphHandle, regulation_id: str) -> None:
-    regulation_rows = _query_rows(baseline_graph, "MATCH (r:Regulation) RETURN r.id")
+    regulation_rows = _query_rows(baseline_graph, "MATCH (r:RegulatoryInstrument) RETURN r.id")
     assert regulation_rows == [[regulation_id]], (
         f"unexpected Regulation node set in {regulation_id}'s baseline graph: {regulation_rows}"
     )

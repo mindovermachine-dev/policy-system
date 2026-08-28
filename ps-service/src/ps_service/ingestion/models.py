@@ -58,7 +58,7 @@ class StructuralNode:
 class StructuralEdge:
     """One parent -> child edge in the native structural graph."""
 
-    parent_element_type: str  # "Regulation" for top-level children, else a StructuralNode.element_type
+    parent_element_type: str  # "RegulatoryInstrument" for top-level children, else a StructuralNode.element_type
     parent_id: str
     child_element_type: str
     child_id: str

@@ -91,7 +91,7 @@ class _ScriptedFakeGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:Regulation {id: $regulation_id}) RETURN n" in q:
+        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
             return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
         raise AssertionError(f"unexpected query issued: {q!r}")
 
@@ -254,7 +254,7 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
     graph = select_graph(db, "test_company_merge_graph_reader_live")
 
     graph.query(
-        "MERGE (r:Regulation {id: $id}) SET r += $properties",
+        "MERGE (r:RegulatoryInstrument {id: $id}) SET r += $properties",
         params={"id": "LIVE-1.0", "properties": {"title": "Live Test Regulation"}},
     )
     graph.query(
@@ -262,7 +262,7 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
         params={"id": "role_live_abc", "properties": {"name": "LiveRole", "confidence": 0.9}},
     )
     graph.query(
-        "MATCH (r:Regulation {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref",
         params={
             "regulation_id": "LIVE-1.0",

@@ -115,7 +115,7 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:Regulation {id: $regulation_id}) RETURN n" in q:
+        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
             return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
         raise AssertionError(f"unexpected query issued: {q!r}")
 
@@ -292,7 +292,7 @@ def test_everything_new_writes_every_node_type_directly(make_emitter) -> None:
     assert result.near_misses == ()
 
     writes = single_tenant.writes()
-    assert any("MERGE (n:Regulation" in c.query for c in writes)
+    assert any("MERGE (n:RegulatoryInstrument" in c.query for c in writes)
     assert any("MERGE (n:Role" in c.query for c in writes)
     assert any("MERGE (n:Requirement" in c.query for c in writes)
     assert any(

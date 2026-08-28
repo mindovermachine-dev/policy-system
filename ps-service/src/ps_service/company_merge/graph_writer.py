@@ -100,7 +100,7 @@ __all__ = [
     "persist_role_and_requirement_passthrough",
 ]
 
-_REGULATION_LABEL = "Regulation"
+_REGULATION_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"

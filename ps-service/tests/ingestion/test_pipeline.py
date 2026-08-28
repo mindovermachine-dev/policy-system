@@ -93,7 +93,7 @@ def _structure(title: str) -> FetchedRegulationStructure:
         source_type="external",
     )
     nodes = (StructuralNode("ARTICLE", f"{title}#art_1", {"text": "t", "citation_ref": "Art. 1", "order": 1}),)
-    edges = (StructuralEdge("Regulation", f"{title}-id", "ARTICLE", f"{title}#art_1"),)
+    edges = (StructuralEdge("RegulatoryInstrument", f"{title}-id", "ARTICLE", f"{title}#art_1"),)
     return FetchedRegulationStructure(metadata=metadata, nodes=nodes, edges=edges)
 
 

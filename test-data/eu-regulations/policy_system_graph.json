@@ -3,7 +3,7 @@
   "_comment": "Instance data for the Policy System domain model (docs/artifacts/ps-domain-concepts.md), formatted for generic loading into FalkorDB by load_graph.py. Nodes are addressed by (label, id) using each concept's documented Identity scheme. Edge properties are attached only where the domain doc places a fact on the edge rather than the node (source_ref on DEFINES/EXPRESSES). Data reproduces the two worked examples from the domain doc -- a CRA (external) chain and an Engineering Practices (internal) chain -- which are constructed to converge on the same Capability and Policy nodes, demonstrating cross-regulation normalization.",
   "nodes": [
     {
-      "label": "Regulation",
+      "label": "RegulatoryInstrument",
       "id": "CRA-1.0",
       "properties": {
         "id": "CRA-1.0",
@@ -16,7 +16,7 @@
       }
     },
     {
-      "label": "Regulation",
+      "label": "RegulatoryInstrument",
       "id": "ENGPRAC-2.1",
       "properties": {
         "id": "ENGPRAC-2.1",
@@ -164,25 +164,25 @@
   "edges": [
     {
       "type": "DEFINES",
-      "from": { "label": "Regulation", "id": "CRA-1.0" },
+      "from": { "label": "RegulatoryInstrument", "id": "CRA-1.0" },
       "to": { "label": "Role", "id": "role_manufacturer_a1b2c3" },
       "properties": { "source_ref": "Art. 13" }
     },
     {
       "type": "EXPRESSES",
-      "from": { "label": "Regulation", "id": "CRA-1.0" },
+      "from": { "label": "RegulatoryInstrument", "id": "CRA-1.0" },
       "to": { "label": "Requirement", "id": "CRA-1.0_req_art_11" },
       "properties": { "source_ref": "Art. 11" }
     },
     {
       "type": "DEFINES",
-      "from": { "label": "Regulation", "id": "ENGPRAC-2.1" },
+      "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-2.1" },
       "to": { "label": "Role", "id": "role_service_owner_9f2e4d" },
       "properties": { "source_ref": "Sec. 4.1" }
     },
     {
       "type": "EXPRESSES",
-      "from": { "label": "Regulation", "id": "ENGPRAC-2.1" },
+      "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-2.1" },
       "to": { "label": "Requirement", "id": "ENGPRAC-2.1_req_art_4.2" },
       "properties": { "source_ref": "Sec. 4.2" }
     },

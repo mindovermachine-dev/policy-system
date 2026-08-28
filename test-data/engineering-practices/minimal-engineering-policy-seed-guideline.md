@@ -64,7 +64,7 @@ This set is intentionally balanced: not too broad, not too fragmented.
 ## 4. Policy System Graph Seed Shape
 
 Recommended initial dataset size:
-1. `Regulation` (internal): 1
+1. `RegulatoryInstrument` (internal): 1
 2. `Role`: 5-7
 3. `Requirement`: 20-30
 4. `Obligation`: 15-20

@@ -104,7 +104,7 @@ class _FakeRegulationNode:
 
 class _FakeNativeGraph:
     """Satisfies `GraphHandle` structurally. Answers
-    `MATCH (r:Regulation) RETURN r` with a scripted Regulation node --
+    `MATCH (r:RegulatoryInstrument) RETURN r` with a scripted Regulation node --
     mirrors `test_extraction.py`'s own `_FakeNativeGraph`."""
 
     def __init__(self, regulation_properties: dict[str, object]) -> None:

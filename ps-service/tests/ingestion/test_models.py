@@ -60,7 +60,7 @@ def test_structural_node_mutation_raises() -> None:
 
 def test_structural_edge_mutation_raises() -> None:
     edge = StructuralEdge(
-        parent_element_type="Regulation",
+        parent_element_type="RegulatoryInstrument",
         parent_id="CRA-1.0",
         child_element_type="ARTICLE",
         child_id="CRA-1.0#art_1",

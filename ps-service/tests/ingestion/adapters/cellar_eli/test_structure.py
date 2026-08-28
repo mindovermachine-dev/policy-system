@@ -102,7 +102,7 @@ def test_chapter_nested_under_title_pass_through_attaches_directly_to_regulation
 
     chapter_edges = [edge for edge in edges if edge.child_id == chapter.id]
     assert len(chapter_edges) == 1
-    assert chapter_edges[0].parent_element_type == "Regulation"
+    assert chapter_edges[0].parent_element_type == "RegulatoryInstrument"
     assert chapter_edges[0].parent_id == _REGULATION_ID
 
 
@@ -169,7 +169,7 @@ def test_recital_is_top_level_child_of_regulation_with_its_own_text() -> None:
 
     recital_edges = [edge for edge in edges if edge.child_id == recital.id]
     assert len(recital_edges) == 1
-    assert recital_edges[0].parent_element_type == "Regulation"
+    assert recital_edges[0].parent_element_type == "RegulatoryInstrument"
     assert recital_edges[0].parent_id == _REGULATION_ID
 
 
@@ -183,5 +183,5 @@ def test_annex_is_top_level_child_of_regulation_sourced_from_its_own_container()
 
     annex_edges = [edge for edge in edges if edge.child_id == annex.id]
     assert len(annex_edges) == 1
-    assert annex_edges[0].parent_element_type == "Regulation"
+    assert annex_edges[0].parent_element_type == "RegulatoryInstrument"
     assert annex_edges[0].parent_id == _REGULATION_ID

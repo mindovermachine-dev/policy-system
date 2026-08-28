@@ -75,7 +75,7 @@ def fetch_capabilities(graph) -> list:
 def fetch_source_regulations(graph, cap_id: str) -> list:
     result = graph.query(
         """
-        MATCH (reg:Regulation)-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(c:Capability {id: $cap_id})
+        MATCH (reg:RegulatoryInstrument)-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(c:Capability {id: $cap_id})
         RETURN DISTINCT reg.id
         """,
         params={"cap_id": cap_id},

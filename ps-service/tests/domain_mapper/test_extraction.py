@@ -321,7 +321,7 @@ class _FakeRegulationNode:
 
 class _FakeNativeGraph:
     """Satisfies `GraphHandle` structurally. Answers
-    `MATCH (r:Regulation) RETURN r` with a scripted Regulation node;
+    `MATCH (r:RegulatoryInstrument) RETURN r` with a scripted Regulation node;
     ignores any other query (the fake adapter never actually queries it in
     these tests)."""
 
@@ -649,7 +649,7 @@ def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_
     assert result.requirement_ids == ()
     assert result.requirement_id_collisions == ()
     assert len(baseline_graph.calls) == 1
-    assert baseline_graph.calls[0].query == "MERGE (n:Regulation {id: $id}) SET n += $properties"
+    assert baseline_graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
 
 
 def test_extract_roles_and_requirements_surfaces_collision_without_aborting(

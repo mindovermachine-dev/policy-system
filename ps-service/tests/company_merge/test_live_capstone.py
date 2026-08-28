@@ -74,7 +74,7 @@ _SEED_REQUIREMENT_TEXT = (
 _SEED_ROLE_NAME = "Capstone Seeded Incident Notifier"
 _SEED_SOURCE_REF = "capstone-seed"
 
-_NODE_LABELS = ("Regulation", "Role", "Requirement", "Obligation", "Capability")
+_NODE_LABELS = ("RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability")
 _EDGE_TYPES = ("DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES")
 
 # Captured at module-import time (collection), before tests/conftest.py's autouse
@@ -165,7 +165,7 @@ def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulation_id: str) 
         },
     )
     baseline_graph.query(
-        "MATCH (r:Regulation {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref",
         params={
             "regulation_id": regulation_id,
@@ -174,7 +174,7 @@ def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulation_id: str) 
         },
     )
     baseline_graph.query(
-        "MATCH (r:Regulation {id: $regulation_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref",
         params={
             "regulation_id": regulation_id,
@@ -231,28 +231,28 @@ def _snapshot_embeddings(single_tenant_graph: GraphHandle) -> dict[str, tuple[fl
 
 def _assert_ac001_every_node_type_present(single_tenant_graph: GraphHandle, regulation_id: str) -> None:
     assert (
-        _count(single_tenant_graph, "MATCH (n:Regulation {id: $id}) RETURN count(n)", {"id": regulation_id})
+        _count(single_tenant_graph, "MATCH (n:RegulatoryInstrument {id: $id}) RETURN count(n)", {"id": regulation_id})
         == 1
     ), f"{regulation_id}: Regulation node missing from {_CAPSTONE_GRAPH_NAME}"
 
     role_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:DEFINES]->(:Role) RETURN count(*)",
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role) RETURN count(*)",
         {"id": regulation_id},
     )
     requirement_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:EXPRESSES]->(:Requirement) RETURN count(*)",
+        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement) RETURN count(*)",
         {"id": regulation_id},
     )
     obligation_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation) RETURN count(*)",
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation) RETURN count(*)",
         {"id": regulation_id},
     )
     capability_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
         "RETURN count(*)",
         {"id": regulation_id},
     )
@@ -355,13 +355,13 @@ def _report_ac003_ac004_mechanism_presence(
 def _assert_ac006_traversal_reachable(single_tenant_graph: GraphHandle, regulation_id: str) -> None:
     has_chain_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
         "RETURN count(*)",
         {"id": regulation_id},
     )
     satisfied_chain_count = _count(
         single_tenant_graph,
-        "MATCH (:Regulation {id: $id})-[:EXPRESSES]->(:Requirement)-[:SATISFIED_BY]->(:Obligation) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement)-[:SATISFIED_BY]->(:Obligation) "
         "RETURN count(*)",
         {"id": regulation_id},
     )

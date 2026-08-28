@@ -91,7 +91,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     assert len(graph.calls) == 5
     regulation_call, role_call, requirement_call, defines_call, expresses_call = graph.calls
 
-    assert regulation_call.query == "MERGE (n:Regulation {id: $id}) SET n += $properties"
+    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
     assert regulation_call.params == {"id": "CRA-1.0", "properties": _regulation_properties()}
 
     assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
@@ -101,7 +101,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
 
     assert defines_call.query == (
-        "MATCH (r:Regulation {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref"
     )
     assert defines_call.params == {
@@ -111,7 +111,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     }
 
     assert expresses_call.query == (
-        "MATCH (r:Regulation {id: $regulation_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
     )
     assert expresses_call.params == {
@@ -158,4 +158,4 @@ def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation() -> N
     )
 
     assert len(graph.calls) == 1
-    assert graph.calls[0].query == "MERGE (n:Regulation {id: $id}) SET n += $properties"
+    assert graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"

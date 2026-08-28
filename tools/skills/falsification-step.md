@@ -46,13 +46,13 @@ Before running any attempt, set `max_falsification_attempts`:
 - **5** — if the supplied Entities list includes `Policy`, `Standard`, or
   `Control`, or the user explicitly asked for deeper scrutiny on this
   question. These three are the customer-governed layer:
-  `ps-domain-concepts.md` describes them (unlike `Regulation`/`Requirement`,
+  `ps-domain-concepts.md` describes them (unlike `RegulatoryInstrument`/`Requirement`,
   which are ingested and read-only once created) as "created by policy
   managers through governance workflows" and actively revised — data this
   pipeline doesn't control the quality of, so it's where a construction-step
   error is most plausible.
 - **1** — otherwise (the question stays entirely within the ingested
-  compliance spine: `Regulation`, `Role`, `Requirement`, `Obligation`,
+  compliance spine: `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`,
   `Capability`, or the classification layer `PracticeArea`/`RiskPath`).
 
 This is a floor, not a skip — every question gets at least one adversarial

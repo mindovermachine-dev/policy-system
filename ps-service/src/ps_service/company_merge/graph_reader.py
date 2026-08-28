@@ -15,11 +15,11 @@ Node/edge shape cross-checked directly against
 module this reader's queries must round-trip against), not invented by
 analogy:
 
-- Regulation: `MERGE (n:Regulation {id: $id}) SET n += $properties`, an
+- Regulation: `MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties`, an
   open/variable properties set (title, jurisdiction, effective_date,
   source_type, ...) -- read back the same way
   `ps_service.domain_mapper.extraction._read_regulation_properties` already
-  does (`MATCH (r:Regulation) RETURN r`, then `dict(node.properties)`,
+  does (`MATCH (r:RegulatoryInstrument) RETURN r`, then `dict(node.properties)`,
   `id` included), via this module's own `_RegulationNode` structural
   Protocol copy.
 - Role: properties are `name`/`confidence` only (`RoleNode.properties`).
@@ -66,17 +66,17 @@ from ps_service.company_merge.models import (
     ProvenanceEdge,
 )
 
-_REGULATION_QUERY = "MATCH (n:Regulation {id: $regulation_id}) RETURN n"
+_REGULATION_QUERY = "MATCH (n:RegulatoryInstrument {id: $regulation_id}) RETURN n"
 _ROLE_QUERY = "MATCH (n:Role) RETURN n.id, n.name, n.confidence"
 _REQUIREMENT_QUERY = "MATCH (n:Requirement) RETURN n.id, n.text, n.type, n.confidence, n.role_id"
 _OBLIGATION_QUERY = "MATCH (n:Obligation) RETURN n.id, n.text, n.confidence"
 _CAPABILITY_QUERY = "MATCH (n:Capability) RETURN n.id, n.name, n.confidence, n.description"
 _DEFINES_QUERY = (
-    "MATCH (r:Regulation {id: $regulation_id})-[e:DEFINES]->(n:Role) "
+    "MATCH (r:RegulatoryInstrument {id: $regulation_id})-[e:DEFINES]->(n:Role) "
     "RETURN n.id, e.source_ref"
 )
 _EXPRESSES_QUERY = (
-    "MATCH (r:Regulation {id: $regulation_id})-[e:EXPRESSES]->(n:Requirement) "
+    "MATCH (r:RegulatoryInstrument {id: $regulation_id})-[e:EXPRESSES]->(n:Requirement) "
     "RETURN n.id, e.source_ref"
 )
 _HAS_QUERY = "MATCH (s:Role)-[:HAS]->(t:Obligation) RETURN s.id, t.id"
@@ -85,7 +85,7 @@ _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id,
 
 
 class _RegulationNode(Protocol):
-    """Structural stand-in for the `falkordb.Node` `MATCH (n:Regulation
+    """Structural stand-in for the `falkordb.Node` `MATCH (n:RegulatoryInstrument
     {id: $regulation_id}) RETURN n` returns -- only `.properties` is ever
     read, mirroring `ps_service.domain_mapper.extraction._RegulationNode`'s
     own minimal structural-Protocol style (own copy, per this component's
@@ -133,7 +133,7 @@ def read_baseline_graph(baseline_graph: GraphHandle, regulation_id: str) -> Base
 def _read_regulation_properties(
     baseline_graph: GraphHandle, regulation_id: str
 ) -> dict[str, object]:
-    """`MATCH (n:Regulation {id: $regulation_id}) RETURN n`, read back as a
+    """`MATCH (n:RegulatoryInstrument {id: $regulation_id}) RETURN n`, read back as a
     plain properties dict -- mirrors `ps_service.domain_mapper.extraction.
     _read_regulation_properties`'s exact read shape. Absent Regulation node
     (a baseline graph left in an unexpected state) yields an empty dict

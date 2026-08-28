@@ -28,7 +28,7 @@ precedent this one follows one component over):
 
 **Design note (S2's resolution, PLAN_REVIEWED.md §0.5 Divergence #1 /
 §11 Increment 9) — no query-safety allow-list is needed anywhere in this
-module.** `Role`, `Requirement`, `Regulation`, `DEFINES`, `EXPRESSES` are
+module.** `Role`, `Requirement`, `RegulatoryInstrument`, `DEFINES`, `EXPRESSES` are
 all fixed Python literals in this module's own source, interpolated as
 labels/relationship-type names the same way `ps_service.ingestion.
 graph_writer`'s `_REGULATION_LABEL` is (no allow-list needed there either)
@@ -98,7 +98,7 @@ from ps_service.domain_mapper.models import (
     RoleNode,
 )
 
-_REGULATION_LABEL = "Regulation"
+_REGULATION_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"
