@@ -164,7 +164,7 @@ graph TB
 
 | Domain Concept | Component Name | Domain Path | Implementation Notes |
 |---|---|---|---|
-| Regulation | Ingestion | `ps.service.ingestion` | Bibliographic metadata (`title`, `jurisdiction`, `effective_date`, `version`) is direct Cellar/ELI structural data — no LLM extraction needed to create this node. For a Directive source (e.g. NIS2), `effective_date` is the Member-State transposition deadline, not the Directive's own EU-level entry-into-force date — the transposition deadline is the point the Directive's obligations actually bind affected entities, which is what this field represents for a Regulation source too |
+| Regulation | Ingestion | `ps.service.ingestion` | Bibliographic metadata (`title`, `jurisdiction`, `effective_date`, `version`, `instrument_type`) is direct Cellar/ELI structural data — no LLM extraction needed to create this node. `instrument_type` (`regulation` \| `directive` \| `national_transposition`) is read from the source's ELI type. A `directive` source is ingested in two shapes: the Directive text as one EU-level framework node, and each member state's transposing statute as its own `national_transposition` node linked to it by `TRANSPOSES` (see [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#directives-and-national-transposition)). For a `directive` node, `effective_date` is the Member-State transposition deadline, not the Directive's own EU-level entry-into-force date — the transposition deadline is the point the Directive's obligations actually bind affected entities, which is what this field represents for a Regulation source too. Which member-state transpositions exist in the graph is a function of what has been ingested; the model does not track transposition status separately |
 | Native structural elements (adapter-defined, e.g. TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH for Cellar/ELI) | Ingestion (write, via source-specific Ingestion Adapter) + Domain Mapper (read, via paired Domain Mapping Adapter) | `ps.service.ingestion`, `ps.service.domainmapper` | Not a fixed, project-wide domain concept — each source's Ingestion Adapter persists its own native hierarchy as-is; only its paired Domain Mapping Adapter knows how to read that shape. A new regulatory source (e.g. SOX, HIPAA) means adding a new matched adapter pair, not extending a shared schema |
 | Role | Domain Mapper | `ps.service.domainmapper` | LLM-extracted from the native structural graph via the Domain Mapping Adapter; `DEFINES` edge with `source_ref` |
 | Requirement | Domain Mapper | `ps.service.domainmapper` | LLM-extracted; `EXPRESSES` edge with `source_ref` |
@@ -191,7 +191,8 @@ graph TB
 | Constraint | Description |
 |---|---|
 | Read-only once created | Regulations are never modified in place; a new version supersedes the old via `SUPERSEDED_BY` (see [Regulatory Change Monitor](#regulatory-change-monitor)) |
-| Natural-key identity | `{SHORT}-{VERSION}` (e.g. `CRA-1.0`) — no separate surrogate key |
+| Natural-key identity | `{SHORT}-{VERSION}` (e.g. `CRA-1.0`); a `national_transposition` node uses `{SHORT}-{JURISDICTION}-{VERSION}` (e.g. `NIS2-DE-1.0`) — no separate surrogate key |
+| Directive/transposition split | A `directive` source produces one EU-level framework node plus zero-or-more `national_transposition` nodes (each `TRANSPOSES` → the framework node), ingested independently from their own national texts |
 
 ###### Attributes
 
@@ -200,7 +201,8 @@ graph TB
 | `id` | Same as Identity | string | — | — | Required |
 | `title` | Regulation title | string | — | — | Required |
 | `source_type` | `external` or `internal` | enum | — | — | Required |
-| `jurisdiction` | Jurisdiction or org-unit scope | string | — | — | Required in practice for `external` |
+| `instrument_type` | `regulation` \| `directive` \| `national_transposition` | enum | — | — | Required for `source_type: external`; absent for `internal` |
+| `jurisdiction` | Jurisdiction or org-unit scope | string | — | — | Required in practice for `external`; a single ISO 3166-1 alpha-2 code for `national_transposition` |
 | `effective_date` | ISO 8601 date | date | — | — | Required |
 | `version` | Version string | string | — | — | Required |
 | `status` | `active` \| `superseded` \| `vacated` | enum | — | — | Required |
@@ -254,7 +256,7 @@ graph TB
 | `ps-service/src/ps_service/ingestion/adapters/errors.py` | `CellarFetchError`, `CellarParseError` | — |
 | `ps-service/src/ps_service/ingestion/adapters/cellar_eli/adapter.py` | `CellarEliAdapter` — the Cellar/ELI `IngestionAdapter` implementation, CELEX-identifier-driven (ELI URI as a literal identifier is not currently supported — no verified live HTTP path resolves one to Cellar content without an unbuilt SPARQL-based resolution step) | FetchRegulationStructure |
 | `ps-service/src/ps_service/ingestion/adapters/cellar_eli/fetch.py` | `fetch_xhtml` — live Cellar/ELI HTTP fetch by CELEX, injectable transport; `check_connectivity` — bare-domain reachability probe, independent of any CELEX identifier | FetchRegulationStructure, CheckConnectivity (Cellar/ELI) |
-| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/metadata.py` | `extract_metadata` — bibliographic metadata extraction, incl. AC-007's transposition-deadline convention | — |
+| `ps-service/src/ps_service/ingestion/adapters/cellar_eli/metadata.py` | `extract_metadata` — bibliographic metadata extraction, incl. `instrument_type` and AC-007's transposition-deadline convention | — |
 | `ps-service/src/ps_service/ingestion/adapters/cellar_eli/structure.py` | `parse_structure` — native ELI structural graph parsing | — |
 
 #### Actions
@@ -575,6 +577,7 @@ None new — maintains `Regulation.SUPERSEDED_BY`, documented under [Ingestion](
 **Implementation Guidance:**
 - Delta report shape/mechanism is under exploration (per Solution Architecture) — do not assume a shape here that the SA doc doesn't already commit to.
 - Amendment detection is assumed to rely on Cellar/ELI's consolidated-version linkage (`cdm:consolidated_by`/`work_related_to` between a regulation's CELEX-numbered expressions) — this has not been verified against a live Cellar SPARQL query. Confirm this mechanism actually surfaces new consolidated versions before implementing `PollForAmendments` against it.
+- Directives (`instrument_type: directive`) are out of scope for `PollForAmendments` as specified here: their checkable obligations live in the member states' national transposing statutes, each independently amendable in its own national legal database with no common EU-level access point. Polling the Directive's own Cellar lineage detects nothing about a member state amending its transposition. Per-`national_transposition` monitoring — plus a transposition-ingestion work-queue and directive-supersession re-transposition tracking — is a separate, larger piece of work (see issue #41) that this action's Cellar-lineage design does not attempt.
 
 #### Implementation Registration
 
@@ -586,7 +589,7 @@ None new — maintains `Regulation.SUPERSEDED_BY`, documented under [Ingestion](
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| PollForAmendments | Periodically poll Cellar/ELI for amendments to tracked regulations | No (deferred) | n/a (deferred) | ≥1 Regulation node with `status: active` exists | New-version detected for the tracked Regulation (version comparison against Cellar/ELI's reported version) — required, gates `TriggerReingestion`. A delta report of affected content is also produced as a secondary output (shape under exploration — does not block triggering) | None (read-only against Cellar/ELI) | Cellar/ELI, FalkorDB (read) | Polling interval not yet decided | Yes | A failed poll retries next cycle; does not block other regulations |
+| PollForAmendments | Periodically poll Cellar/ELI for amendments to tracked regulations (`instrument_type: regulation`, and `directive` framework nodes; `national_transposition` nodes are out of scope — see Implementation Guidance) | No (deferred) | n/a (deferred) | ≥1 Regulation node with `status: active` exists | New-version detected for the tracked Regulation (version comparison against Cellar/ELI's reported version) — required, gates `TriggerReingestion`. A delta report of affected content is also produced as a secondary output (shape under exploration — does not block triggering) | None (read-only against Cellar/ELI) | Cellar/ELI, FalkorDB (read) | Polling interval not yet decided | Yes | A failed poll retries next cycle; does not block other regulations |
 | TriggerReingestion | For an amended regulation, trigger a new Ingestion → Domain Mapper → Company Merge cycle; set `SUPERSEDED_BY` once the new version registers | No (deferred) | n/a (deferred) | PollForAmendments detected a real new ELI version | New Regulation version exists; `SUPERSEDED_BY` links old → new; new baseline merged per add/merge-only rule | Triggers Ingestion/Domain Mapper/Company Merge | Ingestion, Domain Mapper, Company Merge (internal calls) | Not yet set | Yes (re-triggering an already-processed version is a no-op) | A failed cycle leaves the prior version's status untouched — never record supersession without a landed replacement |
 
 ---

@@ -22,7 +22,8 @@
    - [Policy](#policy)
    - [Standard](#standard)
    - [Control](#control)
-6. [Worked Examples](#worked-examples)
+6. [Directives and National Transposition](#directives-and-national-transposition)
+7. [Worked Examples](#worked-examples)
 
 ---
 
@@ -161,6 +162,7 @@ full cross-model shape and provenance rationale at once.
 | `DEFINES` | Regulation → Role | 1 : 0..* | `source_ref` (required) | 1 — edge-owned |
 | `EXPRESSES` | Regulation → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
 | `SUPERSEDED_BY` | Regulation → Regulation | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
+| `TRANSPOSES` | Regulation → Regulation | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
 | `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved |
 | `SATISFIED_BY` | Requirement → Obligation | 1..* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
 | `REQUIRES` | Obligation → Capability | 1..* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
@@ -184,10 +186,25 @@ full cross-model shape and provenance rationale at once.
 
 Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Requirement chain unchanged, so an internal standard's Requirements converge onto the same canonical Obligation and Capability nodes as external regulations — e.g. an internal "Security Logging Practice" can land on the same `Capability` node that CRA and GDPR already converge on (see [Obligation](#obligation) and [Capability](#capability)).
 
-**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. Regulations are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY` — detected by Regulatory Change Monitor polling the source, which triggers a full re-ingestion cycle (Ingestion → Domain Mapper → Company Merge) for the new version, preserving a complete version history for traceability.
+Within `external`, a second axis — `instrument_type` — records what kind of legal instrument the source is, because it changes both how the source is ingested and how its obligations are scoped to a company:
+- **`regulation`** — a directly-applicable instrument binding entities EU-wide from one authoritative text, with no national implementation step (EU Regulations such as GDPR and CRA; also an international standard adopted as-is).
+- **`directive`** — an EU instrument that binds *member states* to a result but leaves the form to national law: each member state transposes it into its own statute, with real discretion over scope thresholds, sanctions, and sector coverage (NIS2). A `directive` node holds the framework-level extraction from the Directive text itself; the checkable national obligations live in separate `national_transposition` nodes linked to it by [`TRANSPOSES`](#edge-catalog).
+- **`national_transposition`** — one member state's statute transposing a specific `directive`. Its `jurisdiction` is a single country, its `source_ref`s point into that country's law, and it carries an outbound `TRANSPOSES` edge to the `directive` it implements.
+
+`instrument_type` is required for `source_type: external` and absent for `internal`. The Directive/transposition pattern is described in full under [Directives and National Transposition](#directives-and-national-transposition).
+
+**Lifecycle:** Ingested from official sources and retained permanently for historical analysis. Regulations are read-only once created — never modified in place. A new version doesn't overwrite the old one; it supersedes it via `SUPERSEDED_BY` — detected by Regulatory Change Monitor polling the source, which triggers a full re-ingestion cycle (Ingestion → Domain Mapper → Company Merge) for the new version, preserving a complete version history for traceability. A `directive` source adds a second ingestion shape: the Directive text is ingested as the framework node, and each member state's transposing statute is ingested separately as its own `national_transposition` node once real transposition text is available. A member state that has not yet transposed — or whose transposition has not yet been ingested — simply has no node; the model does not distinguish those two cases.
 
 **Node label:** `Regulation`
-**Identity:** `{SHORT}-{VERSION}` (e.g. `CRA-1.0`) — natural key. Regulation is a root concept with no parent, so no weak-entity concern applies here.
+**Identity:** natural key, shaped by `instrument_type`:
+
+| `instrument_type` | Identity pattern | Example |
+|---|---|---|
+| `regulation` | `{SHORT}-{VERSION}` | `CRA-1.0`, `GDPR-1.0` |
+| `directive` | `{SHORT}-{VERSION}` | `NIS2-1.0` |
+| `national_transposition` | `{SHORT}-{JURISDICTION}-{VERSION}` | `NIS2-DE-1.0`, `NIS2-FR-1.0` |
+
+`{JURISDICTION}` is the ISO 3166-1 alpha-2 code and always equals the node's own `jurisdiction`. `{VERSION}` on a `national_transposition` tracks that national statute's own revision history, independent of the Directive's version — when a member state amends its transposing law the national node is superseded via `SUPERSEDED_BY` while the `directive` node is untouched. Regulation is a root concept; a `national_transposition`'s link to its `directive` is carried entirely by the `TRANSPOSES` edge, never by a hashed identity segment, so the forms above stay stable human-readable keys rather than weak-entity encodings.
 
 #### Properties
 
@@ -196,7 +213,8 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 | `id` | string | Yes | Same value as Identity above |
 | `title` | string | Yes | |
 | `source_type` | enum: `external` \| `internal` | Yes | `external` = EU legislation, international standard, or national law. `internal` = organizationally-authored Business Regulation (e.g. Engineering Practices standard). |
-| `jurisdiction` | string | No | Required in practice for `external` sources. Optional because `internal` sources may have no jurisdiction, or may use this field for org-unit scope instead — different business units can carry different values here. |
+| `instrument_type` | enum: `regulation` \| `directive` \| `national_transposition` | Conditional | Required for `source_type: external`; absent for `internal`. Determines the identity pattern (below) and, for `directive`, that framework-level and national obligations are modelled as separate linked nodes. See [Directives and National Transposition](#directives-and-national-transposition). |
+| `jurisdiction` | string | No | Required in practice for `external` sources. Optional because `internal` sources may have no jurisdiction, or may use this field for org-unit scope instead — different business units can carry different values here. For `national_transposition` this is a single ISO 3166-1 alpha-2 country code and also appears in the identity. |
 | `effective_date` | date (ISO 8601) | Yes | |
 | `version` | string | Yes | |
 | `status` | enum: `active` \| `superseded` \| `vacated` | Yes | |
@@ -208,6 +226,7 @@ Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Require
 | `DEFINES` | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation defines this Role. Lives on the edge, not on Role, because the defining act is specific to this Regulation–Role pair. |
 | `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this Regulation expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this Regulation–Requirement pair. |
 | `SUPERSEDED_BY` | Regulation | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
+| `TRANSPOSES` (outbound) | Regulation | 0..* : 1 | — | Only on `national_transposition` nodes: links the national statute to the EU `directive` it implements. Each national node transposes exactly one `directive`; a `directive` is transposed by zero-or-more national nodes. Structural bibliographic link — no `source_ref`, since this node's real provenance is on its own `DEFINES`/`EXPRESSES` edges. |
 
 ---
 
@@ -474,9 +493,35 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter once
 
 ---
 
+## Directives and National Transposition
+
+An EU **Directive** does not bind companies directly. It binds each member state to transpose it into national law by a deadline, with genuine discretion over scope thresholds, sanctions, sector coverage, and reporting detail. A company operating in Germany owes what the German transposing statute says; a company operating in France owes what the French one says; the two can differ materially even though both derive from the same Directive. Modelling a Directive as a single `Regulation` node with one set of `source_ref`s would either invent a fictional single source location or silently erase that national variance — either way breaking the guarantee that every regulatory node's provenance is a real, checkable location in an authoritative text.
+
+### Node shape
+
+- **One `directive` node** (e.g. `NIS2-1.0`, `jurisdiction: EU`) carrying framework-level extraction from the Directive text itself — the Roles it names and the Requirements it states in its own operative provisions. Many Directive provisions *are* directly prescriptive (NIS2 Art. 23's reporting timelines, for instance); those are extracted here exactly as for any other source.
+- **Zero or more `national_transposition` nodes** (e.g. `NIS2-DE-1.0`, `NIS2-FR-1.0`), one per member state whose transposing statute has been ingested, each carrying its own `DEFINES`/`EXPRESSES` edges with `source_ref`s into that country's law, and each linked to the `directive` node by an outbound [`TRANSPOSES`](#edge-catalog) edge.
+
+Both kinds of node are extracted **independently and fully** — a `national_transposition` is not a diff against the Directive. Where a member state re-enacts a Directive provision unchanged, the graph legitimately holds two `Requirement` nodes (one expressed by the `directive`, one by the `national_transposition`); they converge downstream on shared canonical capacity, the same way GDPR and CRA already do. Everything from `Obligation` downward is unaffected by whether the source was a `regulation`, a `directive`, or a `national_transposition`.
+
+### Querying across the pattern
+
+Because the same downstream nodes are reachable from both the `directive` and its `national_transposition`s, queries must be explicit about which lens they want; `instrument_type` and `jurisdiction` are the discriminators.
+
+- **Jurisdiction-scoped compliance** ("what does a company operating in Germany owe under NIS2?") — the in-scope set of `Regulation` nodes for a company operating in jurisdictions *J* is: every `regulation` node, plus, for every `directive`, its `national_transposition` nodes whose `jurisdiction ∈ J`. Where a `national_transposition` and its `directive` both lead to the same canonical duty, the **national `source_ref` is the operative one** — it is the text that actually binds the company. The `directive`'s own provision is the fallback source only when the relevant jurisdiction has no `national_transposition` node.
+- **Framework completeness** ("how many distinct obligations does NIS2 impose?") — traverse from the `directive` and its `national_transposition`s together, then deduplicate on canonical node identity. Counting `Requirement`s would double-count every unchanged re-enactment.
+- **Transposition gap analysis** ("where does Germany's transposition fall short of the Directive?") — the set difference between what is reachable from `NIS2-1.0` and what is reachable from `NIS2-DE-1.0`. Partial transposition is surfaced this way, as a query result — never stored as a status flag.
+- **Pre-entry due diligence** ("what would we owe if we opened an office in Italy?") — the jurisdiction-scoped query above, run with a prospective jurisdiction. Every ingested `national_transposition` is present in the company graph regardless of where the company currently operates, specifically so this question can be answered before entering the market rather than after.
+
+### Out of scope for the model
+
+The model records what has been ingested and can be traced to real text. It does **not** model the political state of the transposition processes — whether a given member state is on time, late, or in infringement. That is monitoring, owned by Regulatory Change Monitor, and it depends on polling national legal databases with no common EU-level access point. Until that capability exists, "transposed but not yet ingested" and "not transposed at all" are both simply the absence of a `national_transposition` node.
+
+---
+
 ## Worked Examples
 
-*Illustrative instance data — not normative. IDs reuse the identity examples given throughout this document, so the two chains below double as a consistency check on the model itself. Both chains are constructed to converge on the same `Capability` and `Policy` nodes, to make the cross-regulation convergence claimed throughout this document concrete rather than asserted.*
+*Illustrative instance data — not normative. IDs reuse the identity examples given throughout this document, so each chain below doubles as a consistency check on the model itself. Examples 1 and 2 are constructed to converge on the same `Capability` and `Policy` nodes, making the cross-source convergence claimed throughout this document concrete rather than asserted; Example 3 is the deliberate opposite case (no existing node to converge onto — the internal-source adapter mints the full spine); Example 4 shows an EU Directive plus two national transpositions converging at `Capability`.*
 
 ### Example 1 — CRA (`source_type: external`)
 
@@ -539,11 +584,13 @@ graph LR
 
 *(`{confidence}` is shown on the edge above only for diagram readability — per the [Edge Catalog](#edge-catalog), `confidence` is a node property on Policy/Standard/Control themselves, not an edge property.)*
 
-### Convergence
+### Convergence (Examples 1–3)
 
-Both chains are independent above `Capability`: different Regulations, different Roles, different Requirements, different Obligation text. They merge at `cap_security_logging_c4d9e2` and stay merged through `Policy`, then diverge again at `Standard`/`Control` because CRA's retention concern and the internal format concern are implemented and verified differently. This is the shape the model is designed to produce — regulation-specific duties converging onto shared, reusable capacity and governance, without forcing a single implementation or verification path.
+Examples 1 and 2 are independent above `Capability`: different Regulations, different Roles, different Requirements, different Obligation text. They merge at `cap_security_logging_c4d9e2` and stay merged through `Policy`, then diverge again at `Standard`/`Control` because CRA's retention concern and the internal format concern are implemented and verified differently. This is the shape the model is designed to produce — regulation-specific duties converging onto shared, reusable capacity and governance, without forcing a single implementation or verification path.
 
-Example 3 above is deliberately the opposite case: no existing Capability to converge onto, so the same internal-source adapter run that mints Role/Requirement/Obligation/Capability keeps going and mints Policy/Standard/Control too, all in one pass. Both are legitimate outcomes of the same internal-source adapter — which one happens depends only on whether a matching Capability (and, transitively, Policy) already exists at merge time.
+Example 3 is deliberately the opposite case: no existing Capability to converge onto, so the same internal-source adapter run that mints Role/Requirement/Obligation/Capability keeps going and mints Policy/Standard/Control too, all in one pass. Both are legitimate outcomes of the same internal-source adapter — which one happens depends only on whether a matching Capability (and, transitively, Policy) already exists at merge time.
+
+Example 4 below is the same convergence idea across an EU Directive and its national transpositions — three regulatory chains meeting at one `Capability`.
 
 ```mermaid
 graph LR
@@ -564,6 +611,68 @@ graph LR
     Pol -->|SUPPORTED_BY| StdENG["Structured Access Log<br/>Format Standard"]
     StdCRA -->|IMPLEMENTED_BY| CtrlCRA["Automated Log<br/>Retention Integrity Check"]
     StdENG -->|IMPLEMENTED_BY| CtrlENG["CI Structured Log<br/>Schema Validator"]
+```
+
+### Example 4 — EU Directive with National Transposition (`instrument_type: directive`)
+
+*NIS2 (a Directive) plus two member-state transpositions. Each of the three chains keeps its own `Role` and its own `Obligation` and they converge at `Capability` — the same convergence shape as Examples 1 and 2, which also meet at `Capability`, not `Obligation`. Whether the three `Obligation`s here should instead be a single shared canonical node — as the [Obligation](#obligation) section's cross-source normalization intent suggests — turns on the unresolved `HAS`-cardinality question and is out of scope for the Directive model. This example takes the conservative reading. The three `Obligation`s differ legitimately in their reporting recipient: each member state designates its own CSIRT / competent authority.*
+
+**EU framework node**
+
+| Node | Identity | Key Properties |
+|------|----------|-----------------|
+| `Regulation` | `NIS2-1.0` | `source_type`: `external`, `instrument_type`: `directive`, `title`: "Directive (EU) 2022/2555 (NIS2)", `jurisdiction`: `EU`, `effective_date`: `2024-10-18` (transposition deadline), `version`: `1.0`, `status`: `active` |
+| `Role` | `role_essential_entity_c0a509` | `name`: "Essential entity" — `DEFINES` from `NIS2-1.0`, `source_ref`: "Art. 3" |
+| `Requirement` | `NIS2-1.0_req_art_23.4a` | `text`: "Essential and important entities shall submit to the CSIRT an early warning of any significant incident without undue delay and within 24 hours of becoming aware of it", `type`: `requirement` — `EXPRESSES` from `NIS2-1.0`, `source_ref`: "Art. 23(4)(a)" |
+| `Obligation` | `obl_report_significant_incident_csirt_1a2b3c` | `text`: "Report Significant Incidents to the CSIRT" — `HAS` from `role_essential_entity_c0a509`, `SATISFIED_BY` from `NIS2-1.0_req_art_23.4a` |
+
+**German transposition**
+
+| Node | Identity | Key Properties |
+|------|----------|-----------------|
+| `Regulation` | `NIS2-DE-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "NIS-2-Umsetzungsgesetz", `jurisdiction`: `DE`, `effective_date`: `2025-03-01`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
+| `Role` | `role_besonders_wichtige_einrichtung_7d31f4` | `name`: "Besonders wichtige Einrichtung" — `DEFINES` from `NIS2-DE-1.0`, `source_ref`: "§ 28 BSIG" |
+| `Requirement` | `NIS2-DE-1.0_req_art_32.1` | `text`: "Besonders wichtige und wichtige Einrichtungen melden dem BSI eine Erstmeldung eines erheblichen Sicherheitsvorfalls unverzüglich, spätestens innerhalb von 24 Stunden nach Kenntniserlangung", `type`: `requirement` — `EXPRESSES` from `NIS2-DE-1.0`, `source_ref`: "§ 32 Abs. 1 BSIG" |
+| `Obligation` | `obl_report_significant_incident_bsi_4d5e6f` | `text`: "Report Significant Incidents to the BSI" — `HAS` from `role_besonders_wichtige_einrichtung_7d31f4`, `SATISFIED_BY` from `NIS2-DE-1.0_req_art_32.1` |
+
+**French transposition**
+
+| Node | Identity | Key Properties |
+|------|----------|-----------------|
+| `Regulation` | `NIS2-FR-1.0` | `source_type`: `external`, `instrument_type`: `national_transposition`, `title`: "Loi relative à la résilience des activités d'importance vitale et à la cybersécurité", `jurisdiction`: `FR`, `effective_date`: `2025-01-15`, `version`: `1.0`, `status`: `active` — `TRANSPOSES` → `NIS2-1.0` |
+| `Role` | `role_entite_essentielle_b90c22` | `name`: "Entité essentielle" — `DEFINES` from `NIS2-FR-1.0`, `source_ref`: "Art. 8" |
+| `Requirement` | `NIS2-FR-1.0_req_art_14.1` | `text`: "Les entités essentielles et importantes notifient à l'ANSSI, sans délai et au plus tard dans les 24 heures après en avoir eu connaissance, tout incident important", `type`: `requirement` — `EXPRESSES` from `NIS2-FR-1.0`, `source_ref`: "Art. 14" |
+| `Obligation` | `obl_report_significant_incident_anssi_7a8b9c` | `text`: "Report Significant Incidents to the ANSSI" — `HAS` from `role_entite_essentielle_b90c22`, `SATISFIED_BY` from `NIS2-FR-1.0_req_art_14.1` |
+
+**Shared canonical node**
+
+| Node | Identity | Key Properties |
+|------|----------|-----------------|
+| `Capability` | `cap_incident_notification_a1c8d4` | `name`: "Incident Notification" — `REQUIRES` from all three `Obligation`s above |
+
+Path: the NIS2 Directive (Art. 23(4)(a)) and both national transpositions independently express a 24-hour incident-notification duty, each to its own national authority → each duty is a distinct `Obligation` assigned to that source's own `Role` → all three `REQUIRES` the same "Incident Notification" `Capability`. From `Capability` down the chain is identical to any other source.
+
+A query for *"what must a company operating in Germany report under NIS2, and by when"* resolves to `NIS2-DE-1.0_req_art_32.1` (`source_ref` "§ 32 Abs. 1 BSIG") — the German statute, not the Directive. The same query for a company operating only in a member state with no ingested transposition falls back to `NIS2-1.0_req_art_23.4a` ("Art. 23(4)(a)").
+
+```mermaid
+graph LR
+    NIS2["NIS2-1.0<br/>(directive)"] -->|DEFINES| EEeu["Essential entity"]
+    NIS2 -->|EXPRESSES| ReqEU["NIS2-1.0_req_art_23.4a"]
+    NIS2DE["NIS2-DE-1.0<br/>(national_transposition)"] -->|TRANSPOSES| NIS2
+    NIS2FR["NIS2-FR-1.0<br/>(national_transposition)"] -->|TRANSPOSES| NIS2
+    NIS2DE -->|DEFINES| EEde["Besonders wichtige<br/>Einrichtung"]
+    NIS2DE -->|EXPRESSES| ReqDE["NIS2-DE-1.0_req_art_32.1"]
+    NIS2FR -->|DEFINES| EEfr["Entité essentielle"]
+    NIS2FR -->|EXPRESSES| ReqFR["NIS2-FR-1.0_req_art_14.1"]
+    ReqEU -->|SATISFIED_BY| OblEU["Report Significant<br/>Incidents to the CSIRT"]
+    EEeu -->|HAS| OblEU
+    ReqDE -->|SATISFIED_BY| OblDE["Report Significant<br/>Incidents to the BSI"]
+    EEde -->|HAS| OblDE
+    ReqFR -->|SATISFIED_BY| OblFR["Report Significant<br/>Incidents to the ANSSI"]
+    EEfr -->|HAS| OblFR
+    OblEU -->|REQUIRES| Cap["Incident Notification"]
+    OblDE -->|REQUIRES| Cap
+    OblFR -->|REQUIRES| Cap
 ```
 
 ---
