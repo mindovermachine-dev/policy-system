@@ -1518,7 +1518,7 @@ requires-dist = [
     { name = "falkordb", specifier = "==1.7.1" },
     { name = "fastapi", specifier = "==0.141.1" },
     { name = "litellm", specifier = "==1.98.0" },
-    { name = "mcp", specifier = ">=1.2.0" },
+    { name = "mcp", specifier = "==2.0.0" },
     { name = "openai", specifier = "==2.54.0" },
     { name = "pydantic", specifier = "==2.13.4" },
     { name = "structlog", specifier = ">=26.1.0" },
