@@ -3,14 +3,15 @@ plus the existing-canonical-index reader, exact-match resolution,
 semantic-match resolution, and the combined whole-collection resolution
 algorithm (PLAN_REVIEWED.md §5.1/§5.2/§5.3/§5.4, Increments 6-9).
 
-Company Merge's exact-key match is only correct if it computes *the same
-hash* Domain Mapper already used to write the baseline graph's node ids --
-so `obligation_id`/`capability_id` are imported directly here, never
-reimplemented. See `tests/company_merge/test_identity_reuse.py` for the
-enforcement proof: an AST scan confirms no function named
-`obligation_id`/`capability_id`/`_hash`/`_slug` is ever defined anywhere in
-this package, plus a direct byte-for-byte comparison against
-`ps_service.domain_mapper.identity`'s own functions.
+Since issue #42, Company Merge dedupes **Capability only** on the regulatory
+spine (Obligation is Role-scoped and passed through). Company Merge's
+exact-key match is only correct if it computes *the same hash* Domain Mapper
+already used to write the baseline graph's node ids -- so `capability_id` is
+imported directly here, never reimplemented. See
+`tests/company_merge/test_identity_reuse.py` for the enforcement proof: an
+AST scan confirms no function named `capability_id`/`_hash`/`_slug` is ever
+defined anywhere in this package, plus a direct byte-for-byte comparison
+against `ps_service.domain_mapper.identity`'s own function.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from ps_service.company_merge.models import (
     SemanticMatchResult,
 )
 from ps_service.company_merge.similarity import cosine_similarity
-from ps_service.domain_mapper.identity import capability_id, obligation_id
+from ps_service.domain_mapper.identity import capability_id
 from ps_service.llm_interface.client import EmbeddingCaller
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.logging.emitter import LogEmitter
@@ -36,27 +37,26 @@ __all__ = [
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
-    "obligation_id",
     "read_existing_canonical_index",
     "resolve_exact_match",
 ]
 
-_OBLIGATION_INDEX_QUERY = "MATCH (n:Obligation) RETURN n.id, n.text, n.embedding"
 _CAPABILITY_INDEX_QUERY = "MATCH (n:Capability) RETURN n.id, n.name, n.embedding"
 
 
 def read_existing_canonical_index(
-    single_tenant_graph: GraphHandle, label: Literal["Obligation", "Capability"]
+    single_tenant_graph: GraphHandle, label: Literal["Capability"]
 ) -> tuple[ExistingCanonicalNode, ...]:
     """Read every existing `label` node already present in the single-tenant
     graph, as an `ExistingCanonicalNode` tuple (PLAN_REVIEWED.md §5.2).
 
-    `label` is always one of this module's own two fixed literals
-    (`"Obligation"`/`"Capability"`), passed only by this component's own
-    code (`dedupe_canonical_nodes`, a later increment) -- never sourced from
-    an adapter/LLM/external input -- so it is interpolated directly into the
-    query string, mirroring `graph_reader.py`'s own "fixed literal, no
-    allow-list needed" precedent for its own per-relationship-type queries.
+    `label` is always this module's own fixed literal (`"Capability"`),
+    passed only by this component's own code (`dedupe_canonical_nodes`) --
+    never sourced from an adapter/LLM/external input -- so it is
+    interpolated directly into the query string, mirroring
+    `graph_reader.py`'s own "fixed literal, no allow-list needed" precedent
+    for its own per-relationship-type queries. The parameter is kept for
+    symmetry with a future internal-SoP Policy pass.
 
     `n.embedding` is a cached `list[float]` property once computed
     (PLAN_REVIEWED.md §5.5) -- `None`/absent for a canonical node whose
@@ -65,8 +65,7 @@ def read_existing_canonical_index(
     empty graph (no nodes of this label) returns an empty tuple, no
     exception.
     """
-    query = _OBLIGATION_INDEX_QUERY if label == "Obligation" else _CAPABILITY_INDEX_QUERY
-    result = single_tenant_graph.query(query)
+    result = single_tenant_graph.query(_CAPABILITY_INDEX_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[ExistingCanonicalNode] = []
     for row in rows:
@@ -85,9 +84,9 @@ def read_existing_canonical_index(
 def resolve_exact_match(incoming_id: str, existing_ids: frozenset[str]) -> bool:
     """Exact-key match (PLAN_REVIEWED.md §5.1): does `incoming_id` already
     exist as a canonical node id in the single-tenant graph? Domain Mapper
-    already computed every baseline node's id via `obligation_id`/
-    `capability_id`, so the incoming node's own `id` field already equals
-    its canonical id -- this is nothing more than a membership check."""
+    already computed every baseline Capability node's id via `capability_id`,
+    so the incoming node's own `id` field already equals its canonical id --
+    this is nothing more than a membership check."""
     return incoming_id in existing_ids
 
 
@@ -164,19 +163,17 @@ def find_best_semantic_match(
     )
 
 
-def _incoming_text_or_name(node: BaselineNode, kind: Literal["Obligation", "Capability"]) -> str:
-    """An incoming Obligation's duty statement lives under `properties["text"]`;
-    an incoming Capability's name lives under `properties["name"]` -- mirrors
-    `graph_reader.read_baseline_graph`'s own property-key convention for each
-    kind (see `test_graph_reader.py`'s fixtures)."""
-    key = "text" if kind == "Obligation" else "name"
-    return cast(str, node.properties[key])
+def _incoming_name(node: BaselineNode) -> str:
+    """An incoming Capability's name lives under `properties["name"]` --
+    mirrors `graph_reader.read_baseline_graph`'s own property-key convention
+    (see `test_graph_reader.py`'s fixtures)."""
+    return cast(str, node.properties["name"])
 
 
 def dedupe_canonical_nodes(
     incoming_nodes: tuple[BaselineNode, ...],
     *,
-    kind: Literal["Obligation", "Capability"],
+    kind: Literal["Capability"],
     single_tenant_graph: GraphHandle,
     model: str,
     threshold: float,
@@ -184,9 +181,10 @@ def dedupe_canonical_nodes(
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
     """Combined resolution, whole-collection, before any write
-    (PLAN_REVIEWED.md §5.4, Increment 9) -- run once per kind (Obligation,
-    then Capability) for the WHOLE incoming collection before `merge.py`
-    writes anything.
+    (PLAN_REVIEWED.md §5.4, Increment 9) -- run for the WHOLE incoming
+    Capability collection before `merge.py` writes anything. `kind` is
+    `"Capability"` only since #42 (Obligation is passed through, not
+    deduped); the parameter is kept for a future internal-SoP Policy pass.
 
     Makes exactly one read call (`read_existing_canonical_index`) and never
     a single write call -- "abort with no partial write" on a
@@ -218,7 +216,7 @@ def dedupe_canonical_nodes(
     near_misses: list[NearMissPair] = []
 
     for node in incoming_nodes:
-        node_text = _incoming_text_or_name(node, kind)
+        node_text = _incoming_name(node)
         existing_ids = frozenset(working_index)
 
         if resolve_exact_match(node.id, existing_ids):

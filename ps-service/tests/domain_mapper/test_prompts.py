@@ -156,7 +156,7 @@ def test_parse_extraction_response_requirements_not_a_list_raises_typed_error() 
 _REQUIREMENT_ID = "CRA_req_art_13.1"
 _ROLE_NODE_ID = "role_manufacturer_abc123"
 _EXISTING_TEXT = "Conduct Cybersecurity Risk Assessment"
-_EXISTING_ID = obligation_id(_EXISTING_TEXT)
+_EXISTING_ID = obligation_id(_ROLE_NODE_ID, _EXISTING_TEXT)
 _ROLE_VIEW = {_EXISTING_ID: _EXISTING_TEXT}
 
 
@@ -213,7 +213,7 @@ def test_parse_obligation_response_mint_derives_id_from_new_text() -> None:
         _mint_payload(new_text, confidence=0.75), _REQUIREMENT_ID, _ROLE_NODE_ID, _ROLE_VIEW
     )
 
-    assert assignment.obligation_node_id == obligation_id(new_text)
+    assert assignment.obligation_node_id == obligation_id(_ROLE_NODE_ID, new_text)
     assert assignment.obligation_text == new_text
     assert assignment.confidence == 0.75
 

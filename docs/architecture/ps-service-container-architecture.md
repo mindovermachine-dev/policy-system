@@ -45,7 +45,7 @@ PS Service is the Policy System's backend container: it ingests EU regulations, 
 
 - Ingest EU regulation structure/text from Cellar/ELI (replacing PDF extraction as the source of truth)
 - Map ingested regulatory content into the PS Conceptual Model — external regulations through Role/Requirement/Obligation/Capability; internal regulations (Business SoPs) continuing through Policy/Standard/Control via their own paired adapter
-- Merge per-regulation baselines into a single-tenant compliance graph, with cross-regulation canonical convergence (Obligation/Capability/Policy reuse)
+- Merge per-regulation baselines into a single-tenant compliance graph, with cross-regulation canonical convergence at Capability (and Policy for internal-SoP-derived instances); Role/Requirement/Obligation are source-scoped and passed through, not converged
 - Serve read-only Cypher queries to consuming clients via MCP (MCP Interface), with guarded execution owned by Query Engine — MCP Interface is currently the only access path; no direct/REST query path exists yet
 - Detect regulatory amendments and re-trigger ingestion for the affected regulation
 
@@ -168,9 +168,9 @@ graph TB
 | Native structural elements (adapter-defined, e.g. TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH for Cellar/ELI) | Ingestion (write, via source-specific Ingestion Adapter) + Domain Mapper (read, via paired Domain Mapping Adapter) | `ps.service.ingestion`, `ps.service.domainmapper` | Not a fixed, project-wide domain concept — each source's Ingestion Adapter persists its own native hierarchy as-is; only its paired Domain Mapping Adapter knows how to read that shape. A new regulatory source (e.g. SOX, HIPAA) means adding a new matched adapter pair, not extending a shared schema |
 | Role | Domain Mapper | `ps.service.domainmapper` | LLM-extracted from the native structural graph via the Domain Mapping Adapter; `DEFINES` edge with `source_ref` |
 | Requirement | Domain Mapper | `ps.service.domainmapper` | LLM-extracted; `EXPRESSES` edge with `source_ref` |
-| Obligation | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations — an exact canonical-identity match, or a semantic-equivalence match (via LLM Interface's `RouteEmbedding` action) for differently-worded content expressing the same duty |
-| Capability | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Same split as Obligation |
-| Policy | Domain Mapper (mint/match, internal sources only) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | External-source regulations stop at Capability — Policy is only mint/matched here for `source_type: internal`, via that source's Domain Mapping Adapter, linked from Capability via `GOVERNED_BY`. Human-authored Policy (via Policy Editor, outside this container) is the other origin; canonical identity derived from the Policy's own `title` alone applies either way, with the same exact-or-semantic convergence matching as Obligation/Capability |
+| Obligation | Domain Mapper (mint/match) | `ps.service.domainmapper` | Domain Mapper matches/mints per Role within a source — an Obligation is reused only across that same Role's Requirements. **No cross-regulation convergence:** an Obligation is a weak entity of exactly one Role (identity scoped to duty statement + Role), and Roles are regulation-scoped, so Company Merge passes Obligations through unchanged, like Role and Requirement. Cross-source duties converge one hop down, at Capability |
+| Capability | Domain Mapper (mint/match) + Company Merge (cross-regulation dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | Domain Mapper matches/mints per-regulation; Company Merge resolves canonical convergence across regulations — an exact canonical-identity match, or a semantic-equivalence match (via LLM Interface's `RouteEmbedding` action) for differently-worded content expressing the same capacity. This is the first convergence point on the compliance spine |
+| Policy | Domain Mapper (mint/match, internal sources only) + Company Merge (cross-source dedup) | `ps.service.domainmapper`, `ps.service.companymerge` | External-source regulations stop at Capability — Policy is only mint/matched here for `source_type: internal`, via that source's Domain Mapping Adapter, linked from Capability via `GOVERNED_BY`. Human-authored Policy (via Policy Editor, outside this container) is the other origin; canonical identity derived from the Policy's own `title` alone applies either way, with the same exact-or-semantic convergence matching as Capability |
 | Standard | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `SUPPORTED_BY` from its parent Policy. Weak-entity identity derived from its Policy + version — scoped to exactly one Policy, no cross-source dedup needed |
 | Control | Domain Mapper (internal sources only) | `ps.service.domainmapper` | Only mint/matched for `source_type: internal`, via `IMPLEMENTED_BY` from its parent Standard. Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
 
@@ -311,9 +311,27 @@ graph TB
 | `status` | `active` \| `deprecated` | enum | — | — | Optional |
 | `confidence` | Extraction confidence | float | 0.0 | 1.0 | Required, always recorded |
 
-##### Obligation / Capability / Policy
+##### Obligation
 
-See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-source match/mint step for Obligation/Capability always, and for Policy only when `source_type: internal`; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-source convergence for all three.
+Domain Mapper matches/mints Obligation per Role within a source, always. There is no cross-source convergence step for Obligation — it is a weak entity of exactly one Role (identity scoped to duty statement + Role), so [Company Merge](#company-merge) persists it per source, like Role and Requirement. Attribute table below.
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Role-scoped weak-entity identity | `obl_{slug}_{hash}` — hash derived from the duty statement **and its defining Role** (via the inbound `HAS` edge); an Obligation exists only in the context of one Role, so it is never shared across regulations. This makes `Role → Obligation` `1 : 0..*` structural, not a rule extraction must honour |
+| No `source_ref` | Provenance is recoverable transitively via `SATISFIED_BY` → `EXPRESSES`; never duplicated onto this node |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `text` | Duty statement | string | — | — | Required |
+| `confidence` | Match/mint confidence | float | 0.0 | 1.0 | Required, always recorded |
+
+##### Capability / Policy
+
+See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Domain Mapper performs the per-source match/mint step for Capability always, and for Policy only when `source_type: internal`; full attribute tables are documented once, under [Company Merge](#company-merge), which owns cross-source convergence for both.
 
 ##### Standard
 
@@ -372,7 +390,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 - How far an adapter extracts down the compliance spine is adapter-specific: the Cellar/ELI adapter (`source_type: external`) stops at Capability. An internal-source adapter (paired with an internal-source Ingestion Adapter reading Business SoPs — not yet implemented in this walking skeleton) continues through Policy/Standard/Control via `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`, gated on `RegulatoryInstrument.source_type == internal`. See [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#document-purpose) for the canonical dual-origin model this reflects.
 - Everything this component writes (Role/Requirement/Obligation/Capability, and Policy/Standard/Control for internal sources) lands in a distinct **per-regulation baseline graph space** in FalkorDB — never directly in the company's merged single-tenant graph. [Company Merge](#company-merge) is the only component that reads this space and merges its contents into the company graph.
 - LLM-extraction currently treats the native structural graph's source text as trusted input to the extraction prompt — no mitigation for adversarial content in that text is designed yet; see Solution Architecture Risks & Concerns.
-- LLM extraction is not guaranteed deterministic (see Actions below) — a retried run after a partial failure could reword the same source text differently, producing a different content-hash identity for what is semantically the same Role/Requirement/Obligation, rather than being caught as a duplicate; not yet mitigated.
+- LLM extraction is not guaranteed deterministic (see Actions below) — a retried run after a partial failure could reword the same source text differently, producing a different content-hash identity for what is semantically the same Role/Requirement/Obligation, rather than being caught as a duplicate; not yet mitigated. The live symptom of this (duplicate Role nodes → an Obligation with multiple `HAS` edges) is tracked in issue #34.
 
 #### Implementation Registration
 
@@ -381,7 +399,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 | `ps-service/src/ps_service/domain_mapper/__init__.py` | Package front door, re-exports `extract_roles_and_requirements`, `derive_obligations_and_capabilities` | — |
 | `ps-service/src/ps_service/domain_mapper/errors.py` | `DomainMapperExtractionError`, `DomainMapperDerivationError`, `DomainMapperPersistenceError`, `DomainMapperConfigurationError` | — |
 | `ps-service/src/ps_service/domain_mapper/models.py` | `ExtractionUnit`, `RequirementCandidate`, `ExtractionResult`, `RoleRequirements`, `ObligationAssignment`, `CapabilityDecision`, `DerivationResult`, plus the internal node/edge shapes `graph_writer.py` persists | — |
-| `ps-service/src/ps_service/domain_mapper/identity.py` | `role_id`, `requirement_id`, `obligation_id`, `capability_id` — pure functions implementing `ps-domain-concepts.md`'s canonical identity formulas, including the collision-aware, duty-text-only `obligation_id()` | — |
+| `ps-service/src/ps_service/domain_mapper/identity.py` | `role_id`, `requirement_id`, `obligation_id`, `capability_id` — pure functions implementing `ps-domain-concepts.md`'s identity formulas. Per the resolution of #42, `obligation_id()` is Role-scoped (hash of duty statement + defining Role) so `Role → Obligation` `1 : 0..*` is structural; the current implementation still hashes duty text only — a code follow-up brings it in line | — |
 | `ps-service/src/ps_service/domain_mapper/prompts.py` | System prompts and response-parsing helpers for all three LLM calls (extraction, obligation derivation, capability derivation) | ExtractRolesAndRequirements, DeriveObligationsAndCapabilities |
 | `ps-service/src/ps_service/domain_mapper/extraction.py` | `extract_roles_and_requirements()` — reads native units via the Domain Mapping Adapter, calls the LLM per unit, canonicalizes Roles, builds the Requirement graph with collision disambiguation, persists via `graph_writer.py` | ExtractRolesAndRequirements |
 | `ps-service/src/ps_service/domain_mapper/derivation.py` | `derive_obligations_and_capabilities()` — reads Requirements back from the baseline graph by Role, runs the whole-run collision-aware Obligation mint/match, then whole-run Capability mint/match, persists via `graph_writer.py` | DeriveObligationsAndCapabilities |
@@ -404,21 +422,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 
 #### Domain Concepts
 
-##### Obligation
-
-###### Constraints
-
-| Constraint | Description |
-|---|---|
-| Canonical, regulation-independent identity | `obl_{slug}_{hash}` derived from duty statement only — enables reuse across regulations |
-| No `source_ref` | Provenance is recoverable transitively via `SATISFIED_BY` → `EXPRESSES`; never duplicated onto this node |
-
-###### Attributes
-
-| Attribute | Description | Type | Min | Max | Rules |
-|---|---|---|---|---|---|
-| `text` | Canonical duty statement | string | — | — | Required |
-| `confidence` | Match/mint confidence | float | 0.0 | 1.0 | Required, always recorded |
+Company Merge resolves cross-regulation convergence for **Capability** (always) and **Policy** (internal-SoP-derived instances only). Role, Requirement, and Obligation are source-scoped and passed through unchanged — see [Domain Mapper → Obligation](#obligation) for the Obligation identity and constraints.
 
 ##### Capability
 
@@ -465,7 +469,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 
 **Implementation Guidance:**
 - Add/merge-only — per UC-1, adding a regulation never modifies or deletes existing customer data.
-- Convergence matching is two-tier: canonical-identity equality first, then a semantic-equivalence check (via LLM Interface's `RouteEmbedding` action — cosine similarity over embeddings) for content that doesn't hash-match but expresses the same duty/capability/policy. Unlike Domain Mapper's chat-driven decisions, the embedding computation itself is deterministic for a fixed model/input; the similarity-threshold decision is still a judgment call that can land wrong near the boundary, which is why a low-confidence result is surfaced rather than silently resolved either way — see Actions below.
+- Convergence matching is two-tier: canonical-identity equality first, then a semantic-equivalence check (via LLM Interface's `RouteEmbedding` action — cosine similarity over embeddings) for content that doesn't hash-match but expresses the same capability (or, for internal sources, the same policy). Obligation is not in scope — it is Role-scoped and passed through. Unlike Domain Mapper's chat-driven decisions, the embedding computation itself is deterministic for a fixed model/input; the similarity-threshold decision is still a judgment call that can land wrong near the boundary, which is why a low-confidence result is surfaced rather than silently resolved either way — see Actions below.
 - On a confirmed match (exact identity, or a confident semantic match), the existing canonical node's properties are never overwritten — it wins on any disagreement (e.g. `confidence`, `description`); the incoming duplicate is dropped and only its edges are rewired onto the canonical node, consistent with add/merge-only.
 - No resolution workflow is defined for a surfaced low-confidence semantic-match — whether ingestion stays blocked until manual review, and where/how that review happens, is not yet designed.
 
@@ -480,7 +484,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 | `ps-service/src/ps_service/company_merge/falkordb_client.py` | `connect`/`connect_from_config`, `check_connectivity`, `select_graph`, `single_tenant_graph_name`, `GraphHandle` Protocol | CheckConnectivity (FalkorDB) |
 | `ps-service/src/ps_service/company_merge/graph_reader.py` | `read_baseline_graph` — reads a complete `{short}_baseline` graph (RegulatoryInstrument/Role/Requirement/Obligation/Capability and their edges) back into a `BaselineGraph`, read-only | MergeBaselineGraph |
 | `ps-service/src/ps_service/company_merge/graph_writer.py` | `persist_role_and_requirement_passthrough`, `persist_canonical_nodes`, `backfill_canonical_embeddings`, `persist_rewired_edges` — writes to the single-tenant graph | MergeBaselineGraph, DedupeCanonicalNodes |
-| `ps-service/src/ps_service/company_merge/dedup.py` | `read_existing_canonical_index`, `resolve_exact_match`, `find_best_semantic_match`, `dedupe_canonical_nodes` — exact-key and semantic-match convergence resolution for Obligation/Capability | DedupeCanonicalNodes |
+| `ps-service/src/ps_service/company_merge/dedup.py` | `read_existing_canonical_index`, `resolve_exact_match`, `find_best_semantic_match`, `dedupe_canonical_nodes` — exact-key and semantic-match convergence resolution for Capability (and Policy for internal sources) | DedupeCanonicalNodes |
 | `ps-service/src/ps_service/company_merge/merge.py` | `merge_baseline_graph` — top-level orchestration wiring `graph_reader`, `dedup` (both kinds), and `graph_writer` together | MergeBaselineGraph |
 
 #### Actions
@@ -488,7 +492,7 @@ Only mint/matched for `source_type: internal` — see [Domain Concepts to Compon
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | MergeBaselineGraph | Read a regulation's baseline graph from its per-regulation graph space and merge it into the company's single-tenant graph | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed AND (`RegulatoryInstrument.source_type == external` OR DeriveGovernanceArtifacts completed) | All baseline nodes/edges exist in the company graph; existing canonical nodes' properties untouched | Reads + writes FalkorDB | FalkorDB | Not yet set — bounded by DedupeCanonicalNodes's semantic-match latency (no longer a fixed target now that convergence isn't identity-only) | Yes | Abort with no partial write only when the semantic-match step can't confidently decide whether an incoming node is the same canonical concept as an existing one; surface for manual resolution. A confirmed match (exact identity, or a confident semantic match) never aborts |
-| DedupeCanonicalNodes | Resolve Obligation/Capability/Policy convergence — merge onto an existing canonical node instead of duplicating, whether matched by exact canonical identity or by semantic equivalence (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope) | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Obligation/Capability/Policy for the same canonical concept; incoming edges rewired to the canonical node; canonical node's own properties unchanged | Writes to FalkorDB (edge rewiring); calls LLM Interface's `RouteEmbedding` action for semantic-match candidates | LLM Interface, FalkorDB | Bounded by LLM latency for semantic-match calls; canonical-identity lookups remain fast | Yes (embedding computation is deterministic for a fixed model/input, unlike Domain Mapper's chat-driven decisions; a fixed candidate set re-run against the same canonical set yields the same match/no-match outcome) | Same as MergeBaselineGraph — a low-confidence semantic-match candidate is surfaced, not silently merged or silently dropped |
+| DedupeCanonicalNodes | Resolve Capability/Policy convergence — merge onto an existing canonical node instead of duplicating, whether matched by exact canonical identity or by semantic equivalence (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope). Obligation is not deduped — Role-scoped, passed through | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Capability/Policy for the same canonical concept; incoming edges rewired to the canonical node; canonical node's own properties unchanged | Writes to FalkorDB (edge rewiring); calls LLM Interface's `RouteEmbedding` action for semantic-match candidates | LLM Interface, FalkorDB | Bounded by LLM latency for semantic-match calls; canonical-identity lookups remain fast | Yes (embedding computation is deterministic for a fixed model/input, unlike Domain Mapper's chat-driven decisions; a fixed candidate set re-run against the same canonical set yields the same match/no-match outcome) | Same as MergeBaselineGraph — a low-confidence semantic-match candidate is surfaced, not silently merged or silently dropped |
 
 ---
 

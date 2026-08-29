@@ -38,14 +38,14 @@ class _ScriptedSingleTenantGraph:
     """Satisfies `GraphHandle` structurally: records every `query()` call
     it receives, so a test can assert the call log contains no write."""
 
-    def __init__(self, *, obligation_rows: list[object] | None = None) -> None:
-        self._obligation_rows = obligation_rows if obligation_rows is not None else []
+    def __init__(self, *, capability_rows: list[object] | None = None) -> None:
+        self._capability_rows = capability_rows if capability_rows is not None else []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult(self._obligation_rows)
+        if "(n:Capability) RETURN" in q:
+            return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -79,7 +79,7 @@ def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(mak
     `read_existing_canonical_index` issued at the very start -- zero write
     calls of any kind."""
     emitter, _log_path = make_emitter()
-    graph = _ScriptedSingleTenantGraph(obligation_rows=[])
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
     first_text = "First duty, minted with no comparison needed."
     second_text = "Second duty -- its own embedding call fails."
     third_text = "Third duty, never reached."
@@ -91,15 +91,15 @@ def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(mak
         }
     )
     incoming_nodes = (
-        BaselineNode(id="obl_first", properties={"text": first_text, "confidence": 0.9}),
-        BaselineNode(id="obl_second", properties={"text": second_text, "confidence": 0.9}),
-        BaselineNode(id="obl_third", properties={"text": third_text, "confidence": 0.9}),
+        BaselineNode(id="obl_first", properties={"name": first_text, "confidence": 0.9}),
+        BaselineNode(id="obl_second", properties={"name": second_text, "confidence": 0.9}),
+        BaselineNode(id="obl_third", properties={"name": third_text, "confidence": 0.9}),
     )
 
     with pytest.raises(LlmProviderError):
         dedupe_canonical_nodes(
             incoming_nodes,
-            kind="Obligation",
+            kind="Capability",
             single_tenant_graph=graph,
             model=_MODEL,
             threshold=_THRESHOLD,

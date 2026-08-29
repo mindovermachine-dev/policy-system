@@ -1,20 +1,20 @@
 """Increment 18 (PLAN_REVIEWED.md §9 / §10 Batch 9) -- AC-008 confirmation:
-Role/Requirement dedup is out of scope for `ps_service.company_merge`. Two
-independent proofs, mirroring `tests/domain_mapper/test_ac008_out_of_scope.py`'s
-own precedent of pairing a static-analysis check with direct positive/negative
-runtime cases -- but this issue's AC-008 is a narrower, different claim than
-#15's (no `Policy`/`Standard`/`Control` derivation anywhere in the package):
-here it is specifically that `dedupe_canonical_nodes` is never invoked for
-Role or Requirement collections, only Obligation/Capability.
+Role/Requirement/Obligation dedup is out of scope for
+`ps_service.company_merge`. Two independent proofs, mirroring
+`tests/domain_mapper/test_ac008_out_of_scope.py`'s own precedent of pairing
+a static-analysis check with direct positive/negative runtime cases. Since
+issue #42 Obligation joined Role/Requirement as a passthrough node
+(Role-scoped identity, a weak entity of exactly one Role), so
+`dedupe_canonical_nodes` is invoked for Capability alone.
 
 1. **Static proof** (secondary layer, PLAN_REVIEWED.md §9): `dedupe_canonical_
-   nodes`'s `kind` parameter is genuinely `Literal["Obligation",
-   "Capability"]`-typed, confirmed by introspecting the function's own
-   resolved type hints (`typing.get_type_hints`) rather than merely reading
-   the source -- this is a real, useful guarantee for ordinary
-   statically-checked call sites, but only a lint-time property (a
-   dynamically-constructed call, e.g. via `**kwargs` unpacking or a
-   `# type: ignore` comment, could still bypass it at runtime).
+   nodes`'s `kind` parameter is genuinely `Literal["Capability"]`-typed,
+   confirmed by introspecting the function's own resolved type hints
+   (`typing.get_type_hints`) rather than merely reading the source -- this
+   is a real, useful guarantee for ordinary statically-checked call sites,
+   but only a lint-time property (a dynamically-constructed call, e.g. via
+   `**kwargs` unpacking or a `# type: ignore` comment, could still bypass it
+   at runtime).
 
 2. **Runtime proof** (primary enforcement, PLAN_REVIEWED.md §9): a
    hand-written wrapper around `ps_service.company_merge.dedup.
@@ -22,9 +22,8 @@ Role or Requirement collections, only Obligation/Capability.
    `unittest.mock.patch`), delegating to the real implementation so
    `merge_baseline_graph`'s own behavior/return value is unaffected --
    records every `kind=` keyword argument it is called with. Asserts
-   `merge_baseline_graph`'s only two `dedupe_canonical_nodes` invocations
-   are, in order, `kind="Obligation"` then `kind="Capability"` -- never
-   `"Role"`/`"Requirement"`, and never any other value.
+   `merge_baseline_graph`'s only `dedupe_canonical_nodes` invocation is
+   `kind="Capability"` -- never `"Role"`/`"Requirement"`/`"Obligation"`.
 """
 
 from __future__ import annotations
@@ -152,7 +151,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     role_node_id = "role_manufacturer_abc123"
     requirement_node_id = "REG-AC008_req_art_1.1"
     obligation_text = "Report the incident to the competent authority."
-    obligation_node_id = obligation_id(obligation_text)
+    obligation_node_id = obligation_id(role_node_id, obligation_text)
     capability_name = "Incident Reporting Capability"
     capability_node_id = capability_id(capability_name)
 
@@ -172,12 +171,12 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     )
 
 
-def test_dedupe_canonical_nodes_kind_parameter_is_literal_obligation_capability() -> None:
+def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability() -> None:
     """Static proof: `dedupe_canonical_nodes`'s `kind` parameter's resolved
-    type hint is exactly `Literal["Obligation", "Capability"]` -- confirmed
-    via `typing.get_type_hints`/`typing.get_origin`/`typing.get_args`
-    against the live function object, not merely by reading `dedup.py`'s
-    source text. Pylance strict mode rejects any other literal at every
+    type hint is exactly `Literal["Capability"]` -- confirmed via
+    `typing.get_type_hints`/`typing.get_origin`/`typing.get_args` against the
+    live function object, not merely by reading `dedup.py`'s source text.
+    Pylance strict mode rejects any other literal at every
     statically-checked call site -- a genuine but lint-time-only guarantee
     (PLAN_REVIEWED.md §9's N2 fix), which is why this test exists alongside,
     never instead of, the runtime proof below."""
@@ -185,10 +184,10 @@ def test_dedupe_canonical_nodes_kind_parameter_is_literal_obligation_capability(
     kind_hint = hints["kind"]
 
     assert typing.get_origin(kind_hint) is Literal
-    assert typing.get_args(kind_hint) == ("Obligation", "Capability")
+    assert typing.get_args(kind_hint) == ("Capability",)
 
 
-def test_merge_baseline_graph_calls_dedup_exactly_twice_for_obligation_then_capability(
+def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
     monkeypatch: pytest.MonkeyPatch, make_emitter
 ) -> None:
     """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9):
@@ -198,8 +197,8 @@ def test_merge_baseline_graph_calls_dedup_exactly_twice_for_obligation_then_capa
     invokes it with, then delegates to the real implementation (so `merge_
     baseline_graph`'s own return value/behavior is unaffected by the
     wrapper's presence). Asserts the recorded sequence is exactly
-    `["Obligation", "Capability"]` -- never `"Role"`, never `"Requirement"`,
-    never called a third time, never called out of order.
+    `["Capability"]` -- never `"Role"`, `"Requirement"`, or `"Obligation"`
+    (all passthrough since #42), never called twice.
 
     `merge.py` calls `dedup.dedupe_canonical_nodes(...)` through the `dedup`
     module object (`from ps_service.company_merge import dedup, ...`), so
@@ -213,7 +212,7 @@ def test_merge_baseline_graph_calls_dedup_exactly_twice_for_obligation_then_capa
     def _recording_wrapper(
         incoming_nodes: tuple[BaselineNode, ...],
         *,
-        kind: Literal["Obligation", "Capability"],
+        kind: Literal["Capability"],
         single_tenant_graph: GraphHandle,
         model: str,
         threshold: float,
@@ -250,6 +249,7 @@ def test_merge_baseline_graph_calls_dedup_exactly_twice_for_obligation_then_capa
         emitter=emitter,
     )
 
-    assert recorded_kinds == ["Obligation", "Capability"]
+    assert recorded_kinds == ["Capability"]
     assert "Role" not in recorded_kinds
     assert "Requirement" not in recorded_kinds
+    assert "Obligation" not in recorded_kinds

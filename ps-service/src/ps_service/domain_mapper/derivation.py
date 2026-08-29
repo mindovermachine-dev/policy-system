@@ -3,10 +3,17 @@ action.
 
 Holds the public orchestrating function (`derive_obligations_and_capabilities`,
 PLAN_REVIEWED.md §11 Increment 16, wiring Increments 11-15 plus §7.2's
-`_read_requirements_by_role`), the whole-run, collision-aware Obligation
-derivation (`_derive_obligations`, Increment 12 — the restructuring that
-resolves B1, §3.1), and the whole-run Capability derivation
-(`_derive_capabilities`, Increment 14, §7.4).
+`_read_requirements_by_role`), the whole-run Obligation derivation
+(`_derive_obligations`, Increment 12), and the whole-run Capability
+derivation (`_derive_capabilities`, Increment 14, §7.4).
+
+Obligation identity is Role-scoped (`identity.obligation_id(role_node_id,
+text)`, resolution of issue #42), so a given duty text under two different
+Roles is two distinct Obligation nodes by construction — there is no
+cross-Role collision to detect or resolve here. The whole-run registry
+below still guarantees that the SAME Role independently minting the same
+duty text twice in one run converges onto a single node (the code, not the
+LLM, owns that).
 
 **`_read_requirements_by_role`** (this increment) is §7.2's B3 fix (b): the
 read-side complement to `graph_writer.py`'s write-side B3 fix (a)
@@ -83,7 +90,7 @@ def derive_obligations_and_capabilities(
        including its whole-collection dangling-`role_id` check, which runs
        to completion (raising on the first violation found) before any LLM
        call is made anywhere in this function.
-    2. `_derive_obligations` (Increment 12) — whole-run, collision-aware
+    2. `_derive_obligations` (Increment 12) — whole-run
        mint/match/unmatchable resolution. Its own `outcome="unmatched"` log
        entries are emitted internally (§7.5) — not duplicated here.
     3. `_derive_capabilities` (Increment 14), called with `_derive_obligations`'s
@@ -206,10 +213,11 @@ class _DerivationState:
     by `_derive_obligations`'s own loop — never returned to a caller outside
     this module.
 
-    `registry` is PLAN_REVIEWED.md §7.3's single whole-run registry
-    (`obligation_id -> (text, assigned_role_node_id)`), seeded empty once
-    for the entire run, NOT per-Role — the B1 fix this whole module exists
-    to implement (§3.1)."""
+    `registry` is the single whole-run registry (`obligation_id -> (text,
+    assigned_role_node_id)`), seeded empty once for the entire run. It
+    exists so the SAME Role minting identical duty text twice in one run
+    converges onto one node; cross-Role separation is already guaranteed by
+    the Role-scoped `obligation_id` hash (#42), not by this registry."""
 
     registry: dict[str, tuple[str, str]] = field(default_factory=dict)
     obligation_nodes: list[ObligationNode] = field(default_factory=list)
@@ -230,9 +238,8 @@ def _derive_obligations(
     tuple[RequirementSatisfiedByEdge, ...],
     tuple[str, ...],
 ]:
-    """PLAN_REVIEWED.md §7.3's whole-run, collision-aware Obligation
-    derivation — the B1 fix, restructured from PLAN.md's rejected per-Role
-    registries.
+    """Whole-run Obligation derivation (PLAN_REVIEWED.md §7.3, adapted for
+    #42's Role-scoped Obligation identity).
 
     Iterates `roles` in document order, and within each Role its
     `requirements` in document order (the caller's own tuple order — this
@@ -257,12 +264,12 @@ def _derive_obligations(
       Obligation is involved. An `LlmProviderError` (a genuine infra
       failure calling the LLM at all) is, as in extraction, never caught
       here — it propagates and aborts the whole derivation run.
-    - Otherwise, `_resolve_obligation_id` (below) computes the final
-      Obligation id/text against the WHOLE-run `registry` — mint, same-Role
-      reuse, or (on a genuine cross-Role collision) role-qualify-and-mint —
-      per §3.1/§7.3's exact algorithm. A `HAS` edge and Obligation node are
-      created only the first time a given final id appears (mint or
-      qualified-mint); a `SATISFIED_BY` edge is always written.
+    - Otherwise, `_resolve_obligation_id` (below) computes the Obligation
+      id/text against the WHOLE-run `registry` — either a mint or a
+      same-Role reuse (the Role-scoped `obligation_id` hash means a
+      different Role can never produce a colliding id). A `HAS` edge and
+      Obligation node are created only the first time a given id appears
+      (mint); a `SATISFIED_BY` edge is always written.
 
     Returns `(obligation_nodes, has_edges, satisfied_by_edges,
     unmatched_requirement_ids)` — pure data, no graph writes. Persisting
@@ -300,8 +307,8 @@ def _process_requirement(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One Requirement's mint-or-match-or-unmatchable decision, plus §7.3's
-    whole-registry collision resolution and the corresponding node/edge
+    """One Requirement's mint-or-match-or-unmatchable decision, plus the
+    whole-registry id resolution and the corresponding node/edge
     bookkeeping. Mutates `state` in place."""
     role_view = _role_view(state.registry, role.role_node_id)
 
@@ -327,7 +334,6 @@ def _process_requirement(
     final_id, final_text, is_new_mint = _resolve_obligation_id(
         proposed_text=assignment.obligation_text,
         role_node_id=role.role_node_id,
-        role_name=role.role_name,
         registry=state.registry,
     )
     if is_new_mint:
@@ -377,55 +383,36 @@ def _resolve_obligation_id(
     *,
     proposed_text: str,
     role_node_id: str,
-    role_name: str,
     registry: dict[str, tuple[str, str]],
 ) -> tuple[str, str, bool]:
-    """PLAN_REVIEWED.md §7.3's exact three-way collision resolution — the
-    core mechanism §3.1's B1 fix is built around. Mutates `registry` in
-    place whenever a NEW id is minted (plain reuse never mutates it).
+    """Resolve one proposed duty text to its final Obligation id against
+    the whole-run `registry`. Mutates `registry` in place on a mint; a
+    reuse never mutates it.
 
     Returns `(final_obligation_id, final_text, is_new_mint)`.
 
-    - `oid = obligation_id(proposed_text)` not in `registry` (globally):
-      brand-new duty text — mint it, register `(proposed_text,
-      role_node_id)`, `is_new_mint=True`.
-    - `oid` in `registry` and its assigned role IS `role_node_id`: the
-      SAME Role re-matching/re-minting its own already-registered
-      Obligation — a legitimate reuse, not a collision. Reuse the existing
-      id/text, `is_new_mint=False`. (This is what makes Increment 12 test
-      (c)'s same-Role convergence correct even when the LLM independently
-      mints the same text twice — the code, not the model, guarantees
-      uniqueness.)
-    - `oid` in `registry` and its assigned role is a DIFFERENT role: a
-      genuine CROSS-ROLE COLLISION. Role-qualify the TEXT (never the hash
-      inputs): `qualified_text = f"{proposed_text} as {role_name}"`,
-      `qualified_oid = obligation_id(qualified_text)`. If `qualified_oid`
-      is itself new, mint under it (`is_new_mint=True`) — a node DISTINCT
-      from the original, unqualified one still `HAS`'d to the other Role,
-      whose node/text/edge are left completely untouched. If
-      `qualified_oid` already exists (this Role already minted this exact
-      qualified text earlier in this run), reuse it (`is_new_mint=False`).
+    - `oid = obligation_id(role_node_id, proposed_text)` not in `registry`:
+      mint it, register `(proposed_text, role_node_id)`, `is_new_mint=True`.
+    - `oid` already in `registry`: the SAME Role re-minting/re-matching its
+      own already-registered Obligation (only the same Role can produce
+      this id — it is in the hash). Reuse the existing id/text,
+      `is_new_mint=False`. This is what makes same-Role convergence correct
+      even when the LLM independently mints the same text twice — the code,
+      not the model, guarantees uniqueness.
+
+    There is no cross-Role case: #42's Role-scoped `obligation_id` gives two
+    different Roles two different ids for identical duty text, so each
+    lands as its own mint with its own `HAS` edge.
     """
-    oid = obligation_id(proposed_text)
+    oid = obligation_id(role_node_id, proposed_text)
     existing = registry.get(oid)
 
     if existing is None:
         registry[oid] = (proposed_text, role_node_id)
         return oid, proposed_text, True
 
-    existing_text, existing_role_node_id = existing
-    if existing_role_node_id == role_node_id:
-        return oid, existing_text, False
-
-    qualified_text = f"{proposed_text} as {role_name}"
-    qualified_oid = obligation_id(qualified_text)
-    qualified_existing = registry.get(qualified_oid)
-    if qualified_existing is None:
-        registry[qualified_oid] = (qualified_text, role_node_id)
-        return qualified_oid, qualified_text, True
-
-    qualified_existing_text, _qualified_existing_role_node_id = qualified_existing
-    return qualified_oid, qualified_existing_text, False
+    existing_text, _existing_role_node_id = existing
+    return oid, existing_text, False
 
 
 def _derive_obligation_for_requirement(

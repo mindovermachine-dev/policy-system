@@ -1,9 +1,11 @@
 """Identity-reuse proof (PLAN_REVIEWED.md §3 / §10 Increment 3):
-`ps_service.company_merge` never reimplements Domain Mapper's
-`obligation_id`/`capability_id` hash functions -- it imports them directly
-from `ps_service.domain_mapper.identity`, so its exact-key match computes
-*the same* id Domain Mapper already used to write the baseline graph's node
-ids.
+`ps_service.company_merge` never reimplements Domain Mapper's `capability_id`
+hash function -- it imports it directly from
+`ps_service.domain_mapper.identity`, so its exact-key match computes *the
+same* id Domain Mapper already used to write the baseline graph's Capability
+node ids. (Since issue #42 Company Merge dedupes Capability only; Obligation
+is Role-scoped and passed through, so `obligation_id` is no longer imported
+here -- but a fresh *definition* of it in this package is still forbidden.)
 
 Two independent proofs:
 
@@ -15,9 +17,9 @@ Two independent proofs:
    no function named `obligation_id`/`capability_id`/`_hash`/`_slug` is
    ever *defined* (`ast.FunctionDef`) anywhere in this package.
 2. A direct, byte-for-byte comparison: calling
-   `ps_service.domain_mapper.identity.obligation_id`/`capability_id` with a
-   fixed input produces exactly the value this package would use for its
-   own exact-key match.
+   `ps_service.domain_mapper.identity.capability_id` with a fixed input
+   produces exactly the value this package would use for its own exact-key
+   match.
 """
 
 from __future__ import annotations
@@ -26,12 +28,9 @@ import ast
 from pathlib import Path
 
 import ps_service.company_merge as company_merge_package
-from ps_service.company_merge.dedup import capability_id, obligation_id
+from ps_service.company_merge.dedup import capability_id
 from ps_service.domain_mapper.identity import (
     capability_id as domain_mapper_capability_id,
-)
-from ps_service.domain_mapper.identity import (
-    obligation_id as domain_mapper_obligation_id,
 )
 
 _FORBIDDEN_FUNCTION_NAMES = frozenset({"obligation_id", "capability_id", "_hash", "_slug"})
@@ -107,18 +106,12 @@ def test_find_forbidden_function_defs_ignores_unrelated_function_names() -> None
 # --- Direct byte-for-byte comparison against domain_mapper's own functions ---
 
 
-def test_obligation_id_matches_domain_mapper_identity_exactly() -> None:
-    text = "Conduct Cybersecurity Risk Assessment"
-    assert obligation_id(text) == domain_mapper_obligation_id(text)
-
-
 def test_capability_id_matches_domain_mapper_identity_exactly() -> None:
     name = "Security Logging"
     assert capability_id(name) == domain_mapper_capability_id(name)
 
 
-def test_company_merge_dedup_reexports_the_same_function_objects() -> None:
+def test_company_merge_dedup_reexports_the_same_function_object() -> None:
     """Byte-for-byte identity, not just behavioral equality: `dedup.py`
-    imports (not wraps/reimplements) Domain Mapper's own function objects."""
-    assert obligation_id is domain_mapper_obligation_id
+    imports (not wraps/reimplements) Domain Mapper's own function object."""
     assert capability_id is domain_mapper_capability_id

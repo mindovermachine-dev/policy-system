@@ -11,13 +11,13 @@ Requirement, which are never canonically deduped (unconditional `SET`, same
 as #15's own writer).
 
 **The one deliberate, load-bearing difference from #15's writer (§6.1)**:
-Obligation/Capability node upserts use `MERGE (n:{kind} {id: $id}) ON CREATE
+Capability node upserts use `MERGE (n:Capability {id: $id}) ON CREATE
 SET n += $properties` -- NOT the unconditional `SET` used for Role/
-Requirement/Regulation above. `persist_canonical_nodes` is only ever called
-for a `match_kind="new"` `CanonicalResolution` (an exact/semantic match
-writes NOTHING onto the node it resolved to) -- but even so, `ON CREATE SET`
-is what makes "an existing canonical node's properties are never
-overwritten" a database-engine guarantee rather than application logic
+Requirement/Regulation/Obligation above. `persist_canonical_nodes` is only
+ever called for a `match_kind="new"` `CanonicalResolution` (an exact/
+semantic match writes NOTHING onto the node it resolved to) -- but even so,
+`ON CREATE SET` is what makes "an existing canonical node's properties are
+never overwritten" a database-engine guarantee rather than application logic
 remembering to check: an exact-key match means the incoming node's `id`
 already equals an existing canonical node's `id`, and that incoming node's
 `properties` dict comes from a *different* regulation's baseline graph and
@@ -37,6 +37,13 @@ no-op at the database-engine level, the same load-bearing role `ON CREATE
 SET` plays for the mint path above -- the caller (`merge.py`) does not need
 to check first.
 
+**Obligation is a passthrough node (issue #42)**: Obligation identity is
+Role-scoped, so an Obligation is a weak entity of exactly one Role and is
+never deduped across sources. `persist_obligation_passthrough` writes it
+with the same unconditional `MERGE ... SET` shape used for Role/Requirement.
+Only Capability (and, later, internal-SoP-derived Policy) is canonically
+deduped by Company Merge.
+
 **Edge rewiring (`persist_rewired_edges`, PLAN_REVIEWED.md §10 Increment 12,
 §6.2)**: mirrors `domain_mapper.graph_writer._upsert_bare_edge`'s exact
 `MATCH ... MERGE (s)-[:TYPE]->(t)` shape (no properties) for `HAS`/
@@ -44,36 +51,23 @@ to check first.
 edge-type-specific: for BOTH the source and target of every edge, if that
 endpoint's baseline-local id has an entry in `canonical_id_by_incoming_id`
 (`incoming_id -> canonical_id`), it is rewritten to the canonical id;
-otherwise it passes through unchanged. This means `HAS`/`SATISFIED_BY` have
-their Obligation-typed TARGET rewritten, `REQUIRES` has BOTH its
-Obligation-typed SOURCE and its Capability-typed TARGET rewritten. Role/
-Requirement endpoints (`HAS`'s source, `SATISFIED_BY`'s source) are never
-present in the mapping -- they pass through unchanged automatically, since
-Role/Requirement dedup is out of scope (AC-008, §9) and never produces a
-`CanonicalResolution`. No special-casing by relationship type is needed at
-all for the rewrite itself.
+otherwise it passes through unchanged. In practice only Capability endpoints
+are ever in the mapping, so `REQUIRES`'s Capability-typed TARGET is the only
+endpoint rewritten; `HAS`/`SATISFIED_BY` and `REQUIRES`'s Obligation-typed
+source pass through unchanged (Obligation, Role, and Requirement are all
+passthrough nodes whose baseline-local id is already their final id).
 
-**Orchestrator correction (PLAN_REVIEWED.md §6.2)**: an earlier version of
-this function rewrote only the Obligation-typed endpoint of each edge,
-leaving `REQUIRES`'s Capability-typed target passing through unconditionally.
-This was wrong -- Capability nodes are canonically deduped too (AC-002/
-AC-003 apply to Obligation *or* Capability and explicitly name `REQUIRES` as
-an edge that must be re-pointed), and since a semantically-or-exactly-matched
-Capability is never minted as its own graph node (`persist_canonical_nodes`
-only writes a node for `match_kind="new"`), leaving the baseline-local id in
-place made `MATCH (s...),(t...)` match zero rows for `t` -- the whole
-`MERGE` silently never fired, and the edge was never created at all: a
-dangling reference exactly what AC-002/AC-003 forbid. Fixed by making the
-rewrite endpoint-agnostic as described above.
+**Why `REQUIRES`'s target must be rewritten** (PLAN_REVIEWED.md §6.2): a
+semantically-or-exactly-matched Capability is never minted as its own graph
+node (`persist_canonical_nodes` only writes a node for `match_kind="new"`),
+so leaving the baseline-local id in place would make `MATCH (s...),(t...)`
+match zero rows for `t` -- the whole `MERGE` silently never fires and the
+edge is never created: a dangling reference. The endpoint-agnostic rewrite
+handles this without special-casing by relationship type.
 
-`canonical_id_by_incoming_id` is a SINGLE `dict[str, str]` the caller
-(`merge.py`, a later increment) builds by merging both kinds'
-`CanonicalResolution.incoming_id -> canonical_id` entries (Obligation dedup
-+ Capability dedup) into one dict -- not two separate dicts. This is safe
-because `identity.py`'s id formulas give Obligation/Capability ids disjoint
-prefixes (`obl_`/`cap_`), so there is no collision risk merging them, and a
-single dict is simpler for this function's one lookup site than threading
-two.
+`canonical_id_by_incoming_id` is a `dict[str, str]` the caller (`merge.py`)
+builds from Capability dedup's `CanonicalResolution.incoming_id ->
+canonical_id` entries.
 """
 
 from __future__ import annotations
@@ -96,6 +90,7 @@ from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 __all__ = [
     "backfill_canonical_embeddings",
     "persist_canonical_nodes",
+    "persist_obligation_passthrough",
     "persist_rewired_edges",
     "persist_role_and_requirement_passthrough",
 ]
@@ -185,7 +180,8 @@ def persist_role_and_requirement_passthrough(
     §6). These node kinds are never canonically deduped -- Regulation has
     exactly one node per regulation, and Role/Requirement dedup is out of
     scope (AC-008) -- so there is no "existing wins" concern here, unlike
-    Obligation/Capability (`persist_canonical_nodes`, below).
+    Capability (`persist_canonical_nodes`, below). Obligation is in the same
+    passthrough category since #42 -- see `persist_obligation_passthrough`.
 
     Idempotent: re-running with identical input against the same graph
     issues the same calls and leaves the same end state, since every write
@@ -220,18 +216,44 @@ def persist_role_and_requirement_passthrough(
         )
 
 
+def persist_obligation_passthrough(
+    single_tenant_graph: GraphHandle,
+    obligation_nodes: tuple[BaselineNode, ...],
+) -> None:
+    """Persist one regulation's Obligation nodes into `single_tenant_graph`
+    with the same unconditional `MERGE ... SET` shape as Role/Requirement
+    (issue #42: Obligation is Role-scoped, a weak entity of exactly one
+    Role, never deduped across sources). No `ON CREATE SET` "existing wins"
+    concern -- a given Obligation id can only ever originate from one Role,
+    which originates from one regulation, so re-merging the same regulation
+    is the only way the same id recurs and its properties are identical.
+
+    Called by `merge.py` after `persist_role_and_requirement_passthrough`
+    and before `persist_rewired_edges`, so the `HAS`/`SATISFIED_BY`/
+    `REQUIRES` edge writes can `MATCH` these nodes.
+    """
+    for obligation in obligation_nodes:
+        _upsert_passthrough_node(
+            single_tenant_graph, _OBLIGATION_LABEL, obligation.id, obligation.properties
+        )
+
+
 def persist_canonical_nodes(
     single_tenant_graph: GraphHandle,
     incoming_nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
-    kind: Literal["Obligation", "Capability"],
+    kind: Literal["Capability"],
 ) -> None:
     """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node
     in `single_tenant_graph` (PLAN_REVIEWED.md §6.1, Increment 11's mint
     half). A `match_kind="exact"`/`"semantic"` resolution gets NO write call
     at all here -- it already resolved onto an existing canonical node,
     and this function's whole point is to never touch one.
+
+    `kind` is `"Capability"` only since #42 -- Obligation is no longer
+    canonically deduped (`persist_obligation_passthrough` above); the
+    parameter is kept for symmetry with a future internal-SoP Policy pass.
 
     `MERGE (n:{kind} {id: $id}) ON CREATE SET n += $properties` -- NOT an
     unconditional `SET` -- is the load-bearing invariant that makes
@@ -272,7 +294,7 @@ def persist_canonical_nodes(
 def backfill_canonical_embeddings(
     single_tenant_graph: GraphHandle,
     *,
-    kind: Literal["Obligation", "Capability"],
+    kind: Literal["Capability"],
     embeddings: dict[str, tuple[float, ...]],
 ) -> None:
     """For every `(id, embedding)` pair in `embeddings`, write the embedding
@@ -307,18 +329,17 @@ def backfill_canonical_embeddings(
 
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
     """Every one of `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`)
-    is Obligation or Capability -- the endpoints that went through
+    is Capability -- the only endpoints that went through
     `dedup.dedupe_canonical_nodes` and are therefore guaranteed, by
     construction, to carry an entry in a correctly-built
-    `canonical_id_by_incoming_id`. `HAS`/`SATISFIED_BY` yield just their
-    target (their source is Role/Requirement, never dedupe-eligible --
-    Role/Requirement dedup is out of scope, AC-008). `REQUIRES` yields BOTH
-    its source (Obligation) and its target (Capability), since both are
-    canonically deduped for that edge type (AC-002/AC-003). Order in the
-    returned tuple is source-before-target when both are eligible; callers
-    should not otherwise rely on it."""
+    `canonical_id_by_incoming_id`. Since #42, Obligation is a passthrough
+    node (Role-scoped, never deduped), so `HAS`/`SATISFIED_BY` yield nothing
+    (Role/Requirement source, Obligation target -- all passthrough) and
+    `REQUIRES` yields only its target (Capability); its Obligation source
+    passes through. Order in the returned tuple is source-before-target when
+    both are eligible; callers should not otherwise rely on it."""
     source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
-    dedupe_eligible_labels = (_OBLIGATION_LABEL, _CAPABILITY_LABEL)
+    dedupe_eligible_labels = (_CAPABILITY_LABEL,)
     ids: list[str] = []
     if source_label in dedupe_eligible_labels:
         ids.append(edge.source_id)
@@ -333,24 +354,20 @@ def _validate_rewired_edge_endpoints(
     """Whole-collection validation pass, mirroring `domain_mapper.
     graph_writer._validate_role_references`'s B3 shape: EVERY one of an
     edge's dedupe-eligible endpoints (see `_dedupe_eligible_endpoint_ids` --
-    every endpoint whose label is Obligation or Capability, which for
-    `REQUIRES` is both its source AND its target) must resolve within
-    `canonical_id_by_incoming_id` before `persist_rewired_edges` issues a
-    single `graph.query` call for ANY edge -- not interleaved
-    validate-then-write per edge. Raises `CompanyMergePersistenceError` on
-    the first violation found, with zero `graph.query` calls having been
-    made by the time this raises.
+    since #42 that is only a `REQUIRES` edge's Capability target) must
+    resolve within `canonical_id_by_incoming_id` before
+    `persist_rewired_edges` issues a single `graph.query` call for ANY edge
+    -- not interleaved validate-then-write per edge. Raises
+    `CompanyMergePersistenceError` on the first violation found, with zero
+    `graph.query` calls having been made by the time this raises.
 
-    Every Obligation/Capability id that appears in a `HAS`/`SATISFIED_BY`/
-    `REQUIRES` edge is guaranteed by construction to have gone through
-    `dedup.dedupe_canonical_nodes` and therefore have a `CanonicalResolution`
-    entry in a correctly-built `canonical_id_by_incoming_id` -- there is no
-    legitimate scenario where a dedupe-eligible endpoint is absent from a
-    correct mapping. An absent entry means the caller-supplied mapping
-    itself is incomplete (e.g. `merge.py` failed to merge in one kind's
-    dedup results), not that the endpoint "hasn't been resolved yet" -- so
-    every dedupe-eligible endpoint is a hard pre-write error when missing,
-    not just the one guaranteed by a single edge type's own construction.
+    Every Capability id that appears as a `REQUIRES` target is guaranteed by
+    construction to have gone through `dedup.dedupe_canonical_nodes` and
+    therefore have a `CanonicalResolution` entry in a correctly-built
+    `canonical_id_by_incoming_id`. An absent entry means the caller-supplied
+    mapping itself is incomplete (e.g. `merge.py` failed to pass Capability
+    dedup's results), not that the endpoint "hasn't been resolved yet" -- so
+    it is a hard pre-write error, not a pass-through.
     """
     for edge in bare_edges:
         for incoming_id in _dedupe_eligible_endpoint_ids(edge):
@@ -369,40 +386,35 @@ def persist_rewired_edges(
 ) -> None:
     """Persist `HAS`/`SATISFIED_BY`/`REQUIRES` edges into `single_tenant_graph`
     (PLAN_REVIEWED.md §6.2/§10 Increment 12), rewriting each edge's endpoints
-    through `canonical_id_by_incoming_id` (`incoming_id -> canonical_id`, the
-    merged output of both kinds' `dedup.dedupe_canonical_nodes` resolutions
-    -- see module docstring) instead of writing the baseline-local id
-    verbatim.
+    through `canonical_id_by_incoming_id` (`incoming_id -> canonical_id`,
+    Capability dedup's resolutions -- see module docstring) instead of
+    writing the baseline-local id verbatim.
 
     The rule is endpoint-agnostic, not edge-type-specific: for BOTH the
     source and target of every edge, if that endpoint's baseline-local id
     has an entry in `canonical_id_by_incoming_id`, it is rewritten to the
-    canonical id; otherwise it passes through unchanged. Concretely:
+    canonical id; otherwise it passes through unchanged. Concretely, since
+    #42 (Obligation is a passthrough node):
 
-    - `HAS` (Role -[:HAS]-> Obligation): target (Obligation) rewritten,
-      source (Role) passes through unchanged (never in the mapping).
-    - `SATISFIED_BY` (Requirement -[:SATISFIED_BY]-> Obligation): target
-      (Obligation) rewritten, source (Requirement) passes through unchanged
-      (never in the mapping).
+    - `HAS` (Role -[:HAS]-> Obligation): both endpoints pass through
+      unchanged -- neither Role nor Obligation is ever in the mapping.
+    - `SATISFIED_BY` (Requirement -[:SATISFIED_BY]-> Obligation): both
+      endpoints pass through unchanged.
     - `REQUIRES` (Obligation -[:REQUIRES]-> Capability): source (Obligation)
-      AND target (Capability) both rewritten -- Capability is canonically
-      deduped exactly like Obligation (AC-002/AC-003), so its `REQUIRES`
-      target must be eligible for rewriting, not just the source. Both are
-      now *required* to have a mapping entry (see
-      `_validate_rewired_edge_endpoints`/`_dedupe_eligible_endpoint_ids`) --
-      an absent entry for either is a hard pre-write error, not a
-      pass-through.
+      passes through, target (Capability) is rewritten -- Capability is the
+      only canonically deduped endpoint. Its mapping entry is *required*
+      (see `_validate_rewired_edge_endpoints`/`_dedupe_eligible_endpoint_ids`)
+      -- an absent entry is a hard pre-write error, not a pass-through.
 
     Mirrors `domain_mapper.graph_writer._upsert_bare_edge`'s exact
     `MATCH ... MERGE (s)-[:TYPE]->(t)` shape -- no properties, since `HAS`/
     `SATISFIED_BY`/`REQUIRES` never carry any (Edge Catalog).
 
     Raises `CompanyMergePersistenceError` (via `_validate_rewired_edge_endpoints`)
-    before any write if any edge's dedupe-eligible endpoint(s) (see
-    `_dedupe_eligible_endpoint_ids` -- every endpoint whose label is
-    Obligation or Capability) have no entry in `canonical_id_by_incoming_id`
-    -- validate-then-write over the whole collection, mirroring
-    `domain_mapper.graph_writer`'s own B3 fix shape, so a bad edge set writes
+    before any write if a `REQUIRES` edge's Capability target has no entry
+    in `canonical_id_by_incoming_id` -- validate-then-write over the whole
+    collection, mirroring `domain_mapper.graph_writer`'s own B3 fix shape,
+    so a bad edge set writes
     nothing at all rather than a partial graph.
 
     Idempotent: re-running with the identical `bare_edges`/

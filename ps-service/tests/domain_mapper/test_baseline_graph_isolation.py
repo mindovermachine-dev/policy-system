@@ -366,8 +366,8 @@ def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_
         emitter=emitter,
     )
 
-    cra_obligation_id = obligation_id(cra_mint_text)
-    gdpr_obligation_id = obligation_id(gdpr_mint_text)
+    cra_obligation_id = obligation_id(cra_role, cra_mint_text)
+    gdpr_obligation_id = obligation_id(gdpr_role, gdpr_mint_text)
     assert cra_result.obligation_node_ids == (cra_obligation_id,)
     assert gdpr_result.obligation_node_ids == (gdpr_obligation_id,)
 

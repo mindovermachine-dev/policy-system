@@ -18,16 +18,20 @@ Reached via `ps_service.company_merge.falkordb_client.single_tenant_graph_name()
 existing `PS_FALKORDB_GRAPH` env var override (`monkeypatch`), exactly as
 that function already supports -- no new mechanism.
 
-**S2's fix (§12) -- a deliberate, deterministic seeded duplicate for
-AC-002, kept as an honest non-forcing caveat for AC-003/AC-004**: before any
-merge runs, one extra Role/Requirement/Obligation is additively `MERGE`d
-into `gdpr_baseline` and `nis2_baseline` (never `policy_system` or
+**S2's fix (§12), adapted for issue #42 -- a deliberate, deterministic
+seeded duplicate for AC-002, kept as an honest non-forcing caveat for
+AC-003/AC-004**: before any merge runs, one extra
+Role/Requirement/Obligation/Capability chain is additively `MERGE`d into
+`gdpr_baseline` and `nis2_baseline` (never `policy_system` or
 `policy_system_capstone_test` directly), using the REAL `role_id`/
-`requirement_id`/`obligation_id` functions, both Obligations carrying the
-EXACT SAME literal duty text. Since `obligation_id(text)` is a pure
-function of text alone, this guarantees a real exact-key collision across
-GDPR/NIS2 independent of what CRA/GDPR/NIS2's real content happens to
-contain -- closing AC-002's live check completely. AC-003/AC-004 keep the
+`requirement_id`/`obligation_id`/`capability_id` functions. Since #42 an
+Obligation is Role-scoped (a weak entity of exactly one Role), the two
+seeded Obligations are legitimately DISTINCT nodes -- the guaranteed
+exact-key collision is at **`Capability`** instead: both seeded chains
+`REQUIRES` a Capability whose name is the same literal string, and
+`capability_id(name)` is a pure function of name alone, so a real exact-key
+Capability collision across GDPR/NIS2 is guaranteed independent of real
+CRA/GDPR/NIS2 content -- closing AC-002's live check. AC-003/AC-004 keep the
 identical non-forcing caveat: whether real CRA/GDPR/NIS2 content contains a
 genuine near-or-above-threshold pair is not something this test controls or
 fakes; only that the comparison mechanism itself fires for real is
@@ -57,7 +61,12 @@ from ps_service.company_merge.falkordb_client import (
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.config import load_config
 from ps_service.domain_mapper.falkordb_client import baseline_graph_name
-from ps_service.domain_mapper.identity import obligation_id, requirement_id, role_id
+from ps_service.domain_mapper.identity import (
+    capability_id,
+    obligation_id,
+    requirement_id,
+    role_id,
+)
 from ps_service.logging import bind_run_context
 
 _CAPSTONE_GRAPH_NAME = "policy_system_capstone_test"
@@ -67,6 +76,7 @@ _SIMILARITY_THRESHOLD = 0.90  # user-approved for this run, see task brief -- no
 _LOG_FILENAME = "company_merge_capstone.jsonl"
 
 _SEED_DUTY_TEXT = "Report the incident to the competent authority without undue delay"
+_SEED_CAPABILITY_NAME = "Capstone Seeded Incident Notification Capability"
 _SEED_REQUIREMENT_TEXT = (
     "Capstone seeding: notify the competent authority of a qualifying incident "
     "without undue delay"
@@ -104,6 +114,7 @@ class _SeededIds:
     role_id: str
     requirement_id: str
     obligation_id: str
+    capability_id: str
 
 
 def _query_rows(
@@ -117,26 +128,30 @@ def _count(graph: GraphHandle, query: str, params: dict[str, object] | None = No
 
 
 def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulation_id: str) -> _SeededIds:
-    """S2's fix (PLAN_REVIEWED.md §12): additively `MERGE` one extra
-    Role/Requirement/Obligation into `baseline_graph` (a `{short}_baseline`
-    graph -- never `policy_system`/`policy_system_capstone_test`), fully
-    wired with its own regulation-scoped `DEFINES`/`EXPRESSES`/`HAS`/
-    `SATISFIED_BY` edges. Mirrors `ps_service.domain_mapper.graph_writer`'s
-    exact write shapes (unconditional `MERGE ... SET`, `source_ref`-bearing
-    provenance edges, property-less bare edges) -- this is additive-only,
-    the same MERGE semantics every other write in this system already
-    relies on for safety, targeting only a per-regulation baseline graph
-    already treated as a disposable test fixture (#15's own precedent).
+    """S2's fix (PLAN_REVIEWED.md §12), adapted for #42: additively `MERGE`
+    one extra Role/Requirement/Obligation/Capability chain into
+    `baseline_graph` (a `{short}_baseline` graph -- never `policy_system`/
+    `policy_system_capstone_test`), fully wired with its own
+    regulation-scoped `DEFINES`/`EXPRESSES`/`HAS`/`SATISFIED_BY`/`REQUIRES`
+    edges. Mirrors `ps_service.domain_mapper.graph_writer`'s exact write
+    shapes -- additive-only, the same MERGE semantics every other write in
+    this system already relies on for safety, targeting only a
+    per-regulation baseline graph already treated as a disposable test
+    fixture (#15's own precedent).
 
-    The Obligation's duty text is the SAME literal string for every caller
-    (`_SEED_DUTY_TEXT`) -- since `obligation_id(text)` is a pure function of
-    text alone, this guarantees an identical canonical id across whichever
-    regulations this is called for, independent of real CRA/GDPR/NIS2
-    content (AC-002's live proof, not left to chance).
+    The seeded `Capability`'s name is the SAME literal string for every
+    caller (`_SEED_CAPABILITY_NAME`) -- since `capability_id(name)` is a
+    pure function of name alone, this guarantees an identical canonical
+    Capability id across whichever regulations this is called for,
+    independent of real CRA/GDPR/NIS2 content (AC-002's live proof, not left
+    to chance). The `Obligation` id is Role-scoped (#42), so the two seeded
+    Obligations are legitimately distinct -- convergence is at the shared
+    Capability.
     """
     seeded_role_id = role_id(_SEED_ROLE_NAME, regulation_id)
     seeded_requirement_id = requirement_id(regulation_id, "CAPSTONE", "1", None)
-    seeded_obligation_id = obligation_id(_SEED_DUTY_TEXT)
+    seeded_obligation_id = obligation_id(seeded_role_id, _SEED_DUTY_TEXT)
+    seeded_capability_id = capability_id(_SEED_CAPABILITY_NAME)
 
     baseline_graph.query(
         "MERGE (n:Role {id: $id}) SET n += $properties",
@@ -191,11 +206,24 @@ def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulation_id: str) 
         "MERGE (s)-[:SATISFIED_BY]->(t)",
         params={"source_id": seeded_requirement_id, "target_id": seeded_obligation_id},
     )
+    baseline_graph.query(
+        "MERGE (n:Capability {id: $id}) SET n += $properties",
+        params={
+            "id": seeded_capability_id,
+            "properties": {"name": _SEED_CAPABILITY_NAME, "confidence": 1.0},
+        },
+    )
+    baseline_graph.query(
+        "MATCH (s:Obligation {id: $source_id}), (t:Capability {id: $target_id}) "
+        "MERGE (s)-[:REQUIRES]->(t)",
+        params={"source_id": seeded_obligation_id, "target_id": seeded_capability_id},
+    )
 
     return _SeededIds(
         role_id=seeded_role_id,
         requirement_id=seeded_requirement_id,
         obligation_id=seeded_obligation_id,
+        capability_id=seeded_capability_id,
     )
 
 
@@ -272,34 +300,50 @@ def _assert_seeded_nodes_present(single_tenant_graph: GraphHandle, seeded: _Seed
         _count(single_tenant_graph, "MATCH (n:Obligation {id: $id}) RETURN count(n)", {"id": seeded.obligation_id})
         == 1
     )
+    assert (
+        _count(single_tenant_graph, "MATCH (n:Capability {id: $id}) RETURN count(n)", {"id": seeded.capability_id})
+        == 1
+    )
 
 
 def _assert_ac002_exact_duplicate_converges(
     single_tenant_graph: GraphHandle, seeded_by_regulation: dict[str, _SeededIds]
 ) -> None:
-    canonical_id = seeded_by_regulation["GDPR"].obligation_id
-    assert canonical_id == seeded_by_regulation["NIS2"].obligation_id, (
-        "obligation_id(text) must be identical for both seeded duplicates -- this is the "
+    """#42: the guaranteed exact-key duplicate is a shared `Capability`.
+    The two seeded `Obligation`s are legitimately distinct (Role-scoped);
+    both `REQUIRES` the one canonical Capability."""
+    canonical_id = seeded_by_regulation["GDPR"].capability_id
+    assert canonical_id == seeded_by_regulation["NIS2"].capability_id, (
+        "capability_id(name) must be identical for both seeded duplicates -- this is the "
         "whole point of the seed"
     )
 
-    count = _count(single_tenant_graph, "MATCH (n:Obligation {id: $id}) RETURN count(n)", {"id": canonical_id})
+    count = _count(
+        single_tenant_graph, "MATCH (n:Capability {id: $id}) RETURN count(n)", {"id": canonical_id}
+    )
     assert count == 1, (
-        f"expected exactly ONE canonical Obligation node for the seeded exact-key duplicate "
+        f"expected exactly ONE canonical Capability node for the seeded exact-key duplicate "
         f"{canonical_id!r}, found {count}"
     )
+
+    # Both seeded Obligations remain distinct passthrough nodes.
+    seeded_obligation_ids = {
+        seeded_by_regulation["GDPR"].obligation_id,
+        seeded_by_regulation["NIS2"].obligation_id,
+    }
+    assert len(seeded_obligation_ids) == 2, "the two seeded Obligations must be distinct nodes"
 
     for short_name in ("GDPR", "NIS2"):
         seeded = seeded_by_regulation[short_name]
         rows = _query_rows(
             single_tenant_graph,
-            "MATCH (:Requirement {id: $req_id})-[:SATISFIED_BY]->(o:Obligation) RETURN o.id",
-            {"req_id": seeded.requirement_id},
+            "MATCH (:Obligation {id: $obl_id})-[:REQUIRES]->(c:Capability) RETURN c.id",
+            {"obl_id": seeded.obligation_id},
         )
         target_ids = {cast(str, row[0]) for row in rows}
         assert target_ids == {canonical_id}, (
-            f"{short_name}'s seeded Requirement's SATISFIED_BY edge does not point at the "
-            f"single canonical Obligation id {canonical_id!r}: found {target_ids}"
+            f"{short_name}'s seeded Obligation's REQUIRES edge does not point at the "
+            f"single canonical Capability id {canonical_id!r}: found {target_ids}"
         )
 
 
@@ -404,10 +448,10 @@ def _assert_ac008_no_role_or_requirement_dedup(log_entries: list[dict[str, objec
     assert dedup_entries, "expected at least one dedupe_canonical_nodes log entry across the whole run"
     for entry in dedup_entries:
         entity_id = cast(str, entry.get("entity_id"))
-        assert entity_id.startswith(("obl_", "cap_")), (
-            f"dedupe_canonical_nodes fired for entity_id={entity_id!r}, which is neither an "
-            "Obligation (obl_*) nor Capability (cap_*) id -- Role/Requirement dedup is out of "
-            "scope (AC-008)"
+        assert entity_id.startswith("cap_"), (
+            f"dedupe_canonical_nodes fired for entity_id={entity_id!r}, which is not a "
+            "Capability (cap_*) id -- since #42, Role/Requirement/Obligation dedup is all "
+            "out of scope (AC-008); only Capability is deduped"
         )
 
 

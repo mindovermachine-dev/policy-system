@@ -256,8 +256,10 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
     Obligation), then `REQUIRES` (Obligation -> Capability) -- each read via
     its own fixed-relationship-type query, same reasoning as
     `_read_provenance_edges`. Endpoint ids here are BASELINE-LOCAL; rewiring
-    Obligation/Capability endpoints onto their canonical id is
-    `dedup`/`graph_writer`'s job, not this reader's (§6)."""
+    a `REQUIRES` edge's Capability endpoint onto its canonical id is
+    `dedup`/`graph_writer`'s job, not this reader's (§6). Obligation, Role,
+    and Requirement endpoints are passthrough (#42) -- their baseline-local
+    id is already final."""
     edges: list[BareEdge] = []
 
     has_result = baseline_graph.query(_HAS_QUERY)

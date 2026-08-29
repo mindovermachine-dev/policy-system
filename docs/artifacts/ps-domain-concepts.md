@@ -163,7 +163,7 @@ full cross-model shape and provenance rationale at once.
 | `EXPRESSES` | RegulatoryInstrument → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
 | `SUPERSEDED_BY` | RegulatoryInstrument → RegulatoryInstrument | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
 | `TRANSPOSES` | RegulatoryInstrument → RegulatoryInstrument | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
-| `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved |
+| `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved. The `1` (exactly one Role per Obligation) holds structurally, via Obligation's Role-scoped identity — not as a rule extraction must be trusted to honour. See [Obligation](#obligation). |
 | `SATISFIED_BY` | Requirement → Obligation | 1..* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
 | `REQUIRES` | Obligation → Capability | 1..* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
 | `COVERS` | PracticeArea → Capability | 1 : 0..* | — | 3 — classification layer |
@@ -184,7 +184,7 @@ full cross-model shape and provenance rationale at once.
 - **`external`** — EU legislation (GDPR, CRA, NIS2), an international standard, or national law, ingested from an official regulatory source.
 - **`internal`** — an organizationally-authored "Business Regulation," e.g. an Engineering Practices standard, governed through normal internal engineering governance rather than official-source ingestion.
 
-Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Requirement chain unchanged, so an internal standard's Requirements converge onto the same canonical Obligation and Capability nodes as external regulations — e.g. an internal "Security Logging Practice" can land on the same `Capability` node that CRA and GDPR already converge on (see [Obligation](#obligation) and [Capability](#capability)).
+Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Requirement chain unchanged, so an internal standard's Requirements converge onto the same canonical `Capability` nodes as external regulations — e.g. an internal "Security Logging Practice" can land on the same `Capability` node that CRA and GDPR already converge on (see [Capability](#capability)). Convergence is at `Capability`, not `Obligation`: an internal source's duties get their own regulation-scoped `Role` and `Obligation` nodes, the same as any external source.
 
 Within `external`, a second axis — `instrument_type` — records what kind of legal instrument the source is, because it changes both how the source is ingested and how its obligations are scoped to a company:
 - **`regulation`** — a directly-applicable instrument binding entities EU-wide from one authoritative text, with no national implementation step (EU Regulations such as GDPR and CRA; also an international standard adopted as-is).
@@ -232,7 +232,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 ### Role
 
-**Description:** An actor type defined by a regulation that carries duties and responsibilities — e.g. "Manufacturer" (CRA), "Data Controller" (GDPR), "Operator of Essential Services" (NIS2). Role answers "who must do what" under a given regulation. Because Role's identity is tied to its defining RegulatoryInstrument (see Identity below), roles that are semantically similar across different regulations remain distinct nodes rather than converging onto one — that convergence happens one layer down, at Obligation, which is exactly why Obligation (not Role) is designed to be regulation-independent. Without the structured source reference carried on the `DEFINES` edge, a Role's definition would be an unverifiable assertion — the reference is what lets "Manufacturer" be checked against the regulation that actually defines it, rather than merely claimed.
+**Description:** An actor type defined by a regulation that carries duties and responsibilities — e.g. "Manufacturer" (CRA), "Data Controller" (GDPR), "Operator of Essential Services" (NIS2). Role answers "who must do what" under a given regulation. Because Role's identity is tied to its defining RegulatoryInstrument (see Identity below), roles that are semantically similar across different regulations remain distinct nodes rather than converging onto one — cross-source convergence happens further down the spine, at Capability. Obligation does not converge either: it sits between a regulation-specific Requirement and this regulation-scoped Role and is itself regulation-scoped — a weak entity of the Role that bears it (see [Obligation](#obligation)). Without the structured source reference carried on the `DEFINES` edge, a Role's definition would be an unverifiable assertion — the reference is what lets "Manufacturer" be checked against the regulation that actually defines it, rather than merely claimed.
 
 **Lifecycle:** Extracted when a regulation is loaded, or sourced from official regulatory glossaries/definitions. Immutable reference data once created — a stable point that Obligations attach to via `HAS`.
 
@@ -252,7 +252,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `DEFINES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → DEFINES](#regulatory-instrument). |
-| `HAS` | Obligation | 1 : 0..* | — | A Role has zero or more canonical Obligations assigned to it. |
+| `HAS` | Obligation | 1 : 0..* | — | A Role has zero or more Obligations assigned to it; each of those Obligations is borne by this Role alone. |
 
 ---
 
@@ -279,25 +279,25 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `EXPRESSES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → EXPRESSES](#regulatory-instrument). `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge. |
-| `SATISFIED_BY` | Obligation | 1..* : 0..* | — | Bridges this regulation-specific condition to one or more canonical Obligations. Many-to-many: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies Requirements from several different regulations — that reuse is the entire point of Obligation being canonical (see [Obligation](#obligation)). |
+| `SATISFIED_BY` | Obligation | 1..* : 0..* | — | Bridges this regulation-specific condition to one or more Obligations. Many-to-many within a single source: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies several Requirements borne by the same Role (one Role's duties often recur across articles). Obligations are not shared across regulations — cross-source convergence is at [Capability](#capability). |
 
 ---
 
 ### Obligation
 
-**Description:** A canonical, reusable duty assigned to exactly one Role — e.g. "Conduct Cybersecurity Risk Assessment" or "Report Security Incidents." Obligation is the semantic anchor that enables cross-regulation normalization: GDPR's 72-hour breach notice requirement for Data Controllers and NIS2's 24-hour early warning requirement for Operators of Essential Services both instantiate the same "Report Security Incidents" Obligation, assigned to different Roles — this is exactly why Obligation's identity (see below) is kept regulation-independent. Obligation defines the generic duty only; accountability for actually fulfilling it attaches at Policy (not yet in this document), where the duty is assigned to a concrete organizational owner.
+**Description:** A duty borne by **exactly one Role** — e.g. "Conduct Cybersecurity Risk Assessment" or "Report Security Incidents." An Obligation is a weak entity of its Role: it exists only in the context of the Role that bears it, and its identity is scoped accordingly (see below). Obligation is **not** a cross-regulation normalization point. GDPR's 72-hour breach-notice duty for Data Controllers and NIS2's 24-hour early-warning duty for Operators of Essential Services are *distinct* Obligations under *distinct* Roles — genuinely different duties, with different triggers, deadlines, and recipient authorities. They converge only further down the spine, where both `REQUIRES` the same "Incident Notification" Capability: [Capability](#capability), not Obligation, is where cross-source duties meet (see the [Worked Examples](#worked-examples)). Obligation defines the generic duty only; accountability for actually fulfilling it attaches at Policy (not yet in this document), where the duty is assigned to a concrete organizational owner.
 
-**Lifecycle:** Either pre-populated as part of a canonical taxonomy, or minted the first time a Requirement doesn't match any existing Obligation. Rarely modified once created — stable reference data reused across many Requirements and regulations.
+**Lifecycle:** Minted the first time one of a Role's Requirements states a duty not already captured for that Role; reused when another Requirement of the **same Role** states the same duty. Rarely modified once created. Not reference data shared across regulations — a semantically similar duty under a different regulation's Role is a different Obligation node.
 
 **Node label:** `Obligation`
-**Identity:** `obl_{slug}_{hash}` (e.g. `obl_risk_management_a8f3b1`) — content-derived from the obligation's duty statement, deliberately **regulation-independent** (no `{REG}` prefix, unlike Role and Requirement). This is what makes Obligation canonical: the same node is reused as the `SATISFIED_BY` target for Requirements originating from different regulations, rather than a fresh Obligation being minted per regulation.
+**Identity:** `obl_{slug}_{hash}` (e.g. `obl_risk_management_a8f3b1`) — content-derived from the duty statement **and the Role that bears it** (the Role it will link to via `HAS`), opaque hash suffix. This mirrors [Role](#role)'s own identity, which already folds in its defining RegulatoryInstrument. Scoping the hash to the Role is what makes "[exactly one Role per Obligation](#edge-catalog)" a structural guarantee rather than a rule extraction must be trusted to honour: two sources' duties can never collide onto one Obligation node, because their Roles are always distinct nodes. This is the same weak-entity identity pattern used for [Requirement](#requirement), [Standard](#standard), and [Control](#control) — a node that exists only in one parent's context encodes that parent in its identity. The defining-Role relationship is expressed only via the inbound `HAS` edge, never re-encoded as a substring of the ID.
 
 #### Properties
 
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
-| `text` | string | Yes | The canonical duty statement, e.g. "Conduct Cybersecurity Risk Assessment" |
-| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether minting a new Obligation from an unmatched Requirement, or matching a Requirement to an existing canonical Obligation. Always recorded, unconditionally; not limited to the minted case. |
+| `text` | string | Yes | The duty statement, e.g. "Conduct Cybersecurity Risk Assessment" |
+| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether minting a new Obligation from an unmatched Requirement, or matching a Requirement to an existing Obligation of the same Role. Always recorded, unconditionally; not limited to the minted case. |
 
 Deliberately **excluded**: a `source_ref` property, on the node or on any of its edges — see [Provenance Placement Rule, case 2](#provenance-placement-rule). An Obligation with no live `SATISFIED_BY` edge is unprovenanced.
 
@@ -305,7 +305,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `HAS` (inbound) | Role | 0..* : 1 | — | See [Role → HAS](#role). Each Obligation is assigned to exactly one Role. |
+| `HAS` (inbound) | Role | 0..* : 1 | — | See [Role → HAS](#role). Each Obligation is borne by exactly one Role — structurally, via the Role-scoped identity above, not merely by convention. |
 | `SATISFIED_BY` (inbound) | Requirement | 0..* : 1..* | — | See [Requirement → SATISFIED_BY](#requirement). |
 | `REQUIRES` (outbound) | Capability | 1..* : 0..* | — | See [Capability](#capability). |
 
@@ -369,12 +369,12 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 ### Capability
 
-**Description:** A technical or organizational capacity that must exist to fulfill Obligations — e.g. "Data Encryption," "Access Control System," "Security Logging." Capability is the "how" to Obligation's "what": it lets an organization see commonalities across obligations that look different on paper, e.g. recognizing that both "Maintain Security Monitoring" (CRA) and "Ensure Logging of Access" (GDPR) require the same "Security Logging" capability. This is exactly the cross-regulation convergence the identity design below protects — hashing on `name` alone is what lets one Capability be required by many Obligations instead of fragmenting.
+**Description:** A technical or organizational capacity that must exist to fulfill Obligations — e.g. "Data Encryption," "Access Control System," "Security Logging." Capability is the "how" to Obligation's "what": it lets an organization see commonalities across obligations that look different on paper, e.g. recognizing that both "Maintain Security Monitoring" (CRA) and "Ensure Logging of Access" (GDPR) require the same "Security Logging" capability. This is exactly the cross-regulation convergence the identity design below protects — hashing on `name` alone is what lets one Capability be required by many Obligations instead of fragmenting. Capability is the **first canonical, regulation-independent node on the compliance spine**: RegulatoryInstrument, Role, Requirement, and Obligation upstream are all regulation-scoped, and cross-source duties first meet here.
 
 **Lifecycle:** Either pre-populated as part of a canonical capability taxonomy, or minted when an Obligation requires a capability type that doesn't yet exist. Stable reference data once created — governed by Policy (not yet in this document), potentially across many business contexts.
 
 **Node label:** `Capability`
-**Identity:** `cap_{slug}_{hash}` (e.g. `cap_data_encryption_a8f3b1`) — content-derived from `name` alone, deliberately excluding any specific requiring Obligation. `ps-domain-concepts.md` describes this ID as derived from "capability name and related obligation content," but that would work against its own stated goal: Capability is required by 0..* Obligations (many-to-many, same reuse shape as Obligation itself), so baking one Obligation's content into the hash would fragment equivalent capabilities pulled in under different Obligations instead of collapsing them onto the same node. Deriving from `name` alone is what actually delivers cross-regulation convergence.
+**Identity:** `cap_{slug}_{hash}` (e.g. `cap_data_encryption_a8f3b1`) — content-derived from `name` alone, deliberately excluding any specific requiring Obligation. `ps-domain-concepts.md` describes this ID as derived from "capability name and related obligation content," but that would work against its own stated goal: Capability is required by 0..* Obligations (many-to-many), so baking one Obligation's content into the hash would fragment equivalent capabilities pulled in under different Obligations instead of collapsing them onto the same node. Deriving from `name` alone is what actually delivers cross-regulation convergence.
 
 #### Properties
 
@@ -431,14 +431,14 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter when
 
 ### Standard
 
-**Description:** Implementation guidance for how a Policy is actually to be achieved — procedures, technical specifications, and testing expectations that turn a Policy's organizational commitment into something concrete enough to build and verify. Standard is the "how" beneath Policy's "what," the same relationship Capability has to Obligation one layer up. Unlike Obligation, Capability, and Policy, a Standard is **not** a canonical, cross-context concept: it supports exactly one Policy, so a distinct Standard is minted per Policy rather than one Standard answering to several Policies — which is exactly why its identity (see below) can safely be derived from the Policy it supports.
+**Description:** Implementation guidance for how a Policy is actually to be achieved — procedures, technical specifications, and testing expectations that turn a Policy's organizational commitment into something concrete enough to build and verify. Standard is the "how" beneath Policy's "what," the same relationship Capability has to Obligation one layer up. Unlike Capability and Policy, a Standard is **not** a canonical, cross-context concept: it supports exactly one Policy, so a distinct Standard is minted per Policy rather than one Standard answering to several Policies — which is exactly why its identity (see below) can safely be derived from the Policy it supports.
 
 **Lifecycle:** Developed by policy managers or technical teams once a Policy exists; revised when that Policy changes or the underlying technology evolves. Moves through a `draft` → `implemented` → `reviewed` → `deprecated` status workflow, mirroring Policy's own governance cadence.
 
 Alternatively, matched/minted by the internal-source Domain Mapping Adapter once its parent Policy is internal-SoP-derived — see [Policy](#policy).
 
 **Node label:** `Standard`
-**Identity:** `std_{POLICY}_{VERSION}` (e.g. `std_pol_data_protection_a8f3b1_v1`) — derived from the Policy it supports plus version. This is the same weak-entity pattern used for Requirement's identity (not the canonical-hash pattern used for Obligation/Capability/Policy): a Standard exists only in the context of exactly one Policy, so encoding that ownership in the ID is safe — there's no cross-Policy reuse to protect against.
+**Identity:** `std_{POLICY}_{VERSION}` (e.g. `std_pol_data_protection_a8f3b1_v1`) — derived from the Policy it supports plus version. This is the same weak-entity pattern used for Requirement, Obligation, and Control (not the canonical-hash pattern used for Capability and Policy): a Standard exists only in the context of exactly one Policy, so encoding that ownership in the ID is safe — there's no cross-Policy reuse to protect against.
 
 #### Properties
 
@@ -508,8 +508,8 @@ Both kinds of node are extracted **independently and fully** — a `national_tra
 
 Because the same downstream nodes are reachable from both the `directive` and its `national_transposition`s, queries must be explicit about which lens they want; `instrument_type` and `jurisdiction` are the discriminators.
 
-- **Jurisdiction-scoped compliance** ("what does a company operating in Germany owe under NIS2?") — the in-scope set of `RegulatoryInstrument` nodes for a company operating in jurisdictions *J* is: every `regulation` node, plus, for every `directive`, its `national_transposition` nodes whose `jurisdiction ∈ J`. Where a `national_transposition` and its `directive` both lead to the same canonical duty, the **national `source_ref` is the operative one** — it is the text that actually binds the company. The `directive`'s own provision is the fallback source only when the relevant jurisdiction has no `national_transposition` node.
-- **Framework completeness** ("how many distinct obligations does NIS2 impose?") — traverse from the `directive` and its `national_transposition`s together, then deduplicate on canonical node identity. Counting `Requirement`s would double-count every unchanged re-enactment.
+- **Jurisdiction-scoped compliance** ("what does a company operating in Germany owe under NIS2?") — the in-scope set of `RegulatoryInstrument` nodes for a company operating in jurisdictions *J* is: every `regulation` node, plus, for every `directive`, its `national_transposition` nodes whose `jurisdiction ∈ J`. Where a `national_transposition` and its `directive` both lead to the same downstream `Capability`, the **national `source_ref` is the operative one** — it is the text that actually binds the company. The `directive`'s own provision is the fallback source only when the relevant jurisdiction has no `national_transposition` node.
+- **Framework completeness** ("how much distinct compliance capacity does NIS2 demand?") — traverse from the `directive` and its `national_transposition`s together, then deduplicate at `Capability` (the first canonical node — `Role`, `Requirement`, and `Obligation` are all source-scoped, so a member state re-enacting a Directive provision unchanged yields its own distinct `Role`/`Requirement`/`Obligation` chain). Counting `Requirement`s or `Obligation`s would double-count every unchanged re-enactment.
 - **Transposition gap analysis** ("where does Germany's transposition fall short of the Directive?") — the set difference between what is reachable from `NIS2-1.0` and what is reachable from `NIS2-DE-1.0`. Partial transposition is surfaced this way, as a query result — never stored as a status flag.
 - **Pre-entry due diligence** ("what would we owe if we opened an office in Italy?") — the jurisdiction-scoped query above, run with a prospective jurisdiction. Every ingested `national_transposition` is present in the company graph regardless of where the company currently operates, specifically so this question can be answered before entering the market rather than after.
 
@@ -521,7 +521,7 @@ The model records what has been ingested and can be traced to real text. It does
 
 ## Worked Examples
 
-*Illustrative instance data — not normative. IDs reuse the identity examples given throughout this document, so each chain below doubles as a consistency check on the model itself. Examples 1 and 2 are constructed to converge on the same `Capability` and `Policy` nodes, making the cross-source convergence claimed throughout this document concrete rather than asserted; Example 3 is the deliberate opposite case (no existing node to converge onto — the internal-source adapter mints the full spine); Example 4 shows an EU Directive plus two national transpositions converging at `Capability`.*
+*Illustrative instance data — not normative. IDs reuse the identity examples given throughout this document, so each chain below doubles as a consistency check on the model itself. Examples 1 and 2 are constructed to converge on the same `Capability` and `Policy` nodes, making the cross-source convergence claimed throughout this document concrete rather than asserted — convergence is at `Capability`, never at `Obligation` (Obligations are Role-scoped); Example 3 is the deliberate opposite case (no existing node to converge onto — the internal-source adapter mints the full spine); Example 4 shows an EU Directive plus two national transpositions converging at `Capability`.*
 
 ### Example 1 — CRA (`source_type: external`)
 
@@ -615,7 +615,7 @@ graph LR
 
 ### Example 4 — EU Directive with National Transposition (`instrument_type: directive`)
 
-*NIS2 (a Directive) plus two member-state transpositions. Each of the three chains keeps its own `Role` and its own `Obligation` and they converge at `Capability` — the same convergence shape as Examples 1 and 2, which also meet at `Capability`, not `Obligation`. Whether the three `Obligation`s here should instead be a single shared canonical node — as the [Obligation](#obligation) section's cross-source normalization intent suggests — turns on the unresolved `HAS`-cardinality question and is out of scope for the Directive model. This example takes the conservative reading. The three `Obligation`s differ legitimately in their reporting recipient: each member state designates its own CSIRT / competent authority.*
+*NIS2 (a Directive) plus two member-state transpositions. Each of the three chains keeps its own `Role` and its own `Obligation` and they converge at `Capability` — the same convergence shape as Examples 1 and 2. This is required by the model, not a simplification: an `Obligation` is a weak entity of exactly one `Role` (see [Obligation](#obligation)), `Role`s are regulation-scoped, and each member state designates its own CSIRT / competent authority — so the three reporting duties are genuinely distinct nodes that meet only at the shared `Capability`.*
 
 **EU framework node**
 

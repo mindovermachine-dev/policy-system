@@ -35,14 +35,14 @@ class _FakeQueryResult:
 class _ScriptedSingleTenantGraph:
     """Satisfies `GraphHandle` structurally."""
 
-    def __init__(self, *, obligation_rows: list[object] | None = None) -> None:
-        self._obligation_rows = obligation_rows if obligation_rows is not None else []
+    def __init__(self, *, capability_rows: list[object] | None = None) -> None:
+        self._capability_rows = capability_rows if capability_rows is not None else []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult(self._obligation_rows)
+        if "(n:Capability) RETURN" in q:
+            return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -75,13 +75,13 @@ def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(make_emit
     # 0.8*1.0 + 0.6*0.0 = 0.8, deliberately just below _THRESHOLD (0.85).
     first_vector = [1.0, 0.0]
     second_vector = [0.8, 0.6]
-    graph = _ScriptedSingleTenantGraph(obligation_rows=[])
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
     call_embedding = _ScriptedCallEmbedding(
         {first_text: first_vector, second_text: second_vector}
     )
     incoming_nodes = (
-        BaselineNode(id=first_id, properties={"text": first_text, "confidence": 0.9}),
-        BaselineNode(id=second_id, properties={"text": second_text, "confidence": 0.9}),
+        BaselineNode(id=first_id, properties={"name": first_text, "confidence": 0.9}),
+        BaselineNode(id=second_id, properties={"name": second_text, "confidence": 0.9}),
     )
 
     similarity = cosine_similarity(tuple(second_vector), tuple(first_vector))
@@ -89,7 +89,7 @@ def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(make_emit
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,

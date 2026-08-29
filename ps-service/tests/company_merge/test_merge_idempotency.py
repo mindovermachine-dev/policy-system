@@ -78,7 +78,7 @@ class _RecordedCall:
     params: dict[str, object] | None
 
 
-_READ_MARKERS = ("RETURN n.id, n.text, n.embedding", "RETURN n.id, n.name, n.embedding")
+_READ_MARKERS = ("RETURN n.id, n.name, n.embedding",)  # Capability index only, since #42
 
 
 def _is_read_call(call: _RecordedCall) -> bool:
@@ -166,18 +166,13 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
-        if "(n:Obligation) RETURN n.id, n.text, n.embedding" in q:
-            return _FakeQueryResult([list(row) for row in self._obligations.values()])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
-        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
-            self._mint(self._obligations, params, "text")
+        if "MERGE (n:Obligation {id: $id}) SET n += $properties" in q:
+            self._set(self._obligations, params, "text")  # #42: Obligation passthrough
             return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
             self._mint(self._capabilities, params, "name")
-            return _FakeQueryResult([])
-        if "MATCH (n:Obligation {id: $id}) WHERE n.embedding IS NULL" in q:
-            self._backfill(self._obligations, params)
             return _FakeQueryResult([])
         if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
             self._backfill(self._capabilities, params)
@@ -194,6 +189,19 @@ class _FakeSingleTenantGraph:
         node_id = cast(str, params["id"])
         if node_id in table:
             return
+        properties = cast("dict[str, object]", params["properties"])
+        table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
+
+    def _set(
+        self,
+        table: dict[str, list[object]],
+        params: dict[str, object] | None,
+        text_key: str,
+    ) -> None:
+        """Unconditional `MERGE ... SET n += $properties` -- rewrites the row
+        every call (idempotent when the params are identical)."""
+        assert params is not None
+        node_id = cast(str, params["id"])
         properties = cast("dict[str, object]", params["properties"])
         table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
 
@@ -264,25 +272,21 @@ def _idempotency_fixture() -> tuple[
     _FakeBaselineGraph, _FakeSingleTenantGraph, _ScriptedCallEmbedding, str, str
 ]:
     """One Role, one Requirement, one Obligation, one Capability, fully
-    wired -- with ONE pre-existing Obligation and ONE pre-existing
-    Capability already seeded into the single-tenant graph (both with
-    `embedding=None`), and the baseline graph's own Obligation/Capability
-    text/name deliberately DIFFERENT from those pre-existing nodes, scripted
-    via `call_embedding` to score above `_THRESHOLD` against them. This
-    means BOTH calls (first and second) resolve via `match_kind="semantic"`
-    onto the pre-existing canonical ids -- never minting a new node -- so
-    `embedding_backfills`/`backfill_canonical_embeddings` has real,
-    non-vacuous work to do on the first call, whose "no-op on the second
-    call" effect this test can then meaningfully verify.
+    wired. Since #42 the Obligation is a passthrough node (written straight
+    through under its Role-scoped id, never deduped). The Capability side
+    still exercises the SEMANTIC-match + embedding-backfill path on a re-run:
+    ONE pre-existing Capability is seeded into the single-tenant graph (with
+    `embedding=None`), the baseline's own Capability name is deliberately
+    DIFFERENT, and `call_embedding` scores them above `_THRESHOLD` -- so both
+    calls resolve the Capability via `match_kind="semantic"` onto the
+    pre-existing id, giving `backfill_canonical_embeddings` real, non-vacuous
+    work on the first call.
     """
     role_id = "role_operator_xyz"
     requirement_id = "REG-IDEMPOTENT_req_art_1.1"
 
-    existing_obligation_text = "Report the security incident to the competent authority."
-    existing_obligation_id = obligation_id(existing_obligation_text)
-    incoming_obligation_text = "Notify the competent authority about the security incident."
-    incoming_obligation_id = obligation_id(incoming_obligation_text)
-    assert incoming_obligation_id != existing_obligation_id
+    obligation_text = "Report the security incident to the competent authority."
+    obligation_node_id = obligation_id(role_id, obligation_text)
 
     existing_capability_name = "Incident Response Capability"
     existing_capability_id = capability_id(existing_capability_name)
@@ -296,27 +300,24 @@ def _idempotency_fixture() -> tuple[
         requirement_rows=[
             [requirement_id, "Must report incidents.", "requirement", 0.9, role_id]
         ],
-        obligation_rows=[[incoming_obligation_id, incoming_obligation_text, 0.9]],
+        obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
         capability_rows=[[incoming_capability_id, incoming_capability_name, 0.8, None]],
         defines_rows=[[role_id, "Article 1(1)"]],
         expresses_rows=[[requirement_id, "Article 1(1)"]],
-        has_rows=[[role_id, incoming_obligation_id]],
-        satisfied_by_rows=[[requirement_id, incoming_obligation_id]],
-        requires_rows=[[incoming_obligation_id, incoming_capability_id]],
+        has_rows=[[role_id, obligation_node_id]],
+        satisfied_by_rows=[[requirement_id, obligation_node_id]],
+        requires_rows=[[obligation_node_id, incoming_capability_id]],
     )
     single_tenant = _FakeSingleTenantGraph(
-        obligation_rows=[[existing_obligation_id, existing_obligation_text, None]],
         capability_rows=[[existing_capability_id, existing_capability_name, None]],
     )
     call_embedding = _ScriptedCallEmbedding(
         {
-            incoming_obligation_text: [1.0, 0.0],
-            existing_obligation_text: [1.0, 0.0],
             incoming_capability_name: [1.0, 0.0],
             existing_capability_name: [1.0, 0.0],
         }
     )
-    return baseline, single_tenant, call_embedding, existing_obligation_id, existing_capability_id
+    return baseline, single_tenant, call_embedding, obligation_node_id, existing_capability_id
 
 
 def test_second_identical_call_produces_field_for_field_identical_merge_result(
@@ -354,7 +355,7 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
 
     assert isinstance(result_1, MergeResult)
     assert result_1 == result_2
-    assert result_2.obligation_canonical_ids == (existing_obligation_id,)
+    assert result_2.obligation_ids == (existing_obligation_id,)
     assert result_2.capability_canonical_ids == (existing_capability_id,)
     assert result_2.near_misses == ()
 
@@ -471,7 +472,7 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) 
     (the limitation Increment 11's own shape-only test explicitly accepted).
     """
     emitter, _log_path = make_emitter()
-    baseline, single_tenant, call_embedding, existing_obligation_id, existing_capability_id = (
+    baseline, single_tenant, call_embedding, _existing_obligation_id, existing_capability_id = (
         _idempotency_fixture()
     )
 
@@ -485,17 +486,19 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) 
         emitter=emitter,
     )
     backfill_writes_after_first = single_tenant.calls_matching("WHERE n.embedding IS NULL")
-    # Both pre-existing nodes had embedding=None going in -> both get backfilled.
-    assert len(backfill_writes_after_first) == 2
+    # The one pre-existing Capability node had embedding=None going in -> it
+    # gets backfilled. (Obligation is a passthrough node since #42 -- no
+    # embedding, no backfill.)
+    assert len(backfill_writes_after_first) == 1
     backfilled_ids_after_first = {
         cast(str, c.params["id"]) for c in backfill_writes_after_first if c.params is not None
     }
-    assert backfilled_ids_after_first == {existing_obligation_id, existing_capability_id}
+    assert backfilled_ids_after_first == {existing_capability_id}
 
-    # Every call the first run made to compute an embedding: incoming text/
-    # name AND the (then-uncached) existing text/name, for both kinds -- 4
+    # Every call the first run made to compute an embedding: the incoming
+    # Capability name AND the (then-uncached) existing Capability name -- 2
     # calls total.
-    assert len(call_embedding.calls) == 4
+    assert len(call_embedding.calls) == 2
 
     calls_before_second = len(single_tenant.calls)
     embedding_calls_before_second = len(call_embedding.calls)
@@ -519,8 +522,8 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) 
     )
 
     # The incoming side is never cached (Open Question 4) -- one fresh call
-    # per kind for the incoming text/name is still expected on the second
-    # run -- but the existing side (already cached from the first run) costs
-    # nothing further: 2 new calls total, not 4.
+    # for the incoming Capability name is still expected on the second run --
+    # but the existing side (already cached from the first run) costs nothing
+    # further: 1 new call total, not 2.
     second_run_embedding_calls = call_embedding.calls[embedding_calls_before_second:]
-    assert len(second_run_embedding_calls) == 2
+    assert len(second_run_embedding_calls) == 1

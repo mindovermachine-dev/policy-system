@@ -1,18 +1,17 @@
-"""Pure identity functions for `ps_service.domain_mapper` — the canonical
-id formulas from `docs/artifacts/ps-domain-concepts.md` (PLAN_REVIEWED.md
-§0.2/§3), ported from `spikes/cellar2/schema.py`'s `_slug`/`_hash` shape.
+"""Pure identity functions for `ps_service.domain_mapper` — the identity
+formulas from `docs/artifacts/ps-domain-concepts.md`.
 
-`obligation_id(text)` is duty-text-only, deliberately dropping the
-`role_node_id` parameter `spikes/cellar2/schema.py::obligation_id` bakes in
-— this is PLAN_REVIEWED.md §3.1's B1 fix. The doc's own Company Merge >
-Obligation > Constraints table states the identity is "derived from duty
-statement only — enables reuse across regulations"; baking `role_node_id`
-into the hash would make Obligation transitively regulation-scoped (since
-Role identity already is), defeating that convergence property. The `HAS`
-1:1-with-Role cardinality this creates tension with is preserved instead at
-the derivation-time write layer (`derivation.py`'s whole-run registry,
-PLAN_REVIEWED.md §7.3), not by polluting this hash — see §3.1 for the full
-resolution. Do not add a `role_node_id` parameter here.
+`obligation_id(role_node_id, text)` is **Role-scoped**: the hash folds in
+the bearing Role, exactly as `role_id` folds in its defining Regulation.
+This is the resolution of issue #42 — an Obligation is a weak entity of
+exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
+structurally (two sources' duties can never collide onto one Obligation
+node, because their Roles are always distinct nodes). Cross-source
+convergence on the regulatory spine happens only at `Capability`, whose id
+(`capability_id`) is deliberately name-only. An earlier revision of this
+module made `obligation_id` duty-text-only to make Obligation canonical
+across regulations; #42 retired that — see the issue and
+`ps-domain-concepts.md`'s Obligation section for why.
 """
 
 from __future__ import annotations
@@ -48,12 +47,14 @@ def requirement_id(regulation_id: str, article: str, paragraph: str, letter: str
     return f"{regulation_id}_req_art_{article}.{paragraph}{suffix}"
 
 
-def obligation_id(text: str) -> str:
-    """`obl_{slug}_{hash}` — content-derived from the duty statement
-    ALONE. Deliberately regulation- and role-independent: no other
-    parameter is accepted. See the module docstring and PLAN_REVIEWED.md
-    §3.1 for why this is not `obligation_id(role_node_id, text)`."""
-    return f"obl_{_slug(text)}_{_hash(text.lower())}"
+def obligation_id(role_node_id: str, text: str) -> str:
+    """`obl_{slug}_{hash}` — content-derived from the duty statement AND
+    the id of the Role that bears it (the Role it links to via `HAS`),
+    Role-scoped (Obligation is a weak entity of exactly one Role, per
+    `ps-domain-concepts.md` / issue #42). The `{slug}` is still the duty
+    text alone, for human readability; the Role only enters the opaque
+    `{hash}`, never the id string, mirroring `role_id`'s own shape."""
+    return f"obl_{_slug(text)}_{_hash(f'{role_node_id}:{text.lower()}')}"
 
 
 def capability_id(name: str) -> str:

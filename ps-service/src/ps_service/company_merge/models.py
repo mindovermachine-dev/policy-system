@@ -18,9 +18,9 @@ from typing import Literal
 class BaselineNode:
     """A Role, Requirement, Obligation, or Capability node read back from a
     {short}_baseline graph, exactly as Domain Mapper wrote it. Used for
-    Role/Requirement, which never carry an embedding -- this shape is
-    deliberately NOT reused for the properties dict Company Merge itself
-    writes onto a canonical Obligation/Capability node (see
+    Role/Requirement/Obligation, which never carry an embedding -- this
+    shape is deliberately NOT reused for the properties dict Company Merge
+    itself writes onto a canonical Capability node (see
     CanonicalNodeProperties below, S1's fix)."""
 
     id: str
@@ -40,8 +40,10 @@ class ProvenanceEdge:
 class BareEdge:
     """Role-[:HAS]->Obligation | Requirement-[:SATISFIED_BY]->Obligation |
     Obligation-[:REQUIRES]->Capability, as read from the baseline graph.
-    Endpoint ids here are BASELINE-LOCAL -- Obligation/Capability endpoints
-    are rewritten to their canonical id before being persisted (§6)."""
+    Endpoint ids here are BASELINE-LOCAL -- since #42 only a `REQUIRES`
+    edge's Capability target is rewritten to its canonical id before being
+    persisted; every other endpoint (Role, Requirement, Obligation) is a
+    passthrough node whose baseline-local id is already final (§6)."""
 
     relationship_type: Literal["HAS", "SATISFIED_BY", "REQUIRES"]
     source_id: str
@@ -66,13 +68,14 @@ class BaselineGraph:
 
 @dataclass(frozen=True, slots=True)
 class ExistingCanonicalNode:
-    """One Obligation or Capability already present in the single-tenant
-    graph, as read by dedup.read_existing_canonical_index, OR an in-memory
-    stand-in for one just minted/updated during this same dedup run (§5.4).
-    `embedding` is None when this node has never had one computed/cached."""
+    """One Capability already present in the single-tenant graph, as read by
+    dedup.read_existing_canonical_index, OR an in-memory stand-in for one
+    just minted/updated during this same dedup run (§5.4). `embedding` is
+    None when this node has never had one computed/cached. (Since #42
+    Obligation is not a canonical node -- it is passed through, not deduped.)"""
 
     id: str
-    text: str  # Obligation.text or Capability.name -- whichever this kind uses
+    text: str  # Capability.name
     embedding: tuple[float, ...] | None
 
 
@@ -89,8 +92,8 @@ class NearMissPair:
 
 @dataclass(frozen=True, slots=True)
 class CanonicalResolution:
-    """The outcome of resolving one incoming Obligation/Capability node to
-    its canonical id in the single-tenant graph."""
+    """The outcome of resolving one incoming Capability node to its
+    canonical id in the single-tenant graph."""
 
     incoming_id: str
     canonical_id: str
@@ -122,8 +125,7 @@ class SemanticMatchResult:
 
 @dataclass(frozen=True, slots=True)
 class DedupResult:
-    """dedupe_canonical_nodes()'s return value for one node kind
-    (Obligation or Capability)."""
+    """dedupe_canonical_nodes()'s return value for the Capability pass."""
 
     resolutions: tuple[CanonicalResolution, ...]
     near_misses: tuple[NearMissPair, ...]
@@ -144,16 +146,17 @@ class MergeResult:
     """merge_baseline_graph()'s return value -- MergeBaselineGraph's outcome."""
 
     regulation_id: str
-    obligation_canonical_ids: tuple[str, ...]
+    obligation_ids: tuple[str, ...]  # passed through per source since #42, not deduped
     capability_canonical_ids: tuple[str, ...]
-    near_misses: tuple[NearMissPair, ...]  # AC-004, both kinds combined
+    near_misses: tuple[NearMissPair, ...]  # AC-004, Capability
 
 
 # S1's fix: a properties-dict type distinct from BaselineNode.properties,
 # wide enough to legally carry an embedding value. Used exclusively for the
 # $properties param graph_writer.persist_canonical_nodes builds for a
-# match_kind == "new" resolution, and for the $embedding param
+# match_kind == "new" Capability resolution, and for the $embedding param
 # graph_writer.backfill_canonical_embeddings builds. Never used for
-# Role/Requirement/Regulation properties (those stay dict[str, str | float]
-# via BaselineNode -- they never carry an embedding, by design, per AC-008).
+# Role/Requirement/Regulation/Obligation properties (those stay
+# dict[str, str | float] via BaselineNode -- they never carry an embedding,
+# by design, per AC-008 / #42).
 CanonicalNodeProperties = dict[str, str | float | list[float]]

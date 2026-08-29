@@ -1,5 +1,8 @@
 """Tests for `ps_service.company_merge.dedup` (PLAN_REVIEWED.md §10
 Increments 6-7): `read_existing_canonical_index` and `resolve_exact_match`.
+
+Since issue #42 Company Merge dedupes Capability only -- Obligation is
+Role-scoped and passed through, not deduped.
 """
 
 from __future__ import annotations
@@ -28,57 +31,19 @@ class _ScriptedFakeGraph:
     `tests/company_merge/test_graph_reader.py`'s own `_ScriptedFakeGraph`
     dispatch style."""
 
-    def __init__(self, *, obligation_rows: list[object], capability_rows: list[object]) -> None:
-        self._obligation_rows = obligation_rows
+    def __init__(self, *, capability_rows: list[object]) -> None:
         self._capability_rows = capability_rows
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult(self._obligation_rows)
         if "(n:Capability) RETURN" in q:
             return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
-
-
-def test_read_existing_canonical_index_returns_obligation_nodes_with_and_without_embedding() -> (
-    None
-):
-    graph = _ScriptedFakeGraph(
-        obligation_rows=[
-            ["obligation_1", "Conduct a risk assessment.", [0.1, 0.2, 0.3]],
-            ["obligation_2", "Report an incident.", [0.4, 0.5, 0.6]],
-            ["obligation_3", "Maintain technical documentation.", None],
-        ],
-        capability_rows=[],
-    )
-
-    result = read_existing_canonical_index(graph, "Obligation")
-
-    assert result == (
-        ExistingCanonicalNode(
-            id="obligation_1",
-            text="Conduct a risk assessment.",
-            embedding=(0.1, 0.2, 0.3),
-        ),
-        ExistingCanonicalNode(
-            id="obligation_2",
-            text="Report an incident.",
-            embedding=(0.4, 0.5, 0.6),
-        ),
-        ExistingCanonicalNode(
-            id="obligation_3",
-            text="Maintain technical documentation.",
-            embedding=None,
-        ),
-    )
-    assert result[2].embedding is None
 
 
 def test_read_existing_canonical_index_returns_capability_nodes_with_and_without_embedding() -> (
     None
 ):
     graph = _ScriptedFakeGraph(
-        obligation_rows=[],
         capability_rows=[
             ["capability_1", "Risk Assessment Capability", [0.7, 0.8]],
             ["capability_2", "Incident Reporting Capability", [0.9, 1.0]],
@@ -103,20 +68,20 @@ def test_read_existing_canonical_index_returns_capability_nodes_with_and_without
 
 
 def test_read_existing_canonical_index_returns_empty_tuple_for_empty_graph() -> None:
-    graph = _ScriptedFakeGraph(obligation_rows=[], capability_rows=[])
+    graph = _ScriptedFakeGraph(capability_rows=[])
 
-    result = read_existing_canonical_index(graph, "Obligation")
+    result = read_existing_canonical_index(graph, "Capability")
 
     assert result == ()
 
 
 def test_resolve_exact_match_returns_true_when_incoming_id_is_present() -> None:
-    assert resolve_exact_match("obligation_1", frozenset({"obligation_1", "obligation_2"})) is True
+    assert resolve_exact_match("cap_1", frozenset({"cap_1", "cap_2"})) is True
 
 
 def test_resolve_exact_match_returns_false_when_incoming_id_is_absent() -> None:
-    assert resolve_exact_match("obligation_3", frozenset({"obligation_1", "obligation_2"})) is False
+    assert resolve_exact_match("cap_3", frozenset({"cap_1", "cap_2"})) is False
 
 
 def test_resolve_exact_match_returns_false_for_empty_existing_ids() -> None:
-    assert resolve_exact_match("obligation_1", frozenset()) is False
+    assert resolve_exact_match("cap_1", frozenset()) is False

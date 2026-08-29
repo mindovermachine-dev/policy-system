@@ -233,7 +233,7 @@ def test_dedup_result_accepts_non_empty_embedding_backfills() -> None:
 def test_merge_result_mutation_raises() -> None:
     result = MergeResult(
         regulation_id="CRA-1.0",
-        obligation_canonical_ids=(),
+        obligation_ids=(),
         capability_canonical_ids=(),
         near_misses=(),
     )
@@ -244,9 +244,9 @@ def test_merge_result_mutation_raises() -> None:
 def test_merge_result_constructs_with_valid_fields() -> None:
     result = MergeResult(
         regulation_id="CRA-1.0",
-        obligation_canonical_ids=("obl_risk_a1b2c3",),
+        obligation_ids=("obl_risk_role_x_a1b2c3",),
         capability_canonical_ids=("cap_logging_a1b2c3",),
         near_misses=(),
     )
     assert result.regulation_id == "CRA-1.0"
-    assert result.obligation_canonical_ids == ("obl_risk_a1b2c3",)
+    assert result.obligation_ids == ("obl_risk_role_x_a1b2c3",)

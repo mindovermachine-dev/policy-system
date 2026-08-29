@@ -48,14 +48,14 @@ class _ScriptedSingleTenantGraph:
     Obligation rows, and records every `query()` call it receives -- used
     to assert `dedupe_canonical_nodes` never issues a write call."""
 
-    def __init__(self, *, obligation_rows: list[object] | None = None) -> None:
-        self._obligation_rows = obligation_rows if obligation_rows is not None else []
+    def __init__(self, *, capability_rows: list[object] | None = None) -> None:
+        self._capability_rows = capability_rows if capability_rows is not None else []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult(self._obligation_rows)
+        if "(n:Capability) RETURN" in q:
+            return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -80,7 +80,7 @@ class _ScriptedCallEmbedding:
 
 
 def _obligation(node_id: str, text: str) -> BaselineNode:
-    return BaselineNode(id=node_id, properties={"text": text, "confidence": 0.9})
+    return BaselineNode(id=node_id, properties={"name": text, "confidence": 0.9})
 
 
 def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(make_emitter) -> None:
@@ -91,7 +91,7 @@ def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(make_emitter) ->
     existing_id = "obl_existing_report_incident"
     new_id = "obl_new_never_seen_before"
     graph = _ScriptedSingleTenantGraph(
-        obligation_rows=[[existing_id, "Report the incident.", [1.0, 0.0]]]
+        capability_rows=[[existing_id, "Report the incident.", [1.0, 0.0]]]
     )
     call_embedding = _ScriptedCallEmbedding({"A brand new duty never seen before.": [0.0, 1.0]})
     incoming_nodes = (
@@ -101,7 +101,7 @@ def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(make_emitter) ->
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,
@@ -127,7 +127,7 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(make_em
     existing_id = "obl_existing_conduct_risk_assessment"
     incoming_id = "obl_incoming_perform_risk_assessment"
     graph = _ScriptedSingleTenantGraph(
-        obligation_rows=[[existing_id, "Conduct a risk assessment.", [1.0, 0.0]]]
+        capability_rows=[[existing_id, "Conduct a risk assessment.", [1.0, 0.0]]]
     )
     call_embedding = _ScriptedCallEmbedding(
         {"Perform a cybersecurity risk assessment.": [1.0, 0.0]}
@@ -136,7 +136,7 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(make_em
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,
@@ -159,7 +159,7 @@ def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(make
     emitter, _log_path = make_emitter()
     first_id = "obl_incoming_first_alpha"
     second_id = "obl_incoming_second_beta"
-    graph = _ScriptedSingleTenantGraph(obligation_rows=[])
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
     call_embedding = _ScriptedCallEmbedding(
         {
             "Notify the authority within 72 hours.": [1.0, 0.0],
@@ -173,7 +173,7 @@ def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(make
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,
@@ -216,7 +216,7 @@ def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(make_
         "Existing duty three.": [0.0, 0.0, 1.0, 0.0, 0.0],
     }
     graph = _ScriptedSingleTenantGraph(
-        obligation_rows=[[node_id, text, None] for node_id, text in existing_texts.items()]
+        capability_rows=[[node_id, text, None] for node_id, text in existing_texts.items()]
     )
     incoming_vectors = {
         "Brand new duty alpha.": [0.0, 0.0, 0.0, 1.0, 0.0],
@@ -230,7 +230,7 @@ def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(make_
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,

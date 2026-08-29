@@ -1,9 +1,10 @@
 """Tests for `ps_service.company_merge.graph_writer.persist_rewired_edges`
 (PLAN_REVIEWED.md §10 Increment 12, §6.2): the edge writer that mirrors
-`domain_mapper.graph_writer._upsert_bare_edge`'s `MATCH ... MERGE` shape,
-with the Obligation-typed endpoint of each `HAS`/`SATISFIED_BY`/`REQUIRES`
-edge rewritten through the caller-supplied canonical-id mapping instead of
-written as its baseline-local id.
+`domain_mapper.graph_writer._upsert_bare_edge`'s `MATCH ... MERGE` shape.
+Since issue #42 only a `REQUIRES` edge's Capability target is rewritten
+through the caller-supplied canonical-id mapping; every other endpoint
+(Role, Requirement, Obligation) is a passthrough node written as its
+baseline-local id.
 """
 
 from __future__ import annotations
@@ -223,22 +224,27 @@ def test_rerunning_identical_edge_set_targets_the_same_triple_both_times() -> No
     }
 
 
-def test_missing_canonical_mapping_raises_before_any_write() -> None:
-    """An edge whose Obligation-typed endpoint has no entry in
-    canonical_id_by_incoming_id raises CompanyMergePersistenceError, with
-    zero graph.query calls made -- validate-then-write over the whole
-    collection, mirroring domain_mapper.graph_writer's own B3 fix shape."""
+def test_has_edge_obligation_target_absent_from_mapping_passes_through() -> None:
+    """Since #42, an Obligation is a passthrough node -- a `HAS` edge's
+    Obligation target is NOT required to have a mapping entry, and an
+    absent one is a pass-through (write its baseline-local id verbatim),
+    not a `CompanyMergePersistenceError`. Contrast
+    `test_requires_edge_target_missing_from_mapping_raises_before_any_write`
+    below, where the Capability target still must be present."""
     graph = _FakeGraph()
     edges = (
         BareEdge(relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"),
-        BareEdge(relationship_type="HAS", source_id="role_importer_def456", target_id="obl_unmapped"),
+        BareEdge(
+            relationship_type="HAS", source_id="role_importer_def456", target_id="obl_never_mapped"
+        ),
     )
-    canonical_id_by_incoming_id = {"obl_x": "obl_canonical_x"}
 
-    with pytest.raises(CompanyMergePersistenceError, match="obl_unmapped"):
-        persist_rewired_edges(graph, edges, canonical_id_by_incoming_id)
+    persist_rewired_edges(graph, edges, {})
 
-    assert graph.calls == []
+    assert [c.params for c in graph.calls] == [
+        {"source_id": "role_manufacturer_abc123", "target_id": "obl_x"},
+        {"source_id": "role_importer_def456", "target_id": "obl_never_mapped"},
+    ]
 
 
 def test_requires_edge_target_missing_from_mapping_raises_before_any_write() -> None:

@@ -1,7 +1,7 @@
 """`merge_baseline_graph` -- the `MergeBaselineGraph` public action
 (PLAN_REVIEWED.md §7, §10 Increments 13-14): the top-level orchestration that
 wires `graph_reader.read_baseline_graph`, `dedup.dedupe_canonical_nodes`
-(both kinds), and every `graph_writer` function together.
+(Capability only since #42), and every `graph_writer` function together.
 
 Flow (§7):
 
@@ -10,29 +10,29 @@ Flow (§7):
    zero graph calls of any kind have been made by this point, not even
    `graph_reader.read_baseline_graph`.
 1. Read the regulation's `{short}_baseline` graph.
-2. Dedupe Obligation nodes against the single-tenant graph.
-3. Dedupe Capability nodes against the single-tenant graph -- independent of
-   step 2, same single-tenant graph.
-4. Only now, having completed both dedup passes with no exception: persist
-   Regulation/Role/Requirement/`DEFINES`/`EXPRESSES` (unconditional `SET`);
-   persist canonical Obligation/Capability nodes for every `match_kind="new"`
-   resolution (`ON CREATE SET`); persist `HAS`/`SATISFIED_BY`/`REQUIRES`
-   edges using the MERGED canonical-id mapping (both kinds' resolutions
-   combined into one `dict[str, str]` -- see `graph_writer.persist_rewired_edges`'s
-   own docstring for why merging is safe, disjoint `obl_`/`cap_` id
-   prefixes); then backfill embeddings for each kind.
-5. Emit one `outcome="succeeded"` entry for the whole call. No
+2. Dedupe Capability nodes against the single-tenant graph. (Obligation is
+   Role-scoped since #42 -- a weak entity of exactly one Role, never deduped
+   across sources -- so there is no Obligation dedup pass.)
+3. Only now, having completed the dedup pass with no exception: persist
+   Regulation/Role/Requirement/`DEFINES`/`EXPRESSES` and Obligation
+   (unconditional `SET`); persist canonical Capability nodes for every
+   `match_kind="new"` resolution (`ON CREATE SET`); persist
+   `HAS`/`SATISFIED_BY`/`REQUIRES` edges using the Capability canonical-id
+   mapping (only a `REQUIRES` edge's Capability target is ever rewritten --
+   see `graph_writer.persist_rewired_edges`); then backfill Capability
+   embeddings.
+4. Emit one `outcome="succeeded"` entry for the whole call. No
    `bind_run_context()` self-bind here -- `run_id` is whatever the caller
    already bound, or `None`.
-6. Emit one additional log entry per dedup decision (AC-007): one per
-   `CanonicalResolution` (both kinds), outcome=`match_kind`; one per
-   `NearMissPair` (both kinds), outcome="near_miss".
-7. Return `MergeResult`.
+5. Emit one additional log entry per Capability dedup decision (AC-007): one
+   per `CanonicalResolution`, outcome=`match_kind`; one per `NearMissPair`,
+   outcome="near_miss".
+6. Return `MergeResult`.
 
-If step 2 or 3 raises (`LlmProviderError` from an embedding call), the
-exception propagates unchanged -- no entries from step 4 have been written,
-satisfying "abort with no partial write" as a structural property of call
-order: `dedupe_canonical_nodes` never issues a write call of its own (see
+If step 2 raises (`LlmProviderError` from an embedding call), the exception
+propagates unchanged -- no entries from step 3 have been written, satisfying
+"abort with no partial write" as a structural property of call order:
+`dedupe_canonical_nodes` never issues a write call of its own (see
 `dedup.py`'s own docstring).
 
 `DedupeCanonicalNodes` is not exposed as its own separately-invocable public
@@ -46,7 +46,7 @@ from __future__ import annotations
 from ps_service.company_merge import dedup, graph_reader, graph_writer
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.falkordb_client import GraphHandle
-from ps_service.company_merge.models import CanonicalResolution, MergeResult
+from ps_service.company_merge.models import MergeResult
 from ps_service.llm_interface.client import EmbeddingCaller
 from ps_service.logging import LogEmitter, emit_log_entry
 
@@ -92,15 +92,6 @@ def merge_baseline_graph(
 
     graph = graph_reader.read_baseline_graph(baseline_graph, regulation_id)
 
-    obligation_dedup = dedup.dedupe_canonical_nodes(
-        graph.obligation_nodes,
-        kind="Obligation",
-        single_tenant_graph=single_tenant_graph,
-        model=embed_model,
-        threshold=similarity_threshold,
-        call_embedding=call_embedding,
-        emitter=emitter,
-    )
     capability_dedup = dedup.dedupe_canonical_nodes(
         graph.capability_nodes,
         kind="Capability",
@@ -111,7 +102,7 @@ def merge_baseline_graph(
         emitter=emitter,
     )
 
-    # Only now, having completed both dedup passes with no exception, is
+    # Only now, having completed the dedup pass with no exception, is
     # anything written -- "abort with no partial write" on a raised
     # LlmProviderError is therefore automatic, not enforced by a try/except.
     graph_writer.persist_role_and_requirement_passthrough(
@@ -122,12 +113,7 @@ def merge_baseline_graph(
         graph.requirement_nodes,
         graph.provenance_edges,
     )
-    graph_writer.persist_canonical_nodes(
-        single_tenant_graph,
-        graph.obligation_nodes,
-        obligation_dedup.resolutions,
-        kind="Obligation",
-    )
+    graph_writer.persist_obligation_passthrough(single_tenant_graph, graph.obligation_nodes)
     graph_writer.persist_canonical_nodes(
         single_tenant_graph,
         graph.capability_nodes,
@@ -135,23 +121,17 @@ def merge_baseline_graph(
         kind="Capability",
     )
 
-    # The merged (both-kinds) canonical-id mapping persist_rewired_edges
-    # needs: safe to combine into one dict since identity.py gives
-    # Obligation/Capability ids disjoint obl_/cap_ prefixes (see
-    # graph_writer.persist_rewired_edges's own docstring).
+    # persist_rewired_edges only ever rewrites a REQUIRES edge's Capability
+    # target -- Obligation is a passthrough node since #42, so the mapping
+    # carries Capability resolutions alone.
     canonical_id_by_incoming_id: dict[str, str] = {
         resolution.incoming_id: resolution.canonical_id
-        for resolution in (*obligation_dedup.resolutions, *capability_dedup.resolutions)
+        for resolution in capability_dedup.resolutions
     }
     graph_writer.persist_rewired_edges(
         single_tenant_graph, graph.bare_edges, canonical_id_by_incoming_id
     )
 
-    graph_writer.backfill_canonical_embeddings(
-        single_tenant_graph,
-        kind="Obligation",
-        embeddings=obligation_dedup.embedding_backfills,
-    )
     graph_writer.backfill_canonical_embeddings(
         single_tenant_graph,
         kind="Capability",
@@ -166,11 +146,7 @@ def merge_baseline_graph(
         emitter=emitter,
     )
 
-    all_resolutions: tuple[CanonicalResolution, ...] = (
-        *obligation_dedup.resolutions,
-        *capability_dedup.resolutions,
-    )
-    for resolution in all_resolutions:
+    for resolution in capability_dedup.resolutions:
         emit_log_entry(
             component=_COMPONENT,
             action=_DEDUP_ACTION,
@@ -178,7 +154,7 @@ def merge_baseline_graph(
             outcome=resolution.match_kind,
             emitter=emitter,
         )
-    for near_miss in (*obligation_dedup.near_misses, *capability_dedup.near_misses):
+    for near_miss in capability_dedup.near_misses:
         emit_log_entry(
             component=_COMPONENT,
             action=_DEDUP_ACTION,
@@ -189,7 +165,7 @@ def merge_baseline_graph(
 
     return MergeResult(
         regulation_id=regulation_id,
-        obligation_canonical_ids=tuple(r.canonical_id for r in obligation_dedup.resolutions),
+        obligation_ids=tuple(node.id for node in graph.obligation_nodes),
         capability_canonical_ids=tuple(r.canonical_id for r in capability_dedup.resolutions),
-        near_misses=obligation_dedup.near_misses + capability_dedup.near_misses,
+        near_misses=capability_dedup.near_misses,
     )

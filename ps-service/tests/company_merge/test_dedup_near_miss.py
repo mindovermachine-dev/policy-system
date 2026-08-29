@@ -30,14 +30,14 @@ class _FakeQueryResult:
 class _ScriptedSingleTenantGraph:
     """Satisfies `GraphHandle` structurally."""
 
-    def __init__(self, *, obligation_rows: list[object] | None = None) -> None:
-        self._obligation_rows = obligation_rows if obligation_rows is not None else []
+    def __init__(self, *, capability_rows: list[object] | None = None) -> None:
+        self._capability_rows = capability_rows if capability_rows is not None else []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
-        if "(n:Obligation) RETURN" in q:
-            return _FakeQueryResult(self._obligation_rows)
+        if "(n:Capability) RETURN" in q:
+            return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -69,16 +69,16 @@ def test_dedupe_canonical_nodes_below_threshold_mints_and_records_near_miss(make
     existing_vector = [1.0, 0.0]
     incoming_vector = [0.0, 1.0]
     graph = _ScriptedSingleTenantGraph(
-        obligation_rows=[[existing_id, existing_text, existing_vector]]
+        capability_rows=[[existing_id, existing_text, existing_vector]]
     )
     call_embedding = _ScriptedCallEmbedding({incoming_text: incoming_vector})
     incoming_nodes = (
-        BaselineNode(id=incoming_id, properties={"text": incoming_text, "confidence": 0.9}),
+        BaselineNode(id=incoming_id, properties={"name": incoming_text, "confidence": 0.9}),
     )
 
     result = dedupe_canonical_nodes(
         incoming_nodes,
-        kind="Obligation",
+        kind="Capability",
         single_tenant_graph=graph,
         model=_MODEL,
         threshold=_THRESHOLD,

@@ -147,14 +147,13 @@ class ObligationAssignment(BaseModel):
     `obligation_node_id`/`obligation_text` are `prompts.py::
     parse_obligation_response`'s own PROPOSED identity/text — for a match,
     `obligation_text` is the matched registry entry's text and
-    `obligation_node_id` is `identity.obligation_id()` recomputed from it
-    (always equal to the matched id, by construction, since the registry's
-    own keys are themselves `obligation_id()` outputs); for a mint, both
-    are freshly derived from `new_text`. This is a PROPOSAL only —
-    `derivation.py`'s whole-run registry may still resolve a DIFFERENT,
-    role-qualified final id/text on a genuine cross-Role collision
-    (PLAN_REVIEWED.md §7.3's B1 fix) — `obligation_node_id` here is never
-    assumed to be the final persisted id."""
+    `obligation_node_id` is `identity.obligation_id(role_node_id, text)`
+    recomputed from it (always equal to the matched id, by construction,
+    since the registry's own keys are themselves `obligation_id()` outputs
+    for this Role); for a mint, both are freshly derived from `new_text`.
+    This is a PROPOSAL only — `derivation.py`'s whole-run registry resolves
+    the final id (a mint, or a same-Role reuse); `obligation_node_id` here
+    is not assumed to be the final persisted id."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -169,9 +168,9 @@ class ObligationAssignment(BaseModel):
 class ObligationNode:
     """One Obligation, ready for a future `graph_writer.
     persist_obligation_and_capability_graph` (Increment 15, out of this
-    batch's scope) to `MERGE`. `id` is `identity.obligation_id()`'s
-    output — possibly role-qualified per PLAN_REVIEWED.md §7.3's
-    collision-aware algorithm. `properties` carries `text`/`confidence`
+    batch's scope) to `MERGE`. `id` is `identity.obligation_id(role_node_id,
+    text)`'s output — Role-scoped (#42), so this Obligation belongs to
+    exactly one Role. `properties` carries `text`/`confidence`
     (CA doc's Obligation attributes; the Edge Catalog states Obligation
     carries no `source_ref` of its own — provenance is transitive via
     `SATISFIED_BY` -> `EXPRESSES`)."""
@@ -183,10 +182,9 @@ class ObligationNode:
 @dataclass(frozen=True, slots=True)
 class ObligationHasEdge:
     """Role -[:HAS]-> Obligation. No properties (Edge Catalog, §0.2) —
-    exactly one per Obligation node by construction, since
-    PLAN_REVIEWED.md §7.3's algorithm only ever creates this edge at the
-    moment an Obligation id is first minted (globally, or as a
-    role-qualified id on a collision), never again for the same id."""
+    exactly one per Obligation node, structurally: the Obligation id is
+    Role-scoped (#42), and this edge is created only at the moment an
+    Obligation id is first minted, never again for the same id."""
 
     role_node_id: str
     obligation_node_id: str

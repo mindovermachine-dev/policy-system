@@ -104,7 +104,7 @@ def test_derive_obligations_second_requirement_matches_first_minted_entry(make_e
         ),
     )
     minted_text = "Conduct Cybersecurity Risk Assessment"
-    minted_id = obligation_id(minted_text)
+    minted_id = obligation_id(_ROLE_MANUFACTURER, minted_text)
     call_completion = _scripted_sequential_call_completion(
         [_mint_response(minted_text), _match_response(minted_id)]
     )
@@ -184,7 +184,7 @@ def test_derive_obligations_same_role_convergence_on_independent_identical_mints
 
     assert len(obligation_nodes) == 1
     assert obligation_nodes[0].properties["text"] == duty_text
-    assert obligation_nodes[0].id == obligation_id(duty_text)
+    assert obligation_nodes[0].id == obligation_id(_ROLE_MANUFACTURER, duty_text)
     assert len(has_edges) == 1
     assert has_edges[0].role_node_id == _ROLE_MANUFACTURER
     assert len(satisfied_by_edges) == 2
@@ -192,19 +192,16 @@ def test_derive_obligations_same_role_convergence_on_independent_identical_mints
     assert unmatched == ()
 
 
-def test_derive_obligations_cross_role_collision_role_qualifies_second_roles_text(
+def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes(
     make_emitter,
 ) -> None:
-    """(d) THE critical test: Role A's Requirement mints "Cooperate with
-    Market Surveillance Authority Requests" (registered, one HAS edge to
-    Role A). Role B is processed LATER IN THE SAME RUN; its Requirement
-    independently mints the IDENTICAL text. This must be detected as a
-    collision against Role A's already-registered Obligation and
-    role-qualified for Role B -- Role A's own node/text/edge stay
-    completely untouched. Direct proof of PLAN_REVIEWED.md §3.1/§7.3's B1
-    fix: collision-aware, duty-text-only hashing -- NOT the rejected
-    role-baked-hash design that would mint two independent, unrelated
-    nodes with no shared identity at all."""
+    """(d) #42's resolution: Role A's Requirement mints "Cooperate with
+    Market Surveillance Authority Requests" (one HAS edge to Role A). Role B,
+    processed later in the same run, independently mints the IDENTICAL text.
+    Because `obligation_id` is Role-scoped, the two ids differ by
+    construction — two distinct Obligation nodes, each with its own single
+    HAS edge, each keeping the LLM's own unqualified duty text. No
+    `" as {role}"` text mangling, no runtime collision detection."""
     emitter, _log_path = make_emitter()
     role_a = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -217,8 +214,6 @@ def test_derive_obligations_cross_role_collision_role_qualifies_second_roles_tex
         requirements=(("CRA_req_art_19.7", "Cooperate with the market surveillance authority."),),
     )
     duty_text = "Cooperate with Market Surveillance Authority Requests"
-    # ONE registry, ONE call to _derive_obligations, both Roles in the same
-    # run -- this is what makes the collision detectable at all.
     call_completion = _scripted_sequential_call_completion(
         [_mint_response(duty_text), _mint_response(duty_text)]
     )
@@ -230,20 +225,17 @@ def test_derive_obligations_cross_role_collision_role_qualifies_second_roles_tex
     assert unmatched == ()
     assert len(obligation_nodes) == 2
 
-    node_a = next(n for n in obligation_nodes if n.properties["text"] == duty_text)
-    qualified_text = f"{duty_text} as Importer"
-    node_b = next(n for n in obligation_nodes if n.properties["text"] == qualified_text)
+    # Both nodes carry the LLM's own unqualified text — the Role only enters
+    # the id hash, never the text.
+    assert [n.properties["text"] for n in obligation_nodes] == [duty_text, duty_text]
 
-    # Distinct nodes, distinct ids.
+    node_a = next(n for n in obligation_nodes if n.id == obligation_id(_ROLE_MANUFACTURER, duty_text))
+    node_b = next(n for n in obligation_nodes if n.id == obligation_id(_ROLE_IMPORTER, duty_text))
     assert node_a.id != node_b.id
-    assert node_a.id == obligation_id(duty_text)
-    assert node_b.id == obligation_id(qualified_text)
 
-    # Role A's HAS edge is untouched: exactly one HAS edge to node_a, still
-    # pointing at Role A.
+    # Each Role gets exactly one HAS edge, to its own node.
     edge_a = next(e for e in has_edges if e.obligation_node_id == node_a.id)
     assert edge_a.role_node_id == _ROLE_MANUFACTURER
-    # Role B gets its OWN, separate HAS edge to the qualified node.
     edge_b = next(e for e in has_edges if e.obligation_node_id == node_b.id)
     assert edge_b.role_node_id == _ROLE_IMPORTER
     assert len(has_edges) == 2
@@ -379,7 +371,7 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
     shared Capability node, with TWO REQUIRES edges, one per Obligation.
     Both calls MINT (not match) on purpose -- proving the CODE-level
     registry, not the model, guarantees convergence, mirroring
-    _resolve_obligation_id's own philosophy for Obligation collisions."""
+    _resolve_obligation_id's own same-Role reuse philosophy."""
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
     call_completion = _scripted_sequential_call_completion(

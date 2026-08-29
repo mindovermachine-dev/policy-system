@@ -163,10 +163,11 @@ def _build_candidate(item: Any, unit: ExtractionUnit) -> RequirementCandidate:
 # `matched_existing_id`/`new_text` pair. `role_view` (this Role's own slice
 # of the whole-run registry, §7.3) is presented as the match-candidate set
 # for the mint-or-match decision — the model is never shown the whole-run
-# registry, only what has already been assigned to the current Role, which
-# is deliberate: cross-Role collision detection is a code-level guarantee
-# (`derivation.py::_resolve_obligation_id`, the B1 fix), never delegated to
-# the model's own judgment.
+# registry, only what has already been assigned to the current Role. That
+# scoping is also all that is needed: Obligation identity is Role-scoped
+# (#42), so a duty text under a different Role is a different node by
+# construction — there is no cross-Role case for the model, or the code, to
+# resolve.
 
 OBLIGATION_DERIVATION_SYSTEM_PROMPT = """You maintain a canonical registry of Obligations \
 (reusable duty statements) for one Role in a compliance graph. Given a Requirement's duty \
@@ -211,11 +212,13 @@ def parse_obligation_response(
       outcome (§7.5).
     - a `matched_existing_id` present in `role_view_registry` -> the
       assignment's `obligation_text` is that registry entry's text, and
-      `obligation_node_id` is `identity.obligation_id()` recomputed from
-      it (always equal to `matched_existing_id` itself, since registry
-      keys are themselves `obligation_id()` outputs).
+      `obligation_node_id` is `identity.obligation_id(role_node_id, text)`
+      recomputed from it (always equal to `matched_existing_id` itself,
+      since registry keys are themselves `obligation_id()` outputs for this
+      same Role).
     - a non-empty `new_text` -> the assignment's `obligation_text` is
-      `new_text`, `obligation_node_id` is `identity.obligation_id(new_text)`.
+      `new_text`, `obligation_node_id` is
+      `identity.obligation_id(role_node_id, new_text)`.
 
     Raises `DomainMapperDerivationError`, naming `requirement_id`, on:
     - malformed JSON (`json.JSONDecodeError`) or a non-object response,
@@ -242,7 +245,7 @@ def parse_obligation_response(
     return _build_obligation_assignment(
         requirement_id=requirement_id,
         role_node_id=role_node_id,
-        obligation_node_id=obligation_id(proposed_text),
+        obligation_node_id=obligation_id(role_node_id, proposed_text),
         obligation_text=proposed_text,
         confidence=payload.get("confidence"),
     )

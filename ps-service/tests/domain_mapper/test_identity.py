@@ -40,24 +40,35 @@ def test_requirement_id_shape_with_letter() -> None:
 
 def test_obligation_id_is_deterministic() -> None:
     text = "Conduct Cybersecurity Risk Assessment"
-    first = obligation_id(text)
-    second = obligation_id(text)
+    role = "role_manufacturer_a1b2c3"
+    first = obligation_id(role, text)
+    second = obligation_id(role, text)
     assert first == second
 
 
-def test_obligation_id_is_a_pure_function_of_text_alone() -> None:
-    """Same text produces the same id regardless of any other context the
-    caller might have on hand — B1 fix (PLAN_REVIEWED.md §3.1): no
-    role/regulation parameter exists on this function at all."""
+def test_obligation_id_is_role_scoped() -> None:
+    """Same duty text under two different Roles is two distinct Obligation
+    nodes — the resolution of issue #42. An Obligation is a weak entity of
+    exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
+    structurally rather than by a runtime collision check."""
     text = "Report Security Incidents"
-    manufacturer_context_id = obligation_id(text)
-    operator_context_id = obligation_id(text)
-    assert manufacturer_context_id == operator_context_id
+    manufacturer_id = obligation_id("role_manufacturer_a1b2c3", text)
+    operator_id = obligation_id("role_operator_essential_services_d4e5f6", text)
+    assert manufacturer_id != operator_id
+
+
+def test_obligation_id_slug_is_still_text_only() -> None:
+    """The Role enters only the opaque hash, never the human-readable slug —
+    mirrors `role_id`'s own shape."""
+    assert obligation_id("role_manufacturer_a1b2c3", "Report Security Incidents").startswith(
+        "obl_report_security_incidents_"
+    )
 
 
 def test_obligation_id_differs_for_different_text() -> None:
-    first = obligation_id("Conduct Cybersecurity Risk Assessment")
-    second = obligation_id("Report Security Incidents")
+    role = "role_manufacturer_a1b2c3"
+    first = obligation_id(role, "Conduct Cybersecurity Risk Assessment")
+    second = obligation_id(role, "Report Security Incidents")
     assert first != second
 
 
