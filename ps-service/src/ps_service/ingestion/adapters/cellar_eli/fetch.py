@@ -7,7 +7,7 @@ LEARNINGS.md`):
 
 - `https://publications.europa.eu/resource/celex/{CELEX}` (Cellar's
   machine-access resource endpoint) needs no auth and content-negotiates
-  the same way for a Regulation (CRA, 32024R2847) and a Directive (NIS2,
+  the same way for a regulation (CRA, 32024R2847) and a directive (NIS2,
   32022L2555) — confirmed both, one code path, no per-regulation
   branching.
 - `Accept: application/xhtml+xml` + `Accept-Language: eng` returns the

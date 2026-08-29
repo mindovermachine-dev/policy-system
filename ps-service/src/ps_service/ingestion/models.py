@@ -1,8 +1,8 @@
 """ps_service.ingestion core types — the shapes that cross the Adapter ->
-Ingestion-core boundary (`RegulationMetadata`, `FetchedRegulationStructure`)
+Ingestion-core boundary (`RegulatoryInstrumentMetadata`, `FetchedRegulatoryInstrumentStructure`)
 plus the Ingestion pipeline's own structural/result types.
 
-See `docs/architecture/ps-service-container-architecture.md`'s Regulation
+See `docs/architecture/ps-service-container-architecture.md`'s RegulatoryInstrument
 node and Native Structural Graph attribute tables (lines 183-222) for the
 field-level contract these types encode.
 """
@@ -15,16 +15,16 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-RegulationStatus = Literal["active", "superseded", "vacated"]
+RegulatoryInstrumentStatus = Literal["active", "superseded", "vacated"]
 SourceType = Literal["external", "internal"]
 InstrumentType = Literal["regulation", "directive", "national_transposition"]
 
 
-class RegulationMetadata(BaseModel):
-    """Bibliographic metadata for a Regulation node — crosses the Adapter ->
+class RegulatoryInstrumentMetadata(BaseModel):
+    """Bibliographic metadata for a RegulatoryInstrument node — crosses the Adapter ->
     Ingestion-core boundary, so modeled as Pydantic (frozen) per L2 Data
     Modeling's principle for boundary-crossing fixed-shape entities, even
-    though Regulation isn't in L2's named PS-Conceptual-Model-type list
+    though RegulatoryInstrument isn't in L2's named PS-Conceptual-Model-type list
     (Role/Requirement/Obligation/Capability/Policy/Standard/Control) — a
     reasoned extension of that principle (PLAN_REVIEWED.md §2.2, Open
     Question 4).
@@ -40,7 +40,7 @@ class RegulationMetadata(BaseModel):
     # as an opaque string (PLAN_REVIEWED.md §2.2, S3 fix).
     effective_date: date
     version: str = Field(min_length=1)
-    status: RegulationStatus
+    status: RegulatoryInstrumentStatus
     source_type: SourceType
     instrument_type: InstrumentType | None = None
 
@@ -78,13 +78,13 @@ class StructuralEdge:
 
 
 @dataclass(frozen=True, slots=True)
-class FetchedRegulationStructure:
-    """The Adapter's single return type — `FetchRegulationStructure`'s
+class FetchedRegulatoryInstrumentStructure:
+    """The Adapter's single return type — `FetchRegulatoryInstrumentStructure`'s
     post-condition ('structural text held in memory, ready for
     PersistNativeStructuralGraph') confirms fetch+parse are one Adapter
     action, not two."""
 
-    metadata: RegulationMetadata
+    metadata: RegulatoryInstrumentMetadata
     nodes: tuple[StructuralNode, ...]
     edges: tuple[StructuralEdge, ...]
 
@@ -93,7 +93,7 @@ class FetchedRegulationStructure:
 class ReachabilityCount:
     """Per-label result of `verify_structural_graph_reachable`: how many
     nodes of one label exist in the graph versus how many are actually
-    reachable from the Regulation node."""
+    reachable from the RegulatoryInstrument node."""
 
     total: int
     reachable: int
@@ -101,8 +101,8 @@ class ReachabilityCount:
 
 @dataclass(frozen=True, slots=True)
 class IngestResult:
-    """`ingest_regulation()`'s return value — the outcome of one run."""
+    """`ingest_regulatory_instrument()`'s return value — the outcome of one run."""
 
-    regulation_id: str
+    regulatory_instrument_id: str
     run_id: str
     counts: dict[str, ReachabilityCount]

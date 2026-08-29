@@ -7,10 +7,10 @@ from __future__ import annotations
 
 
 class IngestionPersistenceError(Exception):
-    """A FalkorDB write for the native structural graph or the Regulation
+    """A FalkorDB write for the native structural graph or the RegulatoryInstrument
     node could not be completed.
 
-    Raised by `graph_writer.register_regulation_version` when required
+    Raised by `graph_writer.register_regulatory_instrument_version` when required
     metadata is missing (CA doc: "Reject with a clear error if required
     properties are missing... no partial node") and by
     `graph_writer.persist_native_structural_graph`/

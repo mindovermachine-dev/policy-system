@@ -93,7 +93,7 @@ def _requirement_node(
     )
 
 
-def _regulation_properties() -> dict[str, object]:
+def _regulatory_instrument_properties() -> dict[str, object]:
     return {"title": "Cyber Resilience Act", "jurisdiction": "EU"}
 
 
@@ -112,7 +112,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     persist_role_and_requirement_graph(
         graph,
         "CRA-1.0",
-        _regulation_properties(),
+        _regulatory_instrument_properties(),
         (role,),
         (role_edge,),
         (requirement,),
@@ -120,20 +120,20 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     )
 
     assert len(graph.calls) == 5
-    regulation_call, role_call, defines_call, requirement_call, expresses_call = graph.calls
+    regulatory_instrument_call, role_call, defines_call, requirement_call, expresses_call = graph.calls
 
-    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert regulation_call.params == {"id": "CRA-1.0", "properties": _regulation_properties()}
+    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulatory_instrument_call.params == {"id": "CRA-1.0", "properties": _regulatory_instrument_properties()}
 
     assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
     assert role_call.params == {"id": role.id, "properties": role.properties}
 
     assert defines_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref"
     )
     assert defines_call.params == {
-        "regulation_id": "CRA-1.0",
+        "regulatory_instrument_id": "CRA-1.0",
         "target_id": role.id,
         "source_ref": "Art. 13(1)",
     }
@@ -142,20 +142,20 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
 
     assert expresses_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
     )
     assert expresses_call.params == {
-        "regulation_id": "CRA-1.0",
+        "regulatory_instrument_id": "CRA-1.0",
         "target_id": requirement.id,
         "source_ref": "Art. 13(1)",
     }
 
 
-def test_persist_writes_instrument_type_verbatim_when_present_in_regulation_properties() -> None:
+def test_persist_writes_instrument_type_verbatim_when_present_in_regulatory_instrument_properties() -> None:
     """AC-BI-010 (Domain Mapper, write side): `instrument_type` rides
     through the Regulation MERGE verbatim inside `params["properties"]` —
-    `regulation_properties` is `dict[str, object]` with no key allow-list,
+    `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change."""
     graph = _FakeGraph()
 
@@ -170,10 +170,10 @@ def test_persist_writes_instrument_type_verbatim_when_present_in_regulation_prop
     )
 
     assert len(graph.calls) == 1
-    regulation_call = graph.calls[0]
-    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert regulation_call.params is not None
-    properties = regulation_call.params["properties"]
+    regulatory_instrument_call = graph.calls[0]
+    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulatory_instrument_call.params is not None
+    properties = regulatory_instrument_call.params["properties"]
     assert isinstance(properties, dict)
     assert properties["instrument_type"] == "directive"
 
@@ -194,7 +194,7 @@ def test_persist_never_interpolates_source_ref_value_into_query_string() -> None
     persist_role_and_requirement_graph(
         graph,
         "CRA-1.0",
-        _regulation_properties(),
+        _regulatory_instrument_properties(),
         (role,),
         (role_edge,),
         (requirement,),
@@ -216,7 +216,7 @@ def test_persist_writes_zero_role_and_requirement_elements_when_collections_empt
     graph = _FakeGraph()
 
     persist_role_and_requirement_graph(
-        graph, "CRA-1.0", _regulation_properties(), (), (), (), ()
+        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
     )
 
     assert len(graph.calls) == 1
@@ -244,7 +244,7 @@ def test_persist_raises_before_any_write_when_requirement_role_id_is_dangling() 
         persist_role_and_requirement_graph(
             graph,
             "CRA-1.0",
-            _regulation_properties(),
+            _regulatory_instrument_properties(),
             (role,),
             (role_edge,),
             (dangling_requirement,),
@@ -271,7 +271,7 @@ def test_persist_raises_when_role_nodes_collection_is_empty_but_requirement_refe
         persist_role_and_requirement_graph(
             graph,
             "CRA-1.0",
-            _regulation_properties(),
+            _regulatory_instrument_properties(),
             (),
             (),
             (requirement,),
@@ -289,7 +289,7 @@ def test_persist_marks_falkordb_unhealthy_on_connection_error() -> None:
 
     with pytest.raises(DomainMapperPersistenceError):
         persist_role_and_requirement_graph(
-            graph, "CRA-1.0", _regulation_properties(), (), (), (), ()
+            graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
         )
 
     assert is_healthy(FALKORDB) is False
@@ -299,7 +299,7 @@ def test_persist_marks_falkordb_healthy_on_success() -> None:
     graph = _FakeGraph()
 
     persist_role_and_requirement_graph(
-        graph, "CRA-1.0", _regulation_properties(), (), (), (), ()
+        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), (), ()
     )
 
     assert is_healthy(FALKORDB) is True
@@ -319,7 +319,7 @@ def test_validation_error_does_not_mark_falkordb_unhealthy() -> None:
         persist_role_and_requirement_graph(
             graph,
             "CRA-1.0",
-            _regulation_properties(),
+            _regulatory_instrument_properties(),
             (),
             (),
             (dangling_requirement,),

@@ -2,14 +2,14 @@
 Cellar/ELI, composing `fetch.py::fetch_xhtml` (Increment 2),
 `metadata.py::extract_metadata` (Increment 3), and
 `structure.py::parse_structure` (Increment 4) into one
-`fetch_regulation_structure(identifier) -> FetchedRegulationStructure`
-call — the CA doc's single `FetchRegulationStructure` action.
+`fetch_regulatory_instrument_structure(identifier) -> FetchedRegulatoryInstrumentStructure`
+call — the CA doc's single `FetchRegulatoryInstrumentStructure` action.
 
 `identifier` is a CELEX number (CELEX-only per the user's decision, see
 PLAN_REVIEWED.md §1.2/§9 Open Question 2) and is used, unmodified, both as
-the fetch key and as `parse_structure`'s `regulation_id` prefix for
+the fetch key and as `parse_structure`'s `regulatory_instrument_id` prefix for
 structural node ids — the adapter never computes or sees the final
-`{SHORT}-{VERSION}` Regulation id, which is `pipeline.py`'s responsibility
+`{SHORT}-{VERSION}` RegulatoryInstrument id, which is `pipeline.py`'s responsibility
 (PLAN_REVIEWED.md §3), not the adapter's.
 
 This is the concrete proof-of-pluggability point for AC-001/AC-006 at the
@@ -26,7 +26,7 @@ from typing import Protocol
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
 from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
 from ps_service.ingestion.adapters.cellar_eli.structure import parse_structure
-from ps_service.ingestion.models import FetchedRegulationStructure
+from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
 
 
 class _FetchCallable(Protocol):
@@ -53,7 +53,7 @@ class CellarEliAdapter:
     def __init__(self, *, fetch: _FetchCallable = fetch_xhtml) -> None:
         self._fetch = fetch
 
-    def fetch_regulation_structure(self, identifier: str) -> FetchedRegulationStructure:
+    def fetch_regulatory_instrument_structure(self, identifier: str) -> FetchedRegulatoryInstrumentStructure:
         """Fetch + parse one regulation by CELEX `identifier`. Lets
         `CellarFetchError` (from `fetch`) and `CellarParseError` (from
         `extract_metadata`/`parse_structure`) propagate unchanged — both
@@ -63,4 +63,4 @@ class CellarEliAdapter:
         xhtml = self._fetch(identifier)
         metadata = extract_metadata(xhtml, identifier)
         nodes, edges = parse_structure(xhtml, identifier)
-        return FetchedRegulationStructure(metadata=metadata, nodes=nodes, edges=edges)
+        return FetchedRegulatoryInstrumentStructure(metadata=metadata, nodes=nodes, edges=edges)

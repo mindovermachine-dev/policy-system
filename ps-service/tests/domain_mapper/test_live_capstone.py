@@ -12,7 +12,7 @@ the walking skeleton's actual output, left in place afterward (unlike
 graphs, which ARE cleaned up).
 
 **Bounded, not exhaustive** (Open Question 2's mitigation): each
-regulation's extraction is capped to the first `_LIMIT_PER_REGULATION`
+regulation's extraction is capped to the first `_LIMIT_PER_REGULATORY_INSTRUMENT`
 `ExtractionUnit`s (document order) via `_LimitedDomainMappingAdapter`, a
 thin wrapper written here rather than a production-code change —
 `extract_roles_and_requirements` only ever calls
@@ -48,7 +48,7 @@ from ps_service.domain_mapper.falkordb_client import (
 from ps_service.domain_mapper.models import DerivationResult, ExtractionUnit
 from ps_service.logging import LogEmitter, bind_run_context
 
-_LIMIT_PER_REGULATION = 15
+_LIMIT_PER_REGULATORY_INSTRUMENT = 15
 _LOG_FILENAME = "capstone.jsonl"
 _GOVERNANCE_LABELS = ("Policy", "Standard", "Control")  # AC-008
 
@@ -62,15 +62,15 @@ _LLM_INTERFACE_MODEL = os.environ.get("PS_LLMINTERFACE_MODEL")
 
 
 @dataclass(frozen=True)
-class _RegulationFixture:
+class _RegulatoryInstrumentFixture:
     short_name: str
-    regulation_id: str
+    regulatory_instrument_id: str
 
 
 _REGULATIONS = (
-    _RegulationFixture("CRA", "CRA-1.0"),
-    _RegulationFixture("GDPR", "GDPR-1.0"),
-    _RegulationFixture("NIS2", "NIS2-1.0"),
+    _RegulatoryInstrumentFixture("CRA", "CRA-1.0"),
+    _RegulatoryInstrumentFixture("GDPR", "GDPR-1.0"),
+    _RegulatoryInstrumentFixture("NIS2", "NIS2-1.0"),
 )
 
 
@@ -89,7 +89,7 @@ class _LimitedDomainMappingAdapter:
 
 
 @dataclass
-class _RegulationOutcome:
+class _RegulatoryInstrumentOutcome:
     native_citation_refs: set[str]
     derivation_result: DerivationResult
     extraction_run_id: str
@@ -110,14 +110,14 @@ def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
     }
 
 
-def _run_pipeline_for_regulation(
+def _run_pipeline_for_regulatory_instrument(
     db: FalkorDB,
     adapter: DomainMappingAdapter,
-    fixture: _RegulationFixture,
+    fixture: _RegulatoryInstrumentFixture,
     *,
     model: str,
     emitter: LogEmitter,
-) -> _RegulationOutcome:
+) -> _RegulatoryInstrumentOutcome:
     """Runs both actions for one regulation, each inside its own bound run
     context. A different `run_id` is bound for extraction vs. derivation —
     no orchestrator wires a single shared `run_id` across both actions yet
@@ -126,13 +126,13 @@ def _run_pipeline_for_regulation(
     rather than leave the "same or different" choice implicit."""
     native_graph = select_graph(db, native_graph_name(fixture.short_name))
     baseline_graph = select_graph(db, baseline_graph_name(fixture.short_name))
-    limited_adapter = _LimitedDomainMappingAdapter(adapter, _LIMIT_PER_REGULATION)
+    limited_adapter = _LimitedDomainMappingAdapter(adapter, _LIMIT_PER_REGULATORY_INSTRUMENT)
     native_citation_refs = _native_citation_refs(native_graph)
 
     extraction_run_id = f"capstone-{fixture.short_name.lower()}-extraction"
     with bind_run_context(extraction_run_id):
         extract_roles_and_requirements(
-            fixture.regulation_id,
+            fixture.regulatory_instrument_id,
             adapter=limited_adapter,
             native_graph=native_graph,
             baseline_graph=baseline_graph,
@@ -143,13 +143,13 @@ def _run_pipeline_for_regulation(
     derivation_run_id = f"capstone-{fixture.short_name.lower()}-derivation"
     with bind_run_context(derivation_run_id):
         derivation_result = derive_obligations_and_capabilities(
-            fixture.regulation_id,
+            fixture.regulatory_instrument_id,
             baseline_graph=baseline_graph,
             model=model,
             emitter=emitter,
         )
 
-    return _RegulationOutcome(
+    return _RegulatoryInstrumentOutcome(
         native_citation_refs=native_citation_refs,
         derivation_result=derivation_result,
         extraction_run_id=extraction_run_id,
@@ -158,7 +158,7 @@ def _run_pipeline_for_regulation(
 
 
 def _assert_ac001_provenance(
-    baseline_graph: GraphHandle, native_refs: set[str], regulation_id: str
+    baseline_graph: GraphHandle, native_refs: set[str], regulatory_instrument_id: str
 ) -> None:
     defines_refs = [
         row[0]
@@ -173,15 +173,15 @@ def _assert_ac001_provenance(
             "MATCH (:RegulatoryInstrument)-[e:EXPRESSES]->(:Requirement) RETURN e.source_ref",
         )
     ]
-    assert defines_refs, f"{regulation_id}: no DEFINES edges written"
-    assert expresses_refs, f"{regulation_id}: no EXPRESSES edges written"
+    assert defines_refs, f"{regulatory_instrument_id}: no DEFINES edges written"
+    assert expresses_refs, f"{regulatory_instrument_id}: no EXPRESSES edges written"
     for ref in (*defines_refs, *expresses_refs):
         assert ref in native_refs, (
-            f"{regulation_id}: source_ref {ref!r} does not match any native-graph element"
+            f"{regulatory_instrument_id}: source_ref {ref!r} does not match any native-graph element"
         )
 
 
-def _assert_ac002_confidence(baseline_graph: GraphHandle, regulation_id: str) -> None:
+def _assert_ac002_confidence(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> None:
     role_confidences = [
         row[0] for row in _query_rows(baseline_graph, "MATCH (n:Role) RETURN n.confidence")
     ]
@@ -190,16 +190,16 @@ def _assert_ac002_confidence(baseline_graph: GraphHandle, regulation_id: str) ->
         for row in _query_rows(baseline_graph, "MATCH (n:Requirement) RETURN n.confidence")
     ]
     all_confidences = role_confidences + requirement_confidences
-    assert all_confidences, f"{regulation_id}: no confidence-bearing Role/Requirement nodes found"
+    assert all_confidences, f"{regulatory_instrument_id}: no confidence-bearing Role/Requirement nodes found"
     for value in all_confidences:
         confidence = cast(float, value)
-        assert 0.0 <= confidence <= 1.0, f"{regulation_id}: confidence out of range: {confidence!r}"
+        assert 0.0 <= confidence <= 1.0, f"{regulatory_instrument_id}: confidence out of range: {confidence!r}"
     # Low-confidence existence is explicitly non-blocking (Open Question 8) —
     # deliberately no assertion either way on whether one happens to appear.
 
 
 def _assert_ac003_derivation_shape(
-    baseline_graph: GraphHandle, unmatched_ids: tuple[str, ...], regulation_id: str
+    baseline_graph: GraphHandle, unmatched_ids: tuple[str, ...], regulatory_instrument_id: str
 ) -> None:
     requirement_rows = _query_rows(
         baseline_graph,
@@ -210,7 +210,7 @@ def _assert_ac003_derivation_shape(
         if requirement_id_value in unmatched_ids:
             continue
         assert cast(int, satisfied_count) >= 1, (
-            f"{regulation_id}: Requirement {requirement_id_value!r} has no SATISFIED_BY edge"
+            f"{regulatory_instrument_id}: Requirement {requirement_id_value!r} has no SATISFIED_BY edge"
         )
 
     has_rows = _query_rows(
@@ -219,7 +219,7 @@ def _assert_ac003_derivation_shape(
     )
     for obligation_id_value, has_count in has_rows:
         assert cast(int, has_count) == 1, (
-            f"{regulation_id}: Obligation {obligation_id_value!r} has {has_count} HAS "
+            f"{regulatory_instrument_id}: Obligation {obligation_id_value!r} has {has_count} HAS "
             "edges, expected exactly 1"
         )
 
@@ -229,31 +229,31 @@ def _assert_ac003_derivation_shape(
     )
     for obligation_id_value, requires_count in requires_rows:
         assert cast(int, requires_count) >= 1, (
-            f"{regulation_id}: Obligation {obligation_id_value!r} has no REQUIRES edge"
+            f"{regulatory_instrument_id}: Obligation {obligation_id_value!r} has no REQUIRES edge"
         )
 
 
-def _assert_ac005_regulation_scope(baseline_graph: GraphHandle, regulation_id: str) -> None:
-    regulation_rows = _query_rows(baseline_graph, "MATCH (r:RegulatoryInstrument) RETURN r.id")
-    assert regulation_rows == [[regulation_id]], (
-        f"unexpected Regulation node set in {regulation_id}'s baseline graph: {regulation_rows}"
+def _assert_ac005_regulatory_instrument_scope(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> None:
+    regulatory_instrument_rows = _query_rows(baseline_graph, "MATCH (r:RegulatoryInstrument) RETURN r.id")
+    assert regulatory_instrument_rows == [[regulatory_instrument_id]], (
+        f"unexpected Regulation node set in {regulatory_instrument_id}'s baseline graph: {regulatory_instrument_rows}"
     )
 
     requirement_ids = [
         row[0] for row in _query_rows(baseline_graph, "MATCH (n:Requirement) RETURN n.id")
     ]
-    prefix = f"{regulation_id}_req_art_"
+    prefix = f"{regulatory_instrument_id}_req_art_"
     for requirement_id_value in requirement_ids:
         assert cast(str, requirement_id_value).startswith(prefix), (
-            f"Requirement {requirement_id_value!r} in {regulation_id}'s baseline graph does not "
+            f"Requirement {requirement_id_value!r} in {regulatory_instrument_id}'s baseline graph does not "
             "carry that regulation's own id prefix — possible cross-regulation contamination"
         )
 
 
-def _assert_ac008_no_governance_nodes(baseline_graph: GraphHandle, regulation_id: str) -> None:
+def _assert_ac008_no_governance_nodes(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> None:
     for label in _GOVERNANCE_LABELS:
         count = _query_rows(baseline_graph, f"MATCH (n:{label}) RETURN count(n)")[0][0]
-        assert count == 0, f"{regulation_id}: unexpected {label} node(s) found: {count}"
+        assert count == 0, f"{regulatory_instrument_id}: unexpected {label} node(s) found: {count}"
 
 
 def _assert_run_id_logged(
@@ -292,7 +292,7 @@ def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis
     emitter, log_path = make_emitter(filename=_LOG_FILENAME)
 
     outcomes = {
-        fixture.short_name: _run_pipeline_for_regulation(
+        fixture.short_name: _run_pipeline_for_regulatory_instrument(
             db, adapter, fixture, model=model, emitter=emitter
         )
         for fixture in _REGULATIONS
@@ -306,28 +306,28 @@ def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis
         baseline_graph = select_graph(db, baseline_graph_name(fixture.short_name))
 
         _assert_ac001_provenance(
-            baseline_graph, outcome.native_citation_refs, fixture.regulation_id
+            baseline_graph, outcome.native_citation_refs, fixture.regulatory_instrument_id
         )
-        _assert_ac002_confidence(baseline_graph, fixture.regulation_id)
+        _assert_ac002_confidence(baseline_graph, fixture.regulatory_instrument_id)
         _assert_ac003_derivation_shape(
             baseline_graph,
             outcome.derivation_result.unmatched_requirement_ids,
-            fixture.regulation_id,
+            fixture.regulatory_instrument_id,
         )
         assert isinstance(outcome.derivation_result.unmatched_requirement_ids, tuple)  # AC-004
-        _assert_ac005_regulation_scope(baseline_graph, fixture.regulation_id)
-        _assert_ac008_no_governance_nodes(baseline_graph, fixture.regulation_id)
+        _assert_ac005_regulatory_instrument_scope(baseline_graph, fixture.regulatory_instrument_id)
+        _assert_ac008_no_governance_nodes(baseline_graph, fixture.regulatory_instrument_id)
         _assert_run_id_logged(
             log_entries,
             action="extract_roles_and_requirements",
             run_id=outcome.extraction_run_id,
-            entity_id=fixture.regulation_id,
+            entity_id=fixture.regulatory_instrument_id,
         )
         _assert_run_id_logged(
             log_entries,
             action="derive_obligations_and_capabilities",
             run_id=outcome.derivation_run_id,
-            entity_id=fixture.regulation_id,
+            entity_id=fixture.regulatory_instrument_id,
         )
 
     all_run_ids = [outcome.extraction_run_id for outcome in outcomes.values()] + [

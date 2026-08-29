@@ -64,7 +64,7 @@ def _requirement_node() -> BaselineNode:
     )
 
 
-def _regulation_properties() -> dict[str, object]:
+def _regulatory_instrument_properties() -> dict[str, object]:
     return {"title": "Cyber Resilience Act", "jurisdiction": "EU"}
 
 
@@ -82,17 +82,17 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     persist_role_and_requirement_passthrough(
         graph,
         "CRA-1.0",
-        _regulation_properties(),
+        _regulatory_instrument_properties(),
         (role,),
         (requirement,),
         (defines_edge, expresses_edge),
     )
 
     assert len(graph.calls) == 5
-    regulation_call, role_call, requirement_call, defines_call, expresses_call = graph.calls
+    regulatory_instrument_call, role_call, requirement_call, defines_call, expresses_call = graph.calls
 
-    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert regulation_call.params == {"id": "CRA-1.0", "properties": _regulation_properties()}
+    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulatory_instrument_call.params == {"id": "CRA-1.0", "properties": _regulatory_instrument_properties()}
 
     assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
     assert role_call.params == {"id": role.id, "properties": role.properties}
@@ -101,21 +101,21 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
 
     assert defines_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref"
     )
     assert defines_call.params == {
-        "regulation_id": "CRA-1.0",
+        "regulatory_instrument_id": "CRA-1.0",
         "target_id": role.id,
         "source_ref": "Art. 13(1)",
     }
 
     assert expresses_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
     )
     assert expresses_call.params == {
-        "regulation_id": "CRA-1.0",
+        "regulatory_instrument_id": "CRA-1.0",
         "target_id": requirement.id,
         "source_ref": "Art. 13(1)",
     }
@@ -124,7 +124,7 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
 def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
     """AC-BI-011 (Company Merge, write side): `instrument_type` rides
     through the Regulation MERGE verbatim inside `params["properties"]` —
-    `regulation_properties` is `dict[str, object]` with no key allow-list,
+    `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
     so the key propagates by construction with NO src change."""
     graph = _FakeGraph()
 
@@ -138,10 +138,10 @@ def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
     )
 
     assert len(graph.calls) == 1
-    regulation_call = graph.calls[0]
-    assert regulation_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert regulation_call.params is not None
-    properties = regulation_call.params["properties"]
+    regulatory_instrument_call = graph.calls[0]
+    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert regulatory_instrument_call.params is not None
+    properties = regulatory_instrument_call.params["properties"]
     assert isinstance(properties, dict)
     assert properties["instrument_type"] == "directive"
 
@@ -164,7 +164,7 @@ def test_persist_is_idempotent_across_repeated_calls() -> None:
         persist_role_and_requirement_passthrough(
             graph,
             "CRA-1.0",
-            _regulation_properties(),
+            _regulatory_instrument_properties(),
             (role,),
             (requirement,),
             (defines_edge, expresses_edge),
@@ -179,7 +179,7 @@ def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation() -> N
     graph = _FakeGraph()
 
     persist_role_and_requirement_passthrough(
-        graph, "CRA-1.0", _regulation_properties(), (), (), ()
+        graph, "CRA-1.0", _regulatory_instrument_properties(), (), (), ()
     )
 
     assert len(graph.calls) == 1

@@ -71,7 +71,7 @@ class RoleNode:
 
 @dataclass(frozen=True, slots=True)
 class RoleDefinesEdge:
-    """Regulation -[:DEFINES {source_ref}]-> Role. `role_node_id` is the
+    """RegulatoryInstrument -[:DEFINES {source_ref}]-> Role. `role_node_id` is the
     target Role's `id`; `source_ref` is the first duty-bearing candidate's
     `unit_citation_ref` (PLAN_REVIEWED.md §5.2 step 4)."""
 
@@ -95,7 +95,7 @@ class RequirementNode:
 
 @dataclass(frozen=True, slots=True)
 class RequirementExpressesEdge:
-    """Regulation -[:EXPRESSES {source_ref}]-> Requirement. `source_ref` is
+    """RegulatoryInstrument -[:EXPRESSES {source_ref}]-> Requirement. `source_ref` is
     the candidate's own `unit_citation_ref` (AC-001)."""
 
     requirement_node_id: str
@@ -107,7 +107,7 @@ class ExtractionResult:
     """`extract_roles_and_requirements()`'s return value — the outcome of
     one `ExtractRolesAndRequirements` call."""
 
-    regulation_id: str
+    regulatory_instrument_id: str
     role_node_ids: dict[str, str]  # role_name -> role node id, for derivation's use
     requirement_ids: tuple[str, ...]
     candidate_count: int
@@ -244,7 +244,7 @@ class DerivationResult:
     """`derive_obligations_and_capabilities()`'s return value — the outcome
     of one `DeriveObligationsAndCapabilities` call."""
 
-    regulation_id: str
+    regulatory_instrument_id: str
     obligation_node_ids: tuple[str, ...]
     capability_node_ids: tuple[str, ...]
     unmatched_requirement_ids: tuple[str, ...]  # AC-004 — surfaced, never silently absent

@@ -2,7 +2,7 @@
 formulas from `docs/artifacts/ps-domain-concepts.md`.
 
 `obligation_id(role_node_id, text)` is **Role-scoped**: the hash folds in
-the bearing Role, exactly as `role_id` folds in its defining Regulation.
+the bearing Role, exactly as `role_id` folds in its defining RegulatoryInstrument.
 This is the resolution of issue #42 — an Obligation is a weak entity of
 exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
 structurally (two sources' duties can never collide onto one Obligation
@@ -33,18 +33,18 @@ def _hash(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:6]
 
 
-def role_id(name: str, regulation_id: str) -> str:
+def role_id(name: str, regulatory_instrument_id: str) -> str:
     """`role_{slug}_{hash}` — content-derived from `name` + the defining
-    Regulation, regulation-scoped (Role is NOT canonical across
+    RegulatoryInstrument, regulation-scoped (Role is NOT canonical across
     regulations, per `ps-domain-concepts.md`)."""
-    return f"role_{_slug(name)}_{_hash(f'{regulation_id}:{name.lower()}')}"
+    return f"role_{_slug(name)}_{_hash(f'{regulatory_instrument_id}:{name.lower()}')}"
 
 
-def requirement_id(regulation_id: str, article: str, paragraph: str, letter: str | None) -> str:
+def requirement_id(regulatory_instrument_id: str, article: str, paragraph: str, letter: str | None) -> str:
     """`{REG}_req_art_{ARTICLE}.{PARAGRAPH}[LETTER]` — structurally fixed,
     non-opaque, generated from the source location alone."""
     suffix = letter or ""
-    return f"{regulation_id}_req_art_{article}.{paragraph}{suffix}"
+    return f"{regulatory_instrument_id}_req_art_{article}.{paragraph}{suffix}"
 
 
 def obligation_id(role_node_id: str, text: str) -> str:

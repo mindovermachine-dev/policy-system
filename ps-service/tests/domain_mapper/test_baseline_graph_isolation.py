@@ -94,8 +94,8 @@ class _FakeQueryResult:
         return self._result_set
 
 
-class _FakeRegulationNode:
-    """Satisfies `extraction.py`'s own `_RegulationNode` Protocol
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies `extraction.py`'s own `_RegulatoryInstrumentNode` Protocol
     structurally -- only `.properties` is ever read."""
 
     def __init__(self, properties: dict[str, object]) -> None:
@@ -107,11 +107,11 @@ class _FakeNativeGraph:
     `MATCH (r:RegulatoryInstrument) RETURN r` with a scripted Regulation node --
     mirrors `test_extraction.py`'s own `_FakeNativeGraph`."""
 
-    def __init__(self, regulation_properties: dict[str, object]) -> None:
-        self._regulation_properties = regulation_properties
+    def __init__(self, regulatory_instrument_properties: dict[str, object]) -> None:
+        self._regulatory_instrument_properties = regulatory_instrument_properties
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
+        return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
 
 
 class _FakeBaselineGraph:

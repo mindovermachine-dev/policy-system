@@ -84,7 +84,7 @@ def test_requirement_candidate_rejects_empty_text() -> None:
 
 def test_extraction_result_mutation_raises() -> None:
     result = ExtractionResult(
-        regulation_id="CRA-1.0",
+        regulatory_instrument_id="CRA-1.0",
         role_node_ids={},
         requirement_ids=(),
         candidate_count=0,
@@ -97,7 +97,7 @@ def test_extraction_result_mutation_raises() -> None:
 
 def test_extraction_result_constructs_with_empty_collisions_in_zero_collision_case() -> None:
     result = ExtractionResult(
-        regulation_id="CRA-1.0",
+        regulatory_instrument_id="CRA-1.0",
         role_node_ids={"Manufacturer": "role_manufacturer_a1b2c3"},
         requirement_ids=("CRA-1.0_req_art_13.1",),
         candidate_count=1,
@@ -197,10 +197,10 @@ def test_capability_decision_rejects_confidence_below_zero() -> None:
 
 def test_derivation_result_mutation_raises() -> None:
     result = DerivationResult(
-        regulation_id="CRA-1.0",
+        regulatory_instrument_id="CRA-1.0",
         obligation_node_ids=(),
         capability_node_ids=(),
         unmatched_requirement_ids=(),
     )
     with pytest.raises(AttributeError):
-        result.regulation_id = "changed"  # type: ignore[misc]
+        result.regulatory_instrument_id = "changed"  # type: ignore[misc]

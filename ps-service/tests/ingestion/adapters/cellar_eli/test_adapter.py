@@ -89,18 +89,18 @@ def test_default_fetch_is_the_real_fetch_xhtml() -> None:
 def test_satisfies_ingestion_adapter_protocol() -> None:
     adapter: IngestionAdapter = CellarEliAdapter(fetch=_dispatching_fetch)
 
-    result = adapter.fetch_regulation_structure("32020R1111")
+    result = adapter.fetch_regulatory_instrument_structure("32020R1111")
 
     assert result.metadata.title == "Regulation (EU) 1111/1111 Fixture A"
 
 
-def test_fetch_regulation_structure_produces_different_results_for_different_identifiers_through_one_instance() -> (
+def test_fetch_regulatory_instrument_structure_produces_different_results_for_different_identifiers_through_one_instance() -> (
     None
 ):
     adapter = CellarEliAdapter(fetch=_dispatching_fetch)
 
-    result_a = adapter.fetch_regulation_structure("32020R1111")
-    result_b = adapter.fetch_regulation_structure("32020L2222")
+    result_a = adapter.fetch_regulatory_instrument_structure("32020R1111")
+    result_b = adapter.fetch_regulatory_instrument_structure("32020L2222")
 
     # Different metadata.
     assert result_a.metadata.title == "Regulation (EU) 1111/1111 Fixture A"
@@ -123,17 +123,17 @@ def test_fetch_regulation_structure_produces_different_results_for_different_ide
     assert all(node.id.startswith("32020L2222#") for node in result_b.nodes)
 
 
-def test_fetch_regulation_structure_propagates_cellar_fetch_error_unchanged() -> None:
+def test_fetch_regulatory_instrument_structure_propagates_cellar_fetch_error_unchanged() -> None:
     def _failing_fetch(identifier: str) -> bytes:
         raise CellarFetchError(f"could not fetch {identifier}")
 
     adapter = CellarEliAdapter(fetch=_failing_fetch)
 
     with pytest.raises(CellarFetchError):
-        adapter.fetch_regulation_structure("32020R1111")
+        adapter.fetch_regulatory_instrument_structure("32020R1111")
 
 
-def test_fetch_regulation_structure_propagates_cellar_parse_error_unchanged() -> None:
+def test_fetch_regulatory_instrument_structure_propagates_cellar_parse_error_unchanged() -> None:
     _unresolvable_effective_date_fixture = b"""
     <html xmlns="http://www.w3.org/1999/xhtml">
     <body>
@@ -154,4 +154,4 @@ def test_fetch_regulation_structure_propagates_cellar_parse_error_unchanged() ->
     adapter = CellarEliAdapter(fetch=_fetch)
 
     with pytest.raises(CellarParseError):
-        adapter.fetch_regulation_structure("32020R1111")
+        adapter.fetch_regulatory_instrument_structure("32020R1111")

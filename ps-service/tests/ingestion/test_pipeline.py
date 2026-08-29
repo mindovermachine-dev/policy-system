@@ -2,7 +2,7 @@
 
 Two tests, per the plan:
 
-(a) AC-005 proof — two separate `ingest_regulation()` calls, each inside its
+(a) AC-005 proof — two separate `ingest_regulatory_instrument()` calls, each inside its
 own `bind_run_context()` scope (via `pipeline.py`'s own `with` block), emit
 log entries carrying two distinct `run_id`s. Mirrors
 `tests/llm_interface/test_route_completion_logs_run_id.py`'s
@@ -36,12 +36,12 @@ from pathlib import Path
 
 import ps_service.ingestion as ingestion_package
 from ps_service.ingestion.models import (
-    FetchedRegulationStructure,
-    RegulationMetadata,
+    FetchedRegulatoryInstrumentStructure,
+    RegulatoryInstrumentMetadata,
     StructuralEdge,
     StructuralNode,
 )
-from ps_service.ingestion.pipeline import ingest_regulation
+from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import bind_run_context
 
 # --- shared fakes (structurally satisfy IngestionAdapter / GraphHandle) ---
@@ -72,19 +72,19 @@ class _FakeGraph:
 
 class _FakeAdapter:
     """Satisfies `IngestionAdapter` structurally: one canned
-    `FetchedRegulationStructure` per identifier, looked up from a dict built
+    `FetchedRegulatoryInstrumentStructure` per identifier, looked up from a dict built
     by the test — the dispatch-by-identifier lives here, in test fakery,
     never inside `pipeline.py`."""
 
-    def __init__(self, structures_by_identifier: dict[str, FetchedRegulationStructure]) -> None:
+    def __init__(self, structures_by_identifier: dict[str, FetchedRegulatoryInstrumentStructure]) -> None:
         self._structures_by_identifier = structures_by_identifier
 
-    def fetch_regulation_structure(self, identifier: str) -> FetchedRegulationStructure:
+    def fetch_regulatory_instrument_structure(self, identifier: str) -> FetchedRegulatoryInstrumentStructure:
         return self._structures_by_identifier[identifier]
 
 
-def _structure(title: str) -> FetchedRegulationStructure:
-    metadata = RegulationMetadata(
+def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
+    metadata = RegulatoryInstrumentMetadata(
         title=title,
         jurisdiction="EU",
         effective_date=date(2027, 12, 11),
@@ -95,13 +95,13 @@ def _structure(title: str) -> FetchedRegulationStructure:
     )
     nodes = (StructuralNode("ARTICLE", f"{title}#art_1", {"text": "t", "citation_ref": "Art. 1", "order": 1}),)
     edges = (StructuralEdge("RegulatoryInstrument", f"{title}-id", "ARTICLE", f"{title}#art_1"),)
-    return FetchedRegulationStructure(metadata=metadata, nodes=nodes, edges=edges)
+    return FetchedRegulatoryInstrumentStructure(metadata=metadata, nodes=nodes, edges=edges)
 
 
 # --- (a) AC-005: two calls, two distinct run_ids ---------------------------
 
 
-def test_ingest_regulation_two_calls_emit_two_distinct_run_ids(make_emitter, read_lines) -> None:
+def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(make_emitter, read_lines) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter(
         {
@@ -110,7 +110,7 @@ def test_ingest_regulation_two_calls_emit_two_distinct_run_ids(make_emitter, rea
         }
     )
 
-    result_one = ingest_regulation(
+    result_one = ingest_regulatory_instrument(
         "IDENTIFIER_ONE",
         "ONE",
         version="1.0",
@@ -118,7 +118,7 @@ def test_ingest_regulation_two_calls_emit_two_distinct_run_ids(make_emitter, rea
         graph=_FakeGraph(),
         emitter=emitter,
     )
-    result_two = ingest_regulation(
+    result_two = ingest_regulatory_instrument(
         "IDENTIFIER_TWO",
         "TWO",
         version="1.0",
@@ -138,42 +138,42 @@ def test_ingest_regulation_two_calls_emit_two_distinct_run_ids(make_emitter, rea
     assert run_ids_for_one != run_ids_for_two
 
 
-def test_ingest_regulation_emits_one_log_entry_per_stage(make_emitter, read_lines) -> None:
+def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(make_emitter, read_lines) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
 
-    ingest_regulation(
+    ingest_regulatory_instrument(
         "IDENTIFIER", "SHORT", version="1.0", adapter=adapter, graph=_FakeGraph(), emitter=emitter
     )
     emitter.flush()
 
     actions = [line["action"] for line in read_lines(log_path) if line.get("entity_id") == "SHORT-1.0"]
     assert actions == [
-        "fetch_regulation_structure",
-        "register_regulation_version",
+        "fetch_regulatory_instrument_structure",
+        "register_regulatory_instrument_version",
         "persist_native_structural_graph",
         "verify_structural_graph_reachable",
     ]
 
 
-def test_ingest_regulation_computes_regulation_id_from_caller_supplied_short_name_and_version(
+def test_ingest_regulatory_instrument_computes_regulatory_instrument_id_from_caller_supplied_short_name_and_version(
     make_emitter,
 ) -> None:
     emitter, _ = make_emitter()
     adapter = _FakeAdapter({"ANY_IDENTIFIER": _structure("Fixture")})
 
-    result = ingest_regulation(
+    result = ingest_regulatory_instrument(
         "ANY_IDENTIFIER", "XYZ", version="2.3", adapter=adapter, graph=_FakeGraph(), emitter=emitter
     )
 
-    assert result.regulation_id == "XYZ-2.3"
+    assert result.regulatory_instrument_id == "XYZ-2.3"
 
 
-def test_ingest_regulation_uses_currently_bound_run_id_when_nested_in_an_outer_context(
+def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in_an_outer_context(
     make_emitter, read_lines
 ) -> None:
     """`bind_run_context()`'s own nested-scope restore semantics (run_context.py)
-    mean `ingest_regulation()`'s inner `run_id` is still what gets baked into
+    mean `ingest_regulatory_instrument()`'s inner `run_id` is still what gets baked into
     its own log entries, even when called from within an already-bound outer
     scope — proving the pipeline always uses its own freshly bound id, not
     whatever happened to be active on entry."""
@@ -181,7 +181,7 @@ def test_ingest_regulation_uses_currently_bound_run_id_when_nested_in_an_outer_c
     adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
 
     with bind_run_context("outer-run"):
-        result = ingest_regulation(
+        result = ingest_regulatory_instrument(
             "IDENTIFIER", "SHORT", version="1.0", adapter=adapter, graph=_FakeGraph(), emitter=emitter
         )
     emitter.flush()
@@ -194,9 +194,9 @@ def test_ingest_regulation_uses_currently_bound_run_id_when_nested_in_an_outer_c
 
 # --- (b) AC-006: AST-based regulation-name-conditional scan (B2/B3 fix) ---
 
-_FORBIDDEN_REGULATION_NAMES = frozenset({"CRA", "GDPR", "NIS2"})
+_FORBIDDEN_REGULATORY_INSTRUMENT_NAMES = frozenset({"CRA", "GDPR", "NIS2"})
 _FORBIDDEN_CELEX_IDENTIFIERS = frozenset({"32024R2847", "32016R0679", "32022L2555"})
-_FORBIDDEN_LITERALS = _FORBIDDEN_REGULATION_NAMES | _FORBIDDEN_CELEX_IDENTIFIERS
+_FORBIDDEN_LITERALS = _FORBIDDEN_REGULATORY_INSTRUMENT_NAMES | _FORBIDDEN_CELEX_IDENTIFIERS
 
 _DOCSTRING_HOST_TYPES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 

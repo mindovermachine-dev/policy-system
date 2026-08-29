@@ -34,8 +34,8 @@ class _FakeQueryResult:
         return self._result_set
 
 
-class _FakeRegulationNode:
-    """Satisfies `graph_reader._RegulationNode` structurally -- only
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
     `.properties` is ever read."""
 
     def __init__(self, properties: dict[str, object]) -> None:
@@ -50,7 +50,7 @@ class _ScriptedFakeGraph:
     def __init__(
         self,
         *,
-        regulation_properties: dict[str, object],
+        regulatory_instrument_properties: dict[str, object],
         role_rows: list[object],
         requirement_rows: list[object],
         obligation_rows: list[object],
@@ -61,7 +61,7 @@ class _ScriptedFakeGraph:
         satisfied_by_rows: list[object],
         requires_rows: list[object],
     ) -> None:
-        self._regulation_properties = regulation_properties
+        self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
@@ -91,14 +91,14 @@ class _ScriptedFakeGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
+        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
+            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
 def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> None:
     graph = _ScriptedFakeGraph(
-        regulation_properties={
+        regulatory_instrument_properties={
             "id": "CRA-1.0",
             "title": "Cyber Resilience Act",
             "jurisdiction": "EU",
@@ -133,8 +133,8 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
     result = read_baseline_graph(graph, "CRA-1.0")
 
     assert result == BaselineGraph(
-        regulation_id="CRA-1.0",
-        regulation_properties={
+        regulatory_instrument_id="CRA-1.0",
+        regulatory_instrument_properties={
             "id": "CRA-1.0",
             "title": "Cyber Resilience Act",
             "jurisdiction": "EU",
@@ -218,7 +218,7 @@ def test_read_baseline_graph_returns_empty_tuples_when_no_obligation_or_capabili
     Requirement/`DEFINES`/`EXPRESSES` are still carried forward. No
     exception is raised."""
     graph = _ScriptedFakeGraph(
-        regulation_properties={"id": "GDPR-1.0", "title": "GDPR", "jurisdiction": "EU"},
+        regulatory_instrument_properties={"id": "GDPR-1.0", "title": "GDPR", "jurisdiction": "EU"},
         role_rows=[["role_controller_def456", "Controller", 0.95]],
         requirement_rows=[
             ["GDPR-1.0_req_art_5.1", "Ensure lawful processing.", "requirement", 0.95, "role_controller_def456"]
@@ -242,13 +242,13 @@ def test_read_baseline_graph_returns_empty_tuples_when_no_obligation_or_capabili
     assert result.provenance_edges != ()
 
 
-def test_read_regulation_properties_includes_instrument_type() -> None:
+def test_read_regulatory_instrument_properties_includes_instrument_type() -> None:
     """AC-BI-011 (Company Merge, read side): the Regulation property bag is
     read back whole (`dict(node.properties)`, no field filter), so
-    `instrument_type` reaches `BaselineGraph.regulation_properties` with NO
+    `instrument_type` reaches `BaselineGraph.regulatory_instrument_properties` with NO
     src change."""
     graph = _ScriptedFakeGraph(
-        regulation_properties={
+        regulatory_instrument_properties={
             "id": "NIS2-1.0",
             "title": "NIS2 Directive",
             "jurisdiction": "EU",
@@ -267,7 +267,7 @@ def test_read_regulation_properties_includes_instrument_type() -> None:
 
     result = read_baseline_graph(graph, "NIS2-1.0")
 
-    assert result.regulation_properties["instrument_type"] == "directive"
+    assert result.regulatory_instrument_properties["instrument_type"] == "directive"
 
 
 @pytest.mark.falkordb_live
@@ -290,10 +290,10 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
         params={"id": "role_live_abc", "properties": {"name": "LiveRole", "confidence": 0.9}},
     )
     graph.query(
-        "MATCH (r:RegulatoryInstrument {id: $regulation_id}), (n:Role {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Role {id: $target_id}) "
         "MERGE (r)-[e:DEFINES]->(n) SET e.source_ref = $source_ref",
         params={
-            "regulation_id": "LIVE-1.0",
+            "regulatory_instrument_id": "LIVE-1.0",
             "target_id": "role_live_abc",
             "source_ref": "Article 1",
         },
@@ -301,7 +301,7 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
 
     result = read_baseline_graph(graph, "LIVE-1.0")
 
-    assert result.regulation_properties["title"] == "Live Test Regulation"
+    assert result.regulatory_instrument_properties["title"] == "Live Test Regulation"
     assert result.role_nodes == (
         BaselineNode(id="role_live_abc", properties={"name": "LiveRole", "confidence": 0.9}),
     )

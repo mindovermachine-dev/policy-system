@@ -29,7 +29,7 @@ class BaselineNode:
 
 @dataclass(frozen=True, slots=True)
 class ProvenanceEdge:
-    """Regulation -[:DEFINES|EXPRESSES {source_ref}]-> Role|Requirement."""
+    """RegulatoryInstrument -[:DEFINES|EXPRESSES {source_ref}]-> Role|Requirement."""
 
     relationship_type: Literal["DEFINES", "EXPRESSES"]
     target_id: str
@@ -56,8 +56,8 @@ class BaselineGraph:
     read back by graph_reader.read_baseline_graph -- MergeBaselineGraph's
     input."""
 
-    regulation_id: str
-    regulation_properties: dict[str, object]
+    regulatory_instrument_id: str
+    regulatory_instrument_properties: dict[str, object]
     role_nodes: tuple[BaselineNode, ...]
     requirement_nodes: tuple[BaselineNode, ...]
     obligation_nodes: tuple[BaselineNode, ...]
@@ -145,7 +145,7 @@ class DedupResult:
 class MergeResult:
     """merge_baseline_graph()'s return value -- MergeBaselineGraph's outcome."""
 
-    regulation_id: str
+    regulatory_instrument_id: str
     obligation_ids: tuple[str, ...]  # passed through per source since #42, not deduped
     capability_canonical_ids: tuple[str, ...]
     near_misses: tuple[NearMissPair, ...]  # AC-004, Capability
@@ -156,7 +156,7 @@ class MergeResult:
 # $properties param graph_writer.persist_canonical_nodes builds for a
 # match_kind == "new" Capability resolution, and for the $embedding param
 # graph_writer.backfill_canonical_embeddings builds. Never used for
-# Role/Requirement/Regulation/Obligation properties (those stay
+# Role/Requirement/RegulatoryInstrument/Obligation properties (those stay
 # dict[str, str | float] via BaselineNode -- they never carry an embedding,
 # by design, per AC-008 / #42).
 CanonicalNodeProperties = dict[str, str | float | list[float]]

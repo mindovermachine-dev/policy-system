@@ -3,7 +3,7 @@ native structural graph.
 
 Implements PLAN_REVIEWED.md §7 Increments 8-10:
 
-- `register_regulation_version` — parameterized MERGE of the RegulatoryInstrument
+- `register_regulatory_instrument_version` — parameterized MERGE of the RegulatoryInstrument
   node. `"RegulatoryInstrument"` is a fixed-literal label (never externally sourced),
   so no allow-list check applies to it — contrast `_upsert_node` below,
   whose label comes from adapter-supplied `element_type` and must be
@@ -41,8 +41,8 @@ raw CELEX `identifier` it was called with — see the id-prefixing decision
 above), so every `StructuralEdge` it produces with `parent_element_type ==
 "RegulatoryInstrument"` carries that CELEX identifier as a *placeholder*
 `parent_id`, not the real RegulatoryInstrument node's id. The real RegulatoryInstrument node is
-registered separately by `register_regulation_version`, keyed by the
-caller-supplied `regulation_id` (`pipeline.py`'s `f"{short_name}-{version}"`).
+registered separately by `register_regulatory_instrument_version`, keyed by the
+caller-supplied `regulatory_instrument_id` (`pipeline.py`'s `f"{short_name}-{version}"`).
 Left unsubstituted, `_upsert_edge`'s `MATCH (a:RegulatoryInstrument {id: $parent_id})`
 matches zero rows for every top-level structural edge (the CELEX string
 never equals any real RegulatoryInstrument node's id), so the `MERGE` silently never
@@ -50,7 +50,7 @@ fires — every Chapter/Recital/Annex that anchors directly to RegulatoryInstrum
 would end up completely unreachable, breaking AC-004 for the entire
 graph, not just those top-level nodes (anything nested under them becomes
 unreachable transitively too). `persist_native_structural_graph`'s
-`regulation_id` parameter — previously unused, see IMPL_8_10.md's flagged
+`regulatory_instrument_id` parameter — previously unused, see IMPL_8_10.md's flagged
 deviation #1 — is exactly what closes this gap: `_upsert_edge` now
 substitutes it for `edge.parent_id` whenever `edge.parent_element_type ==
 "RegulatoryInstrument"`, and uses `edge.parent_id` unchanged for every other edge.
@@ -60,7 +60,7 @@ endpoint the adapter cannot know by design. Found and fixed via
 Increment 13's live 3-regulation run (CRA's ANNEX nodes: 8 persisted, 0
 reachable, before this fix) — the existing fake-graph unit tests below
 never caught this because their own `_edge(...)` fixtures already set
-`parent_id` equal to `regulation_id` by construction, never modeling the
+`parent_id` equal to `regulatory_instrument_id` by construction, never modeling the
 real CELEX-vs-final-id mismatch the live adapter->pipeline handoff
 produces.
 
@@ -73,7 +73,7 @@ boundary, not anything inside the f-string itself.
 `_upsert_node`/`_upsert_edge` never re-check — they only ever issue the
 write. `verify_structural_graph_reachable` interpolates a label the same
 way, but its labels come from iterating `_KNOWN_ELEMENT_TYPES` /
-`_REGULATION_LABEL` directly (this module's own fixed constants), not from
+`_REGULATORY_INSTRUMENT_LABEL` directly (this module's own fixed constants), not from
 any externally-sourced value, so no separate allow-list check is needed
 there either.
 """
@@ -89,12 +89,12 @@ from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
 from ps_service.ingestion.models import (
     ReachabilityCount,
-    RegulationMetadata,
+    RegulatoryInstrumentMetadata,
     StructuralEdge,
     StructuralNode,
 )
 
-_REGULATION_LABEL = "RegulatoryInstrument"
+_REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 
 _KNOWN_ELEMENT_TYPES = frozenset({
     "TITLE",
@@ -132,10 +132,10 @@ def _execute_query(
     return result
 
 
-def register_regulation_version(
-    graph: GraphHandle, regulation_id: str, metadata: RegulationMetadata
+def register_regulatory_instrument_version(
+    graph: GraphHandle, regulatory_instrument_id: str, metadata: RegulatoryInstrumentMetadata
 ) -> None:
-    """MERGE the RegulatoryInstrument node, keyed by `regulation_id`
+    """MERGE the RegulatoryInstrument node, keyed by `regulatory_instrument_id`
     (`{SHORT}-{VERSION}`, computed by the caller — see `pipeline.py`, never
     by this function or an adapter).
 
@@ -160,7 +160,7 @@ def register_regulation_version(
     _execute_query(
         graph,
         "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
-        params={"id": regulation_id, "properties": properties},
+        params={"id": regulatory_instrument_id, "properties": properties},
     )
 
 
@@ -185,7 +185,7 @@ def _validate_element_types(
             )
     for edge in edges:
         if (
-            edge.parent_element_type != _REGULATION_LABEL
+            edge.parent_element_type != _REGULATORY_INSTRUMENT_LABEL
             and edge.parent_element_type not in _KNOWN_ELEMENT_TYPES
         ):
             raise IngestionPersistenceError(
@@ -201,7 +201,7 @@ def _validate_element_types(
 
 def persist_native_structural_graph(
     graph: GraphHandle,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     nodes: tuple[StructuralNode, ...],
     edges: tuple[StructuralEdge, ...],
 ) -> None:
@@ -212,7 +212,7 @@ def persist_native_structural_graph(
     Only once validation passes completely does this loop and call
     `_upsert_node`/`_upsert_edge` for every element.
 
-    `regulation_id` is threaded into `_upsert_edge` (Increment 13 fix, see
+    `regulatory_instrument_id` is threaded into `_upsert_edge` (Increment 13 fix, see
     module docstring): every edge whose `parent_element_type == "RegulatoryInstrument"`
     has its `parent_id` substituted with this real, caller-supplied id at
     write time, since the adapter that produced `edges` could only ever
@@ -222,7 +222,7 @@ def persist_native_structural_graph(
     for node in nodes:
         _upsert_node(graph, node)
     for edge in edges:
-        _upsert_edge(graph, regulation_id, edge)
+        _upsert_edge(graph, regulatory_instrument_id, edge)
 
 
 def _upsert_node(graph: GraphHandle, node: StructuralNode) -> None:
@@ -235,17 +235,17 @@ def _upsert_node(graph: GraphHandle, node: StructuralNode) -> None:
     )
 
 
-def _upsert_edge(graph: GraphHandle, regulation_id: str, edge: StructuralEdge) -> None:
+def _upsert_edge(graph: GraphHandle, regulatory_instrument_id: str, edge: StructuralEdge) -> None:
     # parent/child element_type already validated by _validate_element_types
     # above — this function only ever issues the write, never the check.
     #
     # Increment 13 fix: `edge.parent_id` is a CELEX-based placeholder
     # whenever `edge.parent_element_type == "RegulatoryInstrument"` (the adapter
-    # cannot know the real, caller-supplied `regulation_id` — see this
+    # cannot know the real, caller-supplied `regulatory_instrument_id` — see this
     # module's docstring). Substitute the real id for that one case only;
     # every other edge's `parent_id` (a StructuralNode's own id) is used
     # unchanged.
-    parent_id = regulation_id if edge.parent_element_type == _REGULATION_LABEL else edge.parent_id
+    parent_id = regulatory_instrument_id if edge.parent_element_type == _REGULATORY_INSTRUMENT_LABEL else edge.parent_id
     _execute_query(
         graph,
         f"MATCH (a:{edge.parent_element_type} {{id: $parent_id}}), "
@@ -273,18 +273,18 @@ def _count_nodes(graph: GraphHandle, label: str) -> int:
     return _scalar_count(_execute_query(graph, f"MATCH (n:{label}) RETURN count(n)"))
 
 
-def _count_reachable(graph: GraphHandle, regulation_id: str, label: str) -> int:
+def _count_reachable(graph: GraphHandle, regulatory_instrument_id: str, label: str) -> int:
     return _scalar_count(
         _execute_query(
             graph,
             f"MATCH (:RegulatoryInstrument {{id: $id}})-[:HAS*1..]->(n:{label}) RETURN count(DISTINCT n)",
-            params={"id": regulation_id},
+            params={"id": regulatory_instrument_id},
         )
     )
 
 
 def verify_structural_graph_reachable(
-    graph: GraphHandle, regulation_id: str
+    graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, ReachabilityCount]:
     """AC-004: for every structural label (plus `RegulatoryInstrument` itself), the
     node count in this regulation's own graph versus how many of those
@@ -300,15 +300,15 @@ def verify_structural_graph_reachable(
     write left behind).
     """
     counts: dict[str, ReachabilityCount] = {}
-    for label in (_REGULATION_LABEL, *_KNOWN_ELEMENT_TYPES):
+    for label in (_REGULATORY_INSTRUMENT_LABEL, *_KNOWN_ELEMENT_TYPES):
         total = _count_nodes(graph, label)
         reachable = (
-            total if label == _REGULATION_LABEL else _count_reachable(graph, regulation_id, label)
+            total if label == _REGULATORY_INSTRUMENT_LABEL else _count_reachable(graph, regulatory_instrument_id, label)
         )
         counts[label] = ReachabilityCount(total=total, reachable=reachable)
         if reachable != total:
             raise IngestionPersistenceError(
                 f"{label}: total={total} but only {reachable} reachable "
-                f"from RegulatoryInstrument {regulation_id!r}"
+                f"from RegulatoryInstrument {regulatory_instrument_id!r}"
             )
     return counts

@@ -1,4 +1,4 @@
-"""Live end-to-end test for `ps_service.ingestion.pipeline.ingest_regulation`
+"""Live end-to-end test for `ps_service.ingestion.pipeline.ingest_regulatory_instrument`
 (PLAN_REVIEWED.md §7 Increment 13) — the capstone acceptance proof for all
 7 of issue #14's acceptance criteria, run for real against the live
 Cellar/ELI service (`publications.europa.eu`) and a real, reachable
@@ -50,7 +50,7 @@ from ps_service.ingestion.falkordb_client import (
     select_graph,
 )
 from ps_service.ingestion.models import IngestResult
-from ps_service.ingestion.pipeline import ingest_regulation
+from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import EmitterConfig, LogEmitter
 
 pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
@@ -125,7 +125,7 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
     for short_name, spec in _GROUND_TRUTH.items():
         graph = select_graph(db, native_graph_name(short_name))
         # AC-001: this call's own path is
-        #   ingest_regulation -> adapter.fetch_regulation_structure
+        #   ingest_regulatory_instrument -> adapter.fetch_regulatory_instrument_structure
         #   (CellarEliAdapter) -> fetch_xhtml (real HTTP GET to
         #   publications.europa.eu/resource/celex/{identifier}) ->
         #   extract_metadata/parse_structure (parse the fetched bytes,
@@ -134,7 +134,7 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
         # graph — self-evident from the imports above (no `open()`, no
         # `Path.read_*`, no fixture directory reference anywhere in this
         # fixture or in pipeline.py/adapter.py's own source).
-        result = ingest_regulation(
+        result = ingest_regulatory_instrument(
             cast(str, spec["identifier"]),
             short_name,
             version=_VERSION,
@@ -149,17 +149,17 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
     return runs
 
 
-def _regulation_row(run: _LiveRun) -> list[object]:
+def _regulatory_instrument_row(run: _LiveRun) -> list[object]:
     """Fetch the persisted Regulation node's bibliographic fields back
-    from FalkorDB, by the exact id `ingest_regulation()` reported."""
+    from FalkorDB, by the exact id `ingest_regulatory_instrument()` reported."""
     result = run.graph.query(
         "MATCH (n:RegulatoryInstrument {id: $id}) "
         "RETURN n.title, n.jurisdiction, n.effective_date, n.version, n.status, n.source_type, "
         "n.instrument_type",
-        params={"id": run.ingest_result.regulation_id},
+        params={"id": run.ingest_result.regulatory_instrument_id},
     )
     rows = cast("list[list[object]]", result.result_set)
-    assert len(rows) == 1, f"expected exactly 1 Regulation node for {run.ingest_result.regulation_id!r}, got {len(rows)}"
+    assert len(rows) == 1, f"expected exactly 1 Regulation node for {run.ingest_result.regulatory_instrument_id!r}, got {len(rows)}"
     return rows[0]
 
 
@@ -169,14 +169,14 @@ def _regulation_row(run: _LiveRun) -> list[object]:
 def test_ac001_ingestion_succeeds_live_for_all_three_regulations(
     live_runs: dict[str, _LiveRun],
 ) -> None:
-    """All three `ingest_regulation()` calls in the `live_runs` fixture
+    """All three `ingest_regulatory_instrument()` calls in the `live_runs` fixture
     completed without raising `CellarFetchError`/`CellarParseError` — i.e.
     the live Cellar/ELI fetch genuinely succeeded for CRA, NIS2, and GDPR.
     See the fixture's own comment for the no-local-source call-graph proof.
     """
     assert set(live_runs) == set(_GROUND_TRUTH)
     for short_name, run in live_runs.items():
-        assert run.ingest_result.regulation_id == f"{short_name}-{_VERSION}"
+        assert run.ingest_result.regulatory_instrument_id == f"{short_name}-{_VERSION}"
 
 
 # --- AC-002: Regulation node id + 6 bibliographic fields --------------------
@@ -188,10 +188,10 @@ def test_ac002_regulation_node_id_and_bibliographic_fields(
 ) -> None:
     run = live_runs[short_name]
     expected_id = f"{short_name}-{_VERSION}"
-    assert run.ingest_result.regulation_id == expected_id
+    assert run.ingest_result.regulatory_instrument_id == expected_id
 
     title, jurisdiction, effective_date_raw, version, status, source_type, instrument_type = (
-        _regulation_row(run)
+        _regulatory_instrument_row(run)
     )
 
     assert isinstance(title, str) and title.strip()
@@ -246,7 +246,7 @@ def test_ac003_structural_element_counts_match_learnings_ground_truth(
 def test_ac004_every_structural_label_fully_reachable_from_regulation_node(
     live_runs: dict[str, _LiveRun], short_name: str
 ) -> None:
-    """`ingest_regulation()`'s own `verify_structural_graph_reachable` call
+    """`ingest_regulatory_instrument()`'s own `verify_structural_graph_reachable` call
     already raised `IngestionPersistenceError` during the `live_runs`
     fixture if any label had a reachability gap — the fixture completing at
     all is already a strong proof. This test additionally re-asserts the
@@ -284,7 +284,7 @@ def test_ac005_three_distinct_run_ids_captured_across_the_three_runs(
     assert lines, "no log entries were written — logging wiring bug"
 
     for short_name, run in live_runs.items():
-        entity_id = run.ingest_result.regulation_id
+        entity_id = run.ingest_result.regulatory_instrument_id
         entity_run_ids = {line["run_id"] for line in lines if line.get("entity_id") == entity_id}
         assert entity_run_ids == {run.ingest_result.run_id}, (
             f"{short_name}: expected only run_id {run.ingest_result.run_id!r} on its own log "
@@ -302,7 +302,7 @@ def test_ac007_nis2_effective_date_is_the_transposition_deadline(
     Member-State transposition deadline (Art. 41), not the Directive's own
     EU-level entry-into-force date — the CA doc's Regulation mapping row
     convention (PLAN_REVIEWED.md §0.1/§3.2)."""
-    _, _, effective_date_raw, _, _, _, _ = _regulation_row(live_runs["NIS2"])
+    _, _, effective_date_raw, _, _, _, _ = _regulatory_instrument_row(live_runs["NIS2"])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == date(2024, 10, 17)
 
@@ -321,6 +321,6 @@ def test_ac007_regulation_effective_dates_are_the_application_date(
     the "shall apply from" application date, via the same unconditional,
     text-driven search NIS2 uses — confirming the Entry-into-force fallback
     path generalizes across two independent Regulations, not just one."""
-    _, _, effective_date_raw, _, _, _, _ = _regulation_row(live_runs[short_name])
+    _, _, effective_date_raw, _, _, _, _ = _regulatory_instrument_row(live_runs[short_name])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == expected_date

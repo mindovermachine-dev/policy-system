@@ -14,7 +14,7 @@ Flow (§7):
    Role-scoped since #42 -- a weak entity of exactly one Role, never deduped
    across sources -- so there is no Obligation dedup pass.)
 3. Only now, having completed the dedup pass with no exception: persist
-   Regulation/Role/Requirement/`DEFINES`/`EXPRESSES` and Obligation
+   RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` and Obligation
    (unconditional `SET`); persist canonical Capability nodes for every
    `match_kind="new"` resolution (`ON CREATE SET`); persist
    `HAS`/`SATISFIED_BY`/`REQUIRES` edges using the Capability canonical-id
@@ -58,7 +58,7 @@ _DEDUP_ACTION = "dedupe_canonical_nodes"
 
 
 def merge_baseline_graph(
-    regulation_id: str,
+    regulatory_instrument_id: str,
     *,
     baseline_graph: GraphHandle,
     single_tenant_graph: GraphHandle,
@@ -90,7 +90,7 @@ def merge_baseline_graph(
             "merge_baseline_graph"
         )
 
-    graph = graph_reader.read_baseline_graph(baseline_graph, regulation_id)
+    graph = graph_reader.read_baseline_graph(baseline_graph, regulatory_instrument_id)
 
     capability_dedup = dedup.dedupe_canonical_nodes(
         graph.capability_nodes,
@@ -107,8 +107,8 @@ def merge_baseline_graph(
     # LlmProviderError is therefore automatic, not enforced by a try/except.
     graph_writer.persist_role_and_requirement_passthrough(
         single_tenant_graph,
-        regulation_id,
-        graph.regulation_properties,
+        regulatory_instrument_id,
+        graph.regulatory_instrument_properties,
         graph.role_nodes,
         graph.requirement_nodes,
         graph.provenance_edges,
@@ -141,7 +141,7 @@ def merge_baseline_graph(
     emit_log_entry(
         component=_COMPONENT,
         action=_MERGE_ACTION,
-        entity_id=regulation_id,
+        entity_id=regulatory_instrument_id,
         outcome="succeeded",
         emitter=emitter,
     )
@@ -164,7 +164,7 @@ def merge_baseline_graph(
         )
 
     return MergeResult(
-        regulation_id=regulation_id,
+        regulatory_instrument_id=regulatory_instrument_id,
         obligation_ids=tuple(node.id for node in graph.obligation_nodes),
         capability_canonical_ids=tuple(r.canonical_id for r in capability_dedup.resolutions),
         near_misses=capability_dedup.near_misses,

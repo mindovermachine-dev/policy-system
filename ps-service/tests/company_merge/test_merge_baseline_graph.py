@@ -39,8 +39,8 @@ class _FakeQueryResult:
         return self._result_set
 
 
-class _FakeRegulationNode:
-    """Satisfies `graph_reader._RegulationNode` structurally -- only
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
     `.properties` is ever read."""
 
     def __init__(self, properties: dict[str, object]) -> None:
@@ -73,7 +73,7 @@ class _FakeBaselineGraph:
     def __init__(
         self,
         *,
-        regulation_properties: dict[str, object],
+        regulatory_instrument_properties: dict[str, object],
         role_rows: list[object],
         requirement_rows: list[object],
         obligation_rows: list[object],
@@ -84,7 +84,7 @@ class _FakeBaselineGraph:
         satisfied_by_rows: list[object],
         requires_rows: list[object],
     ) -> None:
-        self._regulation_properties = regulation_properties
+        self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
@@ -118,9 +118,9 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
+        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
             return _FakeQueryResult(
-                [[_FakeRegulationNode(self._regulation_properties)]]
+                [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
@@ -283,7 +283,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     capability_node_id = capability_id(capability_name)
 
     return _FakeBaselineGraph(
-        regulation_properties={"id": "REG-1.0", "title": "Test Regulation"},
+        regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"},
         role_rows=[[role_node_id, "Manufacturer", 0.9]],
         requirement_rows=[
             [
@@ -395,7 +395,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     shared_capability_id = capability_id(shared_capability_name)
 
     baseline = _FakeBaselineGraph(
-        regulation_properties={"id": "REG-1.0", "title": "Test Regulation"},
+        regulatory_instrument_properties={"id": "REG-1.0", "title": "Test Regulation"},
         role_rows=[[role_node_id, "Manufacturer", 0.9]],
         requirement_rows=[
             [
@@ -559,7 +559,7 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
 
 def _single_obligation_baseline_graph(
     *,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     role_id_value: str,
     requirement_id_value: str,
     obligation_text: str,
@@ -568,9 +568,9 @@ def _single_obligation_baseline_graph(
     Obligation, `HAS`/`SATISFIED_BY` wired, no Capability."""
     obligation_node_id = obligation_id(role_id_value, obligation_text)
     return _FakeBaselineGraph(
-        regulation_properties={
-            "id": regulation_id,
-            "title": f"Test Regulation {regulation_id}",
+        regulatory_instrument_properties={
+            "id": regulatory_instrument_id,
+            "title": f"Test Regulation {regulatory_instrument_id}",
         },
         role_rows=[[role_id_value, "Manufacturer", 0.9]],
         requirement_rows=[
@@ -611,7 +611,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     merge_baseline_graph(
         "REG-A",
         baseline_graph=_single_obligation_baseline_graph(
-            regulation_id="REG-A",
+            regulatory_instrument_id="REG-A",
             role_id_value="role_a_manufacturer",
             requirement_id_value="REG-A_req_art_1.1",
             obligation_text=shared_text,
@@ -627,7 +627,7 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     result_b = merge_baseline_graph(
         "REG-B",
         baseline_graph=_single_obligation_baseline_graph(
-            regulation_id="REG-B",
+            regulatory_instrument_id="REG-B",
             role_id_value="role_b_provider",
             requirement_id_value="REG-B_req_art_2.1",
             obligation_text=shared_text,
@@ -680,8 +680,8 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
 
     first_obligation_text = "Implement strong authentication for remote access."
     first_obligation_id = obligation_id("role_g_operator", first_obligation_text)
-    first_regulation = _FakeBaselineGraph(
-        regulation_properties={"id": "REG-G", "title": "Test Regulation REG-G"},
+    first_regulatory_instrument = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-G", "title": "Test Regulation REG-G"},
         role_rows=[["role_g_operator", "Operator", 0.9]],
         requirement_rows=[
             [
@@ -702,7 +702,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     )
     merge_baseline_graph(
         "REG-G",
-        baseline_graph=first_regulation,
+        baseline_graph=first_regulatory_instrument,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,
@@ -720,8 +720,8 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     # Obligation lands under its own Role-scoped id regardless of text.
     second_obligation_text = "Enforce multi-factor authentication for all users."
     second_obligation_id = obligation_id("role_h_operator", second_obligation_text)
-    second_regulation = _FakeBaselineGraph(
-        regulation_properties={"id": "REG-H", "title": "Test Regulation REG-H"},
+    second_regulatory_instrument = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-H", "title": "Test Regulation REG-H"},
         role_rows=[["role_h_operator", "Operator", 0.9]],
         requirement_rows=[
             [
@@ -742,7 +742,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     )
     result_h = merge_baseline_graph(
         "REG-H",
-        baseline_graph=second_regulation,
+        baseline_graph=second_regulatory_instrument,
         single_tenant_graph=single_tenant,
         embed_model=_MODEL,
         similarity_threshold=_THRESHOLD,

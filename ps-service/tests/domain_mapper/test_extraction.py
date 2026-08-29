@@ -22,7 +22,7 @@ from ps_service.domain_mapper.extraction import (
     _build_requirement_graph,
     _canonicalize_roles,
     _extract_candidates_for_unit,
-    _read_regulation_properties,
+    _read_regulatory_instrument_properties,
     extract_roles_and_requirements,
 )
 from ps_service.domain_mapper.falkordb_client import GraphHandle
@@ -312,8 +312,8 @@ class _FakeQueryResult:
         return self._result_set
 
 
-class _FakeRegulationNode:
-    """Satisfies extraction.py's own `_RegulationNode` Protocol structurally
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies extraction.py's own `_RegulatoryInstrumentNode` Protocol structurally
     — only `.properties` is ever read."""
 
     def __init__(self, properties: dict[str, object]) -> None:
@@ -326,11 +326,11 @@ class _FakeNativeGraph:
     ignores any other query (the fake adapter never actually queries it in
     these tests)."""
 
-    def __init__(self, regulation_properties: dict[str, object]) -> None:
-        self._regulation_properties = regulation_properties
+    def __init__(self, regulatory_instrument_properties: dict[str, object]) -> None:
+        self._regulatory_instrument_properties = regulatory_instrument_properties
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
+        return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
 
 
 class _FakeBaselineGraph:
@@ -725,17 +725,17 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
     assert collision_entries[0]["entity_id"] == collided_id
 
 
-# --- _read_regulation_properties: whole-bag read, instrument_type included --
+# --- _read_regulatory_instrument_properties: whole-bag read, instrument_type included --
 
 
-def test_read_regulation_properties_includes_instrument_type() -> None:
-    """AC-BI-010 (Domain Mapper, read side): `_read_regulation_properties`
+def test_read_regulatory_instrument_properties_includes_instrument_type() -> None:
+    """AC-BI-010 (Domain Mapper, read side): `_read_regulatory_instrument_properties`
     returns `dict(node.properties)` — the whole property bag, no field
     filter — so `instrument_type` is carried through with NO src change."""
     native_graph = _FakeNativeGraph(
         {"id": "NIS2-1.0", "title": "NIS2 Directive", "instrument_type": "directive"}
     )
 
-    result = _read_regulation_properties(native_graph, "NIS2-1.0")
+    result = _read_regulatory_instrument_properties(native_graph, "NIS2-1.0")
 
     assert result["instrument_type"] == "directive"

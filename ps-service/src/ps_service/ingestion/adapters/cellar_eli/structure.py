@@ -38,7 +38,7 @@ import xml.etree.ElementTree as ET
 from ps_service.ingestion.adapters.errors import CellarParseError
 from ps_service.ingestion.models import StructuralEdge, StructuralNode
 
-REGULATION = "RegulatoryInstrument"
+REGULATORY_INSTRUMENT = "RegulatoryInstrument"
 CHAPTER = "CHAPTER"
 SECTION = "SECTION"
 ARTICLE = "ARTICLE"
@@ -96,7 +96,7 @@ def _mint_paragraph(
     article_local_id: str,
     article_number: str,
     paragraph_group: str,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     order: int,
     nodes: list[StructuralNode],
     edges: list[StructuralEdge],
@@ -104,7 +104,7 @@ def _mint_paragraph(
     para_number = str(int(paragraph_group))
     citation_ref = f"Art. {article_number}({para_number})"
     paragraph_id = div.get("id") or ""
-    node_id = f"{regulation_id}#{paragraph_id}"
+    node_id = f"{regulatory_instrument_id}#{paragraph_id}"
     nodes.append(
         StructuralNode(
             PARAGRAPH,
@@ -112,21 +112,21 @@ def _mint_paragraph(
             {"text": _full_text(div), "citation_ref": citation_ref, "order": order},
         )
     )
-    edges.append(StructuralEdge(ARTICLE, f"{regulation_id}#{article_local_id}", PARAGRAPH, node_id))
+    edges.append(StructuralEdge(ARTICLE, f"{regulatory_instrument_id}#{article_local_id}", PARAGRAPH, node_id))
 
 
 def _walk_article(
     div: ET.Element,
     local_id: str,
     number: str,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     parent_label: str,
     parent_id: str,
     order: int,
     nodes: list[StructuralNode],
     edges: list[StructuralEdge],
 ) -> None:
-    node_id = f"{regulation_id}#{local_id}"
+    node_id = f"{regulatory_instrument_id}#{local_id}"
     heading = ""
     own_text_parts: list[str] = []
     paragraph_children: list[tuple[ET.Element, str]] = []
@@ -168,7 +168,7 @@ def _walk_article(
             local_id,
             number,
             paragraph_group,
-            regulation_id,
+            regulatory_instrument_id,
             para_order.next(ARTICLE, node_id),
             nodes,
             edges,
@@ -180,7 +180,7 @@ def _mint_struct_node(
     kind: str,
     number: str,
     local_id: str,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     parent_label: str,
     parent_id: str,
     order: int,
@@ -192,7 +192,7 @@ def _mint_struct_node(
     children with itself as the new parent. Split out of `_walk_body`'s
     id-dispatch loop — S1 fix, see module docstring."""
     label = _ELEMENT_LABEL[kind]
-    node_id = f"{regulation_id}#{local_id}"
+    node_id = f"{regulatory_instrument_id}#{local_id}"
     properties: dict[str, str | int] = {"citation_ref": f"{_CITATION_WORD[label]} {number}", "order": order}
     if label == RECITAL:
         properties["text"] = _full_text(child)
@@ -203,12 +203,12 @@ def _mint_struct_node(
     edges.append(StructuralEdge(parent_label, parent_id, label, node_id))
 
     if label in (CHAPTER, SECTION):
-        _walk_body(child, regulation_id, label, node_id, _OrderCounter(), nodes, edges)
+        _walk_body(child, regulatory_instrument_id, label, node_id, _OrderCounter(), nodes, edges)
 
 
 def _walk_body(
     elem: ET.Element,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     parent_label: str,
     parent_id: str,
     order_counter: _OrderCounter,
@@ -228,19 +228,19 @@ def _walk_body(
         local_id = child.get("id", "")
         match = _STRUCT_ID_RE.match(local_id)
         if not match:
-            _walk_body(child, regulation_id, parent_label, parent_id, order_counter, nodes, edges)
+            _walk_body(child, regulatory_instrument_id, parent_label, parent_id, order_counter, nodes, edges)
             continue
 
         kind = match.group(1)
         if kind == "art":
             order = order_counter.next(parent_label, parent_id)
-            _walk_article(child, local_id, match.group(2), regulation_id, parent_label, parent_id, order, nodes, edges)
+            _walk_article(child, local_id, match.group(2), regulatory_instrument_id, parent_label, parent_id, order, nodes, edges)
             continue
         if kind == "anx":
             continue  # annexes are separate top-level eli-containers, handled by parse_structure
 
         order = order_counter.next(parent_label, parent_id)
-        _mint_struct_node(child, kind, match.group(2), local_id, regulation_id, parent_label, parent_id, order, nodes, edges)
+        _mint_struct_node(child, kind, match.group(2), local_id, regulatory_instrument_id, parent_label, parent_id, order, nodes, edges)
 
 
 def _split_containers(containers: list[ET.Element]) -> tuple[ET.Element, list[tuple[ET.Element, str]]]:
@@ -262,15 +262,15 @@ def _split_containers(containers: list[ET.Element]) -> tuple[ET.Element, list[tu
 
 
 def parse_structure(
-    xhtml: bytes, regulation_id: str
+    xhtml: bytes, regulatory_instrument_id: str
 ) -> tuple[tuple[StructuralNode, ...], tuple[StructuralEdge, ...]]:
     """Native structural graph for one regulation: CHAPTER/SECTION/ARTICLE/
-    PARAGRAPH/RECITAL nested under `regulation_id`, plus ANNEX as separate
+    PARAGRAPH/RECITAL nested under `regulatory_instrument_id`, plus ANNEX as separate
     top-level children (each annex is its own top-level `eli-container` in
-    Cellar's XHTML, not nested under the main one). `regulation_id` is an
-    opaque prefix for structural node ids (`f"{regulation_id}#{local_id}"`)
+    Cellar's XHTML, not nested under the main one). `regulatory_instrument_id` is an
+    opaque prefix for structural node ids (`f"{regulatory_instrument_id}#{local_id}"`)
     — it is not required to already be the final `{SHORT}-{VERSION}`
-    Regulation id.
+    RegulatoryInstrument id.
     """
     root = ET.fromstring(xhtml)
     _strip_namespace(root)
@@ -280,12 +280,12 @@ def parse_structure(
     containers = [element for element in root.iter("div") if _own_class(element) == "eli-container"]
     main, annexes = _split_containers(containers)
 
-    _walk_body(main, regulation_id, REGULATION, regulation_id, _OrderCounter(), nodes, edges)
+    _walk_body(main, regulatory_instrument_id, REGULATORY_INSTRUMENT, regulatory_instrument_id, _OrderCounter(), nodes, edges)
 
     annex_order = _OrderCounter()
     for annex_element, number in annexes:
         local_id = annex_element.get("id") or ""
-        node_id = f"{regulation_id}#{local_id}"
+        node_id = f"{regulatory_instrument_id}#{local_id}"
         nodes.append(
             StructuralNode(
                 ANNEX,
@@ -293,10 +293,10 @@ def parse_structure(
                 {
                     "text": _full_text(annex_element),
                     "citation_ref": f"Annex {number}",
-                    "order": annex_order.next(REGULATION, regulation_id),
+                    "order": annex_order.next(REGULATORY_INSTRUMENT, regulatory_instrument_id),
                 },
             )
         )
-        edges.append(StructuralEdge(REGULATION, regulation_id, ANNEX, node_id))
+        edges.append(StructuralEdge(REGULATORY_INSTRUMENT, regulatory_instrument_id, ANNEX, node_id))
 
     return tuple(nodes), tuple(edges)

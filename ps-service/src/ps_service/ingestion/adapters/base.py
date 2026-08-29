@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ps_service.ingestion.models import FetchedRegulationStructure
+from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
 
 
 class IngestionAdapter(Protocol):
-    """One method, matching the CA doc's single `FetchRegulationStructure`
+    """One method, matching the CA doc's single `FetchRegulatoryInstrumentStructure`
     action. `identifier` is a CELEX number for the Cellar/ELI adapter
     (CELEX-only per the user's decision — see PLAN_REVIEWED.md §1.2/§9,
     Open Question 2) — the Protocol itself imposes no format, so a future
@@ -20,4 +20,4 @@ class IngestionAdapter(Protocol):
     touching this interface.
     """
 
-    def fetch_regulation_structure(self, identifier: str) -> FetchedRegulationStructure: ...
+    def fetch_regulatory_instrument_structure(self, identifier: str) -> FetchedRegulatoryInstrumentStructure: ...

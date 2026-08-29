@@ -20,12 +20,12 @@ from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import (
     persist_native_structural_graph,
-    register_regulation_version,
+    register_regulatory_instrument_version,
     verify_structural_graph_reachable,
 )
 from ps_service.ingestion.models import (
     ReachabilityCount,
-    RegulationMetadata,
+    RegulatoryInstrumentMetadata,
     StructuralEdge,
     StructuralNode,
 )
@@ -86,7 +86,7 @@ class _ScriptedReachabilityGraph:
         return _FakeQueryResult([[value]])
 
 
-def _metadata(**overrides: object) -> RegulationMetadata:
+def _metadata(**overrides: object) -> RegulatoryInstrumentMetadata:
     fields: dict[str, object] = {
         "title": "Cyber Resilience Act",
         "jurisdiction": "EU",
@@ -97,7 +97,7 @@ def _metadata(**overrides: object) -> RegulationMetadata:
         "instrument_type": "regulation",
     }
     fields.update(overrides)
-    return RegulationMetadata(**{k: v for k, v in fields.items() if v is not None})
+    return RegulatoryInstrumentMetadata(**{k: v for k, v in fields.items() if v is not None})
 
 
 def _node(element_type: str, node_id: str) -> StructuralNode:
@@ -112,13 +112,13 @@ def _edge(
     return StructuralEdge(parent_element_type, parent_id, child_element_type, child_id)
 
 
-# --- Increment 8: register_regulation_version --------------------------
+# --- Increment 8: register_regulatory_instrument_version --------------------------
 
 
-def test_register_regulation_version_merges_regulation_node_with_parameterized_metadata() -> None:
+def test_register_regulatory_instrument_version_merges_regulation_node_with_parameterized_metadata() -> None:
     graph = _FakeGraph()
 
-    register_regulation_version(graph, "CRA-1.0", _metadata())
+    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
 
     assert len(graph.calls) == 1
     call = graph.calls[0]
@@ -137,13 +137,13 @@ def test_register_regulation_version_merges_regulation_node_with_parameterized_m
     }
 
 
-def test_register_regulation_version_never_interpolates_metadata_into_query_string() -> None:
+def test_register_regulatory_instrument_version_never_interpolates_metadata_into_query_string() -> None:
     """The injection-safety property: every metadata value (and the
     regulation id) flows through `params` only — none of them ever appear
     as a substring of the query string itself."""
     graph = _FakeGraph()
 
-    register_regulation_version(graph, "CRA-1.0", _metadata())
+    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
 
     query = graph.calls[0].query
     for value in (
@@ -159,29 +159,29 @@ def test_register_regulation_version_never_interpolates_metadata_into_query_stri
         assert value not in query
 
 
-def test_register_regulation_version_writes_instrument_type_when_present() -> None:
+def test_register_regulatory_instrument_version_writes_instrument_type_when_present() -> None:
     graph = _FakeGraph()
 
-    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
 
     assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
 
 
-def test_register_regulation_version_omits_instrument_type_key_for_internal_source() -> None:
+def test_register_regulatory_instrument_version_omits_instrument_type_key_for_internal_source() -> None:
     graph = _FakeGraph()
 
-    register_regulation_version(
+    register_regulatory_instrument_version(
         graph, "ENGPRAC-3.0", _metadata(source_type="internal", instrument_type=None)
     )
 
     assert "instrument_type" not in graph.calls[0].params["properties"]
 
 
-def test_register_regulation_version_is_idempotent_on_instrument_type() -> None:
+def test_register_regulatory_instrument_version_is_idempotent_on_instrument_type() -> None:
     graph = _FakeGraph()
 
-    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
-    register_regulation_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
 
     assert graph.calls[0].params == graph.calls[1].params
     assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
@@ -297,7 +297,7 @@ def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_ed
     assert graph.calls == []
 
 
-def test_persist_native_structural_graph_substitutes_real_regulation_id_for_celex_placeholder_parent_id() -> (
+def test_persist_native_structural_graph_substitutes_real_regulatory_instrument_id_for_celex_placeholder_parent_id() -> (
     None
 ):
     """Increment 13 regression test — the bug this increment found and
@@ -308,11 +308,11 @@ def test_persist_native_structural_graph_substitutes_real_regulation_id_for_cele
     edge's `parent_id` with the raw CELEX identifier it was given instead
     (e.g. `"32024R2847"`), a placeholder. Every other test in this file
     accidentally masks this: their own `_edge("RegulatoryInstrument", ...)` fixtures
-    set `parent_id` equal to the `regulation_id` passed to
+    set `parent_id` equal to the `regulatory_instrument_id` passed to
     `persist_native_structural_graph` by construction, which never happens
     for real adapter output. This test deliberately uses a *different*
     `parent_id` (mimicking the real CELEX-vs-final-id mismatch) and asserts
-    the write still targets the real `regulation_id` — not the
+    the write still targets the real `regulatory_instrument_id` — not the
     placeholder — which is what makes the Regulation node's `MATCH`
     actually find a row and the `MERGE` actually fire.
     """
@@ -389,19 +389,19 @@ class _FakeGraphThatRaisesConnectionError:
         raise redis.exceptions.ConnectionError("Error 111 connecting to 127.0.0.1:6379")
 
 
-def test_register_regulation_version_marks_falkordb_unhealthy_on_connection_error() -> None:
+def test_register_regulatory_instrument_version_marks_falkordb_unhealthy_on_connection_error() -> None:
     graph = _FakeGraphThatRaisesConnectionError()
 
     with pytest.raises(IngestionPersistenceError):
-        register_regulation_version(graph, "CRA-1.0", _metadata())
+        register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
 
     assert is_healthy(FALKORDB) is False
 
 
-def test_register_regulation_version_marks_falkordb_healthy_on_success() -> None:
+def test_register_regulatory_instrument_version_marks_falkordb_healthy_on_success() -> None:
     graph = _FakeGraph()
 
-    register_regulation_version(graph, "CRA-1.0", _metadata())
+    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
 
     assert is_healthy(FALKORDB) is True
 
@@ -409,11 +409,11 @@ def test_register_regulation_version_marks_falkordb_healthy_on_success() -> None
 def test_falkordb_self_heals_after_a_later_successful_write() -> None:
     failing_graph = _FakeGraphThatRaisesConnectionError()
     with pytest.raises(IngestionPersistenceError):
-        register_regulation_version(failing_graph, "CRA-1.0", _metadata())
+        register_regulatory_instrument_version(failing_graph, "CRA-1.0", _metadata())
     assert is_healthy(FALKORDB) is False
 
     healthy_graph = _FakeGraph()
-    register_regulation_version(healthy_graph, "CRA-1.0", _metadata())
+    register_regulatory_instrument_version(healthy_graph, "CRA-1.0", _metadata())
 
     assert is_healthy(FALKORDB) is True
 
@@ -458,7 +458,7 @@ def test_graph_writer_functions_work_against_real_falkordb() -> None:
     graph = select_graph(db, _LIVE_TEST_GRAPH_NAME)
 
     try:
-        register_regulation_version(graph, "GWTEST-1.0", _metadata())
+        register_regulatory_instrument_version(graph, "GWTEST-1.0", _metadata())
 
         nodes = (_node("ARTICLE", "GWTEST#art_1"),)
         edges = (_edge("RegulatoryInstrument", "GWTEST-1.0", "ARTICLE", "GWTEST#art_1"),)
@@ -471,11 +471,11 @@ def test_graph_writer_functions_work_against_real_falkordb() -> None:
         for label in ("TITLE", "CHAPTER", "SECTION", "PARAGRAPH", "ANNEX", "RECITAL"):
             assert counts[label] == ReachabilityCount(total=0, reachable=0)
 
-        regulation_row = graph.query(
+        regulatory_instrument_row = graph.query(
             "MATCH (n:RegulatoryInstrument {id: $id}) "
             "RETURN n.title, n.effective_date, n.instrument_type",
             params={"id": "GWTEST-1.0"},
         ).result_set[0]
-        assert regulation_row == ["Cyber Resilience Act", "2027-12-11", "regulation"]
+        assert regulatory_instrument_row == ["Cyber Resilience Act", "2027-12-11", "regulation"]
     finally:
         _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)

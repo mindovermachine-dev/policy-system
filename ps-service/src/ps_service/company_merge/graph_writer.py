@@ -6,14 +6,14 @@
 Own copy of `ps_service.domain_mapper.graph_writer`'s connectivity-wrapping
 shape (PLAN_REVIEWED.md §0.3 -- a deliberate near-duplicate, not a shared
 import): the `_execute_query` dependency-health wrapper, and the
-`MERGE ... SET n += $properties` node-upsert shape for Regulation/Role/
+`MERGE ... SET n += $properties` node-upsert shape for RegulatoryInstrument/Role/
 Requirement, which are never canonically deduped (unconditional `SET`, same
 as #15's own writer).
 
 **The one deliberate, load-bearing difference from #15's writer (§6.1)**:
 Capability node upserts use `MERGE (n:Capability {id: $id}) ON CREATE
 SET n += $properties` -- NOT the unconditional `SET` used for Role/
-Requirement/Regulation/Obligation above. `persist_canonical_nodes` is only
+Requirement/RegulatoryInstrument/Obligation above. `persist_canonical_nodes` is only
 ever called for a `match_kind="new"` `CanonicalResolution` (an exact/
 semantic match writes NOTHING onto the node it resolved to) -- but even so,
 `ON CREATE SET` is what makes "an existing canonical node's properties are
@@ -95,7 +95,7 @@ __all__ = [
     "persist_role_and_requirement_passthrough",
 ]
 
-_REGULATION_LABEL = "RegulatoryInstrument"
+_REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"
@@ -143,22 +143,22 @@ def _upsert_provenance_edge(
     graph: GraphHandle,
     relationship_type: Literal["DEFINES", "EXPRESSES"],
     target_label: str,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     target_id: str,
     source_ref: str,
 ) -> None:
-    """`Regulation -[:relationship_type {source_ref}]-> target_label`,
+    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`,
     shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges -- mirrors `domain_mapper.graph_writer._upsert_regulation_edge`
+    edges -- mirrors `domain_mapper.graph_writer._upsert_regulatory_instrument_edge`
     exactly. `relationship_type`/`target_label` are always fixed Python
     literals; `target_id`/`source_ref` flow through `params` only."""
     _execute_query(
         graph,
-        f"MATCH (r:{_REGULATION_LABEL} {{id: $regulation_id}}), "
+        f"MATCH (r:{_REGULATORY_INSTRUMENT_LABEL} {{id: $regulatory_instrument_id}}), "
         f"(n:{target_label} {{id: $target_id}}) "
         f"MERGE (r)-[e:{relationship_type}]->(n) SET e.source_ref = $source_ref",
         params={
-            "regulation_id": regulation_id,
+            "regulatory_instrument_id": regulatory_instrument_id,
             "target_id": target_id,
             "source_ref": source_ref,
         },
@@ -167,17 +167,17 @@ def _upsert_provenance_edge(
 
 def persist_role_and_requirement_passthrough(
     single_tenant_graph: GraphHandle,
-    regulation_id: str,
-    regulation_properties: dict[str, object],
+    regulatory_instrument_id: str,
+    regulatory_instrument_properties: dict[str, object],
     role_nodes: tuple[BaselineNode, ...],
     requirement_nodes: tuple[BaselineNode, ...],
     provenance_edges: tuple[ProvenanceEdge, ...],
 ) -> None:
-    """Persist one regulation's Regulation/Role/Requirement nodes and their
+    """Persist one regulation's RegulatoryInstrument/Role/Requirement nodes and their
     `DEFINES`/`EXPRESSES` provenance edges into `single_tenant_graph` --
     unconditional `MERGE ... SET`, mirroring #15's own
     `persist_role_and_requirement_graph` shape exactly (PLAN_REVIEWED.md
-    §6). These node kinds are never canonically deduped -- Regulation has
+    §6). These node kinds are never canonically deduped -- RegulatoryInstrument has
     exactly one node per regulation, and Role/Requirement dedup is out of
     scope (AC-008) -- so there is no "existing wins" concern here, unlike
     Capability (`persist_canonical_nodes`, below). Obligation is in the same
@@ -187,16 +187,16 @@ def persist_role_and_requirement_passthrough(
     issues the same calls and leaves the same end state, since every write
     is a `MERGE` keyed on `id`.
 
-    All nodes (Regulation, then every Role, then every Requirement) are
-    written before any edge -- an edge write `MATCH`es both its Regulation
+    All nodes (RegulatoryInstrument, then every Role, then every Requirement) are
+    written before any edge -- an edge write `MATCH`es both its RegulatoryInstrument
     and target endpoints, so writing nodes first is load-bearing, not
     stylistic, mirroring `domain_mapper.graph_writer`'s own write-order
     contract.
     """
     _execute_query(
         single_tenant_graph,
-        f"MERGE (n:{_REGULATION_LABEL} {{id: $id}}) SET n += $properties",
-        params={"id": regulation_id, "properties": regulation_properties},
+        f"MERGE (n:{_REGULATORY_INSTRUMENT_LABEL} {{id: $id}}) SET n += $properties",
+        params={"id": regulatory_instrument_id, "properties": regulatory_instrument_properties},
     )
     for role in role_nodes:
         _upsert_passthrough_node(single_tenant_graph, _ROLE_LABEL, role.id, role.properties)
@@ -210,7 +210,7 @@ def persist_role_and_requirement_passthrough(
             single_tenant_graph,
             edge.relationship_type,
             target_label,
-            regulation_id,
+            regulatory_instrument_id,
             edge.target_id,
             edge.source_ref,
         )

@@ -21,7 +21,7 @@ precedent this one follows one component over):
   guarantee `ps_service.ingestion.graph_writer._validate_element_types`
   gives Ingestion.
 - Only once validation passes does this function loop and write:
-  Regulation MERGE, Role node MERGEs, `DEFINES` edge MERGEs, Requirement
+  RegulatoryInstrument MERGE, Role node MERGEs, `DEFINES` edge MERGEs, Requirement
   node MERGEs (with `role_id` in `properties`), `EXPRESSES` edge MERGEs —
   all parameterized (`source_ref`/`role_id`/etc. in `params`, never
   interpolated into the query string).
@@ -31,7 +31,7 @@ precedent this one follows one component over):
 module.** `Role`, `Requirement`, `RegulatoryInstrument`, `DEFINES`, `EXPRESSES` are
 all fixed Python literals in this module's own source, interpolated as
 labels/relationship-type names the same way `ps_service.ingestion.
-graph_writer`'s `_REGULATION_LABEL` is (no allow-list needed there either)
+graph_writer`'s `_REGULATORY_INSTRUMENT_LABEL` is (no allow-list needed there either)
 — unlike that module's `_upsert_node`/`_upsert_edge`, which interpolate an
 adapter-supplied `element_type` string and therefore DO need
 `_validate_element_types`'s allow-list. Nothing in this module's write path
@@ -73,9 +73,9 @@ performed by the orchestrating `derive_obligations_and_capabilities`
 `RoleRequirements` (and therefore any Obligation/edge derived from them)
 can exist at all. Given both of those, this function is a plain,
 unconditional writer, matching the style of `_upsert_node`/
-`_upsert_regulation_edge` above but with no properties on any of its three
+`_upsert_regulatory_instrument_edge` above but with no properties on any of its three
 edge types (Edge Catalog, §0.2) — deliberately NOT copying
-`_upsert_regulation_edge`'s `SET e.source_ref = $source_ref` pattern, since
+`_upsert_regulatory_instrument_edge`'s `SET e.source_ref = $source_ref` pattern, since
 `HAS`/`SATISFIED_BY`/`REQUIRES` carry no properties at all.
 """
 
@@ -98,7 +98,7 @@ from ps_service.domain_mapper.models import (
     RoleNode,
 )
 
-_REGULATION_LABEL = "RegulatoryInstrument"
+_REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"
@@ -152,8 +152,8 @@ def _validate_role_references(
 
 def persist_role_and_requirement_graph(
     graph: GraphHandle,
-    regulation_id: str,
-    regulation_properties: dict[str, object],
+    regulatory_instrument_id: str,
+    regulatory_instrument_properties: dict[str, object],
     role_nodes: tuple[RoleNode, ...],
     role_edges: tuple[RoleDefinesEdge, ...],
     requirement_nodes: tuple[RequirementNode, ...],
@@ -162,7 +162,7 @@ def persist_role_and_requirement_graph(
     """Persist one extraction run's complete Role/Requirement graph into
     `graph` (the caller's already-selected `{short}_baseline` `GraphHandle`).
 
-    `regulation_properties` MERGEs the Regulation node itself (PLAN_REVIEWED.md
+    `regulatory_instrument_properties` MERGEs the RegulatoryInstrument node itself (PLAN_REVIEWED.md
     §5.2 step 1) — the `DEFINES`/`EXPRESSES` edges below originate from it.
     `role_nodes`/`role_edges`/`requirement_nodes`/`requirement_edges` are
     `extraction.py`'s `_canonicalize_roles`/`_build_requirement_graph`
@@ -177,18 +177,18 @@ def persist_role_and_requirement_graph(
 
     _execute_query(
         graph,
-        f"MERGE (n:{_REGULATION_LABEL} {{id: $id}}) SET n += $properties",
-        params={"id": regulation_id, "properties": regulation_properties},
+        f"MERGE (n:{_REGULATORY_INSTRUMENT_LABEL} {{id: $id}}) SET n += $properties",
+        params={"id": regulatory_instrument_id, "properties": regulatory_instrument_properties},
     )
     for role in role_nodes:
         _upsert_node(graph, _ROLE_LABEL, role.id, role.properties)
     for role_edge in role_edges:
-        _upsert_regulation_edge(graph, "DEFINES", _ROLE_LABEL, regulation_id, role_edge)
+        _upsert_regulatory_instrument_edge(graph, "DEFINES", _ROLE_LABEL, regulatory_instrument_id, role_edge)
     for requirement in requirement_nodes:
         _upsert_node(graph, _REQUIREMENT_LABEL, requirement.id, requirement.properties)
     for requirement_edge in requirement_edges:
-        _upsert_regulation_edge(
-            graph, "EXPRESSES", _REQUIREMENT_LABEL, regulation_id, requirement_edge
+        _upsert_regulatory_instrument_edge(
+            graph, "EXPRESSES", _REQUIREMENT_LABEL, regulatory_instrument_id, requirement_edge
         )
 
 
@@ -205,16 +205,16 @@ def _upsert_node(
     )
 
 
-def _upsert_regulation_edge(
+def _upsert_regulatory_instrument_edge(
     graph: GraphHandle,
     relationship_type: str,
     target_label: str,
-    regulation_id: str,
+    regulatory_instrument_id: str,
     edge: RoleDefinesEdge | RequirementExpressesEdge,
 ) -> None:
-    """`Regulation -[:relationship_type {source_ref}]-> target_label`,
+    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`,
     shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges — both originate from the Regulation node and carry the same
+    edges — both originate from the RegulatoryInstrument node and carry the same
     single `source_ref` property (Edge Catalog, PLAN_REVIEWED.md §0.2).
 
     `relationship_type`/`target_label` are always this module's own fixed
@@ -230,11 +230,11 @@ def _upsert_regulation_edge(
     )
     _execute_query(
         graph,
-        f"MATCH (r:{_REGULATION_LABEL} {{id: $regulation_id}}), "
+        f"MATCH (r:{_REGULATORY_INSTRUMENT_LABEL} {{id: $regulatory_instrument_id}}), "
         f"(n:{target_label} {{id: $target_id}}) "
         f"MERGE (r)-[e:{relationship_type}]->(n) SET e.source_ref = $source_ref",
         params={
-            "regulation_id": regulation_id,
+            "regulatory_instrument_id": regulatory_instrument_id,
             "target_id": target_node_id,
             "source_ref": edge.source_ref,
         },
@@ -325,9 +325,9 @@ def _upsert_bare_edge(
     """`source_label -[:relationship_type]-> target_label`, NO properties —
     the shared shape for `HAS`/`SATISFIED_BY`/`REQUIRES` (Edge Catalog,
     PLAN_REVIEWED.md §0.2), deliberately distinct from
-    `_upsert_regulation_edge`'s `DEFINES`/`EXPRESSES` shape, which always
+    `_upsert_regulatory_instrument_edge`'s `DEFINES`/`EXPRESSES` shape, which always
     sets `source_ref`. There is no `SET` clause here at all — be
-    deliberate about NOT copy-pasting `_upsert_regulation_edge`'s pattern
+    deliberate about NOT copy-pasting `_upsert_regulatory_instrument_edge`'s pattern
     onto this function (PLAN_REVIEWED.md §11 Increment 15's explicit
     warning).
 

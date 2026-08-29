@@ -72,8 +72,8 @@ def test_bare_edge_constructs_with_valid_fields() -> None:
 
 def _baseline_graph() -> BaselineGraph:
     return BaselineGraph(
-        regulation_id="CRA-1.0",
-        regulation_properties={"name": "Cyber Resilience Act"},
+        regulatory_instrument_id="CRA-1.0",
+        regulatory_instrument_properties={"name": "Cyber Resilience Act"},
         role_nodes=(),
         requirement_nodes=(),
         obligation_nodes=(),
@@ -86,12 +86,12 @@ def _baseline_graph() -> BaselineGraph:
 def test_baseline_graph_mutation_raises() -> None:
     graph = _baseline_graph()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        graph.regulation_id = "changed"  # type: ignore[misc]
+        graph.regulatory_instrument_id = "changed"  # type: ignore[misc]
 
 
 def test_baseline_graph_constructs_with_valid_fields() -> None:
     graph = _baseline_graph()
-    assert graph.regulation_id == "CRA-1.0"
+    assert graph.regulatory_instrument_id == "CRA-1.0"
     assert graph.role_nodes == ()
 
 
@@ -232,21 +232,21 @@ def test_dedup_result_accepts_non_empty_embedding_backfills() -> None:
 
 def test_merge_result_mutation_raises() -> None:
     result = MergeResult(
-        regulation_id="CRA-1.0",
+        regulatory_instrument_id="CRA-1.0",
         obligation_ids=(),
         capability_canonical_ids=(),
         near_misses=(),
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        result.regulation_id = "changed"  # type: ignore[misc]
+        result.regulatory_instrument_id = "changed"  # type: ignore[misc]
 
 
 def test_merge_result_constructs_with_valid_fields() -> None:
     result = MergeResult(
-        regulation_id="CRA-1.0",
+        regulatory_instrument_id="CRA-1.0",
         obligation_ids=("obl_risk_role_x_a1b2c3",),
         capability_canonical_ids=("cap_logging_a1b2c3",),
         near_misses=(),
     )
-    assert result.regulation_id == "CRA-1.0"
+    assert result.regulatory_instrument_id == "CRA-1.0"
     assert result.obligation_ids == ("obl_risk_role_x_a1b2c3",)

@@ -72,7 +72,7 @@ _READ_REQUIREMENTS_BY_ROLE_QUERY = (
 
 
 def derive_obligations_and_capabilities(
-    regulation_id: str,
+    regulatory_instrument_id: str,
     *,
     baseline_graph: GraphHandle,
     model: str,
@@ -127,13 +127,13 @@ def derive_obligations_and_capabilities(
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,
-        entity_id=regulation_id,
+        entity_id=regulatory_instrument_id,
         outcome="succeeded",
         emitter=emitter,
     )
 
     return DerivationResult(
-        regulation_id=regulation_id,
+        regulatory_instrument_id=regulatory_instrument_id,
         obligation_node_ids=tuple(node.id for node in obligation_nodes),
         capability_node_ids=tuple(node.id for node in capability_nodes),
         unmatched_requirement_ids=unmatched_requirement_ids,

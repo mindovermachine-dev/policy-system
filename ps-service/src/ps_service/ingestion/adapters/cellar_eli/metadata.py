@@ -1,10 +1,10 @@
-"""Cellar/ELI XHTML -> `RegulationMetadata`. Ports `spikes/cellar1/
+"""Cellar/ELI XHTML -> `RegulatoryInstrumentMetadata`. Ports `spikes/cellar1/
 parse_structure.py`'s `extract_metadata`/`_find_effective_date`/
-`_article_by_heading` logic, retyped to return `RegulationMetadata`
+`_article_by_heading` logic, retyped to return `RegulatoryInstrumentMetadata`
 (Pydantic, `effective_date: date`).
 
 `effective_date` extraction is genuinely regulation-agnostic, not a
-Regulation-vs-Directive branch on CELEX type: it looks for an Article
+regulation-vs-directive branch on CELEX type: it looks for an Article
 titled "Transposition" first (the Member-State transposition-deadline
 case, AC-007) and only falls back to "Entry into force and application"
 (the direct application-date case) if no Transposition article exists.
@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime
 
 from ps_service.ingestion.adapters.errors import CellarParseError
-from ps_service.ingestion.models import InstrumentType, RegulationMetadata
+from ps_service.ingestion.models import InstrumentType, RegulatoryInstrumentMetadata
 
 _TITLE_CLASS = "eli-title"
 _DATE_PATTERN = r"(\d{1,2} [A-Z][a-z]+ \d{4})"
@@ -127,7 +127,7 @@ def _instrument_type_from_celex(identifier: str) -> InstrumentType:
         ) from None
 
 
-def extract_metadata(xhtml: bytes, identifier: str) -> RegulationMetadata:
+def extract_metadata(xhtml: bytes, identifier: str) -> RegulatoryInstrumentMetadata:
     """Bibliographic metadata sourced directly from the document's own
     text — no LLM extraction (AC-002), no per-regulation branching
     (AC-006). `identifier` is the source CELEX number, used only to derive
@@ -135,8 +135,8 @@ def extract_metadata(xhtml: bytes, identifier: str) -> RegulationMetadata:
     CELEX type code is unsupported or if `effective_date` can't be resolved
     (neither a "Transposition" nor an "Entry into force and application"
     Article heading is present) and `pydantic.ValidationError` if any other
-    required field is missing (e.g. an empty title) — `RegulationMetadata`'s
-    own boundary validation. Both satisfy `RegisterRegulationVersion`'s
+    required field is missing (e.g. an empty title) — `RegulatoryInstrumentMetadata`'s
+    own boundary validation. Both satisfy `RegisterRegulatoryInstrumentVersion`'s
     CA-doc contract: "Reject with a clear error if required properties are
     missing."
     """
@@ -154,7 +154,7 @@ def extract_metadata(xhtml: bytes, identifier: str) -> RegulationMetadata:
             "'Transposition' or 'Entry into force and application'"
         )
 
-    return RegulationMetadata(
+    return RegulatoryInstrumentMetadata(
         title=title,
         jurisdiction="EU",
         effective_date=effective_date,

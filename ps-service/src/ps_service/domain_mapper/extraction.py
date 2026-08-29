@@ -38,7 +38,7 @@ _COMPONENT = "domain_mapper"
 _ACTION = "extract_roles_and_requirements"
 
 
-class _RegulationNode(Protocol):
+class _RegulatoryInstrumentNode(Protocol):
     """Structural stand-in for the `falkordb.Node` this module's own
     `MATCH (r:RegulatoryInstrument) RETURN r` read returns -- only `.properties` is
     ever read, mirroring `falkordb_client.GraphQueryResult`'s own minimal
@@ -50,7 +50,7 @@ class _RegulationNode(Protocol):
 
 
 def extract_roles_and_requirements(
-    regulation_id: str,
+    regulatory_instrument_id: str,
     *,
     adapter: DomainMappingAdapter,
     native_graph: GraphHandle,
@@ -61,12 +61,12 @@ def extract_roles_and_requirements(
 ) -> ExtractionResult:
     """ExtractRolesAndRequirements — PLAN_REVIEWED.md §5.2's 8-step flow.
 
-    1. Reads the Regulation node's own properties from `native_graph` and
+    1. Reads the RegulatoryInstrument node's own properties from `native_graph` and
        MERGEs it into `baseline_graph` first (via
        `persist_role_and_requirement_graph`, step 6 below) — the
        `DEFINES`/`EXPRESSES` edges originate from it.
     2. `adapter.read_native_units(native_graph)`. An empty result is not an
-       error (Q2 fix) — the Regulation node is still MERGEd and a
+       error (Q2 fix) — the RegulatoryInstrument node is still MERGEd and a
        well-formed, all-zero `ExtractionResult` is returned.
     3. Calls `_extract_candidates_for_unit` per unit, with per-unit failure
        isolation: a `DomainMapperExtractionError` for one unit is caught,
@@ -84,22 +84,22 @@ def extract_roles_and_requirements(
        already bound, or `None`.
     8. Returns the `ExtractionResult`.
     """
-    regulation_properties = _read_regulation_properties(native_graph, regulation_id)
+    regulatory_instrument_properties = _read_regulatory_instrument_properties(native_graph, regulatory_instrument_id)
     units = adapter.read_native_units(native_graph)
 
     candidates, skipped_unit_count = _extract_all_candidates(
         units, model=model, call_completion=call_completion, emitter=emitter
     )
 
-    role_nodes, role_edges, role_node_ids = _canonicalize_roles(candidates, regulation_id)
+    role_nodes, role_edges, role_node_ids = _canonicalize_roles(candidates, regulatory_instrument_id)
     requirement_nodes, requirement_edges, collided_ids = _build_requirement_graph(
-        candidates, regulation_id, role_node_ids
+        candidates, regulatory_instrument_id, role_node_ids
     )
 
     persist_role_and_requirement_graph(
         baseline_graph,
-        regulation_id,
-        regulation_properties,
+        regulatory_instrument_id,
+        regulatory_instrument_properties,
         role_nodes,
         role_edges,
         requirement_nodes,
@@ -117,13 +117,13 @@ def extract_roles_and_requirements(
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,
-        entity_id=regulation_id,
+        entity_id=regulatory_instrument_id,
         outcome="succeeded",
         emitter=emitter,
     )
 
     return ExtractionResult(
-        regulation_id=regulation_id,
+        regulatory_instrument_id=regulatory_instrument_id,
         role_node_ids=role_node_ids,
         requirement_ids=tuple(node.id for node in requirement_nodes),
         candidate_count=len(candidates),
@@ -132,14 +132,14 @@ def extract_roles_and_requirements(
     )
 
 
-def _read_regulation_properties(
-    native_graph: GraphHandle, regulation_id: str
+def _read_regulatory_instrument_properties(
+    native_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, object]:
     """PLAN_REVIEWED.md §5.2 step 1: `MATCH (r:RegulatoryInstrument) RETURN r`, read
     back as a plain properties dict for `persist_role_and_requirement_graph`
     to MERGE into `baseline_graph`.
 
-    Raises `DomainMapperExtractionError` if no Regulation node is found —
+    Raises `DomainMapperExtractionError` if no RegulatoryInstrument node is found —
     `ExtractRolesAndRequirements`'s own pre-condition
     (`PersistNativeStructuralGraph` completed for this regulation) was not
     met.
@@ -148,10 +148,10 @@ def _read_regulation_properties(
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
         raise DomainMapperExtractionError(
-            f"no Regulation node found in native graph for {regulation_id!r}; "
+            f"no RegulatoryInstrument node found in native graph for {regulatory_instrument_id!r}; "
             "PersistNativeStructuralGraph must complete before ExtractRolesAndRequirements"
         )
-    node = cast(_RegulationNode, rows[0][0])
+    node = cast(_RegulatoryInstrumentNode, rows[0][0])
     return dict(node.properties)
 
 
@@ -249,13 +249,13 @@ def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
 
 
 def _canonicalize_roles(
-    candidates: list[RequirementCandidate], regulation_id: str
+    candidates: list[RequirementCandidate], regulatory_instrument_id: str
 ) -> tuple[tuple[RoleNode, ...], tuple[RoleDefinesEdge, ...], dict[str, str]]:
     """PLAN_REVIEWED.md §5.2 step 4 — deterministic dedup via
     `identity.role_id()`, no LLM call.
 
     Candidates sharing the same `role_name` collapse onto one Role node
-    (`role_id()` is a pure function of `role_name` + `regulation_id`, so
+    (`role_id()` is a pure function of `role_name` + `regulatory_instrument_id`, so
     every candidate naming the same role deterministically computes the
     same id). The FIRST candidate (in document order, i.e. this list's own
     order — the caller is responsible for supplying candidates already in
@@ -279,7 +279,7 @@ def _canonicalize_roles(
     seen_role_node_ids: set[str] = set()
 
     for candidate in candidates:
-        node_id = role_id(candidate.role_name, regulation_id)
+        node_id = role_id(candidate.role_name, regulatory_instrument_id)
         role_node_ids[candidate.role_name] = node_id
         if node_id in seen_role_node_ids:
             continue
@@ -299,7 +299,7 @@ def _canonicalize_roles(
 
 def _build_requirement_graph(
     candidates: list[RequirementCandidate],
-    regulation_id: str,
+    regulatory_instrument_id: str,
     role_node_ids: dict[str, str],
 ) -> tuple[tuple[RequirementNode, ...], tuple[RequirementExpressesEdge, ...], tuple[str, ...]]:
     """PLAN_REVIEWED.md §5.2 step 5 — B2 fix: deterministic Requirement-id
@@ -337,7 +337,7 @@ def _build_requirement_graph(
 
     for candidate in candidates:
         base_id = requirement_id(
-            regulation_id,
+            regulatory_instrument_id,
             candidate.unit_article_number,
             candidate.unit_paragraph_number,
             candidate.letter_suffix,

@@ -58,8 +58,8 @@ class _FakeQueryResult:
         return self._result_set
 
 
-class _FakeRegulationNode:
-    """Satisfies `graph_reader._RegulationNode` structurally -- only
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
     `.properties` is ever read."""
 
     def __init__(self, properties: dict[str, object]) -> None:
@@ -76,7 +76,7 @@ class _FakeBaselineGraph:
     def __init__(
         self,
         *,
-        regulation_properties: dict[str, object],
+        regulatory_instrument_properties: dict[str, object],
         role_rows: list[object],
         requirement_rows: list[object],
         obligation_rows: list[object],
@@ -87,7 +87,7 @@ class _FakeBaselineGraph:
         satisfied_by_rows: list[object],
         requires_rows: list[object],
     ) -> None:
-        self._regulation_properties = regulation_properties
+        self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
@@ -119,8 +119,8 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
-        if "(n:RegulatoryInstrument {id: $regulation_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeRegulationNode(self._regulation_properties)]])
+        if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
+            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -156,7 +156,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     capability_node_id = capability_id(capability_name)
 
     return _FakeBaselineGraph(
-        regulation_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
+        regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
         role_rows=[[role_node_id, "Manufacturer", 0.9]],
         requirement_rows=[
             [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
