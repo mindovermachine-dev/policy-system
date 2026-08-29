@@ -16,6 +16,7 @@ import pytest
 
 from ps_service.ingestion.adapters.cellar_eli.metadata import (
     _BASE_ACT_VERSION,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _base_celex,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _find_effective_date,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _instrument_type_from_celex,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _strip_namespace,  # pyright: ignore[reportPrivateUsage] — internal helper under test
@@ -160,6 +161,49 @@ def test_extract_metadata_sets_instrument_type_directive_for_L_celex() -> None:
     assert metadata.instrument_type == "directive"
 
 
+def test_extract_metadata_sets_celex_from_identifier() -> None:
+    metadata = extract_metadata(_TRANSPOSITION_FIXTURE, "32022L2555")
+
+    assert metadata.celex == "32022L2555"
+
+
 def test_extract_metadata_raises_before_building_node_for_unsupported_celex_code() -> None:
     with pytest.raises(CellarParseError):
         extract_metadata(_ENTRY_INTO_FORCE_FIXTURE, "32014D0123")
+
+
+# --- Follow-on A1: consolidated-expression CELEX acceptance ---------------
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("32024R2847", "32024R2847"),
+        ("32022L2555", "32022L2555"),
+        ("02024R2847-20241120", "32024R2847"),
+        ("02016R0679-20160504", "32016R0679"),
+        ("02013R0575-20240709", "32013R0575"),
+    ],
+)
+def test_base_celex_normalises_consolidated_and_passes_base_act_through(
+    identifier: str, expected: str
+) -> None:
+    assert _base_celex(identifier) == expected
+
+
+@pytest.mark.parametrize("identifier", ["garbage", "02024R2847", "not-a-celex"])
+def test_base_celex_raises_on_unrecognised_identifier_form(identifier: str) -> None:
+    with pytest.raises(CellarParseError):
+        _base_celex(identifier)
+
+
+def test_instrument_type_from_celex_accepts_consolidated_expression_form() -> None:
+    assert _instrument_type_from_celex("02016R0679-20160504") == "regulation"
+
+
+def test_extract_metadata_accepts_consolidated_celex_and_stores_base_act_celex() -> None:
+    metadata = extract_metadata(_ENTRY_INTO_FORCE_FIXTURE, "02024R2847-20241120")
+
+    assert metadata.celex == "32024R2847"
+    assert metadata.instrument_type == "regulation"
+    assert metadata.effective_date == date(2027, 12, 11)

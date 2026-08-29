@@ -39,6 +39,34 @@ _CELEX_TYPE_CODE_RE = re.compile(r"^\d{5}([A-Z]{1,2})\d+$")
 (the type code) + running number. e.g. `32016R0679` -> `R`, `32022L2555` -> `L`.
 Greedy `[A-Z]{1,2}` backtracks to 1 letter because the next char is a digit."""
 
+_CONSOLIDATED_CELEX_RE = re.compile(r"^0(\d{4}[A-Z]{1,2}\d+)-\d{8}$")
+"""Consolidated-expression CELEX: sector `0` (consolidated acts), the base act's
+year+type+number, then a `-YYYYMMDD` "amendments incorporated up to" suffix.
+e.g. `02024R2847-20241120` -> base group `2024R2847`. Branches only on the
+identifier's own lexical form, never on which regulation it names (AC-006/AC-011).
+"""
+
+
+def _base_celex(identifier: str) -> str:
+    """The base-act CELEX for `identifier`.
+
+    A base-act CELEX (`32024R2847`) is passed through unchanged; a
+    consolidated-expression CELEX (`02024R2847-20241120`) is reduced to its
+    base act (`32024R2847`: drop the `-YYYYMMDD` suffix, sector `0` -> `3`).
+    Raises `CellarParseError` for any other shape — including a sector-`0`
+    identifier with no consolidation-date suffix.
+    """
+    consolidated = _CONSOLIDATED_CELEX_RE.match(identifier)
+    if consolidated is not None:
+        return f"3{consolidated.group(1)}"
+    if not identifier.startswith("0") and _CELEX_TYPE_CODE_RE.match(identifier) is not None:
+        return identifier
+    raise CellarParseError(
+        f"identifier {identifier!r} is neither a base-act CELEX nor a "
+        "consolidated-expression CELEX (0YYYY<T>NNNN-YYYYMMDD)"
+    )
+
+
 _INSTRUMENT_TYPE_BY_CELEX_CODE: dict[str, InstrumentType] = {
     "R": "regulation",
     "L": "directive",
@@ -125,6 +153,7 @@ def _instrument_type_from_celex(identifier: str) -> InstrumentType:
     `CellarParseError` naming the code for any other descriptor (e.g. `D`
     decision), never a default (AC-BI-012).
     """
+    identifier = _base_celex(identifier)
     match = _CELEX_TYPE_CODE_RE.match(identifier)
     if match is None:
         raise CellarParseError(f"could not parse a CELEX type code from identifier {identifier!r}")
@@ -174,4 +203,5 @@ def extract_metadata(xhtml: bytes, identifier: str) -> RegulatoryInstrumentMetad
         status="active",
         source_type="external",
         instrument_type=instrument_type,
+        celex=_base_celex(identifier),
     )

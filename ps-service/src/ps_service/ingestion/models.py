@@ -47,6 +47,12 @@ class RegulatoryInstrumentMetadata(BaseModel):
     status: RegulatoryInstrumentStatus
     source_type: SourceType
     instrument_type: InstrumentType | None = None
+    # The source CELEX identifier (base-act form, e.g. "32024R2847"), when the
+    # adapter knows it. Optional and additive: carried onto the RegulatoryInstrument
+    # node so the Regulatory Change Monitor can poll Cellar for consolidated
+    # versions without a caller-supplied CELEX map (issue #19, D2). No cross-field
+    # rule — a null `celex` is a valid pre-D2 / internal-source state.
+    celex: str | None = None
 
     @model_validator(mode="after")
     def _check_instrument_type_matches_source_type(self) -> Self:

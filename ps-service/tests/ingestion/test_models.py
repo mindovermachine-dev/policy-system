@@ -100,6 +100,22 @@ def test_regulatory_instrument_metadata_accepts_national_transposition_instrumen
     assert metadata.instrument_type == "national_transposition"
 
 
+def test_regulatory_instrument_metadata_celex_defaults_to_none() -> None:
+    metadata = _metadata()
+    assert metadata.celex is None
+
+
+def test_regulatory_instrument_metadata_accepts_celex_string() -> None:
+    metadata = _metadata(celex="32024R2847")
+    assert metadata.celex == "32024R2847"
+
+
+def test_regulatory_instrument_metadata_with_celex_set_is_still_frozen() -> None:
+    metadata = _metadata(celex="32024R2847")
+    with pytest.raises(ValidationError):
+        _mutate(metadata, "celex", "32016R0679")
+
+
 def test_structural_node_mutation_raises() -> None:
     node = StructuralNode(element_type="ARTICLE", id="CRA-1.0#art_1", properties={"order": 1})
     with pytest.raises(AttributeError):

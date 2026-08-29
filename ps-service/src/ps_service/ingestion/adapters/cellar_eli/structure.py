@@ -57,7 +57,68 @@ RECITAL = "RECITAL"
 _STRUCT_ID_RE = re.compile(r"^(cpt|sct|art|anx|rct)_([A-Za-z0-9]+)$")
 _PARAGRAPH_ID_RE = re.compile(r"^(\d{3})\.(\d{3})$")
 _TITLE_CLASS = "eli-title"
-_LABEL_ONLY_CLASSES = {"oj-ti-art", "oj-ti-section-1", "oj-doc-ti"}
+_LABEL_ONLY_CLASSES = {
+    "oj-ti-art",
+    "oj-ti-section-1",
+    "oj-doc-ti",
+    "title-article-norm",
+    "stitle-article-norm",
+}
+
+_PARAGRAPH_NORM_CLASS = "norm"
+"""Consolidated convention: every article paragraph is wrapped in `<div class="norm">`."""
+
+_NO_PARAG_CLASS = "no-parag"
+"""Consolidated convention: a paragraph's number sits in a `<span class="no-parag">`."""
+
+_PARAGRAPH_NUMBER_LEADING_STRIP = "\u2018\u2019'\u25ba\u25bc "
+"""Leading noise a `no-parag` marker can carry: U+2018/U+2019 typographic quotes,
+an ASCII apostrophe, a U+25BA/U+25BC amendment change-marker, and whitespace."""
+
+
+def _normalise_paragraph_number(raw: str) -> str:
+    """A clean paragraph number from a raw id group or `no-parag` marker text.
+
+    Strips surrounding whitespace, a leading typographic quote / change-marker,
+    and the trailing `.`; an all-digit result has its leading zeros dropped
+    (`"001"` -> `"1"`). An alphanumeric result (`"1a"`, an amendment-inserted
+    paragraph) is kept verbatim — never `int()`-parsed.
+    """
+    cleaned = raw.strip().lstrip(_PARAGRAPH_NUMBER_LEADING_STRIP).rstrip(". ").strip()
+    return str(int(cleaned)) if cleaned.isdigit() else cleaned
+
+
+def _paragraph_number(child: ET.Element, child_id: str) -> str | None:
+    """The paragraph number for a direct child of an ARTICLE div, or `None`.
+
+    Two markup conventions, one predicate:
+    * base-act: `child_id` matches `NNN.NNN` -> the trailing group, normalised.
+    * consolidated: the child's own class list contains `norm` AND it has a
+      descendant `<span class="no-parag">` -> that span's text, normalised.
+    Anything else (an unnumbered `norm` chapeau, a heading, a points list) -> `None`.
+    """
+    base_match = _PARAGRAPH_ID_RE.match(child_id)
+    if base_match is not None:
+        return _normalise_paragraph_number(base_match.group(2))
+    if _PARAGRAPH_NORM_CLASS not in _own_class(child).split():
+        return None
+    for span in child.iter("span"):
+        if _own_class(span) == _NO_PARAG_CLASS:
+            marker = "".join(span.itertext()).strip()
+            if marker:
+                return _normalise_paragraph_number(marker)
+    return None
+
+
+def _is_label_only(element: ET.Element) -> bool:
+    """Whether `element`'s first CSS class marks it as a bare label (Article N).
+
+    Matches on the first class only, so a single-class `<p class="title-article-norm">`
+    is suppressed while a compound `norm inline-element` paragraph body never is.
+    """
+    classes = _own_class(element).split()
+    return bool(classes) and classes[0] in _LABEL_ONLY_CLASSES
+
 
 _ELEMENT_LABEL = {"cpt": CHAPTER, "sct": SECTION, "anx": ANNEX, "rct": RECITAL}
 _CITATION_WORD = {
@@ -80,6 +141,10 @@ class _StructuralSink:
     regulatory_instrument_id: str
     nodes: list[StructuralNode]
     edges: list[StructuralEdge]
+    annexes: list[tuple[ET.Element, str]]
+    """`(element, number)` for every `anx_*` div found nested in the main container
+    (the consolidated convention). Merged with the base-act separate-container
+    annexes in `parse_structure` and minted there, deduped by number."""
 
 
 def _strip_namespace(root: ET.Element) -> None:
@@ -128,13 +193,19 @@ def _mint_paragraph(
     div: ET.Element,
     article_local_id: str,
     article_number: str,
-    paragraph_group: str,
+    para_number: str,
     order: int,
     sink: _StructuralSink,
 ) -> None:
-    para_number = str(int(paragraph_group))
+    """Mint one PARAGRAPH node + its ARTICLE->PARAGRAPH edge.
+
+    `para_number` is already normalised (`_paragraph_number`). When the div
+    carries no `id` (the consolidated convention), a stable article-scoped
+    id is synthesised (`{article_local_id}.p{para_number}`) so re-ingest
+    stays idempotent and sibling paragraphs never collide.
+    """
     citation_ref = f"Art. {article_number}({para_number})"
-    paragraph_id = div.get("id") or ""
+    paragraph_id = div.get("id") or f"{article_local_id}.p{para_number}"
     node_id = f"{sink.regulatory_instrument_id}#{paragraph_id}"
     sink.nodes.append(
         StructuralNode(
@@ -167,19 +238,16 @@ def _walk_article(
 
     for child in div:
         child_id = child.get("id") or ""
-        cls = _own_class(child)
-        if cls == _TITLE_CLASS or child_id.endswith(".tit_1"):
+        if _own_class(child) == _TITLE_CLASS or child_id.endswith(".tit_1"):
             heading = _full_text(child)
-        elif cls in _LABEL_ONLY_CLASSES:
+        elif _is_label_only(child):
             continue
         else:
-            paragraph_match = _PARAGRAPH_ID_RE.match(child_id)
-            if paragraph_match is not None:
-                paragraph_children.append((child, paragraph_match.group(2)))
-            else:
-                text = _full_text(child)
-                if text:
-                    own_text_parts.append(text)
+            para_number = _paragraph_number(child, child_id)
+            if para_number is not None:
+                paragraph_children.append((child, para_number))
+            elif text := _full_text(child):
+                own_text_parts.append(text)
 
     sink.nodes.append(
         StructuralNode(
@@ -195,12 +263,12 @@ def _walk_article(
     )
     sink.edges.append(StructuralEdge(parent_label, parent_id, ARTICLE, node_id))
 
-    for paragraph_child, paragraph_group in paragraph_children:
+    for paragraph_child, paragraph_number in paragraph_children:
         _mint_paragraph(
             paragraph_child,
             local_id,
             number,
-            paragraph_group,
+            paragraph_number,
             para_order.next(ARTICLE, node_id),
             sink,
         )
@@ -272,7 +340,11 @@ def _walk_body(
             _walk_article(child, local_id, match.group(2), parent_label, parent_id, order, sink)
             continue
         if kind == "anx":
-            continue  # annexes are separate top-level eli-containers, handled by parse_structure
+            # consolidated convention: anx_* is a div nested in the main container,
+            # not a separate eli-container. Collect it (don't recurse); parse_structure
+            # merges it with the base-act separate-container annexes and mints both.
+            sink.annexes.append((child, match.group(2)))
+            continue
 
         order = order_counter.next(parent_label, parent_id)
         _mint_struct_node(
@@ -303,30 +375,24 @@ def _split_containers(
     return main, annexes
 
 
-def parse_structure(
-    xhtml: bytes, regulatory_instrument_id: str
-) -> tuple[tuple[StructuralNode, ...], tuple[StructuralEdge, ...]]:
-    """Native structural graph for one regulation.
+def _mint_annexes(
+    annexes: list[tuple[ET.Element, str]],
+    regulatory_instrument_id: str,
+    sink: _StructuralSink,
+) -> None:
+    """Mint one ANNEX node + its RegulatoryInstrument->ANNEX edge per distinct annex number.
 
-    CHAPTER/SECTION/ARTICLE/PARAGRAPH/RECITAL nested under
-    `regulatory_instrument_id`, plus ANNEX as separate top-level children
-    (each annex is its own top-level `eli-container` in Cellar's XHTML, not
-    nested under the main one). `regulatory_instrument_id` is an opaque
-    prefix for structural node ids
-    (`f"{regulatory_instrument_id}#{local_id}"`) — it is not required to
-    already be the final `{SHORT}-{VERSION}` RegulatoryInstrument id.
+    Fed from both markup conventions — a base-act separate `eli-container`
+    and a consolidated `anx_*` div nested in the main container — and deduped
+    by annex number so a document carrying both forms mints each annex once.
+    Node/edge shape is identical for both conventions.
     """
-    root = parse_xml(xhtml)
-    _strip_namespace(root)
-    sink = _StructuralSink(regulatory_instrument_id, [], [])
-
-    containers = [element for element in root.iter("div") if _own_class(element) == "eli-container"]
-    main, annexes = _split_containers(containers)
-
-    _walk_body(main, REGULATORY_INSTRUMENT, regulatory_instrument_id, _OrderCounter(), sink)
-
-    annex_order = _OrderCounter()
+    order = _OrderCounter()
+    seen_numbers: set[str] = set()
     for annex_element, number in annexes:
+        if number in seen_numbers:
+            continue
+        seen_numbers.add(number)
         local_id = annex_element.get("id") or ""
         node_id = f"{regulatory_instrument_id}#{local_id}"
         sink.nodes.append(
@@ -336,12 +402,37 @@ def parse_structure(
                 {
                     "text": _full_text(annex_element),
                     "citation_ref": f"Annex {number}",
-                    "order": annex_order.next(REGULATORY_INSTRUMENT, regulatory_instrument_id),
+                    "order": order.next(REGULATORY_INSTRUMENT, regulatory_instrument_id),
                 },
             )
         )
         sink.edges.append(
             StructuralEdge(REGULATORY_INSTRUMENT, regulatory_instrument_id, ANNEX, node_id)
         )
+
+
+def parse_structure(
+    xhtml: bytes, regulatory_instrument_id: str
+) -> tuple[tuple[StructuralNode, ...], tuple[StructuralEdge, ...]]:
+    """Native structural graph for one regulation.
+
+    CHAPTER/SECTION/ARTICLE/PARAGRAPH/RECITAL nested under
+    `regulatory_instrument_id`, plus ANNEX as top-level children. An annex is
+    either its own top-level `eli-container` (base-act convention) or an
+    `anx_*` div nested in the main container (consolidated convention); both
+    forms are collected and minted the same way, deduped by annex number.
+    `regulatory_instrument_id` is an opaque prefix for structural node ids
+    (`f"{regulatory_instrument_id}#{local_id}"`) — it is not required to
+    already be the final `{SHORT}-{VERSION}` RegulatoryInstrument id.
+    """
+    root = parse_xml(xhtml)
+    _strip_namespace(root)
+    sink = _StructuralSink(regulatory_instrument_id, [], [], [])
+
+    containers = [element for element in root.iter("div") if _own_class(element) == "eli-container"]
+    main, separate_annexes = _split_containers(containers)
+
+    _walk_body(main, REGULATORY_INSTRUMENT, regulatory_instrument_id, _OrderCounter(), sink)
+    _mint_annexes([*separate_annexes, *sink.annexes], regulatory_instrument_id, sink)
 
     return tuple(sink.nodes), tuple(sink.edges)

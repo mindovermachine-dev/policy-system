@@ -19,10 +19,12 @@ Implements PLAN_REVIEWED.md §7 Increments 8-10:
   actually hold for a real 200-800+ node regulation, instead of the
   original per-element-interleaved design that let earlier nodes get
   written before a later invalid element was ever seen.
-- `verify_structural_graph_reachable` — AC-004's reachability check: counts
-  every structural label's total vs. how many are actually reachable from
-  the RegulatoryInstrument node via `HAS` (any depth). Raises
-  `IngestionPersistenceError` — not a silent warning — on any gap.
+- `verify_structural_graph_reachable` — AC-004's reachability check: for
+  every structural label, no node may be an orphan — unreachable from
+  *every* RegulatoryInstrument node via `HAS` (any depth). Version-agnostic
+  (a `{short}_native` graph can hold several coexisting versions' subtrees
+  after a Change-Monitor re-ingest). Raises `IngestionPersistenceError` —
+  not a silent warning — on any orphan.
 
 Structural node/edge ids are used exactly as produced by the Cellar/ELI
 adapter (CELEX-prefixed, e.g. `"32024R2847#art_1"`) — never rewritten or
@@ -163,6 +165,8 @@ def register_regulatory_instrument_version(
     }
     if metadata.instrument_type is not None:
         properties["instrument_type"] = metadata.instrument_type
+    if metadata.celex is not None:
+        properties["celex"] = metadata.celex
     _execute_query(
         graph,
         "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
@@ -288,13 +292,22 @@ def _count_nodes(graph: GraphHandle, label: str) -> int:
     return _scalar_count(_execute_query(graph, f"MATCH (n:{label}) RETURN count(n)"))
 
 
-def _count_reachable(graph: GraphHandle, regulatory_instrument_id: str, label: str) -> int:
+def _count_orphans(graph: GraphHandle, label: str) -> int:
+    """Nodes of `label` not reachable from ANY RegulatoryInstrument via `HAS` (any depth).
+
+    Version-agnostic denominator for the reachability check: after a
+    Change-Monitor re-ingest, one `{short}_native` graph holds several
+    versions' structural subtrees, each anchored to its own
+    `{SHORT}-{VERSION}` RegulatoryInstrument node (domain-concepts: a new
+    version supersedes, never overwrites). A node owned by a sibling version
+    is still reachable from *some* RegulatoryInstrument, so it is not an
+    orphan; only a node that a `persist` wrote but left unlinked from every
+    RegulatoryInstrument is counted.
+    """
     return _scalar_count(
         _execute_query(
             graph,
-            f"MATCH (:RegulatoryInstrument {{id: $id}})-[:HAS*1..]->(n:{label}) "
-            "RETURN count(DISTINCT n)",
-            params={"id": regulatory_instrument_id},
+            f"MATCH (n:{label}) WHERE NOT (:RegulatoryInstrument)-[:HAS*1..]->(n) RETURN count(n)",
         )
     )
 
@@ -302,33 +315,34 @@ def _count_reachable(graph: GraphHandle, regulatory_instrument_id: str, label: s
 def verify_structural_graph_reachable(
     graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, ReachabilityCount]:
-    """AC-004: node count vs. reachable count for every structural label.
+    """AC-004: every structural node must be reachable from some RegulatoryInstrument.
 
-    For every structural label (plus `RegulatoryInstrument` itself), the
-    node count in this regulation's own graph versus how many of those
-    nodes are actually reachable from the RegulatoryInstrument node via `HAS` (any
-    depth) — not just present. One FalkorDB graph per regulation
-    (`falkordb_client.native_graph_name`, PLAN_REVIEWED.md §4.1), so a bare
-    `MATCH (n:LABEL)` total is already this regulation's own total; no
-    id-prefix scoping is needed (§4.3).
+    For every structural label (plus `RegulatoryInstrument` itself), reports
+    the whole-graph node count (`total`) and how many of those are actually
+    linked into a RegulatoryInstrument's `HAS` tree
+    (`reachable = total - orphans`). `total` stays a whole-graph count so the
+    public shape is unchanged; `reachable` equals `total` on every clean
+    graph, single- or multi-version, because the orphan denominator counts
+    only nodes unreachable from *every* RegulatoryInstrument.
 
-    Raises `IngestionPersistenceError` — not a silent warning — if any
-    label has `reachable != total`, matching the CA doc's
-    `PersistNativeStructuralGraph` post-condition (no partial/undetected
-    write left behind).
+    Raises `IngestionPersistenceError` — not a silent warning — if any label
+    has an orphan, matching the CA doc's `PersistNativeStructuralGraph`
+    post-condition (no partial/undetected write left behind). A node this run
+    wrote but failed to link is unreachable from every RegulatoryInstrument
+    (its id prefix is unique to this run), so it is always caught.
     """
     counts: dict[str, ReachabilityCount] = {}
     for label in (_REGULATORY_INSTRUMENT_LABEL, *_KNOWN_ELEMENT_TYPES):
         total = _count_nodes(graph, label)
-        reachable = (
-            total
-            if label == _REGULATORY_INSTRUMENT_LABEL
-            else _count_reachable(graph, regulatory_instrument_id, label)
-        )
-        counts[label] = ReachabilityCount(total=total, reachable=reachable)
-        if reachable != total:
+        if label == _REGULATORY_INSTRUMENT_LABEL:
+            counts[label] = ReachabilityCount(total=total, reachable=total)
+            continue
+        orphans = _count_orphans(graph, label)
+        if orphans != 0:
             raise IngestionPersistenceError(
-                f"{label}: total={total} but only {reachable} reachable "
-                f"from RegulatoryInstrument {regulatory_instrument_id!r}"
+                f"{label}: {orphans} of {total} node(s) not reachable from any "
+                f"RegulatoryInstrument (persist left an orphan) — re-ingest of "
+                f"{regulatory_instrument_id!r}"
             )
+        counts[label] = ReachabilityCount(total=total, reachable=total - orphans)
     return counts

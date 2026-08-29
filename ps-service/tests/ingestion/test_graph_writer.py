@@ -88,7 +88,11 @@ class _ScriptedReachabilityGraph:
         match = _LABEL_RE.search(q)
         assert match is not None, f"could not find a label in query: {q!r}"
         total, reachable = self._counts_by_label[match.group(1)]
-        value = reachable if "DISTINCT" in q else total
+        # `verify` issues two query shapes per label: the bare total
+        # (`count(n)`) and the orphan count (`... WHERE NOT (:RegulatoryInstrument)
+        # -[:HAS*1..]->(n) ...`), which the scripted (total, reachable) pair
+        # models as `total - reachable`.
+        value = total - reachable if "WHERE NOT" in q else total
         return _FakeQueryResult([[value]])
 
 
@@ -101,6 +105,7 @@ def _metadata(
     status: RegulatoryInstrumentStatus = "active",
     source_type: SourceType = "external",
     instrument_type: InstrumentType | None = "regulation",
+    celex: str | None = None,
 ) -> RegulatoryInstrumentMetadata:
     return RegulatoryInstrumentMetadata(
         title=title,
@@ -110,6 +115,7 @@ def _metadata(
         status=status,
         source_type=source_type,
         instrument_type=instrument_type,
+        celex=celex,
     )
 
 
@@ -216,6 +222,22 @@ def test_register_regulatory_instrument_version_is_idempotent_on_instrument_type
     assert graph.calls[0].params == graph.calls[1].params
     assert _properties(graph.calls[0])["instrument_type"] == "directive"
     assert _properties(graph.calls[1])["instrument_type"] == "directive"
+
+
+def test_register_regulatory_instrument_version_writes_celex_when_present() -> None:
+    graph = _FakeGraph()
+
+    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata(celex="32024R2847"))
+
+    assert _properties(graph.calls[0])["celex"] == "32024R2847"
+
+
+def test_register_regulatory_instrument_version_omits_celex_key_when_absent() -> None:
+    graph = _FakeGraph()
+
+    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
+
+    assert "celex" not in _properties(graph.calls[0])
 
 
 # --- Increment 9: persist_native_structural_graph (THE B1 FIX) ----------
@@ -400,6 +422,34 @@ def test_verify_structural_graph_reachable_raises_on_gap() -> None:
 
     with pytest.raises(IngestionPersistenceError, match="ARTICLE"):
         verify_structural_graph_reachable(graph, "CRA-1.0")
+
+
+def test_verify_passes_with_two_versions_coexisting() -> None:
+    """Follow-on A: after a Change-Monitor re-ingest, one `{short}_native`
+    graph holds two versions' subtrees. RECITAL's whole-graph total is v1's
+    173, every one still reachable from v1 (0 orphans), while the id under
+    verification is v2 — whose own document has no preamble. The orphan
+    check must NOT read v2's zero recitals as a persistence gap.
+    """
+    counts = dict(_ALL_LABELS_NO_GAP)
+    counts["RECITAL"] = (173, 173)  # 173 total, all reachable from some RI -> 0 orphans
+    graph = _ScriptedReachabilityGraph(counts)
+
+    result = verify_structural_graph_reachable(graph, "CRA-2.0")
+
+    assert result["RECITAL"] == ReachabilityCount(total=173, reachable=173)
+
+
+def test_verify_raises_on_true_orphan() -> None:
+    """A node that `persist` wrote but left unlinked from every
+    RegulatoryInstrument is a genuine orphan and must still raise.
+    """
+    counts = dict(_ALL_LABELS_NO_GAP)
+    counts["ARTICLE"] = (100, 98)  # 2 of 100 reachable from no RI at all
+    graph = _ScriptedReachabilityGraph(counts)
+
+    with pytest.raises(IngestionPersistenceError, match="ARTICLE"):
+        verify_structural_graph_reachable(graph, "CRA-2.0")
 
 
 # --- Dependency health wiring ----------------------------------------------

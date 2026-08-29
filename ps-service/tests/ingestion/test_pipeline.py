@@ -35,6 +35,11 @@ from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from change_monitor._regulation_independence import (
+    find_forbidden_literals,
+    scan_package_for_forbidden_conditionals,
+)
+
 import ps_service.ingestion as ingestion_package
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
@@ -235,12 +240,12 @@ def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in
 
 
 # --- (b) AC-006: AST-based regulation-name-conditional scan (B2/B3 fix) ---
-
-_FORBIDDEN_REGULATORY_INSTRUMENT_NAMES = frozenset({"CRA", "GDPR", "NIS2"})
-_FORBIDDEN_CELEX_IDENTIFIERS = frozenset({"32024R2847", "32016R0679", "32022L2555"})
-_FORBIDDEN_LITERALS = _FORBIDDEN_REGULATORY_INSTRUMENT_NAMES | _FORBIDDEN_CELEX_IDENTIFIERS
-
-_DOCSTRING_HOST_TYPES = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+#
+# The scan machinery (FORBIDDEN_LITERALS, find_forbidden_literals,
+# scan_package_for_forbidden_conditionals) now lives in the shared
+# `change_monitor._regulation_independence` module (PLAN_REVIEWED.md §1.6,
+# flaw 12/13). Behaviour and assertions below are unchanged — only the
+# import source moved.
 
 
 def _files_to_scan() -> list[Path]:
@@ -254,87 +259,12 @@ def _files_to_scan() -> list[Path]:
     return sorted(ingestion_root.rglob("*.py"))
 
 
-def _docstring_constant_ids(tree: ast.AST) -> set[int]:
-    """`id()`s of every module/class/function docstring's `ast.Constant`
-    node — the first statement of a `Module`/`ClassDef`/`FunctionDef`/
-    `AsyncFunctionDef` body, when it is a bare string-literal expression.
-
-    Kept as an explicit, separate exclusion (per PLAN_REVIEWED.md's B3 fix
-    wording) even though `_find_forbidden_literals` below only ever
-    walks a conditional construct's *decision* subtree — a docstring
-    statement can never structurally be part of one, so this exclusion is
-    defense-in-depth, not load-bearing; see this module's own docstring.
-    """
-    docstring_ids: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, _DOCSTRING_HOST_TYPES):
-            first_statement = node.body[0] if node.body else None
-            if (
-                isinstance(first_statement, ast.Expr)
-                and isinstance(first_statement.value, ast.Constant)
-                and isinstance(first_statement.value.value, str)
-            ):
-                docstring_ids.add(id(first_statement.value))
-    return docstring_ids
-
-
-def _conditional_decision_subtrees(tree: ast.AST) -> list[ast.AST]:
-    """Every expression subtree that is a conditional/branching construct's
-    *decision* — never its body/orelse — per PLAN_REVIEWED.md's "ast.If /
-    ast.Compare / any other executable context" wording: an `if`/`elif`
-    test, a ternary's test, a `while`/`assert` condition, a bare `Compare`
-    node (covers `==`/`!=`/`in`/`not in`/`is`/... wherever it occurs, even
-    outside an explicit `if`), and a `match` statement's case patterns.
-    """
-    subtrees: list[ast.AST] = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.If, ast.IfExp, ast.While, ast.Assert)):
-            subtrees.append(node.test)
-        elif isinstance(node, ast.Compare):
-            subtrees.append(node)
-        elif isinstance(node, ast.Match):
-            subtrees.extend(case.pattern for case in node.cases)
-    return subtrees
-
-
-def _find_forbidden_literals(tree: ast.AST) -> list[ast.Constant]:
-    """B3 fix: AST-based walk, not a substring `"CRA" not in source` check.
-
-    Flags a string-literal `Constant` node whose value is a forbidden
-    literal — a regulation name (`CRA`/`GDPR`/`NIS2`) or one of the real
-    CELEX identifiers of the instruments ingested today
-    (`32024R2847`/`32016R0679`/`32022L2555`) — when it appears inside a
-    conditional/branching construct's decision
-    (`_conditional_decision_subtrees`) — i.e. a genuine
-    `short_name == "CRA"`-shaped regulation-name conditional. Comments are
-    already invisible to `ast` (discarded at tokenization); docstring `Expr`
-    nodes are additionally, explicitly excluded (`_docstring_constant_ids`).
-    """
-    docstring_ids = _docstring_constant_ids(tree)
-    seen: set[int] = set()
-    violations: list[ast.Constant] = []
-    for subtree in _conditional_decision_subtrees(tree):
-        for node in ast.walk(subtree):
-            if (
-                isinstance(node, ast.Constant)
-                and isinstance(node.value, str)
-                and node.value in _FORBIDDEN_LITERALS
-                and id(node) not in docstring_ids
-                and id(node) not in seen
-            ):
-                seen.add(id(node))
-                violations.append(node)
-    return violations
-
-
 def test_no_forbidden_literal_conditionals_in_ingestion_package() -> None:
-    for path in _files_to_scan():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        violations = _find_forbidden_literals(tree)
-        assert not violations, (
-            f"{path}: forbidden-literal conditional found at "
-            f"{[(v.value, v.lineno) for v in violations]}"
-        )
+    violations = scan_package_for_forbidden_conditionals(ingestion_package)
+    assert not violations, (
+        "forbidden-literal conditional(s) found: "
+        f"{[(str(path), node.value, node.lineno) for path, node in violations]}"
+    )
 
 
 def test_files_to_scan_covers_every_known_ingestion_module() -> None:
@@ -373,7 +303,7 @@ def test_find_forbidden_literals_flags_a_hypothetical_conditional() -> None:
         "def f(short_name):\n    if short_name == 'CRA':\n        return True\n    return False\n"
     )
 
-    violations = _find_forbidden_literals(tree)
+    violations = find_forbidden_literals(tree)
 
     assert [v.value for v in violations] == ["CRA"]
 
@@ -390,7 +320,7 @@ def test_find_forbidden_literals_flags_a_hypothetical_celex_conditional() -> Non
         "    return False\n"
     )
 
-    assert [v.value for v in _find_forbidden_literals(tree)] == ["32016R0679"]
+    assert [v.value for v in find_forbidden_literals(tree)] == ["32016R0679"]
 
 
 def test_find_forbidden_literals_ignores_docstring_examples() -> None:
@@ -405,7 +335,7 @@ def test_find_forbidden_literals_ignores_docstring_examples() -> None:
         "    pass\n"
     )
 
-    violations = _find_forbidden_literals(tree)
+    violations = find_forbidden_literals(tree)
 
     assert violations == []
 
@@ -415,4 +345,4 @@ def test_find_forbidden_literals_ignores_docstring_examples() -> None:
         "    pass\n"
     )
 
-    assert _find_forbidden_literals(celex_tree) == []
+    assert find_forbidden_literals(celex_tree) == []
