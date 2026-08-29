@@ -1,6 +1,7 @@
-"""FalkorDB persistence for `ps_service.company_merge`'s single-tenant graph —
-`persist_role_and_requirement_passthrough` (PLAN_REVIEWED.md §10 Increment 10,
-§6) and `persist_canonical_nodes`/`backfill_canonical_embeddings`
+"""FalkorDB persistence for `ps_service.company_merge`'s single-tenant graph.
+
+`persist_role_and_requirement_passthrough` (PLAN_REVIEWED.md §10 Increment
+10, §6) and `persist_canonical_nodes`/`backfill_canonical_embeddings`
 (PLAN_REVIEWED.md §10 Increment 11, §6.1/§6.2).
 
 Own copy of `ps_service.domain_mapper.graph_writer`'s connectivity-wrapping
@@ -72,20 +73,22 @@ canonical_id` entries.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import redis.exceptions
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError
-from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
-from ps_service.company_merge.models import (
-    BareEdge,
-    BaselineNode,
-    CanonicalNodeProperties,
-    CanonicalResolution,
-    ProvenanceEdge,
-)
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+
+if TYPE_CHECKING:
+    from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
+    from ps_service.company_merge.models import (
+        BareEdge,
+        BaselineNode,
+        CanonicalNodeProperties,
+        CanonicalResolution,
+        ProvenanceEdge,
+    )
 
 __all__ = [
     "backfill_canonical_embeddings",
@@ -113,10 +116,12 @@ _EDGE_ENDPOINT_LABELS: dict[Literal["HAS", "SATISFIED_BY", "REQUIRES"], tuple[st
 def _execute_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every `graph.query()` write in this module goes
-    through, so FalkorDB connectivity failures get recorded in
-    `ps_service.dependency_health` -- mirrors `ps_service.domain_mapper.
-    graph_writer._execute_query` exactly."""
+    """Wrap every `graph.query()` write in this module for connectivity-health recording.
+
+    The one call site every write goes through, so FalkorDB connectivity
+    failures get recorded in `ps_service.dependency_health` -- mirrors
+    `ps_service.domain_mapper.graph_writer._execute_query` exactly.
+    """
     try:
         result = graph.query(query, params=params)
     except redis.exceptions.RedisError as exc:
@@ -147,11 +152,14 @@ def _upsert_provenance_edge(
     target_id: str,
     source_ref: str,
 ) -> None:
-    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`,
-    shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges -- mirrors `domain_mapper.graph_writer._upsert_regulatory_instrument_edge`
-    exactly. `relationship_type`/`target_label` are always fixed Python
-    literals; `target_id`/`source_ref` flow through `params` only."""
+    """Write a `RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label` edge.
+
+    Shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
+    edges -- mirrors
+    `domain_mapper.graph_writer._upsert_regulatory_instrument_edge` exactly.
+    `relationship_type`/`target_label` are always fixed Python literals;
+    `target_id`/`source_ref` flow through `params` only.
+    """
     _execute_query(
         graph,
         f"MATCH (r:{_REGULATORY_INSTRUMENT_LABEL} {{id: $regulatory_instrument_id}}), "
@@ -173,25 +181,26 @@ def persist_role_and_requirement_passthrough(
     requirement_nodes: tuple[BaselineNode, ...],
     provenance_edges: tuple[ProvenanceEdge, ...],
 ) -> None:
-    """Persist one regulation's RegulatoryInstrument/Role/Requirement nodes and their
-    `DEFINES`/`EXPRESSES` provenance edges into `single_tenant_graph` --
+    """Persist one regulation's RegulatoryInstrument/Role/Requirement nodes and provenance edges.
+
+    Writes the `DEFINES`/`EXPRESSES` edges into `single_tenant_graph` with an
     unconditional `MERGE ... SET`, mirroring #15's own
-    `persist_role_and_requirement_graph` shape exactly (PLAN_REVIEWED.md
-    §6). These node kinds are never canonically deduped -- RegulatoryInstrument has
+    `persist_role_and_requirement_graph` shape exactly (PLAN_REVIEWED.md §6).
+    These node kinds are never canonically deduped -- RegulatoryInstrument has
     exactly one node per regulation, and Role/Requirement dedup is out of
     scope (AC-008) -- so there is no "existing wins" concern here, unlike
     Capability (`persist_canonical_nodes`, below). Obligation is in the same
     passthrough category since #42 -- see `persist_obligation_passthrough`.
 
-    Idempotent: re-running with identical input against the same graph
-    issues the same calls and leaves the same end state, since every write
-    is a `MERGE` keyed on `id`.
+    Idempotent: re-running with identical input against the same graph issues
+    the same calls and leaves the same end state, since every write is a
+    `MERGE` keyed on `id`.
 
-    All nodes (RegulatoryInstrument, then every Role, then every Requirement) are
-    written before any edge -- an edge write `MATCH`es both its RegulatoryInstrument
-    and target endpoints, so writing nodes first is load-bearing, not
-    stylistic, mirroring `domain_mapper.graph_writer`'s own write-order
-    contract.
+    All nodes (RegulatoryInstrument, then every Role, then every Requirement)
+    are written before any edge -- an edge write `MATCH`es both its
+    RegulatoryInstrument and target endpoints, so writing nodes first is
+    load-bearing, not stylistic, mirroring `domain_mapper.graph_writer`'s own
+    write-order contract.
     """
     _execute_query(
         single_tenant_graph,
@@ -220,13 +229,14 @@ def persist_obligation_passthrough(
     single_tenant_graph: GraphHandle,
     obligation_nodes: tuple[BaselineNode, ...],
 ) -> None:
-    """Persist one regulation's Obligation nodes into `single_tenant_graph`
-    with the same unconditional `MERGE ... SET` shape as Role/Requirement
-    (issue #42: Obligation is Role-scoped, a weak entity of exactly one
-    Role, never deduped across sources). No `ON CREATE SET` "existing wins"
-    concern -- a given Obligation id can only ever originate from one Role,
-    which originates from one regulation, so re-merging the same regulation
-    is the only way the same id recurs and its properties are identical.
+    """Persist one regulation's Obligation nodes into `single_tenant_graph`.
+
+    Uses the same unconditional `MERGE ... SET` shape as Role/Requirement
+    (issue #42: Obligation is Role-scoped, a weak entity of exactly one Role,
+    never deduped across sources). No `ON CREATE SET` "existing wins" concern
+    -- a given Obligation id can only ever originate from one Role, which
+    originates from one regulation, so re-merging the same regulation is the
+    only way the same id recurs and its properties are identical.
 
     Called by `merge.py` after `persist_role_and_requirement_passthrough`
     and before `persist_rewired_edges`, so the `HAS`/`SATISFIED_BY`/
@@ -245,10 +255,11 @@ def persist_canonical_nodes(
     *,
     kind: Literal["Capability"],
 ) -> None:
-    """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node
-    in `single_tenant_graph` (PLAN_REVIEWED.md §6.1, Increment 11's mint
-    half). A `match_kind="exact"`/`"semantic"` resolution gets NO write call
-    at all here -- it already resolved onto an existing canonical node,
+    """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node.
+
+    Writes into `single_tenant_graph` (PLAN_REVIEWED.md §6.1, Increment 11's
+    mint half). A `match_kind="exact"`/`"semantic"` resolution gets NO write
+    call at all here -- it already resolved onto an existing canonical node,
     and this function's whole point is to never touch one.
 
     `kind` is `"Capability"` only since #42 -- Obligation is no longer
@@ -297,10 +308,11 @@ def backfill_canonical_embeddings(
     kind: Literal["Capability"],
     embeddings: dict[str, tuple[float, ...]],
 ) -> None:
-    """For every `(id, embedding)` pair in `embeddings`, write the embedding
-    onto an ALREADY-EXISTING `kind` canonical node (PLAN_REVIEWED.md §6.2,
-    B2's fix) -- distinct from `persist_canonical_nodes`' `ON CREATE SET`
-    mint path, and deliberately never touching a node's other properties.
+    """Write each `embeddings` entry onto an ALREADY-EXISTING `kind` canonical node.
+
+    For every `(id, embedding)` pair (PLAN_REVIEWED.md §6.2, B2's fix) --
+    distinct from `persist_canonical_nodes`' `ON CREATE SET` mint path, and
+    deliberately never touching a node's other properties.
 
     One call per id:
 
@@ -328,8 +340,9 @@ def backfill_canonical_embeddings(
 
 
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
-    """Every one of `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`)
-    is Capability -- the only endpoints that went through
+    """Return `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`) is Capability.
+
+    Capability endpoints are the only ones that went through
     `dedup.dedupe_canonical_nodes` and are therefore guaranteed, by
     construction, to carry an entry in a correctly-built
     `canonical_id_by_incoming_id`. Since #42, Obligation is a passthrough
@@ -337,7 +350,8 @@ def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
     (Role/Requirement source, Obligation target -- all passthrough) and
     `REQUIRES` yields only its target (Capability); its Obligation source
     passes through. Order in the returned tuple is source-before-target when
-    both are eligible; callers should not otherwise rely on it."""
+    both are eligible; callers should not otherwise rely on it.
+    """
     source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
     dedupe_eligible_labels = (_CAPABILITY_LABEL,)
     ids: list[str] = []
@@ -351,13 +365,14 @@ def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
 def _validate_rewired_edge_endpoints(
     bare_edges: tuple[BareEdge, ...], canonical_id_by_incoming_id: dict[str, str]
 ) -> None:
-    """Whole-collection validation pass, mirroring `domain_mapper.
-    graph_writer._validate_role_references`'s B3 shape: EVERY one of an
-    edge's dedupe-eligible endpoints (see `_dedupe_eligible_endpoint_ids` --
-    since #42 that is only a `REQUIRES` edge's Capability target) must
-    resolve within `canonical_id_by_incoming_id` before
-    `persist_rewired_edges` issues a single `graph.query` call for ANY edge
-    -- not interleaved validate-then-write per edge. Raises
+    """Whole-collection validation pass over every edge's dedupe-eligible endpoints.
+
+    Mirrors `domain_mapper.graph_writer._validate_role_references`'s B3
+    shape: EVERY one of an edge's dedupe-eligible endpoints (see
+    `_dedupe_eligible_endpoint_ids` -- since #42 that is only a `REQUIRES`
+    edge's Capability target) must resolve within `canonical_id_by_incoming_id`
+    before `persist_rewired_edges` issues a single `graph.query` call for ANY
+    edge -- not interleaved validate-then-write per edge. Raises
     `CompanyMergePersistenceError` on the first violation found, with zero
     `graph.query` calls having been made by the time this raises.
 
@@ -384,11 +399,12 @@ def persist_rewired_edges(
     bare_edges: tuple[BareEdge, ...],
     canonical_id_by_incoming_id: dict[str, str],
 ) -> None:
-    """Persist `HAS`/`SATISFIED_BY`/`REQUIRES` edges into `single_tenant_graph`
-    (PLAN_REVIEWED.md §6.2/§10 Increment 12), rewriting each edge's endpoints
-    through `canonical_id_by_incoming_id` (`incoming_id -> canonical_id`,
-    Capability dedup's resolutions -- see module docstring) instead of
-    writing the baseline-local id verbatim.
+    """Persist `HAS`/`SATISFIED_BY`/`REQUIRES` edges into `single_tenant_graph`.
+
+    Rewrites each edge's endpoints through `canonical_id_by_incoming_id`
+    (`incoming_id -> canonical_id`, Capability dedup's resolutions -- see
+    module docstring) instead of writing the baseline-local id verbatim
+    (PLAN_REVIEWED.md §6.2/§10 Increment 12).
 
     The rule is endpoint-agnostic, not edge-type-specific: for BOTH the
     source and target of every edge, if that endpoint's baseline-local id

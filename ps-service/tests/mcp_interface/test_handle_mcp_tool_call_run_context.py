@@ -14,8 +14,19 @@ fixtures. No `unittest.mock`.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ps_service.logging.run_context import current_run_id
 from ps_service.mcp_interface import mcp_server
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from ps_service.logging.emitter import LogEmitter
+
+    type MakeEmitter = Callable[..., tuple[LogEmitter, Path]]
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 
 class _FakeQueryResult:
@@ -28,7 +39,8 @@ class _FakeQueryResult:
 
 class _RunIdRecordingGraphHandle:
     """Satisfies `GraphHandle` structurally. Records the `run_id` bound in
-    the calling context every time `query()` is invoked."""
+    the calling context every time `query()` is invoked.
+    """
 
     def __init__(self) -> None:
         self.seen_run_ids: list[str | None] = []
@@ -38,7 +50,7 @@ class _RunIdRecordingGraphHandle:
         return _FakeQueryResult(header=[[0, "n"]], result_set=[["x"]])
 
 
-def test_run_id_bound_and_visible_to_delegate(make_emitter) -> None:
+def test_run_id_bound_and_visible_to_delegate(make_emitter: MakeEmitter) -> None:
     emitter, _ = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
@@ -51,7 +63,7 @@ def test_run_id_bound_and_visible_to_delegate(make_emitter) -> None:
     assert run_id != ""
 
 
-def test_two_calls_get_distinct_run_ids(make_emitter) -> None:
+def test_two_calls_get_distinct_run_ids(make_emitter: MakeEmitter) -> None:
     emitter, _ = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
@@ -63,7 +75,9 @@ def test_two_calls_get_distinct_run_ids(make_emitter) -> None:
     assert fake.seen_run_ids[0] != fake.seen_run_ids[1]
 
 
-def test_emitted_log_entry_carries_bound_run_id(make_emitter, read_lines) -> None:
+def test_emitted_log_entry_carries_bound_run_id(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
@@ -77,7 +91,7 @@ def test_emitted_log_entry_carries_bound_run_id(make_emitter, read_lines) -> Non
     assert entry["run_id"] == fake.seen_run_ids[0]
 
 
-def test_no_emitted_log_entry_contains_query_text(make_emitter) -> None:
+def test_no_emitted_log_entry_contains_query_text(make_emitter: MakeEmitter) -> None:
     emitter, log_path = make_emitter()
     fake = _RunIdRecordingGraphHandle()
     query = "MATCH (n {ssn: '123-45-6789'}) RETURN n"

@@ -20,16 +20,18 @@ from __future__ import annotations
 
 import re
 import time
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-from ps_service.logging.emitter import LogEmitter
 from ps_service.logging.facade import emit_log_entry
 from ps_service.query_engine.errors import (
     QueryEngineExecutionError,
     WriteClauseRejectedError,
 )
-from ps_service.query_engine.falkordb_client import GraphHandle
 from ps_service.query_engine.models import QueryResult
+
+if TYPE_CHECKING:
+    from ps_service.logging.emitter import LogEmitter
+    from ps_service.query_engine.falkordb_client import GraphHandle
 
 _COMPONENT = "query_engine"
 _ACTION = "execute_cypher_query"
@@ -45,10 +47,13 @@ _WRITE_CLAUSE_REJECTION_MESSAGE = (
 
 
 def is_write_clause(query: str) -> bool:
-    """Single source of truth for the write-clause check -- the AC-002
-    boundary every caller goes through, including `mcp_interface`'s
-    in-process `handle_mcp_tool_call`. It has one call site
-    (`execute_cypher_query`); exported, not duplicated as a second regex."""
+    """Return True if `query` contains a write clause.
+
+    Single source of truth for the AC-002 check -- the boundary every
+    caller goes through, including `mcp_interface`'s in-process
+    `handle_mcp_tool_call`. One call site (`execute_cypher_query`);
+    exported, not duplicated as a second regex.
+    """
     return bool(_WRITE_CLAUSE.search(query))
 
 
@@ -83,17 +88,15 @@ def execute_cypher_query(
         _log(outcome="failed", started=started, emitter=emitter)
         raise QueryEngineExecutionError(str(exc)) from exc
 
-    columns = (
-        [cast(str, c[1]) for c in cast("list[list[object]]", result.header)]
-        if result.header
-        else []
-    )
+    columns = [cast("str", c[1]) for c in result.header] if result.header else []
     rows = [list(r) for r in cast("list[list[object]]", result.result_set)]
     _log(outcome="succeeded", started=started, emitter=emitter, row_count=len(rows))
     return QueryResult(columns=columns, rows=rows, row_count=len(rows))
 
 
-def _log(*, outcome: str, started: float, emitter: LogEmitter | None, row_count: int | None = None) -> None:
+def _log(
+    *, outcome: str, started: float, emitter: LogEmitter | None, row_count: int | None = None
+) -> None:
     """Emit one `LogEntry` for a completed `execute_cypher_query` call.
 
     Never logs the query text -- `extra` carries only `row_count`, and only

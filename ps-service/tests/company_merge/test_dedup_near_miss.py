@@ -6,6 +6,11 @@ a below-threshold semantic score mints a new canonical node AND records a
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
@@ -48,9 +53,9 @@ class _ScriptedCallEmbedding:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         vector = self._vectors_by_text.get(text)
         if vector is None:
@@ -60,7 +65,9 @@ class _ScriptedCallEmbedding:
         )
 
 
-def test_dedupe_canonical_nodes_below_threshold_mints_and_records_near_miss(make_emitter) -> None:
+def test_dedupe_canonical_nodes_below_threshold_mints_and_records_near_miss(
+    make_emitter: MakeEmitter,
+) -> None:
     emitter, _log_path = make_emitter()
     existing_id = "obl_existing_conduct_risk_assessment"
     incoming_id = "obl_incoming_report_incident"

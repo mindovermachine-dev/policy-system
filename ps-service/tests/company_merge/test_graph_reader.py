@@ -36,7 +36,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
-    `.properties` is ever read."""
+    `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -45,7 +46,8 @@ class _FakeRegulatoryInstrumentNode:
 class _ScriptedFakeGraph:
     """Satisfies `GraphHandle` structurally. Every one of the ten queries
     `read_baseline_graph` issues is answered with its own scripted row set,
-    dispatched by a distinctive substring of the query text."""
+    dispatched by a distinctive substring of the query text.
+    """
 
     def __init__(
         self,
@@ -92,7 +94,9 @@ class _ScriptedFakeGraph:
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
         if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
+            return _FakeQueryResult(
+                [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -141,7 +145,8 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
         },
         role_nodes=(
             BaselineNode(
-                id="role_manufacturer_abc123", properties={"name": "Manufacturer", "confidence": 0.9}
+                id="role_manufacturer_abc123",
+                properties={"name": "Manufacturer", "confidence": 0.9},
             ),
         ),
         requirement_nodes=(
@@ -207,21 +212,26 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
     )
 
 
-def test_read_baseline_graph_returns_empty_tuples_when_no_obligation_or_capability_nodes_exist() -> (
-    None
-):
+def test_read_baseline_graph_empty_when_no_obligation_or_capability_nodes() -> None:
     """AC-004 edge case (per #15's own DeriveObligationsAndCapabilities
     scope): a regulation whose derivation surfaced every Requirement as
     unmatched has zero Obligation and zero Capability nodes -- and
     therefore zero `HAS`/`SATISFIED_BY`/`REQUIRES` edges, since every one of
     those edge types requires an Obligation or Capability endpoint. Role/
     Requirement/`DEFINES`/`EXPRESSES` are still carried forward. No
-    exception is raised."""
+    exception is raised.
+    """
     graph = _ScriptedFakeGraph(
         regulatory_instrument_properties={"id": "GDPR-1.0", "title": "GDPR", "jurisdiction": "EU"},
         role_rows=[["role_controller_def456", "Controller", 0.95]],
         requirement_rows=[
-            ["GDPR-1.0_req_art_5.1", "Ensure lawful processing.", "requirement", 0.95, "role_controller_def456"]
+            [
+                "GDPR-1.0_req_art_5.1",
+                "Ensure lawful processing.",
+                "requirement",
+                0.95,
+                "role_controller_def456",
+            ]
         ],
         obligation_rows=[],
         capability_rows=[],
@@ -246,7 +256,8 @@ def test_read_regulatory_instrument_properties_includes_instrument_type() -> Non
     """AC-BI-011 (Company Merge, read side): the Regulation property bag is
     read back whole (`dict(node.properties)`, no field filter), so
     `instrument_type` reaches `BaselineGraph.regulatory_instrument_properties` with NO
-    src change."""
+    src change.
+    """
     graph = _ScriptedFakeGraph(
         regulatory_instrument_properties={
             "id": "NIS2-1.0",
@@ -275,7 +286,8 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
     """Live smoke test: writes a minimal baseline graph via a direct Cypher
     call against a real, reachable FalkorDB instance, then asserts
     `read_baseline_graph` reads it back correctly. Requires FalkorDB running
-    at 127.0.0.1:6379."""
+    at 127.0.0.1:6379.
+    """
     from ps_service.company_merge.falkordb_client import connect, select_graph
 
     db = connect(host="127.0.0.1", port=6379)
@@ -306,5 +318,7 @@ def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -
         BaselineNode(id="role_live_abc", properties={"name": "LiveRole", "confidence": 0.9}),
     )
     assert result.provenance_edges == (
-        ProvenanceEdge(relationship_type="DEFINES", target_id="role_live_abc", source_ref="Article 1"),
+        ProvenanceEdge(
+            relationship_type="DEFINES", target_id="role_live_abc", source_ref="Article 1"
+        ),
     )

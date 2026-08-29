@@ -43,7 +43,8 @@ def _keyword_names(tree: ast.Module) -> list[str]:
 
 def _call_arg_string_constants(tree: ast.Module) -> list[str]:
     """Every string literal passed positionally or as a keyword value to any
-    call -- deliberately NOT docstrings or module-level assignments."""
+    call -- deliberately NOT docstrings or module-level assignments.
+    """
     values: list[str] = []
     for call in _calls(tree):
         operands = list(call.args) + [kw.value for kw in call.keywords]

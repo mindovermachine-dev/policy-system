@@ -21,8 +21,7 @@ conflict.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -30,12 +29,19 @@ from ps_service.dependency_health import (
     reset_for_tests as reset_dependency_health_for_tests,
 )
 from ps_service.logging import EmitterConfig, LogEmitter
-from ps_service.logging.emitter import TextSink
 from ps_service.logging.facade import reset_for_tests
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+    from ps_service.logging.emitter import TextSink
 
 
 @pytest.fixture(autouse=True)
-def _isolate_logging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _isolate_logging(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
     """Redirect `PS_LOGGING_DIR` to a per-test `tmp_path` and reset the facade around each test.
 
     Ensures no test ever reads leftover state from a previous test and no
@@ -70,7 +76,9 @@ def make_emitter(tmp_path: Path):
     then read the same path.
     """
 
-    def _make(*, filename: str = "test.jsonl", fallback: TextSink | None = None) -> tuple[LogEmitter, Path]:
+    def _make(
+        *, filename: str = "test.jsonl", fallback: TextSink | None = None
+    ) -> tuple[LogEmitter, Path]:
         log_path = tmp_path / filename
         config = EmitterConfig(log_path=log_path, fallback=fallback)
         return LogEmitter(config), log_path
@@ -85,6 +93,8 @@ def read_lines():
     def _read(log_path: Path) -> list[dict[str, object]]:
         if not log_path.exists():
             return []
-        return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+        return [
+            json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line
+        ]
 
     return _read

@@ -1,5 +1,6 @@
-"""`merge_baseline_graph` -- the `MergeBaselineGraph` public action
-(PLAN_REVIEWED.md §7, §10 Increments 13-14): the top-level orchestration that
+"""`merge_baseline_graph` -- the `MergeBaselineGraph` public action.
+
+The top-level orchestration (PLAN_REVIEWED.md §7, §10 Increments 13-14) that
 wires `graph_reader.read_baseline_graph`, `dedup.dedupe_canonical_nodes`
 (Capability only since #42), and every `graph_writer` function together.
 
@@ -43,12 +44,16 @@ for it; it only ever runs as part of this orchestration.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ps_service.company_merge import dedup, graph_reader, graph_writer
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
-from ps_service.company_merge.falkordb_client import GraphHandle
 from ps_service.company_merge.models import MergeResult
-from ps_service.llm_interface.client import EmbeddingCaller
 from ps_service.logging import LogEmitter, emit_log_entry
+
+if TYPE_CHECKING:
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.llm_interface.client import EmbeddingCaller
 
 __all__ = ["merge_baseline_graph"]
 
@@ -67,11 +72,10 @@ def merge_baseline_graph(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> MergeResult:
-    """Merge one regulation's `{short}_baseline` graph into
-    `single_tenant_graph` (`MergeBaselineGraph`, PLAN_REVIEWED.md §7).
+    """Merge one regulation's `{short}_baseline` graph into `single_tenant_graph`.
 
-    `similarity_threshold` is required at this call site (B1's fix,
-    PLAN_REVIEWED.md §8): `None` means
+    `MergeBaselineGraph`, PLAN_REVIEWED.md §7. `similarity_threshold` is
+    required at this call site (B1's fix, PLAN_REVIEWED.md §8): `None` means
     `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` was never resolved via
     `ServiceConfig`, and raises `CompanyMergeConfigurationError` immediately
     -- before `baseline_graph`/`single_tenant_graph` receive a single call of

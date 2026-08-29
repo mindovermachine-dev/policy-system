@@ -57,11 +57,14 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 if sys.platform == "win32":  # pragma: no cover - documented platform caveat, not exercised here
     pytest.skip("subprocess signal semantics differ on Windows", allow_module_level=True)
@@ -69,7 +72,9 @@ if sys.platform == "win32":  # pragma: no cover - documented platform caveat, no
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOST = "127.0.0.1"
 _PORT = 8000
-_OVERRIDE_PORT = 8010  # distinct from _PORT so this test can run independently of TestSharedServer's lifecycle
+_OVERRIDE_PORT = (
+    8010  # distinct from _PORT so this test can run independently of TestSharedServer's lifecycle
+)
 _HEALTH_URL = f"http://{_HOST}:{_PORT}/health"
 _READY_POLL_TIMEOUT_SECONDS = 5.0
 _READY_POLL_INTERVAL_SECONDS = 0.05
@@ -89,7 +94,8 @@ def _build_env(log_dir: Path, extra_env: dict[str, str] | None) -> dict[str, str
 def _spawn_via_documented_command(
     log_dir: Path, *, extra_env: dict[str, str] | None = None
 ) -> subprocess.Popen[bytes]:
-    """Spawn the exact documented local-run command from `CONTRIBUTING.md`: `uv run python -m ps_service`.
+    """Spawn the exact documented local-run command from `CONTRIBUTING.md`:
+    `uv run python -m ps_service`.
 
     Used for AC-BI-003/AC-BI-004, where the point is proving that literal
     command works. See the module docstring for why this wrapper's own
@@ -97,7 +103,13 @@ def _spawn_via_documented_command(
     tests, which use `_spawn_direct` instead.
     """
     return subprocess.Popen(
-        ["uv", "run", "python", "-m", "ps_service"],
+        [  # noqa: S607 — `uv` resolved from PATH by design (integration test)
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "ps_service",
+        ],
         cwd=_REPO_ROOT,
         env=_build_env(log_dir, extra_env),
         stdout=subprocess.PIPE,
@@ -105,8 +117,11 @@ def _spawn_via_documented_command(
     )
 
 
-def _spawn_direct(log_dir: Path, *, extra_env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
-    """Spawn `python -m ps_service` directly via `sys.executable`, without the `uv run` wrapper layer.
+def _spawn_direct(
+    log_dir: Path, *, extra_env: dict[str, str] | None = None
+) -> subprocess.Popen[bytes]:
+    """Spawn `python -m ps_service` directly via `sys.executable`, without the
+    `uv run` wrapper layer.
 
     Used where the spawned pid must be the actual server process so
     SIGTERM/exit-code assertions are meaningful (see module docstring).
@@ -138,7 +153,8 @@ def _terminate(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _try_get_health(url: str = _HEALTH_URL) -> httpx.Response | None:
-    """Attempt a single `GET /health` call, returning `None` if the server isn't accepting connections yet.
+    """Attempt a single `GET /health` call, returning `None` if the server isn't
+    accepting connections yet.
 
     Factored out of `_wait_until_healthy`'s polling loop so the `try`/`except`
     lives in a single call, not inline inside the loop body (ruff PERF203).
@@ -173,7 +189,8 @@ def _wait_until_healthy(
 
 
 class TestSharedServer:
-    """Tests (a) and (b): both only need "is the server up and reachable", so they share one process.
+    """Tests (a) and (b): both only need "is the server up and reachable", so they
+    share one process.
 
     Grouped in a class so `running_server` can be `scope="class"` — shared
     across this class's tests, but torn down (freeing `_PORT`, the default
@@ -183,7 +200,9 @@ class TestSharedServer:
 
     @pytest.fixture(scope="class")
     @classmethod
-    def running_server(cls, tmp_path_factory: pytest.TempPathFactory) -> Iterator[subprocess.Popen[bytes]]:
+    def running_server(
+        cls, tmp_path_factory: pytest.TempPathFactory
+    ) -> Iterator[subprocess.Popen[bytes]]:
         """Class-scoped: one live `ps_service` subprocess shared by this class's tests.
 
         `@classmethod` per pytest's guidance for class-scoped fixtures
@@ -203,7 +222,8 @@ class TestSharedServer:
     def test_documented_run_command_starts_process_and_it_stays_running(
         self, running_server: subprocess.Popen[bytes]
     ) -> None:
-        """AC-BI-003 + AC-BI-004: the documented `uv run python -m ps_service` command starts a live, staying-up process.
+        """AC-BI-003 + AC-BI-004: the documented `uv run python -m ps_service`
+        command starts a live, staying-up process.
 
         Polls `/health` over real HTTP until it responds, then asserts the
         subprocess is still alive (not a crash-then-somehow-still-200 fluke).
@@ -218,7 +238,8 @@ class TestSharedServer:
     def test_process_binds_health_and_ready_to_localhost_only(
         self, running_server: subprocess.Popen[bytes]
     ) -> None:
-        """AC-BI-002 (behavioral half): the running process's listening socket is bound to 127.0.0.1, not 0.0.0.0/*.
+        """AC-BI-002 (behavioral half): the running process's listening socket is
+        bound to 127.0.0.1, not 0.0.0.0/*.
 
         Uses `lsof -n -P -iTCP:<port> -sTCP:LISTEN` (confirmed available on
         this darwin dev machine per PLAN_REVIEWED.md §4). `-n -P` disable
@@ -246,7 +267,7 @@ class TestSharedServer:
 
         _wait_until_healthy()  # ensure the listening socket is definitely open
 
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 — trusted dev tool (lsof), args are literals
             [lsof_path, "-n", "-P", f"-iTCP:{_PORT}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
@@ -306,7 +327,8 @@ def test_sigterm_triggers_clean_bounded_exit(tmp_path: Path) -> None:
 
 @pytest.mark.integration
 def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_path: Path) -> None:
-    """AC-BI-010 (subprocess half): a port-bind failure exits nonzero and reports it without leaking secrets.
+    """AC-BI-010 (subprocess half): a port-bind failure exits nonzero and reports
+    it without leaking secrets.
 
     Occupies the default port (`_PORT`) with a raw socket first, then spawns the
     subprocess pointed at the same port; uvicorn's own bind attempt should
@@ -326,7 +348,9 @@ def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_pa
 
         proc = _spawn_direct(tmp_path, extra_env={"PS_TEST_SECRET_SENTINEL": secret_sentinel})
         try:
-            _, stderr = proc.communicate(timeout=_READY_POLL_TIMEOUT_SECONDS + _SHUTDOWN_WAIT_BUFFER_SECONDS)
+            _, stderr = proc.communicate(
+                timeout=_READY_POLL_TIMEOUT_SECONDS + _SHUTDOWN_WAIT_BUFFER_SECONDS
+            )
         except subprocess.TimeoutExpired:
             _terminate(proc)
             pytest.fail("process did not exit promptly after a port-bind failure")
@@ -340,7 +364,8 @@ def test_port_bind_failure_exits_nonzero_and_stderr_has_no_secret_content(tmp_pa
 
 @pytest.mark.integration
 def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path: Path) -> None:
-    """AC-BI-003 (subprocess/behavioral proof): PS_SERVICE_PORT actually rebinds the real listening port.
+    """AC-BI-003 (subprocess/behavioral proof): PS_SERVICE_PORT actually rebinds
+    the real listening port.
 
     Spawns its own dedicated subprocess with `PS_SERVICE_PORT=_OVERRIDE_PORT`
     (distinct from `_PORT`, the default-path constant used by
@@ -363,7 +388,8 @@ def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path:
 
 @pytest.mark.integration
 def test_invalid_ps_service_port_env_exits_nonzero_without_binding(tmp_path: Path) -> None:
-    """AC-BI-009 (subprocess/behavioral proof): an invalid PS_SERVICE_PORT fails before uvicorn ever binds.
+    """AC-BI-009 (subprocess/behavioral proof): an invalid PS_SERVICE_PORT fails
+    before uvicorn ever binds.
 
     `main()` calls `load_config()` first; an unparseable `PS_SERVICE_PORT`
     makes `_parse_port` raise `ServiceConfigurationError` synchronously,
@@ -381,7 +407,9 @@ def test_invalid_ps_service_port_env_exits_nonzero_without_binding(tmp_path: Pat
     proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": "not-a-number"})
     try:
         try:
-            _, stderr = proc.communicate(timeout=_READY_POLL_TIMEOUT_SECONDS + _SHUTDOWN_WAIT_BUFFER_SECONDS)
+            _, stderr = proc.communicate(
+                timeout=_READY_POLL_TIMEOUT_SECONDS + _SHUTDOWN_WAIT_BUFFER_SECONDS
+            )
         except subprocess.TimeoutExpired:
             pytest.fail("process did not exit promptly after an invalid PS_SERVICE_PORT")
 

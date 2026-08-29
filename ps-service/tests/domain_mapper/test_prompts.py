@@ -237,7 +237,8 @@ def test_parse_obligation_response_malformed_json_raises_typed_error() -> None:
 def test_parse_obligation_response_neither_matched_new_nor_unmatchable_raises_typed_error() -> None:
     """The exact LEARNINGS.md B1-documented failure shape: a syntactically
     valid response with neither a valid match nor a new-text value nor
-    unmatchable=true set."""
+    unmatchable=true set.
+    """
     payload = json.dumps(
         {"matched_existing_id": None, "new_text": None, "unmatchable": False, "confidence": 0.5}
     )
@@ -250,7 +251,8 @@ def test_parse_obligation_response_neither_matched_new_nor_unmatchable_raises_ty
 def test_parse_obligation_response_matched_id_not_in_role_view_raises_typed_error() -> None:
     """A matched_existing_id that doesn't resolve within this Role's own
     registry view (a hallucinated match) is treated the same as a missing
-    match — a typed error, not a silently-accepted dangling reference."""
+    match — a typed error, not a silently-accepted dangling reference.
+    """
     payload = _match_payload("obl_nonexistent_000000")
 
     with pytest.raises(DomainMapperDerivationError) as exc_info:
@@ -337,7 +339,8 @@ def test_parse_capability_response_multi_capability_response_returns_two_decisio
     """Proves the list-of-decisions shape actually supports >1 -- a single
     Obligation may bundle more than one distinct Capability requirement
     (PLAN_REVIEWED.md §7.4, multi-capability-per-Obligation ported from
-    spikes/cellar2/derive_capabilities.py)."""
+    spikes/cellar2/derive_capabilities.py).
+    """
     payload = _capability_payload(
         _mint_item("Incident Detection", "Detects security incidents in real time."),
         _mint_item("Regulatory Notification Workflow", "Notifies the authority in time."),
@@ -372,7 +375,8 @@ def test_parse_capability_response_missing_capabilities_key_raises_typed_error()
 def test_parse_capability_response_item_missing_both_matched_and_new_raises_typed_error() -> None:
     """The exact LEARNINGS.md B1-documented failure shape ported to
     Capability derivation: a syntactically valid item with neither a valid
-    matched_existing_id nor a new_name value."""
+    matched_existing_id nor a new_name value.
+    """
     payload = _capability_payload(
         {"matched_existing_id": None, "new_name": None, "new_description": None, "confidence": 0.5}
     )
@@ -384,7 +388,8 @@ def test_parse_capability_response_item_missing_both_matched_and_new_raises_type
 
 def test_parse_capability_response_matched_id_not_in_registry_raises_typed_error() -> None:
     """A matched_existing_id that doesn't resolve within the given registry
-    (a hallucinated match) is treated as malformed, not silently accepted."""
+    (a hallucinated match) is treated as malformed, not silently accepted.
+    """
     payload = _capability_payload(_match_item("cap_nonexistent_000000"))
 
     with pytest.raises(DomainMapperDerivationError) as exc_info:

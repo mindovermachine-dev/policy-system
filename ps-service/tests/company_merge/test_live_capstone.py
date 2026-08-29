@@ -46,6 +46,11 @@ wrote a single node/edge/property into the real graph.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter, ReadLines
+
 import os
 from dataclasses import dataclass
 from typing import cast
@@ -78,8 +83,7 @@ _LOG_FILENAME = "company_merge_capstone.jsonl"
 _SEED_DUTY_TEXT = "Report the incident to the competent authority without undue delay"
 _SEED_CAPABILITY_NAME = "Capstone Seeded Incident Notification Capability"
 _SEED_REQUIREMENT_TEXT = (
-    "Capstone seeding: notify the competent authority of a qualifying incident "
-    "without undue delay"
+    "Capstone seeding: notify the competent authority of a qualifying incident without undue delay"
 )
 _SEED_ROLE_NAME = "Capstone Seeded Incident Notifier"
 _SEED_SOURCE_REF = "capstone-seed"
@@ -124,10 +128,12 @@ def _query_rows(
 
 
 def _count(graph: GraphHandle, query: str, params: dict[str, object] | None = None) -> int:
-    return cast(int, _query_rows(graph, query, params=params)[0][0])
+    return cast("int", _query_rows(graph, query, params=params)[0][0])
 
 
-def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> _SeededIds:
+def _seed_duplicate_obligation(
+    baseline_graph: GraphHandle, regulatory_instrument_id: str
+) -> _SeededIds:
     """S2's fix (PLAN_REVIEWED.md §12), adapted for #42: additively `MERGE`
     one extra Role/Requirement/Obligation/Capability chain into
     `baseline_graph` (a `{short}_baseline` graph -- never `policy_system`/
@@ -189,7 +195,8 @@ def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulatory_instrumen
         },
     )
     baseline_graph.query(
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), "
+        "(n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref",
         params={
             "regulatory_instrument_id": regulatory_instrument_id,
@@ -230,7 +237,8 @@ def _seed_duplicate_obligation(baseline_graph: GraphHandle, regulatory_instrumen
 def _snapshot_counts(single_tenant_graph: GraphHandle) -> dict[str, int]:
     """Per-label node counts + per-relationship-type edge counts -- AC-005's
     "no growth" proof operates on this whole snapshot, not just a single
-    total."""
+    total.
+    """
     counts = {
         label: _count(single_tenant_graph, f"MATCH (n:{label}) RETURN count(n)")
         for label in _NODE_LABELS
@@ -245,21 +253,30 @@ def _snapshot_counts(single_tenant_graph: GraphHandle) -> dict[str, int]:
 
 
 def _snapshot_embeddings(single_tenant_graph: GraphHandle) -> dict[str, tuple[float, ...] | None]:
-    """id -> embedding (or None) for every Obligation/Capability node --
+    """Id -> embedding (or None) for every Obligation/Capability node --
     AC-005's "zero further embedding-backfill writes" proof compares this
-    whole map before/after the second pass, not just the seeded pair."""
+    whole map before/after the second pass, not just the seeded pair.
+    """
     embeddings: dict[str, tuple[float, ...] | None] = {}
     for label in ("Obligation", "Capability"):
-        for node_id, embedding in _query_rows(single_tenant_graph, f"MATCH (n:{label}) RETURN n.id, n.embedding"):
-            embeddings[cast(str, node_id)] = (
+        for node_id, embedding in _query_rows(
+            single_tenant_graph, f"MATCH (n:{label}) RETURN n.id, n.embedding"
+        ):
+            embeddings[cast("str", node_id)] = (
                 tuple(cast("list[float]", embedding)) if embedding is not None else None
             )
     return embeddings
 
 
-def _assert_ac001_every_node_type_present(single_tenant_graph: GraphHandle, regulatory_instrument_id: str) -> None:
+def _assert_ac001_every_node_type_present(
+    single_tenant_graph: GraphHandle, regulatory_instrument_id: str
+) -> None:
     assert (
-        _count(single_tenant_graph, "MATCH (n:RegulatoryInstrument {id: $id}) RETURN count(n)", {"id": regulatory_instrument_id})
+        _count(
+            single_tenant_graph,
+            "MATCH (n:RegulatoryInstrument {id: $id}) RETURN count(n)",
+            {"id": regulatory_instrument_id},
+        )
         == 1
     ), f"{regulatory_instrument_id}: Regulation node missing from {_CAPSTONE_GRAPH_NAME}"
 
@@ -275,33 +292,56 @@ def _assert_ac001_every_node_type_present(single_tenant_graph: GraphHandle, regu
     )
     obligation_count = _count(
         single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation) RETURN count(*)",
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation) "
+        "RETURN count(*)",
         {"id": regulatory_instrument_id},
     )
     capability_count = _count(
         single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)"
+        "-[:REQUIRES]->(:Capability) "
         "RETURN count(*)",
         {"id": regulatory_instrument_id},
     )
     assert role_count > 0, f"{regulatory_instrument_id}: no Role reachable via DEFINES"
-    assert requirement_count > 0, f"{regulatory_instrument_id}: no Requirement reachable via EXPRESSES"
+    assert requirement_count > 0, (
+        f"{regulatory_instrument_id}: no Requirement reachable via EXPRESSES"
+    )
     assert obligation_count > 0, f"{regulatory_instrument_id}: no Obligation reachable via Role HAS"
-    assert capability_count > 0, f"{regulatory_instrument_id}: no Capability reachable via Obligation REQUIRES"
+    assert capability_count > 0, (
+        f"{regulatory_instrument_id}: no Capability reachable via Obligation REQUIRES"
+    )
 
 
 def _assert_seeded_nodes_present(single_tenant_graph: GraphHandle, seeded: _SeededIds) -> None:
-    assert _count(single_tenant_graph, "MATCH (n:Role {id: $id}) RETURN count(n)", {"id": seeded.role_id}) == 1
     assert (
-        _count(single_tenant_graph, "MATCH (n:Requirement {id: $id}) RETURN count(n)", {"id": seeded.requirement_id})
+        _count(
+            single_tenant_graph, "MATCH (n:Role {id: $id}) RETURN count(n)", {"id": seeded.role_id}
+        )
         == 1
     )
     assert (
-        _count(single_tenant_graph, "MATCH (n:Obligation {id: $id}) RETURN count(n)", {"id": seeded.obligation_id})
+        _count(
+            single_tenant_graph,
+            "MATCH (n:Requirement {id: $id}) RETURN count(n)",
+            {"id": seeded.requirement_id},
+        )
         == 1
     )
     assert (
-        _count(single_tenant_graph, "MATCH (n:Capability {id: $id}) RETURN count(n)", {"id": seeded.capability_id})
+        _count(
+            single_tenant_graph,
+            "MATCH (n:Obligation {id: $id}) RETURN count(n)",
+            {"id": seeded.obligation_id},
+        )
+        == 1
+    )
+    assert (
+        _count(
+            single_tenant_graph,
+            "MATCH (n:Capability {id: $id}) RETURN count(n)",
+            {"id": seeded.capability_id},
+        )
         == 1
     )
 
@@ -311,7 +351,8 @@ def _assert_ac002_exact_duplicate_converges(
 ) -> None:
     """#42: the guaranteed exact-key duplicate is a shared `Capability`.
     The two seeded `Obligation`s are legitimately distinct (Role-scoped);
-    both `REQUIRES` the one canonical Capability."""
+    both `REQUIRES` the one canonical Capability.
+    """
     canonical_id = seeded_by_regulatory_instrument["GDPR"].capability_id
     assert canonical_id == seeded_by_regulatory_instrument["NIS2"].capability_id, (
         "capability_id(name) must be identical for both seeded duplicates -- this is the "
@@ -340,7 +381,7 @@ def _assert_ac002_exact_duplicate_converges(
             "MATCH (:Obligation {id: $obl_id})-[:REQUIRES]->(c:Capability) RETURN c.id",
             {"obl_id": seeded.obligation_id},
         )
-        target_ids = {cast(str, row[0]) for row in rows}
+        target_ids = {cast("str", row[0]) for row in rows}
         assert target_ids == {canonical_id}, (
             f"{short_name}'s seeded Obligation's REQUIRES edge does not point at the "
             f"single canonical Capability id {canonical_id!r}: found {target_ids}"
@@ -396,25 +437,31 @@ def _report_ac003_ac004_mechanism_presence(
     }
 
 
-def _assert_ac006_traversal_reachable(single_tenant_graph: GraphHandle, regulatory_instrument_id: str) -> None:
+def _assert_ac006_traversal_reachable(
+    single_tenant_graph: GraphHandle, regulatory_instrument_id: str
+) -> None:
     has_chain_count = _count(
         single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)-[:REQUIRES]->(:Capability) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)"
+        "-[:REQUIRES]->(:Capability) "
         "RETURN count(*)",
         {"id": regulatory_instrument_id},
     )
     satisfied_chain_count = _count(
         single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement)-[:SATISFIED_BY]->(:Obligation) "
+        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement)"
+        "-[:SATISFIED_BY]->(:Obligation) "
         "RETURN count(*)",
         {"id": regulatory_instrument_id},
     )
     assert has_chain_count > 0, (
-        f"{regulatory_instrument_id}: no live Regulation->DEFINES->Role->HAS->Obligation->REQUIRES->"
+        f"{regulatory_instrument_id}: no live "
+        f"Regulation->DEFINES->Role->HAS->Obligation->REQUIRES->"
         f"Capability traversal in {_CAPSTONE_GRAPH_NAME}"
     )
     assert satisfied_chain_count > 0, (
-        f"{regulatory_instrument_id}: no live Regulation->EXPRESSES->Requirement->SATISFIED_BY->Obligation "
+        f"{regulatory_instrument_id}: no live "
+        f"Regulation->EXPRESSES->Requirement->SATISFIED_BY->Obligation "
         f"traversal in {_CAPSTONE_GRAPH_NAME}"
     )
 
@@ -440,14 +487,20 @@ def _assert_dedup_decisions_correlated(log_entries: list[dict[str, object]], run
         for entry in log_entries
         if entry.get("action") == "dedupe_canonical_nodes" and entry.get("run_id") == run_id
     ]
-    assert matches, f"no dedupe_canonical_nodes log entries correlated to run_id={run_id!r} (AC-007)"
+    assert matches, (
+        f"no dedupe_canonical_nodes log entries correlated to run_id={run_id!r} (AC-007)"
+    )
 
 
 def _assert_ac008_no_role_or_requirement_dedup(log_entries: list[dict[str, object]]) -> None:
-    dedup_entries = [entry for entry in log_entries if entry.get("action") == "dedupe_canonical_nodes"]
-    assert dedup_entries, "expected at least one dedupe_canonical_nodes log entry across the whole run"
+    dedup_entries = [
+        entry for entry in log_entries if entry.get("action") == "dedupe_canonical_nodes"
+    ]
+    assert dedup_entries, (
+        "expected at least one dedupe_canonical_nodes log entry across the whole run"
+    )
     for entry in dedup_entries:
-        entity_id = cast(str, entry.get("entity_id"))
+        entity_id = cast("str", entry.get("entity_id"))
         assert entity_id.startswith("cap_"), (
             f"dedupe_canonical_nodes fired for entity_id={entity_id!r}, which is not a "
             "Capability (cap_*) id -- since #42, Role/Requirement/Obligation dedup is all "
@@ -462,7 +515,9 @@ def _assert_ac008_no_role_or_requirement_dedup(log_entries: list[dict[str, objec
     reason="requires .env sourced (PS_LLMINTERFACE_EMBED_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
-    make_emitter, read_lines, monkeypatch: pytest.MonkeyPatch
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert _LLM_INTERFACE_EMBED_MODEL is not None  # narrows type; skipif already guards this
     embed_model = _LLM_INTERFACE_EMBED_MODEL
@@ -474,8 +529,7 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     db = connect_from_config(config)
 
     # --- Safety check (BEFORE): the real policy_system graph must be provably untouched ---
-    graphs_before = set(db.list_graphs())
-    capstone_graph_preexisted = _CAPSTONE_GRAPH_NAME in graphs_before
+    set(db.list_graphs())
     real_single_tenant_graph = select_graph(db, _REAL_SINGLE_TENANT_GRAPH_NAME)
     real_node_count_before = _count(real_single_tenant_graph, "MATCH (n) RETURN count(n)")
 
@@ -493,7 +547,9 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
 
     # --- S2's seeding fix: a guaranteed exact-key duplicate across GDPR/NIS2 ---
     seeded_by_regulatory_instrument: dict[str, _SeededIds] = {
-        fixture.short_name: _seed_duplicate_obligation(baseline_graphs[fixture.short_name], fixture.regulatory_instrument_id)
+        fixture.short_name: _seed_duplicate_obligation(
+            baseline_graphs[fixture.short_name], fixture.regulatory_instrument_id
+        )
         for fixture in _REGULATIONS
         if fixture.seed_duplicate
     }
@@ -553,14 +609,17 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     _assert_ac002_exact_duplicate_converges(single_tenant_graph, seeded_by_regulatory_instrument)
 
     # --- AC-003 / AC-004: mechanism-presence only, non-forcing (see helper docstring) ---
-    mechanism_presence = _report_ac003_ac004_mechanism_presence(single_tenant_graph, log_entries)
+    _report_ac003_ac004_mechanism_presence(single_tenant_graph, log_entries)
 
     # --- AC-007: distinct run_id per regulation (per pass), correlated dedup decisions ---
     assert len(set(run_ids)) == len(run_ids), f"expected 6 mutually distinct run_ids, got {run_ids}"
     for fixture in _REGULATIONS:
         merge_run_id = f"capstone-{fixture.short_name.lower()}-pass1"
         _assert_run_id_logged(
-            log_entries, action="merge_baseline_graph", run_id=merge_run_id, entity_id=fixture.regulatory_instrument_id
+            log_entries,
+            action="merge_baseline_graph",
+            run_id=merge_run_id,
+            entity_id=fixture.regulatory_instrument_id,
         )
         _assert_dedup_decisions_correlated(log_entries, merge_run_id)
 
@@ -575,8 +634,3 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
     )
 
     # Informational, not asserted on: real observed shape for IMPL_20.md.
-    print(f"capstone_graph_preexisted={capstone_graph_preexisted}")
-    print(f"counts_after_pass_1={counts_after_pass_1}")
-    print(f"counts_after_pass_2={counts_after_pass_2}")
-    print(f"mechanism_presence={mechanism_presence}")
-    print(f"real_policy_system_node_count={real_node_count_before}")

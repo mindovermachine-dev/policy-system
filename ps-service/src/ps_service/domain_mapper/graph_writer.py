@@ -1,4 +1,5 @@
-"""FalkorDB persistence for `ps_service.domain_mapper`'s baseline graph —
+"""FalkorDB persistence for `ps_service.domain_mapper`'s baseline graph.
+
 `persist_role_and_requirement_graph` (PLAN_REVIEWED.md §11 Increment 9,
 §5.4) and `persist_obligation_and_capability_graph` (§11 Increment 15,
 §7.6).
@@ -81,11 +82,12 @@ edge types (Edge Catalog, §0.2) — deliberately NOT copying
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.domain_mapper.errors import DomainMapperPersistenceError
-from ps_service.domain_mapper.falkordb_client import GraphHandle, GraphQueryResult
 from ps_service.domain_mapper.models import (
     CapabilityNode,
     CapabilityRequiresEdge,
@@ -98,6 +100,9 @@ from ps_service.domain_mapper.models import (
     RoleNode,
 )
 
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.falkordb_client import GraphHandle, GraphQueryResult
+
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
@@ -108,10 +113,11 @@ _CAPABILITY_LABEL = "Capability"
 def _execute_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every `graph.query()` write in this module goes
-    through, so FalkorDB connectivity failures get recorded in
-    `ps_service.dependency_health` — mirrors `ps_service.ingestion.
-    graph_writer._execute_query` exactly.
+    """The one call site every `graph.query()` write in this module goes through.
+
+    So FalkorDB connectivity failures get recorded in
+    `ps_service.dependency_health` — mirrors
+    `ps_service.ingestion.graph_writer._execute_query` exactly.
 
     Wraps `redis.exceptions.RedisError` into `DomainMapperPersistenceError`,
     distinct from this module's own data-validation
@@ -130,9 +136,11 @@ def _execute_query(
 def _validate_role_references(
     role_nodes: tuple[RoleNode, ...], requirement_nodes: tuple[RequirementNode, ...]
 ) -> None:
-    """B3 fix (a): a whole-collection validation pass, called once, before
-    `persist_role_and_requirement_graph` issues a single `graph.query` call
-    for ANY element — not interleaved validate-then-write per element.
+    """B3 fix (a): a whole-collection validation pass, called once before any write.
+
+    Runs before `persist_role_and_requirement_graph` issues a single
+    `graph.query` call for ANY element — not interleaved
+    validate-then-write per element.
 
     Checks every Requirement node's `role_id` property against the set of
     Role node ids ALSO about to be persisted in this same call. Raises
@@ -159,11 +167,12 @@ def persist_role_and_requirement_graph(
     requirement_nodes: tuple[RequirementNode, ...],
     requirement_edges: tuple[RequirementExpressesEdge, ...],
 ) -> None:
-    """Persist one extraction run's complete Role/Requirement graph into
-    `graph` (the caller's already-selected `{short}_baseline` `GraphHandle`).
+    """Persist one extraction run's complete Role/Requirement graph into `graph`.
 
-    `regulatory_instrument_properties` MERGEs the RegulatoryInstrument node itself (PLAN_REVIEWED.md
-    §5.2 step 1) — the `DEFINES`/`EXPRESSES` edges below originate from it.
+    `graph` is the caller's already-selected `{short}_baseline`
+    `GraphHandle`. `regulatory_instrument_properties` MERGEs the
+    RegulatoryInstrument node itself (PLAN_REVIEWED.md §5.2 step 1) — the
+    `DEFINES`/`EXPRESSES` edges below originate from it.
     `role_nodes`/`role_edges`/`requirement_nodes`/`requirement_edges` are
     `extraction.py`'s `_canonicalize_roles`/`_build_requirement_graph`
     output (Increment 8) — this function does no canonicalization or
@@ -183,7 +192,9 @@ def persist_role_and_requirement_graph(
     for role in role_nodes:
         _upsert_node(graph, _ROLE_LABEL, role.id, role.properties)
     for role_edge in role_edges:
-        _upsert_regulatory_instrument_edge(graph, "DEFINES", _ROLE_LABEL, regulatory_instrument_id, role_edge)
+        _upsert_regulatory_instrument_edge(
+            graph, "DEFINES", _ROLE_LABEL, regulatory_instrument_id, role_edge
+        )
     for requirement in requirement_nodes:
         _upsert_node(graph, _REQUIREMENT_LABEL, requirement.id, requirement.properties)
     for requirement_edge in requirement_edges:
@@ -212,10 +223,12 @@ def _upsert_regulatory_instrument_edge(
     regulatory_instrument_id: str,
     edge: RoleDefinesEdge | RequirementExpressesEdge,
 ) -> None:
-    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`,
-    shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
-    edges — both originate from the RegulatoryInstrument node and carry the same
-    single `source_ref` property (Edge Catalog, PLAN_REVIEWED.md §0.2).
+    """`RegulatoryInstrument -[:relationship_type {source_ref}]-> target_label`.
+
+    Shared shape for both `DEFINES` (Role) and `EXPRESSES` (Requirement)
+    edges — both originate from the RegulatoryInstrument node and carry the
+    same single `source_ref` property (Edge Catalog, PLAN_REVIEWED.md
+    §0.2).
 
     `relationship_type`/`target_label` are always this module's own fixed
     literals (`"DEFINES"`/`"EXPRESSES"`, `_ROLE_LABEL`/`_REQUIREMENT_LABEL`)
@@ -224,9 +237,7 @@ def _upsert_regulatory_instrument_edge(
     only, never interpolated into the query string.
     """
     target_node_id = (
-        edge.role_node_id
-        if isinstance(edge, RoleDefinesEdge)
-        else edge.requirement_node_id
+        edge.role_node_id if isinstance(edge, RoleDefinesEdge) else edge.requirement_node_id
     )
     _execute_query(
         graph,
@@ -249,10 +260,12 @@ def persist_obligation_and_capability_graph(
     capability_nodes: tuple[CapabilityNode, ...],
     requires_edges: tuple[CapabilityRequiresEdge, ...],
 ) -> None:
-    """Persist one derivation run's complete Obligation/Capability graph
-    into `graph` (the caller's already-selected `{short}_baseline`
-    `GraphHandle` — the SAME graph a prior `persist_role_and_requirement_graph`
-    call already wrote Role/Requirement nodes into).
+    """Persist one derivation run's complete Obligation/Capability graph into `graph`.
+
+    `graph` is the caller's already-selected `{short}_baseline`
+    `GraphHandle` — the SAME graph a prior
+    `persist_role_and_requirement_graph` call already wrote
+    Role/Requirement nodes into.
 
     `obligation_nodes`/`has_edges`/`satisfied_by_edges` are `derivation.py`'s
     `_derive_obligations` output (Increment 12); `capability_nodes`/
@@ -322,13 +335,14 @@ def _upsert_bare_edge(
     target_label: str,
     target_id: str,
 ) -> None:
-    """`source_label -[:relationship_type]-> target_label`, NO properties —
-    the shared shape for `HAS`/`SATISFIED_BY`/`REQUIRES` (Edge Catalog,
+    """`source_label -[:relationship_type]-> target_label`, NO properties.
+
+    The shared shape for `HAS`/`SATISFIED_BY`/`REQUIRES` (Edge Catalog,
     PLAN_REVIEWED.md §0.2), deliberately distinct from
-    `_upsert_regulatory_instrument_edge`'s `DEFINES`/`EXPRESSES` shape, which always
-    sets `source_ref`. There is no `SET` clause here at all — be
-    deliberate about NOT copy-pasting `_upsert_regulatory_instrument_edge`'s pattern
-    onto this function (PLAN_REVIEWED.md §11 Increment 15's explicit
+    `_upsert_regulatory_instrument_edge`'s `DEFINES`/`EXPRESSES` shape,
+    which always sets `source_ref`. There is no `SET` clause here at all —
+    be deliberate about NOT copy-pasting `_upsert_regulatory_instrument_edge`'s
+    pattern onto this function (PLAN_REVIEWED.md §11 Increment 15's explicit
     warning).
 
     `relationship_type`/`source_label`/`target_label` are always this

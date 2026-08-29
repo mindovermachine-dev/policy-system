@@ -1,6 +1,6 @@
 """Tests for ps_service.ingestion.adapters.cellar_eli.adapter.
 
-The main test here (`test_...through_one_instance`) is the concrete
+The main test here (`test_one_instance_produces_different_results...`) is the concrete
 proof-of-pluggability test for AC-001/AC-006 at the adapter level: one
 `CellarEliAdapter` instance, one injected `fetch` callable capable of
 serving multiple identifiers (exactly mirroring how the real `fetch_xhtml`
@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import inspect
 from datetime import date
+from typing import TYPE_CHECKING
 
 import pytest
 
-from ps_service.ingestion.adapters.base import IngestionAdapter
 from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarParseError
+
+if TYPE_CHECKING:
+    from ps_service.ingestion.adapters.base import IngestionAdapter
 
 # Fixture A: a Regulation-shaped document (Entry-into-force wording, no
 # recital, no annex).
@@ -57,7 +60,8 @@ _FIXTURE_DIRECTIVE_B = b"""
 necessary to comply with this Directive.</div>
 </div>
 </div>
-<div class="eli-subdivision" id="rct_1">Whereas this Directive is necessary for the internal market.</div>
+<div class="eli-subdivision" id="rct_1">Whereas this Directive is necessary
+for the internal market.</div>
 </div>
 <div class="eli-container" id="anx_I">
 <div class="eli-title" id="anx_I.tit_1">ANNEX I Technical requirements</div>
@@ -77,7 +81,8 @@ def _dispatching_fetch(identifier: str) -> bytes:
     """A single fetch function capable of serving multiple identifiers —
     exactly what the real `fetch_xhtml(celex)` does for any CELEX value.
     Injected once per test; the dispatch-by-identifier lives here, in test
-    fakery, never in `adapter.py`'s own source."""
+    fakery, never in `adapter.py`'s own source.
+    """
     return _FIXTURES_BY_IDENTIFIER[identifier]
 
 
@@ -94,9 +99,7 @@ def test_satisfies_ingestion_adapter_protocol() -> None:
     assert result.metadata.title == "Regulation (EU) 1111/1111 Fixture A"
 
 
-def test_fetch_regulatory_instrument_structure_produces_different_results_for_different_identifiers_through_one_instance() -> (
-    None
-):
+def test_one_instance_produces_different_results_for_different_identifiers() -> None:
     adapter = CellarEliAdapter(fetch=_dispatching_fetch)
 
     result_a = adapter.fetch_regulatory_instrument_structure("32020R1111")
@@ -114,7 +117,12 @@ def test_fetch_regulatory_instrument_structure_produces_different_results_for_di
     assert len(result_a.nodes) == 2  # CHAPTER, ARTICLE
     assert len(result_b.nodes) == 4  # CHAPTER, ARTICLE, RECITAL, ANNEX
     assert {node.element_type for node in result_a.nodes} == {"CHAPTER", "ARTICLE"}
-    assert {node.element_type for node in result_b.nodes} == {"CHAPTER", "ARTICLE", "RECITAL", "ANNEX"}
+    assert {node.element_type for node in result_b.nodes} == {
+        "CHAPTER",
+        "ARTICLE",
+        "RECITAL",
+        "ANNEX",
+    }
 
     # `identifier` flows through unmodified as the structural-node-id
     # prefix — proof the adapter passed it straight through, not a

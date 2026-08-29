@@ -15,10 +15,10 @@ from datetime import date
 import pytest
 
 from ps_service.ingestion.adapters.cellar_eli.metadata import (
-    _BASE_ACT_VERSION,
-    _find_effective_date,
-    _instrument_type_from_celex,
-    _strip_namespace,
+    _BASE_ACT_VERSION,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _find_effective_date,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _instrument_type_from_celex,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _strip_namespace,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     extract_metadata,
 )
 from ps_service.ingestion.adapters.errors import CellarParseError
@@ -27,7 +27,8 @@ _TRANSPOSITION_FIXTURE = b"""
 <html xmlns="http://www.w3.org/1999/xhtml">
 <body>
 <div class="eli-container" id="enc_1">
-<div class="eli-main-title">Directive (EU) 2022/2555 of the European Parliament and of the Council</div>
+<div class="eli-main-title">Directive (EU) 2022/2555 of the European Parliament
+and of the Council</div>
 <div class="eli-subdivision" id="art_41">
 <div class="eli-title" id="art_41.tit_1">Article 41 Transposition</div>
 <div id="041.001">1. By 17 October 2024, Member States shall adopt and publish the measures
@@ -42,7 +43,8 @@ _ENTRY_INTO_FORCE_FIXTURE = b"""
 <html xmlns="http://www.w3.org/1999/xhtml">
 <body>
 <div class="eli-container" id="enc_1">
-<div class="eli-main-title">Regulation (EU) 2024/2847 of the European Parliament and of the Council</div>
+<div class="eli-main-title">Regulation (EU) 2024/2847 of the European Parliament
+and of the Council</div>
 <div class="eli-subdivision" id="art_71">
 <div class="eli-title" id="art_71.tit_1">Article 71 Entry into force and application</div>
 <div id="071.001">This Regulation shall enter into force on the twentieth day following
@@ -69,12 +71,14 @@ _NO_DATE_HEADING_FIXTURE = b"""
 
 
 def _root(xhtml: bytes) -> ET.Element:
-    root = ET.fromstring(xhtml)
+    root = ET.fromstring(xhtml)  # noqa: S314 — fixture XML authored in-repo, not untrusted
     _strip_namespace(root)
     return root
 
 
-def test_find_effective_date_returns_transposition_date_when_transposition_heading_present() -> None:
+def test_find_effective_date_returns_transposition_date_when_transposition_heading_present() -> (
+    None
+):
     result = _find_effective_date(_root(_TRANSPOSITION_FIXTURE))
 
     assert result == date(2024, 10, 17)
@@ -95,7 +99,9 @@ def test_find_effective_date_returns_none_when_neither_heading_present() -> None
 def test_extract_metadata_returns_title_from_eli_main_title() -> None:
     metadata = extract_metadata(_TRANSPOSITION_FIXTURE, "32022L2555")
 
-    assert metadata.title == "Directive (EU) 2022/2555 of the European Parliament and of the Council"
+    assert (
+        metadata.title == "Directive (EU) 2022/2555 of the European Parliament and of the Council"
+    )
 
 
 def test_extract_metadata_sets_jurisdiction_status_and_source_type_constants() -> None:

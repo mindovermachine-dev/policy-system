@@ -14,16 +14,21 @@ from __future__ import annotations
 
 import ast
 import inspect
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 import ps_service.query_engine
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.mcp_interface import mcp_server
-from ps_service.query_engine.cypher_query import _WRITE_CLAUSE_REJECTION_MESSAGE
+from ps_service.query_engine.cypher_query import (
+    _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
+)
 from ps_service.query_engine.models import QueryResult
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -44,7 +49,8 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. `query()` records every call
     and either returns a scripted `_FakeQueryResult` or raises a scripted
-    exception."""
+    exception.
+    """
 
     def __init__(
         self,
@@ -158,7 +164,11 @@ def _func_renders_as(func: ast.expr) -> str:
     if isinstance(func, ast.Name):
         return func.id
     if isinstance(func, ast.Attribute):
-        return f"{_func_renders_as(func.value)}.{func.attr}" if isinstance(func.value, (ast.Name, ast.Attribute)) else func.attr
+        return (
+            f"{_func_renders_as(func.value)}.{func.attr}"
+            if isinstance(func.value, (ast.Name, ast.Attribute))
+            else func.attr
+        )
     return ""
 
 

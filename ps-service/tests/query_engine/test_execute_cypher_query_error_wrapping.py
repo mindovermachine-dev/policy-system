@@ -15,15 +15,17 @@ only that `execute_cypher_query` itself behaves correctly.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine.cypher_query import execute_cypher_query
 from ps_service.query_engine.errors import QueryEngineExecutionError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -37,7 +39,8 @@ class _RaisingGraphHandle:
     """Satisfies `GraphHandle` structurally -- `.query()` always raises the
     scripted exception instead of returning a result. Annotated `NoReturn`
     (it never actually returns) so it satisfies `GraphHandle`'s `query(...)
-    -> GraphQueryResult` structurally under strict type checking."""
+    -> GraphQueryResult` structurally under strict type checking.
+    """
 
     def __init__(self, exc: Exception) -> None:
         self._exc = exc

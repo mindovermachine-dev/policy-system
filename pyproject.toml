@@ -3,9 +3,11 @@ members = ["ps-service", "ps-cli"]
 
 [dependency-groups]
 dev = [
+    "basedpyright==1.39.10",
     "httpx>=0.28.1",
+    "pre-commit==4.6.2",
     "pytest>=8.0.0",
-    "ruff>=0.16.4",
+    "ruff==0.16.4",
 ]
 
 [tool.pytest.ini_options]
@@ -16,3 +18,115 @@ markers = [
     "cellar_live: hits the live Cellar/ELI service over the network (slow, environment-dependent)",
     "falkordb_live: requires a real, reachable FalkorDB instance (slow, environment-dependent)",
 ]
+
+[tool.ruff]
+line-length = 100          # AC-BI-001; dissolves ~908 E501 once `ruff format` runs
+target-version = "py314"   # AC-BI-001; matches requires-python of both members (accepted by ruff 0.16.4)
+src = ["ps-service/src", "ps-cli/src"]  # first-party roots for import sorting (I)
+extend-exclude = ["spikes"]  # nested git repo; no .py today; also keeps basedpyright-parity of scope explicit (ruff already skips it via .gitignore)
+
+[tool.ruff.lint]
+select = ["ALL"]           # AC-BI-001 — maximalist, opt-out only
+ignore = [
+    # --- formatter-owned / conflicts with `ruff format` (AC-BI-002 names these) ---
+    "COM812",   # missing-trailing-comma — `ruff format` owns comma placement; ruff warns of the conflict if selected
+    "ISC001",   # single-line-implicit-string-concat — `ruff format` owns string joining; documented formatter conflict
+    "CPY001",   # missing-copyright-notice — repo convention is a single top-of-file HTML comment on docs only, not per-.py (AC-BI-002 names this)
+    # --- pydocstyle mutually-exclusive pairs (must pick one of each) ---
+    "D203",     # incorrect-blank-line-before-class — conflicts with D211; we keep D211 (no blank line before class docstring)
+    "D213",     # multi-line-summary-second-line — conflicts with D212; we keep D212 (summary starts on first line)
+    # --- exception-message ergonomics: keep raise-sites readable (widely disabled) ---
+    "EM101",    # raw-string-in-exception — forcing a local var for every message hurts readability more than it helps
+    "EM102",    # f-string-in-exception — same rationale
+    "TRY003",   # raise-vanilla-args — we do not subclass an exception per distinct message string
+    # --- TODO bookkeeping: TODOs in this repo are tracked as GitHub issues, not inline metadata ---
+    "TD002",    # missing-todo-author — author is in git blame
+    "TD003",    # missing-todo-link — not every TODO gets an issue; the ones that matter do
+    "FIX002",   # line-contains-todo — a TODO comment is allowed to exist
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8          # AC-BI-001; L1 "never more than 8"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"   # AC-BI-001; L2 "Absolute imports only"
+
+[tool.ruff.lint.pylint]
+max-args = 8               # D-6: match max-complexity=8 (ruff default is 5). Drops PLR0913 23→2; the 2 residual (structure.py 9- and 10-arg builders) refactored in B12.
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"      # AC-BI-001. Justification below.
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]  # keep Pydantic field types out of `if TYPE_CHECKING` (needed at runtime). NOTE: does NOT cover plain function-signature introspection — see B2 / F-03.
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = [
+    "S101",     # assert — pytest's assertion mechanism; ~1,188 occurrences, all legitimate
+    "PLR2004",  # magic-value-comparison — literal expected-values in assertions are the point of a test (~81)
+    "SLF001",   # private-member-access — tests legitimately reach into internals under test (~17)
+    "ARG001", "ARG002", "ARG005",  # unused-*-argument — pytest fixtures injected by name, often unused (~147)
+    "ANN001", "ANN201", "ANN202",  # missing-*-type — RE-ENABLED for basedpyright (AC-BI-008); ruff-side relaxation only, keeps ruff signal focused on product code
+    "INP001",   # implicit-namespace-package — tests dirs deliberately have no __init__.py (pytest rootdir import mode)
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",  # undocumented-* — test names are the documentation (L1: "Test names describe the scenario"); ~336 D103
+    "D205",     # D-7: test docstrings are scenario prose, not API contracts (L1: test names are the documentation). Applies to tests/** ONLY — never src. No autofixer; 270 occurrences.
+    "PLC0415",  # import-outside-top-level — deferred imports in tests to exercise import-time behavior (~14)
+    "S104",     # hardcoded-bind-all-interfaces — test doubles bind 0.0.0.0 (~7)
+    "S105", "S106", "S107",  # hardcoded-password — dummy credentials in fixtures
+    "PT011", "PT018",  # pytest-raises-too-broad / composite-assertion — acceptable in this suite's style
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "C901",  # complexity — table-driven test helpers
+    "N802",     # invalid-function-name — a few test helpers use PascalCase-ish names mirroring the SUT
+    "A002", "A006",  # builtin-shadowing — test params mirror the SUT's param names (e.g. `id`). NOTE: `input` in tests/llm_interface is renamed by B7b, not ignored here.
+    "PERF401",  # manual-list-comprehension — explicit loops are clearer in test arrange blocks
+]
+"tools/**" = [
+    "T201",     # print — operator CLI scripts; stdout IS the interface (~36 occurrences)
+    "INP001",   # implicit-namespace-package — standalone scripts, not an importable package
+    "EXE001",   # shebang-not-executable — chmod state not tracked reliably; shebang is documentation
+    "D100", "D101", "D102", "D103", "D104",  # undocumented-* — internal one-off maintenance scripts
+    "ANN001", "ANN201", "ANN202",  # missing-*-type — ruff-side only; basedpyright DOES type-check tools/ (D-1) — see §A.3
+    "PLR2004",  # magic-value-comparison — one occurrence, `== 2` in a dup-finder
+]
+"docs/regulations/*.py" = [
+    "T201",     # print — convert_to_markdown.py is a run-once conversion script
+    "INP001",   # implicit-namespace-package — not a package
+    "D100", "D103", "ANN001", "ANN201",  # run-once script; ruff-side only — basedpyright DOES type-check it (D-9)
+]
+
+[tool.basedpyright]
+typeCheckingMode = "strict"   # AC-BI-003
+pythonVersion = "3.14"        # AC-BI-003
+pythonPlatform = "Linux"      # CI runs ubuntu-latest; keeps platform-conditional stdlib stable
+venvPath = "."
+venv = ".venv"                # single shared workspace venv — one flat root config suffices (no executionEnvironments; see A.4)
+include = [
+    "ps-service/src",
+    "ps-service/tests",
+    "ps-cli/src",
+    "ps-cli/tests",            # dir does not exist yet; harmless, future-proofs
+    "tools",                   # D-1: tools/ is IN strict scope (238 errors → B21, required, last priority)
+    "docs/regulations",        # D-9: convert_to_markdown.py is IN strict scope (7 errors → B21)
+]
+exclude = [
+    "**/__pycache__",
+    "spikes",                 # nested git repo, no .py, in .gitignore (basedpyright does NOT respect .gitignore, so this line is load-bearing)
+]
+reportMissingTypeStubs = false  # falkordb / graphrag_sdk / litellm ship no py.typed. This is a stub-AVAILABILITY signal, not a type-correctness downgrade — kept as the single commented global key (AC-BI-003 permits it; verifier confirms it is the only global report* override).
+
+# --- Per-library relaxation (AC-BI-003: commented, per-library, NOT a global rule downgrade) ---
+# basedpyright has no per-module rule-severity table, so each untyped 3rd-party
+# boundary is handled by an INLINE `# pyright: ignore[<rule>]  # <lib>: <reason>`
+# at the single wrapper/adapter module that touches it. The rule stays `error`
+# everywhere else. Current boundary points:
+#
+#   falkordb (1.7.1)   — no py.typed. Boundary imports carry
+#                        `# pyright: ignore[reportMissingTypeStubs]` in
+#                        ps_service/{ingestion,domain_mapper,query_engine,company_merge}/falkordb_client.py.
+#   litellm (1.98.0)   — untyped. `litellm.completion` / `litellm.embedding`
+#                        return Unknown; ps_service/llm_interface casts the result
+#                        to the litellm response type at the boundary (see B13).
+#   graphrag_sdk (1.4.0, ps-cli) — untyped. Same boundary-cast pattern when
+#                        ps-cli grows real code (only __init__.py today).
+#
+# If inline suppressions proliferate (>~15), promote to local stub packages under
+# `typings/` + `stubPath = "typings"` — a follow-up, not this issue.

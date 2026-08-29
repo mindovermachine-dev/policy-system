@@ -13,6 +13,11 @@ dedup-target reachability proof (test (c), Q3's fix).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter, ReadLines
+
 from dataclasses import dataclass
 from typing import cast
 
@@ -41,7 +46,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
-    `.properties` is ever read."""
+    `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -68,7 +74,8 @@ class _FakeBaselineGraph:
     """Answers every one of `read_baseline_graph`'s ten queries with its own
     scripted row set, dispatched by a distinctive substring -- mirrors
     `test_graph_reader.py`'s `_ScriptedFakeGraph` exactly, plus recording
-    every call received (needed for test (d)'s zero-calls proof)."""
+    every call received (needed for test (d)'s zero-calls proof).
+    """
 
     def __init__(
         self,
@@ -96,9 +103,7 @@ class _FakeBaselineGraph:
         self._requires_rows = requires_rows
         self.calls: list[str] = []
 
-    def query(
-        self, q: str, params: dict[str, object] | None = None
-    ) -> _FakeQueryResult:
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
         if "[e:DEFINES]" in q:
             return _FakeQueryResult(self._defines_rows)
@@ -145,7 +150,8 @@ class _FakeSingleTenantGraph:
     already-non-`None` embedding is a no-op, matching the real `WHERE
     n.embedding IS NULL` guard) -- so a SECOND call's
     `read_existing_canonical_index` read sees everything the FIRST call
-    wrote, exactly as AC-002/003/004 require."""
+    wrote, exactly as AC-002/003/004 require.
+    """
 
     def __init__(
         self,
@@ -156,16 +162,14 @@ class _FakeSingleTenantGraph:
         self._obligations: dict[str, list[object]] = {}
         for row in obligation_rows or []:
             row_list = list(cast("list[object]", row))
-            self._obligations[cast(str, row_list[0])] = row_list
+            self._obligations[cast("str", row_list[0])] = row_list
         self._capabilities: dict[str, list[object]] = {}
         for row in capability_rows or []:
             row_list = list(cast("list[object]", row))
-            self._capabilities[cast(str, row_list[0])] = row_list
+            self._capabilities[cast("str", row_list[0])] = row_list
         self.calls: list[_RecordedCall] = []
 
-    def query(
-        self, q: str, params: dict[str, object] | None = None
-    ) -> _FakeQueryResult:
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
@@ -191,7 +195,7 @@ class _FakeSingleTenantGraph:
     ) -> None:
         """Unconditional `MERGE ... SET n += $properties` semantics."""
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         properties = cast("dict[str, object]", params["properties"])
         table[node_id] = [
             node_id,
@@ -210,9 +214,10 @@ class _FakeSingleTenantGraph:
         exactly what makes a second call's exact/semantic-matched
         resolution (which never even issues this query -- see
         `persist_canonical_nodes`, only a `match_kind="new"` resolution
-        does) safe regardless."""
+        does) safe regardless.
+        """
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         if node_id in table:
             return
         properties = cast("dict[str, object]", params["properties"])
@@ -222,14 +227,13 @@ class _FakeSingleTenantGraph:
             properties.get("embedding"),
         ]
 
-    def _backfill(
-        self, table: dict[str, list[object]], params: dict[str, object] | None
-    ) -> None:
+    def _backfill(self, table: dict[str, list[object]], params: dict[str, object] | None) -> None:
         """`WHERE n.embedding IS NULL` semantics: a no-op when the id is
         absent from `table` or its embedding is already set -- matches real
-        FalkorDB's own guard exactly (PLAN_REVIEWED.md §6.2)."""
+        FalkorDB's own guard exactly (PLAN_REVIEWED.md §6.2).
+        """
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         row = table.get(node_id)
         if row is None or row[2] is not None:
             return
@@ -246,7 +250,8 @@ class _FakeSingleTenantGraph:
         Obligation node ids accumulated so far across however many
         `merge_baseline_graph` calls have run against this instance -- the
         direct proof that a cross-regulation exact/semantic match never
-        mints a second node for the same canonical concept."""
+        mints a second node for the same canonical concept.
+        """
         return frozenset(self._obligations)
 
 
@@ -257,11 +262,9 @@ class _ScriptedCallEmbedding:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(
-        self, *, model: str, input: list[str], timeout: float
-    ) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         vector = self._vectors_by_text.get(text)
         if vector is None:
@@ -274,7 +277,8 @@ class _ScriptedCallEmbedding:
 def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     """AC-001's "everything is new" fixture: one Role, one Requirement, one
     Obligation, one Capability, fully wired edges. No pre-existing canonical
-    node exists anywhere, so nothing has anything to converge onto."""
+    node exists anywhere, so nothing has anything to converge onto.
+    """
     role_node_id = "role_manufacturer_abc123"
     requirement_node_id = "REG-1.0_req_art_1.1"
     obligation_text = "Report the incident to the competent authority."
@@ -304,12 +308,15 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     )
 
 
-def test_everything_new_writes_every_node_type_directly(make_emitter) -> None:
+def test_everything_new_writes_every_node_type_directly(
+    make_emitter: MakeEmitter,
+) -> None:
     """(a) AC-001, "everything is new": an empty existing single-tenant
     graph -> every node type present afterward in the fake single-tenant
     graph's write log, directly (Obligation via unconditional passthrough
     SET since #42; Capability via match_kind="new", nothing to converge
-    onto)."""
+    onto).
+    """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph()
@@ -331,21 +338,20 @@ def test_everything_new_writes_every_node_type_directly(make_emitter) -> None:
     assert any("MERGE (n:RegulatoryInstrument" in c.query for c in writes)
     assert any("MERGE (n:Role" in c.query for c in writes)
     assert any("MERGE (n:Requirement" in c.query for c in writes)
-    assert any(
-        "MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes
-    )
-    assert any(
-        "MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes
-    )
+    assert any("MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes)
+    assert any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes)
     assert any("[:HAS]" in c.query for c in writes)
     assert any("[:SATISFIED_BY]" in c.query for c in writes)
     assert any("[:REQUIRES]" in c.query for c in writes)
 
 
-def test_both_dedup_reads_complete_before_any_write_call(make_emitter) -> None:
+def test_both_dedup_reads_complete_before_any_write_call(
+    make_emitter: MakeEmitter,
+) -> None:
     """(b) call-order proof: the Capability dedup pass completes (its
     read_existing_canonical_index read happens) before any write call
-    appears in the fake single_tenant_graph's call log."""
+    appears in the fake single_tenant_graph's call log.
+    """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph()
@@ -359,19 +365,15 @@ def test_both_dedup_reads_complete_before_any_write_call(make_emitter) -> None:
         emitter=emitter,
     )
 
-    read_positions = [
-        i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)
-    ]
-    write_positions = [
-        i for i, call in enumerate(single_tenant.calls) if not _is_read_call(call)
-    ]
+    read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
+    write_positions = [i for i, call in enumerate(single_tenant.calls) if not _is_read_call(call)]
     assert len(read_positions) == 1
     assert write_positions
     assert max(read_positions) < min(write_positions)
 
 
 def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(c) Q3's fix, "the Capability dedup target is reused," proven
     end-to-end within ONE call: pre-seed the fake single_tenant_graph with
@@ -383,7 +385,8 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     The Obligation, since #42, is a passthrough node: it is written with an
     unconditional `SET` under its own baseline-local (Role-scoped) id, and
     the Role's `HAS` / Requirement's `SATISFIED_BY` edges target that same
-    id -- never a "canonical" id, because there is no Obligation dedup."""
+    id -- never a "canonical" id, because there is no Obligation dedup.
+    """
     emitter, _log_path = make_emitter()
     role_node_id = "role_manufacturer_abc123"
     requirement_node_id = "REG-1.0_req_art_1.1"
@@ -431,12 +434,12 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     assert result.capability_canonical_ids == (shared_capability_id,)
 
     writes = single_tenant.writes()
-    assert not any(
-        "MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes
-    ), "no new Capability node should have been minted -- the dedup target was reused"
-    assert any(
-        "MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes
-    ), "the Obligation is written straight through as a passthrough node"
+    assert not any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes), (
+        "no new Capability node should have been minted -- the dedup target was reused"
+    )
+    assert any("MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes), (
+        "the Obligation is written straight through as a passthrough node"
+    )
 
     has_writes = single_tenant.calls_matching("[:HAS]")
     assert len(has_writes) == 1
@@ -464,7 +467,8 @@ def test_missing_similarity_threshold_raises_before_any_call() -> None:
     """(d) B1's fix, runtime enforcement: similarity_threshold=None raises
     CompanyMergeConfigurationError; both the fake baseline_graph and fake
     single_tenant_graph receive ZERO calls of any kind (the check fires
-    before even the Regulation read)."""
+    before even the Regulation read).
+    """
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph()
 
@@ -481,10 +485,13 @@ def test_missing_similarity_threshold_raises_before_any_call() -> None:
     assert single_tenant.calls == []
 
 
-def test_succeeded_log_entry_carries_bound_run_id(make_emitter, read_lines) -> None:
+def test_succeeded_log_entry_carries_bound_run_id(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     """Increment 14(a): with bind_run_context("run-x"), the
     outcome="succeeded" entry for action="merge_baseline_graph" carries
-    run_id="run-x"."""
+    run_id="run-x".
+    """
     emitter, log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph()
@@ -511,12 +518,13 @@ def test_succeeded_log_entry_carries_bound_run_id(make_emitter, read_lines) -> N
 
 
 def test_dedup_decision_log_entries_carry_bound_run_id(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """Increment 14(b): at least one per-decision entry for
     action="dedupe_canonical_nodes" also carries run_id="run-x", with
     entity_id equal to one of the resolved nodes' incoming_id and outcome
-    equal to its match_kind."""
+    equal to its match_kind.
+    """
     emitter, log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
     single_tenant = _FakeSingleTenantGraph()
@@ -539,9 +547,7 @@ def test_dedup_decision_log_entries_carry_bound_run_id(
         assert entry["run_id"] == "run-x"
 
     resolved_capability_id = result.capability_canonical_ids[0]
-    matching = [
-        e for e in dedup_entries if e.get("entity_id") == resolved_capability_id
-    ]
+    matching = [e for e in dedup_entries if e.get("entity_id") == resolved_capability_id]
     assert len(matching) == 1
     assert matching[0]["outcome"] == "new"
 
@@ -565,7 +571,8 @@ def _single_obligation_baseline_graph(
     obligation_text: str,
 ) -> _FakeBaselineGraph:
     """A minimal baseline graph fixture: one Role, one Requirement, one
-    Obligation, `HAS`/`SATISFIED_BY` wired, no Capability."""
+    Obligation, `HAS`/`SATISFIED_BY` wired, no Capability.
+    """
     obligation_node_id = obligation_id(role_id_value, obligation_text)
     return _FakeBaselineGraph(
         regulatory_instrument_properties={
@@ -593,13 +600,14 @@ def _single_obligation_baseline_graph(
 
 
 def test_cross_regulation_obligations_are_passed_through_never_deduped(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """#42: two regulations whose duty text is IDENTICAL but whose Roles
     differ (Roles are regulation-scoped) produce two DISTINCT Obligation
     nodes -- each written straight through under its own Role-scoped id, with
     its own single `HAS` edge. Company Merge runs no exact-key or semantic
-    dedup for Obligation, and makes zero embedding calls for it."""
+    dedup for Obligation, and makes zero embedding calls for it.
+    """
     emitter, _log_path = make_emitter()
     shared_text = "Report the incident to the competent authority without undue delay."
     id_a = obligation_id("role_a_manufacturer", shared_text)
@@ -646,19 +654,14 @@ def test_cross_regulation_obligations_are_passed_through_never_deduped(
     # No embedding call was ever made for an Obligation.
     assert call_embedding.calls == []
     # No dedup read query for Obligation was ever issued.
-    assert not single_tenant.calls_matching(
-        "(n:Obligation) RETURN n.id, n.text, n.embedding"
-    )
+    assert not single_tenant.calls_matching("(n:Obligation) RETURN n.id, n.text, n.embedding")
 
     has_writes = single_tenant.calls_matching("[:HAS]")
-    assert any(
-        c.params == {"source_id": "role_b_provider", "target_id": id_b}
-        for c in has_writes
-    )
+    assert any(c.params == {"source_id": "role_b_provider", "target_id": id_b} for c in has_writes)
 
 
 def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """Increment 16, extra scenario (PLAN_REVIEWED.md §6.2's "Orchestrator
     correction," found during Increment 12): Capability-side cross-regulation
@@ -708,12 +711,7 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         similarity_threshold=_THRESHOLD,
         emitter=emitter,
     )
-    assert (
-        len(
-            single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
-        )
-        == 1
-    )
+    assert len(single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")) == 1
 
     # The Obligation side needs no special handling: since #42 Obligation is
     # a passthrough node (no dedup pass, no call_embedding), so REG-H's
@@ -753,15 +751,12 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
     # No second Capability node was ever minted -- the dedup target was
     # reused via exact-key match (same capability name -> same
     # capability_id hash across both regulations).
-    mint_writes = single_tenant.calls_matching(
-        "MERGE (n:Capability {id: $id}) ON CREATE SET"
-    )
+    mint_writes = single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
     assert len(mint_writes) == 1
 
     requires_writes = single_tenant.calls_matching("[:REQUIRES]")
     assert any(
-        c.params
-        == {"source_id": second_obligation_id, "target_id": canonical_capability_id}
+        c.params == {"source_id": second_obligation_id, "target_id": canonical_capability_id}
         for c in requires_writes
     ), (
         "REQUIRES edge's Capability TARGET must be rewritten to the canonical id "

@@ -10,6 +10,11 @@ mirrors `tests/llm_interface/test_route_embedding_mocked.py`'s and
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 import httpx
 import openai
 import pytest
@@ -21,7 +26,6 @@ from ps_service.company_merge.similarity import cosine_similarity
 from ps_service.llm_interface.errors import LlmProviderError
 
 _MODEL = "fake-embed-model"
-_THRESHOLD = 0.85
 
 
 def _embedding_response(vector: list[float], *, model: str = _MODEL) -> EmbeddingResponse:
@@ -33,18 +37,19 @@ def _embedding_response(vector: list[float], *, model: str = _MODEL) -> Embeddin
 
 class _ScriptedCallEmbedding:
     """A hand-written `EmbeddingCaller` fake, scripted per input `text`
-    (the sole item of the `input` list `route_embedding` always passes),
+    (the sole item of the `inputs` list `route_embedding` always passes),
     keeping its own call log for assertion -- mirrors
     `test_extraction.py`'s `_scripted_call_completion` dispatch style, but
-    keyed by exact text and logging every call it serves."""
+    keyed by exact text and logging every call it serves.
+    """
 
     def __init__(self, vectors_by_text: dict[str, list[float] | Exception]) -> None:
         self._vectors_by_text = vectors_by_text
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         scripted = self._vectors_by_text.get(text)
         if scripted is None:
@@ -55,21 +60,23 @@ class _ScriptedCallEmbedding:
 
     def add_script(self, text: str, vector: list[float]) -> None:
         """Script a further response after construction -- used to extend a
-        fake mid-test for a second `find_best_semantic_match` call."""
+        fake mid-test for a second `find_best_semantic_match` call.
+        """
         self._vectors_by_text[text] = vector
 
 
-def test_find_best_semantic_match_scores_all_entries_and_returns_the_max(make_emitter) -> None:
+def test_find_best_semantic_match_scores_all_entries_and_returns_the_max(
+    make_emitter: MakeEmitter,
+) -> None:
     """One call for the incoming text, one per existing entry missing a
     cached embedding -- correct best_existing_id/best_similarity via
-    cosine_similarity."""
+    cosine_similarity.
+    """
     emitter, _log_path = make_emitter()
     incoming_text = "Conduct a cybersecurity risk assessment."
     existing_index = (
         ExistingCanonicalNode(id="obligation_1", text="Report an incident.", embedding=None),
-        ExistingCanonicalNode(
-            id="obligation_2", text="Conduct a risk assessment.", embedding=None
-        ),
+        ExistingCanonicalNode(id="obligation_2", text="Conduct a risk assessment.", embedding=None),
     )
     incoming_vector = [1.0, 0.0, 0.0]
     obligation_1_vector = [0.0, 1.0, 0.0]
@@ -86,15 +93,12 @@ def test_find_best_semantic_match_scores_all_entries_and_returns_the_max(make_em
         incoming_text,
         existing_index,
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
     )
 
     assert result is not None
-    expected_similarity = cosine_similarity(
-        tuple(incoming_vector), tuple(obligation_2_vector)
-    )
+    expected_similarity = cosine_similarity(tuple(incoming_vector), tuple(obligation_2_vector))
     assert result.best_existing_id == "obligation_2"
     assert result.best_similarity == expected_similarity
     assert result.incoming_embedding == tuple(incoming_vector)
@@ -106,10 +110,11 @@ def test_find_best_semantic_match_scores_all_entries_and_returns_the_max(make_em
 
 
 def test_find_best_semantic_match_reuses_cached_embedding_with_zero_calls_for_it(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """An existing entry that already carries a cached `embedding` triggers
-    ZERO `call_embedding` calls for it."""
+    ZERO `call_embedding` calls for it.
+    """
     emitter, _log_path = make_emitter()
     incoming_text = "Conduct a cybersecurity risk assessment."
     cached_embedding = (0.9, 0.1, 0.0)
@@ -125,7 +130,6 @@ def test_find_best_semantic_match_reuses_cached_embedding_with_zero_calls_for_it
         incoming_text,
         existing_index,
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -141,14 +145,14 @@ def test_find_best_semantic_match_reuses_cached_embedding_with_zero_calls_for_it
 
 def test_find_best_semantic_match_returns_none_and_makes_zero_calls_for_empty_index() -> None:
     """Empty `existing_index` -> `None`, and ZERO `call_embedding` calls at
-    all -- not even for the incoming text."""
+    all -- not even for the incoming text.
+    """
     call_embedding = _ScriptedCallEmbedding({})
 
     result = find_best_semantic_match(
         "Conduct a cybersecurity risk assessment.",
         (),
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
     )
 
@@ -156,10 +160,13 @@ def test_find_best_semantic_match_returns_none_and_makes_zero_calls_for_empty_in
     assert call_embedding.calls == []
 
 
-def test_find_best_semantic_match_propagates_llm_provider_error_unchanged(make_emitter) -> None:
+def test_find_best_semantic_match_propagates_llm_provider_error_unchanged(
+    make_emitter: MakeEmitter,
+) -> None:
     """A `call_embedding` raising `openai.OpenAIError` (mirroring how
     `route_embedding` wraps a real provider failure) propagates as
-    `LlmProviderError`, unchanged, with no try/except swallowing it here."""
+    `LlmProviderError`, unchanged, with no try/except swallowing it here.
+    """
     emitter, _log_path = make_emitter()
     incoming_text = "Conduct a cybersecurity risk assessment."
     existing_index = (
@@ -179,18 +186,18 @@ def test_find_best_semantic_match_propagates_llm_provider_error_unchanged(make_e
             incoming_text,
             existing_index,
             model=_MODEL,
-            threshold=_THRESHOLD,
             call_embedding=call_embedding,
             emitter=emitter,
         )
 
 
 def test_find_best_semantic_match_newly_computed_embeddings_excludes_cached_entries(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """B2 proof: `newly_computed_existing_embeddings` contains EXACTLY the
     ids that had no cached embedding going in -- never an id that already
-    had one."""
+    had one.
+    """
     emitter, _log_path = make_emitter()
     incoming_text = "Conduct a cybersecurity risk assessment."
     cached_embedding = (0.5, 0.5, 0.0)
@@ -220,7 +227,6 @@ def test_find_best_semantic_match_newly_computed_embeddings_excludes_cached_entr
         incoming_text,
         existing_index,
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -247,7 +253,7 @@ def test_find_best_semantic_match_newly_computed_embeddings_excludes_cached_entr
 
 
 def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embedding(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """B2 proof (the primitive-level fold-in proof): calling
     `find_best_semantic_match` TWICE in direct sequence -- first against an
@@ -258,7 +264,8 @@ def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embe
     what `dedupe_canonical_nodes` will do automatically in the next
     increment) -- and asserts the second call makes ZERO further
     `call_embedding` calls for that entry. This is the critical proof that
-    `SemanticMatchResult`'s return-value contract actually holds."""
+    `SemanticMatchResult`'s return-value contract actually holds.
+    """
     emitter, _log_path = make_emitter()
     incoming_text_first = "Conduct a cybersecurity risk assessment."
     incoming_text_second = "Perform a cybersecurity risk assessment."
@@ -279,7 +286,6 @@ def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embe
         incoming_text_first,
         first_existing_index,
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
     )
@@ -305,7 +311,6 @@ def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embe
         incoming_text_second,
         second_existing_index,
         model=_MODEL,
-        threshold=_THRESHOLD,
         call_embedding=call_embedding,
         emitter=emitter,
     )

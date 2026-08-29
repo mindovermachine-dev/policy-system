@@ -1,9 +1,12 @@
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ps_service.logging import LoggingConfigurationError
 from ps_service.logging.facade import resolve_default_log_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_resolve_default_log_path_when_no_env_override_then_under_repo_root_logs_dir(
@@ -31,12 +34,14 @@ def test_resolve_default_log_path_when_env_override_set_then_uses_override_dir(
     assert override_dir.is_dir()
 
 
-def test_resolve_default_log_path_when_directory_cannot_be_created_then_raises_logging_configuration_error(
+def test_resolve_default_log_path_raises_when_directory_cannot_be_created(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     blocking_file = tmp_path / "blocked"
     blocking_file.write_text("x")
-    monkeypatch.setenv("PS_LOGGING_DIR", str(blocking_file / "logs"))  # parent is a file -> mkdir fails
+    monkeypatch.setenv(
+        "PS_LOGGING_DIR", str(blocking_file / "logs")
+    )  # parent is a file -> mkdir fails
 
     with pytest.raises(LoggingConfigurationError):
         resolve_default_log_path(repo_root=tmp_path)

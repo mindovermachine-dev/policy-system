@@ -11,6 +11,11 @@ equivalent. This closes the gap a positive convergence test alone
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
@@ -53,9 +58,9 @@ class _ScriptedCallEmbedding:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         vector = self._vectors_by_text.get(text)
         if vector is None:
@@ -65,7 +70,9 @@ class _ScriptedCallEmbedding:
         )
 
 
-def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(make_emitter) -> None:
+def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(
+    make_emitter: MakeEmitter,
+) -> None:
     emitter, _log_path = make_emitter()
     first_id = "obl_notify_authority_breach"
     second_id = "obl_register_processing_activities"
@@ -76,9 +83,7 @@ def test_dedupe_canonical_nodes_below_threshold_pair_does_not_converge(make_emit
     first_vector = [1.0, 0.0]
     second_vector = [0.8, 0.6]
     graph = _ScriptedSingleTenantGraph(capability_rows=[])
-    call_embedding = _ScriptedCallEmbedding(
-        {first_text: first_vector, second_text: second_vector}
-    )
+    call_embedding = _ScriptedCallEmbedding({first_text: first_vector, second_text: second_vector})
     incoming_nodes = (
         BaselineNode(id=first_id, properties={"name": first_text, "confidence": 0.9}),
         BaselineNode(id=second_id, properties={"name": second_text, "confidence": 0.9}),

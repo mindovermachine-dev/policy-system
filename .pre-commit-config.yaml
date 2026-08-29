@@ -1,0 +1,18 @@
+# Managed pre-commit hooks. Invoked from `.githooks/pre-commit` (repo sets
+# core.hooksPath = .githooks, so this runs via `pre-commit run`, not an installed hook script).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4              # keep in lockstep with the dev-group ruff pin
+    hooks:
+      - id: ruff-check
+        args: [--force-exclude]
+      - id: ruff-format
+        args: [--check, --force-exclude]
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright (strict)
+        entry: uv run basedpyright
+        language: system
+        types: [python]
+        pass_filenames: false     # project-wide check, not per-file

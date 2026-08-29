@@ -1,12 +1,28 @@
 """Convert EU regulation PDFs in this folder to Markdown using markitdown."""
-from pathlib import Path
 
-from markitdown import MarkItDown
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, cast
+
+from markitdown import (  # pyright: ignore[reportMissingImports]  # markitdown: not a workspace dep
+    MarkItDown,  # pyright: ignore[reportUnknownVariableType]  # markitdown: unresolved -> Unknown symbol
+)
+
+if TYPE_CHECKING:
+    # markitdown ships no py.typed (and is not installed in the workspace venv);
+    # this Protocol pins the slice of its surface this script touches.
+    class _ConversionResult(Protocol):
+        @property
+        def text_content(self) -> str: ...
+
+    class _MarkItDown(Protocol):
+        def convert(self, source: str) -> _ConversionResult: ...
+
 
 REGULATIONS_DIR = Path(__file__).parent
 
+
 def main() -> None:
-    converter = MarkItDown()
+    converter = cast("_MarkItDown", MarkItDown())
     pdf_files = sorted(REGULATIONS_DIR.glob("*.pdf"))
 
     if not pdf_files:

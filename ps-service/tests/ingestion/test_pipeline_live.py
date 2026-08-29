@@ -35,8 +35,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -49,9 +48,13 @@ from ps_service.ingestion.falkordb_client import (
     native_graph_name,
     select_graph,
 )
-from ps_service.ingestion.models import IngestResult
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import EmitterConfig, LogEmitter
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ps_service.ingestion.models import IngestResult
 
 pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
 
@@ -89,7 +92,8 @@ class _LiveRun:
     """One regulation's real ingestion outcome, plus the graph handle used
     to query FalkorDB for the fields `IngestResult` doesn't itself carry
     (title/jurisdiction/effective_date/... live on the persisted node, not
-    on the result object)."""
+    on the result object).
+    """
 
     short_name: str
     graph: GraphHandle
@@ -135,7 +139,7 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
         # `Path.read_*`, no fixture directory reference anywhere in this
         # fixture or in pipeline.py/adapter.py's own source).
         result = ingest_regulatory_instrument(
-            cast(str, spec["identifier"]),
+            cast("str", spec["identifier"]),
             short_name,
             version=_VERSION,
             adapter=adapter,
@@ -151,7 +155,8 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
 
 def _regulatory_instrument_row(run: _LiveRun) -> list[object]:
     """Fetch the persisted Regulation node's bibliographic fields back
-    from FalkorDB, by the exact id `ingest_regulatory_instrument()` reported."""
+    from FalkorDB, by the exact id `ingest_regulatory_instrument()` reported.
+    """
     result = run.graph.query(
         "MATCH (n:RegulatoryInstrument {id: $id}) "
         "RETURN n.title, n.jurisdiction, n.effective_date, n.version, n.status, n.source_type, "
@@ -159,7 +164,10 @@ def _regulatory_instrument_row(run: _LiveRun) -> list[object]:
         params={"id": run.ingest_result.regulatory_instrument_id},
     )
     rows = cast("list[list[object]]", result.result_set)
-    assert len(rows) == 1, f"expected exactly 1 Regulation node for {run.ingest_result.regulatory_instrument_id!r}, got {len(rows)}"
+    assert len(rows) == 1, (
+        f"expected exactly 1 Regulation node for "
+        f"{run.ingest_result.regulatory_instrument_id!r}, got {len(rows)}"
+    )
     return rows[0]
 
 
@@ -233,9 +241,10 @@ def test_ac003_structural_element_counts_match_learnings_ground_truth(
     for element_type, expected_count in expected_counts.items():
         result = run.graph.query(f"MATCH (n:{element_type}) RETURN count(n)")
         rows = cast("list[list[object]]", result.result_set)
-        actual_count = cast(int, rows[0][0])
+        actual_count = cast("int", rows[0][0])
         assert actual_count == expected_count, (
-            f"{short_name} {element_type}: expected {expected_count} (LEARNINGS.md), got {actual_count}"
+            f"{short_name} {element_type}: expected {expected_count} (LEARNINGS.md), "
+            f"got {actual_count}"
         )
 
 
@@ -258,7 +267,8 @@ def test_ac004_every_structural_label_fully_reachable_from_regulation_node(
     assert counts, "verify_structural_graph_reachable returned no labels"
     for label, reachability in counts.items():
         assert reachability.reachable == reachability.total, (
-            f"{short_name} {label}: reachable={reachability.reachable} != total={reachability.total}"
+            f"{short_name} {label}: "
+            f"reachable={reachability.reachable} != total={reachability.total}"
         )
 
     expected_counts = cast("dict[str, int]", _GROUND_TRUTH[short_name]["counts"])
@@ -301,7 +311,8 @@ def test_ac007_nis2_effective_date_is_the_transposition_deadline(
     """The Directive-specific case: NIS2's `effective_date` must be the
     Member-State transposition deadline (Art. 41), not the Directive's own
     EU-level entry-into-force date — the CA doc's Regulation mapping row
-    convention (PLAN_REVIEWED.md §0.1/§3.2)."""
+    convention (PLAN_REVIEWED.md §0.1/§3.2).
+    """
     _, _, effective_date_raw, _, _, _, _ = _regulatory_instrument_row(live_runs["NIS2"])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == date(2024, 10, 17)
@@ -320,7 +331,8 @@ def test_ac007_regulation_effective_dates_are_the_application_date(
     """The Regulation case (not a Directive): CRA/GDPR's `effective_date` is
     the "shall apply from" application date, via the same unconditional,
     text-driven search NIS2 uses — confirming the Entry-into-force fallback
-    path generalizes across two independent Regulations, not just one."""
+    path generalizes across two independent Regulations, not just one.
+    """
     _, _, effective_date_raw, _, _, _, _ = _regulatory_instrument_row(live_runs[short_name])
     assert isinstance(effective_date_raw, str)
     assert date.fromisoformat(effective_date_raw) == expected_date

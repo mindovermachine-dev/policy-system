@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.llm_interface.models import EmbeddingResult
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 pytestmark = pytest.mark.llm_live
 
@@ -29,7 +32,7 @@ _EXPECTED_VECTOR_DIMENSIONALITY = 3072
 
 @pytest.fixture
 def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
-    """A real `LogEmitter` writing to a per-test tmp path — `route_embedding`'s `_log` call
+    """A real `LogEmitter` writing to a per-test tmp path — `route_embedding`'s `log` call.
 
     needs a live emitter (or a configured process default) or it raises
     `LoggingLifecycleError`; these tests don't assert on log content, only
@@ -48,7 +51,9 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 def test_route_embedding_returns_vector_of_expected_dimensionality_from_live_provider(
     emitter: LogEmitter,
 ) -> None:
-    assert _LLM_INTERFACE_EMBED_MODEL is not None  # narrows type for mypy/ruff; skipif already guards this
+    assert (
+        _LLM_INTERFACE_EMBED_MODEL is not None
+    )  # narrows type for mypy/ruff; skipif already guards this
     result = route_embedding(
         "The quick brown fox jumps over the lazy dog.",
         model=_LLM_INTERFACE_EMBED_MODEL,
@@ -68,7 +73,9 @@ def test_route_embedding_returns_vector_of_expected_dimensionality_from_live_pro
 def test_route_embedding_returns_identical_vector_for_identical_input_from_live_provider(
     emitter: LogEmitter,
 ) -> None:
-    assert _LLM_INTERFACE_EMBED_MODEL is not None  # narrows type for mypy/ruff; skipif already guards this
+    assert (
+        _LLM_INTERFACE_EMBED_MODEL is not None
+    )  # narrows type for mypy/ruff; skipif already guards this
     text = "The quick brown fox jumps over the lazy dog."
 
     result1 = route_embedding(

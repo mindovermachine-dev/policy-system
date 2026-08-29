@@ -52,6 +52,34 @@ inventory:
     name: Run prettier
     command: prettier --check .
 
+  - id: ruff-check
+    name: Run ruff lint
+    command: uv run ruff check .
+
+  - id: ruff-format
+    name: Run ruff format check
+    command: uv run ruff format --check .
+
+  - id: basedpyright
+    name: Run basedpyright (strict)
+    command: uv run basedpyright
+    timeout: 10m
+
+  - id: pip-audit
+    name: Audit locked dependencies for known CVEs
+    timeout: 10m
+    command: |
+      uv export --no-emit-workspace --format requirements-txt --no-hashes \
+        | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off
+
+  - id: sync-dev-group
+    name: Sync uv dev dependency group
+    command: uv sync --group dev
+
+  - id: ruff-fix
+    name: Auto-fix ruff violations
+    command: uv run ruff check --fix .
+
   - id: "install-lint-tools"
     name: "Install linting and checker tools"
     command: |
@@ -101,6 +129,7 @@ waves:
       - install-gh-insitu
       - repo-gitconfig
       - install-lint-tools
+      - sync-dev-group
       - version-txt
 
   - id: trunk-worthy
@@ -110,6 +139,10 @@ waves:
       - cspell
       - markdownlint
       - prettier
+      - ruff-check
+      - ruff-format
+      - basedpyright
+      - pip-audit
 
   - id: "fix-all"
     name: "Fix anything that can be fixed automatically"
@@ -117,3 +150,4 @@ waves:
     checks:
       - "fix-markdown"
       - "fix-prettier"
+      - "ruff-fix"

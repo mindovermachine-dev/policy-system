@@ -13,28 +13,47 @@ judgment calls -- re-running this script against a freshly reloaded graph
 (from load_graph.py) reproduces the same merged state, so it's safe to keep
 appending to it as more regulations are loaded.
 
-Usage:
-    python tools/graph-ingestion/merge_capabilities.py --decisions docs/test-data/eu-regulations/capability_merges.json --graph-name policy_system
+Usage (a single command line, wrapped here for width):
+    python tools/graph-ingestion/merge_capabilities.py
+      --decisions docs/test-data/eu-regulations/capability_merges.json
+      --graph-name policy_system
 """
+
+from __future__ import annotations
 
 import argparse
 import json
 import sys
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from falkordb import FalkorDB
 
+if TYPE_CHECKING:
+    # falkordb ships no py.typed; these Protocols pin the slice of its surface
+    # this script touches so the rest of the module stays precisely typed.
+    class _QueryResult(Protocol):
+        @property
+        def result_set(self) -> list[list[Any]]: ...
 
-def load_decisions(path) -> list:
-    with open(path) as f:
+    class _Graph(Protocol):
+        def query(self, q: str, params: dict[str, Any] | None = None) -> _QueryResult: ...
+
+    class _FalkorDB(Protocol):
+        def select_graph(self, name: str) -> _Graph: ...
+
+
+def load_decisions(path: Path) -> list[dict[str, Any]]:
+    with path.open() as f:
         return json.load(f)
 
 
-def node_exists(graph, cap_id: str) -> bool:
+def node_exists(graph: _Graph, cap_id: str) -> bool:
     result = graph.query("MATCH (n:Capability {id: $id}) RETURN n.id", params={"id": cap_id})
     return bool(result.result_set)
 
 
-def rewire_and_delete(graph, keep_id: str, drop_id: str) -> None:
+def rewire_and_delete(graph: _Graph, keep_id: str, drop_id: str) -> None:
     outgoing = graph.query(
         "MATCH (d:Capability {id: $id})-[r]->(o) RETURN type(r), labels(o)[0], o.id, properties(r)",
         params={"id": drop_id},
@@ -82,13 +101,20 @@ def main() -> int:
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=6379)
     parser.add_argument("--graph-name", default="policy_system")
-    parser.add_argument("--decisions", required=True, help="Path to the merge decisions JSON file")
-    parser.add_argument("--dry-run", action="store_true", help="Print what would happen without writing")
+    parser.add_argument(
+        "--decisions",
+        type=Path,
+        required=True,
+        help="Path to the merge decisions JSON file",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print what would happen without writing"
+    )
     args = parser.parse_args()
 
     decisions = load_decisions(args.decisions)
 
-    db = FalkorDB(host=args.host, port=args.port)
+    db = cast("_FalkorDB", FalkorDB(host=args.host, port=args.port))
     graph = db.select_graph(args.graph_name)
 
     applied, skipped = 0, 0

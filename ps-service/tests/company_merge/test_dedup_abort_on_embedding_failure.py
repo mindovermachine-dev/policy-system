@@ -10,6 +10,11 @@ this test is the direct proof of that call-log shape.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 import httpx
 import openai
 import pytest
@@ -36,7 +41,8 @@ class _FakeQueryResult:
 
 class _ScriptedSingleTenantGraph:
     """Satisfies `GraphHandle` structurally: records every `query()` call
-    it receives, so a test can assert the call log contains no write."""
+    it receives, so a test can assert the call log contains no write.
+    """
 
     def __init__(self, *, capability_rows: list[object] | None = None) -> None:
         self._capability_rows = capability_rows if capability_rows is not None else []
@@ -52,15 +58,16 @@ class _ScriptedSingleTenantGraph:
 class _ScriptedCallEmbedding:
     """A hand-written `EmbeddingCaller` fake, scripted per input `text` --
     a scripted `Exception` value is raised instead of returning a response,
-    mirroring `test_dedup_semantic_match.py`'s propagation test."""
+    mirroring `test_dedup_semantic_match.py`'s propagation test.
+    """
 
     def __init__(self, vectors_by_text: dict[str, list[float] | Exception]) -> None:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         scripted = self._vectors_by_text.get(text)
         if scripted is None:
@@ -72,12 +79,15 @@ class _ScriptedCallEmbedding:
         )
 
 
-def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(make_emitter) -> None:
+def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(
+    make_emitter: MakeEmitter,
+) -> None:
     """3 incoming nodes; the second one's own embedding call raises. The
     exception propagates unchanged, the third node is never processed, and
     `single_tenant_graph`'s call log contains exactly the one read call
     `read_existing_canonical_index` issued at the very start -- zero write
-    calls of any kind."""
+    calls of any kind.
+    """
     emitter, _log_path = make_emitter()
     graph = _ScriptedSingleTenantGraph(capability_rows=[])
     first_text = "First duty, minted with no comparison needed."

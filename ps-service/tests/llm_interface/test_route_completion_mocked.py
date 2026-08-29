@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import openai
@@ -16,10 +15,14 @@ from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.llm_interface.models import ChatMessage, CompletionResult
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
 
 @pytest.fixture
 def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
-    """A real `LogEmitter` writing to a per-test tmp path — `route_completion`'s `_log` call
+    """A real `LogEmitter` writing to a per-test tmp path — `route_completion`'s `log` call.
 
     needs a live emitter (or a configured process default) or it raises
     `LoggingLifecycleError`; these tests don't assert on log content, only
@@ -35,10 +38,16 @@ def test_route_completion_returns_completion_result_with_provider_text(emitter: 
     fake_response = ModelResponse(
         id="x",
         model="fake-model",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="hi there", role="assistant"))],
+        choices=[
+            Choices(
+                finish_reason="stop", index=0, message=Message(content="hi there", role="assistant")
+            )
+        ],
     )
 
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         return fake_response
 
     result = route_completion(
@@ -53,8 +62,12 @@ def test_route_completion_returns_completion_result_with_provider_text(emitter: 
     assert result.model == "fake-model"
 
 
-def test_route_completion_raises_llm_provider_error_when_provider_call_raises(emitter: LogEmitter) -> None:
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+def test_route_completion_raises_llm_provider_error_when_provider_call_raises(
+    emitter: LogEmitter,
+) -> None:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         raise openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
 
     with pytest.raises(LlmProviderError) as exc_info:
@@ -73,7 +86,9 @@ def test_route_completion_raises_llm_provider_error_when_provider_returns_no_cho
 ) -> None:
     fake_response = ModelResponse(id="x", model="fake-model", choices=[])
 
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         return fake_response
 
     with pytest.raises(LlmProviderError):
@@ -89,10 +104,16 @@ def test_route_completion_marks_llm_interface_healthy_on_success(emitter: LogEmi
     fake_response = ModelResponse(
         id="x",
         model="fake-model",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="hi there", role="assistant"))],
+        choices=[
+            Choices(
+                finish_reason="stop", index=0, message=Message(content="hi there", role="assistant")
+            )
+        ],
     )
 
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         return fake_response
 
     route_completion(
@@ -105,8 +126,12 @@ def test_route_completion_marks_llm_interface_healthy_on_success(emitter: LogEmi
     assert is_healthy(LLM_INTERFACE) is True
 
 
-def test_route_completion_marks_llm_interface_unhealthy_when_provider_call_raises(emitter: LogEmitter) -> None:
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+def test_route_completion_marks_llm_interface_unhealthy_when_provider_call_raises(
+    emitter: LogEmitter,
+) -> None:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         raise openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
 
     with pytest.raises(LlmProviderError):
@@ -120,13 +145,18 @@ def test_route_completion_marks_llm_interface_unhealthy_when_provider_call_raise
     assert is_healthy(LLM_INTERFACE) is False
 
 
-def test_route_completion_empty_choices_does_not_mark_llm_interface_unhealthy(emitter: LogEmitter) -> None:
+def test_route_completion_empty_choices_does_not_mark_llm_interface_unhealthy(
+    emitter: LogEmitter,
+) -> None:
     """An empty-choices response is a data-shape issue with this particular
     call, not evidence the provider is unreachable — must not be conflated
-    with a transport-level failure."""
+    with a transport-level failure.
+    """
     fake_response = ModelResponse(id="x", model="fake-model", choices=[])
 
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         return fake_response
 
     with pytest.raises(LlmProviderError):
@@ -146,10 +176,14 @@ def test_route_completion_raises_llm_provider_error_when_provider_returns_empty_
     fake_response = ModelResponse(
         id="x",
         model="fake-model",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="", role="assistant"))],
+        choices=[
+            Choices(finish_reason="stop", index=0, message=Message(content="", role="assistant"))
+        ],
     )
 
-    def fake_call_completion(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_call_completion(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         return fake_response
 
     with pytest.raises(LlmProviderError):

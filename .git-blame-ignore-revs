@@ -1,0 +1,10 @@
+# Revisions to skip in `git blame`.
+# Enable locally with:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub applies this file automatically.)
+#
+# Issue #48 — mechanical `ruff check --fix --unsafe-fixes` + `ruff format` sweep.
+# ACTION FOR THE COMMITTER: after you make the mechanical-style commit (the one whose
+# message is `style(lint): mechanical ruff --fix --unsafe-fixes + ruff format (#48)`),
+# run `git rev-parse HEAD`, replace the 40-zero placeholder line below with that full
+# SHA, and amend it into the config commit (or add a tiny follow-up commit).
+0000000000000000000000000000000000000000

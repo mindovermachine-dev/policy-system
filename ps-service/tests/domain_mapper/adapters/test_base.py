@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
-from ps_service.domain_mapper.falkordb_client import GraphHandle, GraphQueryResult
+from typing import TYPE_CHECKING
+
 from ps_service.domain_mapper.models import ExtractionUnit
+
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
+    from ps_service.domain_mapper.falkordb_client import GraphHandle, GraphQueryResult
 
 
 class _FakeGraphQueryResult:
@@ -17,7 +21,8 @@ class _FakeGraphQueryResult:
 
 class _FakeGraphHandle:
     """A minimal structural implementation of `GraphHandle` — just enough
-    to pass as this Protocol's `graph` argument without a `type: ignore`."""
+    to pass as this Protocol's `graph` argument without a `type: ignore`.
+    """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
         del q, params
@@ -26,7 +31,8 @@ class _FakeGraphHandle:
 
 class _FakeAdapter:
     """A minimal structural implementation — proves `DomainMappingAdapter`
-    is satisfied by duck typing (Protocol), not by inheritance."""
+    is satisfied by duck typing (Protocol), not by inheritance.
+    """
 
     def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
         del graph  # unused by this fake — the Protocol imposes no naming convention of its own

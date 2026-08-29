@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ps_service.logging import bind_run_context, emit_log_entry
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_emit_log_entry_when_run_id_bound_then_baked_into_entry(make_emitter, read_lines) -> None:
+    from conftest import MakeEmitter, ReadLines
+
+
+def test_emit_log_entry_when_run_id_bound_then_baked_into_entry(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
 
     with bind_run_context("run-xyz"):
@@ -20,8 +27,8 @@ def test_emit_log_entry_when_run_id_bound_then_baked_into_entry(make_emitter, re
     assert lines[0]["run_id"] == "run-xyz"
 
 
-def test_emit_log_entry_when_two_threads_bind_and_emit_through_same_emitter_then_no_cross_contamination(
-    make_emitter, read_lines
+def test_emit_log_entry_two_threads_same_emitter_no_cross_contamination(
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     emitter, log_path = make_emitter()
     entries_per_thread = 5
@@ -29,7 +36,9 @@ def test_emit_log_entry_when_two_threads_bind_and_emit_through_same_emitter_then
     def worker(tag: str) -> None:
         with bind_run_context(tag):
             for i in range(entries_per_thread):
-                emit_log_entry(component="ac2", action=f"t{i}", emitter=emitter)  # same instance (M8 fix)
+                emit_log_entry(
+                    component="ac2", action=f"t{i}", emitter=emitter
+                )  # same instance (M8 fix)
 
     threads = [threading.Thread(target=worker, args=(tag,)) for tag in ("thread-a", "thread-b")]
     for t in threads:
@@ -45,7 +54,9 @@ def test_emit_log_entry_when_two_threads_bind_and_emit_through_same_emitter_then
     assert run_ids_seen == {"thread-a", "thread-b"}  # disjoint, no foreign run_id in any line
 
 
-def test_emit_log_entry_when_no_emitter_and_no_default_then_raises_logging_lifecycle_error() -> None:
+def test_emit_log_entry_when_no_emitter_and_no_default_then_raises_logging_lifecycle_error() -> (
+    None
+):
     import pytest
 
     from ps_service.logging import LoggingLifecycleError
@@ -54,7 +65,9 @@ def test_emit_log_entry_when_no_emitter_and_no_default_then_raises_logging_lifec
         emit_log_entry(component="ac1", action="do_thing")
 
 
-def test_atexit_drain_hook_registered_once_when_configure_called_multiple_times(tmp_path: Path) -> None:
+def test_atexit_drain_hook_registered_once_when_configure_called_multiple_times(
+    tmp_path: Path,
+) -> None:
     import atexit
     from unittest.mock import patch
 

@@ -31,16 +31,20 @@ Three tests, all `@pytest.mark.falkordb_live` (deselected by the default
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.mcp_interface.mcp_server import handle_mcp_tool_call
-from ps_service.query_engine.cypher_query import _WRITE_CLAUSE_REJECTION_MESSAGE
+from ps_service.query_engine.cypher_query import (
+    _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
+)
 from ps_service.query_engine.falkordb_client import GraphHandle, connect, select_graph
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 _HOST = "127.0.0.1"
 _PORT = 6379
@@ -53,7 +57,8 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
     `execute_cypher_query`, which logs on every branch (succeeded / rejected
     / failed), so it needs a live emitter rather than relying on a
     configured process default. No test here asserts on log content.
-    Mirrors `tests/query_engine/test_execute_cypher_query_success.py`."""
+    Mirrors `tests/query_engine/test_execute_cypher_query_success.py`.
+    """
     log_emitter = LogEmitter(EmitterConfig(log_path=tmp_path / "test.jsonl"))
     yield log_emitter
     log_emitter.stop()
@@ -64,7 +69,8 @@ def real_graph() -> GraphHandle:
     """Connects to the real, reachable FalkorDB instance and selects the
     real `policy_system` graph via the real `connect`/`select_graph` from
     `falkordb_client.py` -- no fake `GraphHandle`. Same host/port/graph as
-    `tests/query_engine/test_live_capstone.py`."""
+    `tests/query_engine/test_live_capstone.py`.
+    """
     db = connect(host=_HOST, port=_PORT)
     return select_graph(db, _GRAPH_NAME)
 
@@ -74,10 +80,11 @@ def _count_nodes(graph: GraphHandle) -> int:
     `handle_mcp_tool_call` -- used only to observe the real node count
     before/after the guarded write attempt below. Routing this through the
     function under test would be circular; this is a plain
-    `MATCH ... RETURN count(n)` query, never anything else."""
+    `MATCH ... RETURN count(n)` query, never anything else.
+    """
     result = graph.query("MATCH (n) RETURN count(n)")
     rows = cast("list[list[object]]", result.result_set)
-    return cast(int, rows[0][0])
+    return cast("int", rows[0][0])
 
 
 @pytest.mark.falkordb_live
@@ -91,7 +98,7 @@ def test_live_read_only_query_returns_expected_shape(
     result = handle_mcp_tool_call("MATCH (n) RETURN n LIMIT 3", graph=real_graph, emitter=emitter)
 
     assert isinstance(result, dict)
-    row_count = cast(int, result["row_count"])
+    row_count = cast("int", result["row_count"])
     rows = cast("list[object]", result["rows"])
     assert row_count == len(rows)
     assert row_count <= 3
@@ -107,14 +114,13 @@ def test_live_malformed_query_returns_verbatim_error(
     """AC-005 live proof: a syntactically invalid query is executed against
     the real FalkorDB, which rejects it; `handle_mcp_tool_call` surfaces
     FalkorDB's own error text verbatim as an `error: ` string, never a
-    formatted traceback."""
+    formatted traceback.
+    """
     result = handle_mcp_tool_call("MATCH (n RETURN n", graph=real_graph, emitter=emitter)
 
     assert isinstance(result, str)
     assert result.startswith("error: ")
-    assert "Invalid input" in result, (
-        f"expected FalkorDB's own parser error text, got: {result!r}"
-    )
+    assert "Invalid input" in result, f"expected FalkorDB's own parser error text, got: {result!r}"
     assert "Traceback" not in result
 
 
@@ -125,7 +131,8 @@ def test_live_write_clause_rejected(real_graph: GraphHandle, emitter: LogEmitter
     Proven two ways: the returned string is exactly
     `"error: " + _WRITE_CLAUSE_REJECTION_MESSAGE`, and the real graph's node
     count is provably unchanged before vs. after (the `CapstoneProbe` node
-    never persisted)."""
+    never persisted).
+    """
     count_before = _count_nodes(real_graph)
 
     result = handle_mcp_tool_call(

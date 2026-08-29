@@ -1,8 +1,9 @@
-"""Cosine similarity -- a pure function, new logic not present anywhere in
-shipped `ps_service` code (PLAN_REVIEWED.md §0.4/§10 Increment 2).
+"""Cosine similarity -- a pure function.
 
-Used by `dedup.find_best_semantic_match` to score an incoming node's
-embedding against every existing canonical candidate's embedding.
+New logic not present anywhere in shipped `ps_service` code
+(PLAN_REVIEWED.md §0.4/§10 Increment 2). Used by
+`dedup.find_best_semantic_match` to score an incoming node's embedding
+against every existing canonical candidate's embedding.
 """
 
 from __future__ import annotations
@@ -13,8 +14,7 @@ from ps_service.company_merge.errors import CompanyMergeValidationError
 
 
 def cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
-    """Cosine similarity between two equal-length embedding vectors, in
-    `[-1.0, 1.0]`.
+    """Cosine similarity between two equal-length embedding vectors, in `[-1.0, 1.0]`.
 
     Raises `CompanyMergeValidationError` if the vectors have different
     lengths (naming both lengths in the message) or if either vector is the
@@ -31,5 +31,7 @@ def cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
         message = "cosine similarity is undefined for a zero vector"
         raise CompanyMergeValidationError(message)
 
-    dot_product = sum(component_a * component_b for component_a, component_b in zip(a, b, strict=True))
+    dot_product = sum(
+        component_a * component_b for component_a, component_b in zip(a, b, strict=True)
+    )
     return dot_product / (magnitude_a * magnitude_b)

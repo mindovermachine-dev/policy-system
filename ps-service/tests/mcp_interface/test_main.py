@@ -11,9 +11,12 @@ Hand-written spies, per repo convention -- no `unittest.mock`.
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from ps_service.mcp_interface import mcp_server
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_main_calls_configure_then_run_with_no_transport_arg(

@@ -29,13 +29,15 @@ def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
     )
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        config.port = 9000  # type: ignore[misc]
+        config.port = 9000  # pyright: ignore[reportAttributeAccessIssue]  # deliberately mutating a frozen dataclass to prove it raises
 
 
-def test_load_config_with_no_relevant_env_vars_set_returns_default_service_config(
+def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_SERVICE_*`/`PS_LOGGING_DIR` set → defaults matching #12's shipped values (AC-BI-006)."""
+    """No `PS_SERVICE_*`/`PS_LOGGING_DIR` set → defaults matching #12's shipped
+    values (AC-BI-006).
+    """
     monkeypatch.delenv("PS_LOGGING_DIR", raising=False)
     monkeypatch.delenv("PS_SERVICE_HOST", raising=False)
     monkeypatch.delenv("PS_SERVICE_PORT", raising=False)
@@ -126,13 +128,15 @@ def _find_bare_os_environ_references(tree: ast.AST) -> list[ast.Attribute]:
             is_get_object and isinstance(grandparent, ast.Call) and grandparent.func is parent
         )
         if not is_called:
-            violations.append(node)  # type: ignore[arg-type]
+            violations.append(node)  # pyright: ignore[reportArgumentType]  # `node` is a narrowed `ast.Attribute` here (the `is_os_environ` guard above), but the compound boolean does not propagate the narrowing
 
     return violations
 
 
 def test_config_module_never_references_bare_os_environ() -> None:
-    """`config.py` only reads env vars via `os.environ.get(...)`, never the full mapping (AC-BI-012)."""
+    """`config.py` only reads env vars via `os.environ.get(...)`, never the full
+    mapping (AC-BI-012).
+    """
     source = inspect.getsource(config_module)
     tree = ast.parse(source)
 
@@ -142,14 +146,14 @@ def test_config_module_never_references_bare_os_environ() -> None:
 
 
 @pytest.mark.parametrize("invalid_graceful_shutdown_seconds", ["not-a-number", "-1"])
-def test_load_config_raises_service_configuration_error_for_invalid_ps_service_graceful_shutdown_seconds(
+def test_load_config_raises_for_invalid_ps_service_graceful_shutdown_seconds(
     invalid_graceful_shutdown_seconds: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-integer/negative `PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` raises, for validation-surface consistency."""
-    monkeypatch.setenv(
-        "PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS", invalid_graceful_shutdown_seconds
-    )
+    """Non-integer/negative `PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS` raises, for
+    validation-surface consistency.
+    """
+    monkeypatch.setenv("PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS", invalid_graceful_shutdown_seconds)
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
@@ -167,10 +171,12 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
         load_config()
 
 
-def test_load_config_with_no_llm_interface_env_vars_set_returns_none_for_both_model_fields(
+def test_load_config_no_llm_interface_env_vars_returns_none_for_both_model_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` set → both fields default to `None`."""
+    """No `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` set → both fields
+    default to `None`.
+    """
     monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
     monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
 
@@ -199,7 +205,7 @@ def test_load_config_honors_ps_llm_interface_embed_model_override(
 
 
 @pytest.mark.parametrize("invalid_model", ["", "   ", "\t"])
-def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_ps_llm_interface_model(
+def test_load_config_raises_for_empty_or_whitespace_ps_llm_interface_model(
     invalid_model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -211,7 +217,7 @@ def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_
 
 
 @pytest.mark.parametrize("invalid_embed_model", ["", "   ", "\t"])
-def test_load_config_raises_service_configuration_error_for_empty_or_whitespace_ps_llm_interface_embed_model(
+def test_load_config_raises_for_empty_or_whitespace_ps_llm_interface_embed_model(
     invalid_embed_model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,18 +316,20 @@ def test_load_config_honors_ps_companymerge_similarity_threshold_override(
     "invalid_similarity_threshold",
     ["0.0", "1.5", "-0.1"],
 )
-def test_load_config_raises_service_configuration_error_for_out_of_range_ps_companymerge_similarity_threshold(
+def test_load_config_raises_for_out_of_range_ps_companymerge_similarity_threshold(
     invalid_similarity_threshold: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Out-of-range (not `0.0 < value <= 1.0`) `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` fails closed, when present."""
+    """Out-of-range (not `0.0 < value <= 1.0`) `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
+    fails closed, when present.
+    """
     monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", invalid_similarity_threshold)
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
 
 
-def test_load_config_raises_service_configuration_error_for_non_numeric_ps_companymerge_similarity_threshold(
+def test_load_config_raises_for_non_numeric_ps_companymerge_similarity_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-numeric `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` fails closed, when present."""
@@ -331,7 +339,7 @@ def test_load_config_raises_service_configuration_error_for_non_numeric_ps_compa
         load_config()
 
 
-def test_service_config_pre_existing_four_field_construction_still_succeeds_with_none_threshold() -> None:
+def test_service_config_four_field_construction_still_succeeds_with_none_threshold() -> None:
     """Regression proof (issue #16's B1): the exact pre-existing 4-positional-field
     `ServiceConfig(...)` construction other tests in this file already use, with no
     `company_merge_similarity_threshold` argument, still succeeds and the new field

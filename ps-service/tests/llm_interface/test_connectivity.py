@@ -24,18 +24,25 @@ from ps_service.llm_interface.errors import LlmProviderError
 
 
 @pytest.fixture(autouse=True)
-def _stub_emit_log_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+def stub_emit_log_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """`check_connectivity` calls `route_completion`/`route_embedding` with no
     `emitter=` (mirroring how `main.py`'s lifespan calls it, after `Logging.
-    configure()` has already run), so `_log`'s `emit_log_entry` call needs
+    configure()` has already run), so `log`'s `emit_log_entry` call needs
     either a process default emitter or (as here) a stub — avoids these
     tests depending on the real `Logging.configure()`'s process-wide,
     once-ever `atexit.register` side effect, which other test files'
-    ordering-sensitive assertions rely on staying untouched."""
-    monkeypatch.setattr(_logging_support, "emit_log_entry", lambda **kwargs: None)
+    ordering-sensitive assertions rely on staying untouched.
+    """
+
+    def _noop_emit_log_entry(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(_logging_support, "emit_log_entry", _noop_emit_log_entry)
 
 
-def _config(*, model: str | None = "fake/model", embed_model: str | None = "fake/embed-model") -> ServiceConfig:
+def _config(
+    *, model: str | None = "fake/model", embed_model: str | None = "fake/embed-model"
+) -> ServiceConfig:
     return ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -50,25 +57,34 @@ def _stub_successful_provider_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     completion_response = ModelResponse(
         id="x",
         model="fake/model",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="pong", role="assistant"))],
+        choices=[
+            Choices(
+                finish_reason="stop", index=0, message=Message(content="pong", role="assistant")
+            )
+        ],
     )
     embedding_response = EmbeddingResponse(
         model="fake/embed-model",
         data=[Embedding(embedding=[0.1], index=0, object="embedding")],
     )
-    monkeypatch.setattr(
-        completion_module,
-        "default_completion_caller",
-        lambda *, model, messages, timeout: completion_response,
-    )
-    monkeypatch.setattr(
-        embedding_module,
-        "default_embedding_caller",
-        lambda *, model, input, timeout: embedding_response,
-    )
+
+    def fake_completion_caller(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
+        return completion_response
+
+    def fake_embedding_caller(
+        *, model: str, inputs: list[str], timeout: float
+    ) -> EmbeddingResponse:
+        return embedding_response
+
+    monkeypatch.setattr(completion_module, "default_completion_caller", fake_completion_caller)
+    monkeypatch.setattr(embedding_module, "default_embedding_caller", fake_embedding_caller)
 
 
-def test_check_connectivity_raises_without_marking_a_call_when_completion_model_unconfigured() -> None:
+def test_check_connectivity_raises_without_marking_a_call_when_completion_model_unconfigured() -> (
+    None
+):
     config = _config(model=None)
 
     with pytest.raises(LlmProviderError, match="PS_LLMINTERFACE_MODEL"):
@@ -97,8 +113,12 @@ def test_check_connectivity_marks_healthy_when_both_models_configured_and_reacha
     assert is_healthy(LLM_INTERFACE) is True
 
 
-def test_check_connectivity_marks_unhealthy_when_completion_call_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    def failing_completion_caller(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+def test_check_connectivity_marks_unhealthy_when_completion_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_completion_caller(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         raise openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))
 
     monkeypatch.setattr(completion_module, "default_completion_caller", failing_completion_caller)
@@ -117,22 +137,33 @@ def test_check_connectivity_uses_configured_env_supplied_models_not_hardcoded_li
     `check_connectivity` must call `route_completion`/`route_embedding` with
     `config`'s own model strings, not a literal — parametrized here via
     `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` env vars through
-    the real `load_config()`."""
+    the real `load_config()`.
+    """
     monkeypatch.setenv("PS_LLMINTERFACE_MODEL", "azure/gpt-5.4-mini")
     monkeypatch.setenv("PS_LLMINTERFACE_EMBED_MODEL", "azure/text-embed-3")
     captured_models: list[str] = []
 
-    def fake_completion_caller(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+    def fake_completion_caller(
+        *, model: str, messages: list[dict[str, str]], timeout: float
+    ) -> ModelResponse:
         captured_models.append(model)
         return ModelResponse(
             id="x",
             model=model,
-            choices=[Choices(finish_reason="stop", index=0, message=Message(content="pong", role="assistant"))],
+            choices=[
+                Choices(
+                    finish_reason="stop", index=0, message=Message(content="pong", role="assistant")
+                )
+            ],
         )
 
-    def fake_embedding_caller(*, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
+    def fake_embedding_caller(
+        *, model: str, inputs: list[str], timeout: float
+    ) -> EmbeddingResponse:
         captured_models.append(model)
-        return EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1], index=0, object="embedding")])
+        return EmbeddingResponse(
+            model=model, data=[Embedding(embedding=[0.1], index=0, object="embedding")]
+        )
 
     monkeypatch.setattr(completion_module, "default_completion_caller", fake_completion_caller)
     monkeypatch.setattr(embedding_module, "default_embedding_caller", fake_embedding_caller)

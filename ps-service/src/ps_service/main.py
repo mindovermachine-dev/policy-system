@@ -6,8 +6,8 @@ the process boots and reports its own health.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 import uvicorn
 from fastapi import FastAPI
@@ -31,10 +31,14 @@ from ps_service.llm_interface import (
 )
 from ps_service.logging.facade import configure, emit_log_entry
 
-_LOG_FILENAME = "ps-service.jsonl"  # matches ps_service/logging/facade.py's _DEFAULT_LOG_FILENAME and
-# docs/architecture/ps-service-container-architecture.md's documented sink filename — kept as a local
-# literal (not imported) so this fix stays entirely within main.py, without touching the already-shipped,
-# already-reviewed Logging component's private API surface.
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+# Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
+# in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
+# imported) so this fix stays within main.py, without touching the already-shipped, already-reviewed
+# Logging component's private API surface.
+_LOG_FILENAME = "ps-service.jsonl"
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -54,8 +58,9 @@ def _is_loopback(host: str) -> bool:
 
 
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
-    """Probe FalkorDB, LLM Interface, and Cellar/ELI once at startup, logging
-    a warning per failure — deliberately never raising (issue #22): unlike
+    """Probe FalkorDB, LLM Interface, and Cellar/ELI once at startup, logging a warning per failure.
+
+    Deliberately never raises (issue #22): unlike
     `configure()`'s failures above, a dependency outage must never crash the
     process, only keep it out of `/ready`'s pool. Runs every probe even
     after an earlier one fails, so a single startup gives the full picture
@@ -69,9 +74,12 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     """
     all_succeeded = True
     for dependency, probe in (
-        (FALKORDB, lambda: check_falkordb_connectivity(
-            connect_from_config(config), config.falkordb_host, config.falkordb_port
-        )),
+        (
+            FALKORDB,
+            lambda: check_falkordb_connectivity(
+                connect_from_config(config), config.falkordb_host, config.falkordb_port
+            ),
+        ),
         (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
         (CELLAR_ELI, check_cellar_eli_connectivity),
     ):
@@ -107,8 +115,8 @@ def create_app(config: ServiceConfig) -> FastAPI:
     """
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Configure Logging, emit startup log entries, probe dependencies once, then flip the readiness flag.
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+        """Configure Logging, emit startup entries, probe dependencies once, then flip readiness.
 
         `configure(log_path=...)` is called before any `emit_log_entry` call,
         per the Logging facade's contract that a process-wide default emitter
@@ -165,7 +173,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         return {"status": "alive"}
 
     async def ready() -> dict[str, str]:
-        """Report readiness: "ready" only once startup succeeded AND every dependency is currently healthy.
+        """Report "ready" only once startup succeeded AND every dependency is currently healthy.
 
         Two independent gates (issue #22): `app.state.ready` (the one-time
         startup probe from `lifespan`) AND `dependency_health.all_healthy(...)`

@@ -1,19 +1,24 @@
-"""Shared `_log` helper for `ps_service.llm_interface`'s two action modules
-(`completion.py`, `embedding.py`) — factored out once both needed the
-identical duration/outcome/model logging shape (L1/L2 DRY: extract once a
-pattern repeats a third time — `route_completion`, `route_embedding`, and
-this module's own definition).
+"""Shared `log` helper for `ps_service.llm_interface`'s two action modules.
+
+Factored out of `completion.py` and `embedding.py` once both needed the identical
+duration/outcome/model logging shape (L1/L2 DRY: extract once a pattern repeats a
+third time — `route_completion`, `route_embedding`, and this module's own definition).
 """
 
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
-from ps_service.logging.emitter import LogEmitter
 from ps_service.logging.facade import emit_log_entry
 
+if TYPE_CHECKING:
+    from ps_service.logging.emitter import LogEmitter
 
-def _log(*, action: str, outcome: str, started: float, model: str, emitter: LogEmitter | None) -> None:
+
+def log(
+    *, action: str, outcome: str, started: float, model: str, emitter: LogEmitter | None
+) -> None:
     """Emit a `LogEntry` for a completed RouteCompletion/RouteEmbedding call.
 
     Only ever logs the model-id string via `extra={"model": model}` — never

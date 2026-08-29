@@ -13,8 +13,8 @@ issue #42 Obligation joined Role/Requirement as a passthrough node
    (`typing.get_type_hints`) rather than merely reading the source -- this
    is a real, useful guarantee for ordinary statically-checked call sites,
    but only a lint-time property (a dynamically-constructed call, e.g. via
-   `**kwargs` unpacking or a `# type: ignore` comment, could still bypass it
-   at runtime).
+   `**kwargs` unpacking or a type-checker suppression comment, could still
+   bypass it at runtime).
 
 2. **Runtime proof** (primary enforcement, PLAN_REVIEWED.md §9): a
    hand-written wrapper around `ps_service.company_merge.dedup.
@@ -31,16 +31,19 @@ from __future__ import annotations
 import typing
 from typing import Literal
 
-import pytest
-
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
-from ps_service.company_merge.falkordb_client import GraphHandle
 from ps_service.company_merge.merge import merge_baseline_graph
-from ps_service.company_merge.models import BaselineNode, DedupResult
 from ps_service.domain_mapper.identity import capability_id, obligation_id
-from ps_service.llm_interface.client import EmbeddingCaller
-from ps_service.logging.emitter import LogEmitter
+
+if typing.TYPE_CHECKING:
+    import pytest
+
+    from company_merge._fakes import MakeEmitter
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.models import BaselineNode, DedupResult
+    from ps_service.llm_interface.client import EmbeddingCaller
+    from ps_service.logging.emitter import LogEmitter
 
 _MODEL = "fake-embed-model"
 _THRESHOLD = 0.85
@@ -60,7 +63,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
-    `.properties` is ever read."""
+    `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -71,7 +75,8 @@ class _FakeBaselineGraph:
     scripted row set -- one Role, one Requirement, one Obligation, one
     Capability, fully wired -- copied (self-contained, per this test
     package's own convention) from `test_merge_baseline_graph.py`'s
-    `_FakeBaselineGraph`."""
+    `_FakeBaselineGraph`.
+    """
 
     def __init__(
         self,
@@ -120,7 +125,9 @@ class _FakeBaselineGraph:
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
         if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
+            return _FakeQueryResult(
+                [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -129,7 +136,8 @@ class _FakeSingleTenantGraph:
     (every incoming Obligation/Capability is a first-time mint), records
     every call it receives. No embedding-backfill/mint state-mutation logic
     is needed for this test -- it only cares about which `kind`s
-    `dedupe_canonical_nodes` was invoked for, not cross-call convergence."""
+    `dedupe_canonical_nodes` was invoked for, not cross-call convergence.
+    """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -147,7 +155,8 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     """One Role, one Requirement, one Obligation, one Capability, fully
     wired -- nothing pre-exists in the single-tenant graph, so both dedup
     passes mint (no `call_embedding` needed: an empty existing index makes
-    `find_best_semantic_match` return `None` with zero calls)."""
+    `find_best_semantic_match` return `None` with zero calls).
+    """
     role_node_id = "role_manufacturer_abc123"
     requirement_node_id = "REG-AC008_req_art_1.1"
     obligation_text = "Report the incident to the competent authority."
@@ -179,7 +188,8 @@ def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability() -> None:
     Pylance strict mode rejects any other literal at every
     statically-checked call site -- a genuine but lint-time-only guarantee
     (PLAN_REVIEWED.md §9's N2 fix), which is why this test exists alongside,
-    never instead of, the runtime proof below."""
+    never instead of, the runtime proof below.
+    """
     hints = typing.get_type_hints(dedupe_canonical_nodes)
     kind_hint = hints["kind"]
 
@@ -188,7 +198,7 @@ def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability() -> None:
 
 
 def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
-    monkeypatch: pytest.MonkeyPatch, make_emitter
+    monkeypatch: pytest.MonkeyPatch, make_emitter: MakeEmitter
 ) -> None:
     """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9):
     a hand-written wrapper -- not `unittest.mock.patch` -- installed over
@@ -221,8 +231,9 @@ def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
     ) -> DedupResult:
         """Explicit-signature wrapper (no `**kwargs`) matching `dedupe_
         canonical_nodes`'s own parameters exactly, so this stays fully typed
-        without a `# type: ignore` escape hatch -- records `kind`, then
-        delegates unchanged to the real implementation."""
+        without a type-checker suppression -- records `kind`, then
+        delegates unchanged to the real implementation.
+        """
         recorded_kinds.append(kind)
         return real_dedupe_canonical_nodes(
             incoming_nodes,

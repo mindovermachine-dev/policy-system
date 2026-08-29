@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
@@ -44,7 +45,10 @@ from ps_service.domain_mapper.falkordb_client import (
 )
 from ps_service.domain_mapper.identity import obligation_id, role_id
 from ps_service.domain_mapper.models import ExtractionUnit
-from ps_service.llm_interface.client import CompletionCaller
+
+if TYPE_CHECKING:
+    from domain_mapper._fakes import MakeEmitter
+    from ps_service.llm_interface.client import CompletionCaller
 
 # --- shared helpers ----------------------------------------------------
 
@@ -83,6 +87,12 @@ class _RecordedCall:
     params: dict[str, object] | None
 
 
+class _HasCallLog(Protocol):
+    """Structural type shared by both fake baseline graphs: a captured `(query, params)` log."""
+
+    calls: list[_RecordedCall]
+
+
 class _FakeQueryResult:
     """Satisfies `GraphQueryResult` structurally."""
 
@@ -96,7 +106,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies `extraction.py`'s own `_RegulatoryInstrumentNode` Protocol
-    structurally -- only `.properties` is ever read."""
+    structurally -- only `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -105,13 +116,16 @@ class _FakeRegulatoryInstrumentNode:
 class _FakeNativeGraph:
     """Satisfies `GraphHandle` structurally. Answers
     `MATCH (r:RegulatoryInstrument) RETURN r` with a scripted Regulation node --
-    mirrors `test_extraction.py`'s own `_FakeNativeGraph`."""
+    mirrors `test_extraction.py`'s own `_FakeNativeGraph`.
+    """
 
     def __init__(self, regulatory_instrument_properties: dict[str, object]) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
+        return _FakeQueryResult(
+            [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
+        )
 
 
 class _FakeBaselineGraph:
@@ -120,7 +134,8 @@ class _FakeBaselineGraph:
     Each instance is a wholly independent, isolated in-memory call log:
     there is no class-level or module-level state shared between two
     instances of this fake, which is exactly the property this test is
-    checking the PRODUCTION code (not this fake) actually respects."""
+    checking the PRODUCTION code (not this fake) actually respects.
+    """
 
     def __init__(self) -> None:
         self.calls: list[_RecordedCall] = []
@@ -132,7 +147,8 @@ class _FakeBaselineGraph:
 
 class _FakeAdapter:
     """Satisfies `DomainMappingAdapter` structurally -- returns a
-    pre-scripted tuple of `ExtractionUnit`s regardless of `graph`."""
+    pre-scripted tuple of `ExtractionUnit`s regardless of `graph`.
+    """
 
     def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
         self._units = units
@@ -143,7 +159,8 @@ class _FakeAdapter:
 
 def _scripted_call_completion(responses: dict[str, str]) -> CompletionCaller:
     """A `CompletionCaller` fake keyed by the unit's `citation_ref`, mirrors
-    `test_extraction.py`'s `_scripted_call_completion`."""
+    `test_extraction.py`'s `_scripted_call_completion`.
+    """
 
     def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
         user_content = messages[1]["content"]
@@ -155,13 +172,14 @@ def _scripted_call_completion(responses: dict[str, str]) -> CompletionCaller:
     return _call
 
 
-def _graph_mentions(graph: _FakeBaselineGraph, needle: str) -> bool:
+def _graph_mentions(graph: _HasCallLog, needle: str) -> bool:
     """True if `needle` appears anywhere in this graph's captured call
     log -- either in a query string or anywhere inside a call's params
     (stringified, so it also catches a needle nested inside a properties
     dict). This is the actual isolation assertion: a value written to one
     `GraphHandle` must never be observable, in any form, on a completely
-    separate `GraphHandle` instance."""
+    separate `GraphHandle` instance.
+    """
     for call in graph.calls:
         if needle in call.query:
             return True
@@ -174,7 +192,7 @@ def _graph_mentions(graph: _FakeBaselineGraph, needle: str) -> bool:
 
 
 def test_extract_roles_and_requirements_never_leaks_across_two_independent_graph_handles(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     emitter, _log_path = make_emitter()
 
@@ -261,10 +279,11 @@ class _FakeDerivationBaselineGraph:
     """Satisfies `GraphHandle` structurally. Answers
     `_read_requirements_by_role`'s `OPTIONAL MATCH (rl:Role...` query with a
     scripted row set; captures every other `(query, params)` call --
-    mirrors `test_derivation.py`'s own `_FakeBaselineGraph` exactly."""
+    mirrors `test_derivation.py`'s own `_FakeBaselineGraph` exactly.
+    """
 
     def __init__(self, requirement_rows: list[list[object]]) -> None:
-        self._requirement_rows = requirement_rows
+        self._requirement_rows: list[object] = [*requirement_rows]
         self.calls: list[_RecordedCall] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
@@ -312,7 +331,7 @@ def _scripted_sequential_call_completion(responses: list[str]) -> CompletionCall
 
 
 def test_derive_obligations_and_capabilities_never_leaks_across_two_independent_graph_handles(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     emitter, _log_path = make_emitter()
 
@@ -395,7 +414,8 @@ def test_baseline_graph_isolation_against_real_falkordb() -> None:
     """Real connect to 127.0.0.1:6379. Writes a distinguishable node into
     each of two distinct, test-specific graph names, queries both back,
     asserts genuine isolation, then deletes both graphs -- in a `finally`
-    block, so no live residue survives even a failing run."""
+    block, so no live residue survives even a failing run.
+    """
     db = connect(host="127.0.0.1", port=6379)
 
     # Defensive pre-clean, in case a prior failed run left residue.

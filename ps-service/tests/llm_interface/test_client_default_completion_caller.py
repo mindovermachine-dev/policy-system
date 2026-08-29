@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from ps_service.llm_interface.client import default_completion_caller
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_default_completion_caller_forwards_args_to_litellm_completion(

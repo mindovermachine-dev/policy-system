@@ -1,7 +1,8 @@
-"""Cellar/ELI XHTML -> `RegulatoryInstrumentMetadata`. Ports `spikes/cellar1/
-parse_structure.py`'s `extract_metadata`/`_find_effective_date`/
-`_article_by_heading` logic, retyped to return `RegulatoryInstrumentMetadata`
-(Pydantic, `effective_date: date`).
+"""Cellar/ELI XHTML -> `RegulatoryInstrumentMetadata`.
+
+Ports `spikes/cellar1/parse_structure.py`'s `extract_metadata`/
+`_find_effective_date`/`_article_by_heading` logic, retyped to return
+`RegulatoryInstrumentMetadata` (Pydantic, `effective_date: date`).
 
 `effective_date` extraction is genuinely regulation-agnostic, not a
 regulation-vs-directive branch on CELEX type: it looks for an Article
@@ -17,11 +18,16 @@ per-regulation knowledge — verified against real CRA/NIS2/GDPR text (see
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+from defusedxml.ElementTree import fromstring as parse_xml
 
 from ps_service.ingestion.adapters.errors import CellarParseError
 from ps_service.ingestion.models import InstrumentType, RegulatoryInstrumentMetadata
+
+if TYPE_CHECKING:
+    import xml.etree.ElementTree as ET
 
 _TITLE_CLASS = "eli-title"
 _DATE_PATTERN = r"(\d{1,2} [A-Z][a-z]+ \d{4})"
@@ -69,9 +75,12 @@ def _full_text(element: ET.Element) -> str:
 
 
 def _article_by_heading(root: ET.Element, heading_substring: str) -> ET.Element | None:
-    """Finds the Article `div` whose `eli-title`-classed heading sibling
-    contains `heading_substring` (case-insensitive) — text-driven, not
-    positional, and never branches on which regulation this is."""
+    """Find the Article `div` whose heading sibling contains `heading_substring`.
+
+    Matches on the `eli-title`-classed heading sibling, case-insensitive —
+    text-driven, not positional, and never branches on which regulation
+    this is.
+    """
     for title_div in root.iter("div"):
         if title_div.get("class", "") != _TITLE_CLASS:
             continue
@@ -85,9 +94,11 @@ def _article_by_heading(root: ET.Element, heading_substring: str) -> ET.Element 
 
 
 def _parse_eu_date(text: str) -> date:
-    """`text` is an already-extracted EU-style date, e.g. "17 October 2024".
-    A calendar date, not an instant — no timezone applies."""
-    return datetime.strptime(text, "%d %B %Y").date()  # noqa: DTZ007
+    """Parse an already-extracted EU-style date string, e.g. "17 October 2024".
+
+    A calendar date, not an instant — no timezone applies.
+    """
+    return datetime.strptime(text, "%d %B %Y").date()  # noqa: DTZ007 — a calendar date, not an instant; no timezone applies
 
 
 def _find_effective_date(root: ET.Element) -> date | None:
@@ -107,16 +118,16 @@ def _find_effective_date(root: ET.Element) -> date | None:
 
 
 def _instrument_type_from_celex(identifier: str) -> InstrumentType:
-    """Map a CELEX identifier's type-code letter to its `instrument_type`
-    (`R` -> regulation, `L` -> directive). Structural document metadata,
-    not per-instrument knowledge — same code path for every CELEX. Raises
+    """Map a CELEX identifier's type-code letter to its `instrument_type`.
+
+    `R` -> regulation, `L` -> directive. Structural document metadata, not
+    per-instrument knowledge — same code path for every CELEX. Raises
     `CellarParseError` naming the code for any other descriptor (e.g. `D`
-    decision), never a default (AC-BI-012)."""
+    decision), never a default (AC-BI-012).
+    """
     match = _CELEX_TYPE_CODE_RE.match(identifier)
     if match is None:
-        raise CellarParseError(
-            f"could not parse a CELEX type code from identifier {identifier!r}"
-        )
+        raise CellarParseError(f"could not parse a CELEX type code from identifier {identifier!r}")
     code = match.group(1)
     try:
         return _INSTRUMENT_TYPE_BY_CELEX_CODE[code]
@@ -128,9 +139,10 @@ def _instrument_type_from_celex(identifier: str) -> InstrumentType:
 
 
 def extract_metadata(xhtml: bytes, identifier: str) -> RegulatoryInstrumentMetadata:
-    """Bibliographic metadata sourced directly from the document's own
-    text — no LLM extraction (AC-002), no per-regulation branching
-    (AC-006). `identifier` is the source CELEX number, used only to derive
+    """Bibliographic metadata sourced directly from the document's own text.
+
+    No LLM extraction (AC-002), no per-regulation branching (AC-006).
+    `identifier` is the source CELEX number, used only to derive
     `instrument_type` from its type code. Raises `CellarParseError` if the
     CELEX type code is unsupported or if `effective_date` can't be resolved
     (neither a "Transposition" nor an "Entry into force and application"
@@ -138,10 +150,10 @@ def extract_metadata(xhtml: bytes, identifier: str) -> RegulatoryInstrumentMetad
     required field is missing (e.g. an empty title) — `RegulatoryInstrumentMetadata`'s
     own boundary validation. Both satisfy `RegisterRegulatoryInstrumentVersion`'s
     CA-doc contract: "Reject with a clear error if required properties are
-    missing."
+    missing.".
     """
     instrument_type = _instrument_type_from_celex(identifier)
-    root = ET.fromstring(xhtml)
+    root = parse_xml(xhtml)
     _strip_namespace(root)
 
     main_title_div = root.find('.//div[@class="eli-main-title"]')

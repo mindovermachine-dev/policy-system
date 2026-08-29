@@ -1,6 +1,7 @@
-"""Correlation-id binding/unbinding for a call chain — the BindRunContext
-action (AC#1, AC#2). Reads/writes the `run_id` ContextVar only; no file I/O,
-no queue — this module knows nothing about `emitter.py`.
+"""Correlation-id binding/unbinding for a call chain — the BindRunContext action (AC#1, AC#2).
+
+Reads/writes the `run_id` ContextVar only; no file I/O, no queue — this
+module knows nothing about `emitter.py`.
 
 Propagation boundary (G2, M5): a `contextvars` binding is visible to
 everything deeper on the *same* thread/task's call stack, including a
@@ -17,16 +18,19 @@ worker.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import structlog.contextvars as ctxvars
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 _RUN_ID_KEY: str = "run_id"
 
 
 @contextmanager
-def bind_run_context(run_id: str | None = None) -> Iterator[str]:
+def bind_run_context(run_id: str | None = None) -> Generator[str]:
     """Bind `run_id` (generating a uuid4 if omitted) for the current call chain.
 
     G1 fix (M4): structlog 26.1.0's `unbind_contextvars` DELETES the key from

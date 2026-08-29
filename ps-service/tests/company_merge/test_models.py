@@ -19,17 +19,33 @@ from ps_service.company_merge.models import (
     SemanticMatchResult,
 )
 
+
+def _mutate(obj: object, attr: str, value: object) -> None:
+    """Write ``obj.attr = value`` through a dynamic path.
+
+    The frozen-dataclass ``__setattr__`` guard -- not the type checker -- is
+    what must reject the write, so the assignment target is kept off the
+    statically-known attribute path (basedpyright strict would otherwise
+    flag every one of these as `reportAttributeAccessIssue`).
+    """
+    setattr(obj, attr, value)
+
+
 # --- BaselineNode -----------------------------------------------------
 
 
 def test_baseline_node_mutation_raises() -> None:
-    node = BaselineNode(id="obl_risk_assessment_a1b2c3", properties={"text": "Assess risk", "confidence": 0.9})
+    node = BaselineNode(
+        id="obl_risk_assessment_a1b2c3", properties={"text": "Assess risk", "confidence": 0.9}
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        node.id = "changed"  # type: ignore[misc]
+        _mutate(node, "id", "changed")
 
 
 def test_baseline_node_constructs_with_valid_fields() -> None:
-    node = BaselineNode(id="obl_risk_assessment_a1b2c3", properties={"text": "Assess risk", "confidence": 0.9})
+    node = BaselineNode(
+        id="obl_risk_assessment_a1b2c3", properties={"text": "Assess risk", "confidence": 0.9}
+    )
     assert node.id == "obl_risk_assessment_a1b2c3"
     assert node.properties == {"text": "Assess risk", "confidence": 0.9}
 
@@ -38,9 +54,11 @@ def test_baseline_node_constructs_with_valid_fields() -> None:
 
 
 def test_provenance_edge_mutation_raises() -> None:
-    edge = ProvenanceEdge(relationship_type="DEFINES", target_id="role_manufacturer_a1b2c3", source_ref="Art. 13(1)")
+    edge = ProvenanceEdge(
+        relationship_type="DEFINES", target_id="role_manufacturer_a1b2c3", source_ref="Art. 13(1)"
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        edge.source_ref = "changed"  # type: ignore[misc]
+        _mutate(edge, "source_ref", "changed")
 
 
 def test_provenance_edge_constructs_with_valid_fields() -> None:
@@ -55,13 +73,17 @@ def test_provenance_edge_constructs_with_valid_fields() -> None:
 
 
 def test_bare_edge_mutation_raises() -> None:
-    edge = BareEdge(relationship_type="HAS", source_id="role_manufacturer_a1b2c3", target_id="obl_risk_a1b2c3")
+    edge = BareEdge(
+        relationship_type="HAS", source_id="role_manufacturer_a1b2c3", target_id="obl_risk_a1b2c3"
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        edge.target_id = "changed"  # type: ignore[misc]
+        _mutate(edge, "target_id", "changed")
 
 
 def test_bare_edge_constructs_with_valid_fields() -> None:
-    edge = BareEdge(relationship_type="REQUIRES", source_id="obl_risk_a1b2c3", target_id="cap_logging_a1b2c3")
+    edge = BareEdge(
+        relationship_type="REQUIRES", source_id="obl_risk_a1b2c3", target_id="cap_logging_a1b2c3"
+    )
     assert edge.relationship_type == "REQUIRES"
     assert edge.source_id == "obl_risk_a1b2c3"
     assert edge.target_id == "cap_logging_a1b2c3"
@@ -86,7 +108,7 @@ def _baseline_graph() -> BaselineGraph:
 def test_baseline_graph_mutation_raises() -> None:
     graph = _baseline_graph()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        graph.regulatory_instrument_id = "changed"  # type: ignore[misc]
+        _mutate(graph, "regulatory_instrument_id", "changed")
 
 
 def test_baseline_graph_constructs_with_valid_fields() -> None:
@@ -101,11 +123,13 @@ def test_baseline_graph_constructs_with_valid_fields() -> None:
 def test_existing_canonical_node_mutation_raises() -> None:
     node = ExistingCanonicalNode(id="obl_risk_a1b2c3", text="Assess risk", embedding=None)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        node.embedding = (0.1, 0.2)  # type: ignore[misc]
+        _mutate(node, "embedding", (0.1, 0.2))
 
 
 def test_existing_canonical_node_constructs_with_valid_fields() -> None:
-    node = ExistingCanonicalNode(id="obl_risk_a1b2c3", text="Assess risk", embedding=(0.1, 0.2, 0.3))
+    node = ExistingCanonicalNode(
+        id="obl_risk_a1b2c3", text="Assess risk", embedding=(0.1, 0.2, 0.3)
+    )
     assert node.embedding == (0.1, 0.2, 0.3)
 
 
@@ -126,7 +150,7 @@ def test_near_miss_pair_mutation_raises() -> None:
         similarity=0.62,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        pair.similarity = 0.9  # type: ignore[misc]
+        _mutate(pair, "similarity", 0.9)
 
 
 def test_near_miss_pair_constructs_with_valid_fields() -> None:
@@ -151,12 +175,15 @@ def test_canonical_resolution_mutation_raises() -> None:
         embedding=(0.1, 0.2),
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        resolution.match_kind = "exact"  # type: ignore[misc]
+        _mutate(resolution, "match_kind", "exact")
 
 
 def test_canonical_resolution_constructs_with_valid_fields() -> None:
     resolution = CanonicalResolution(
-        incoming_id="obl_new_a1b2c3", canonical_id="obl_existing_d4e5f6", match_kind="semantic", embedding=None
+        incoming_id="obl_new_a1b2c3",
+        canonical_id="obl_existing_d4e5f6",
+        match_kind="semantic",
+        embedding=None,
     )
     assert resolution.match_kind == "semantic"
     assert resolution.embedding is None
@@ -173,7 +200,7 @@ def test_semantic_match_result_mutation_raises() -> None:
         newly_computed_existing_embeddings={},
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        result.best_similarity = 0.5  # type: ignore[misc]
+        _mutate(result, "best_similarity", 0.5)
 
 
 def test_semantic_match_result_constructs_with_valid_fields() -> None:
@@ -190,7 +217,8 @@ def test_semantic_match_result_accepts_non_empty_newly_computed_existing_embeddi
     """The direct proof (S1/B2) that this field's type shape --
     `dict[str, tuple[float, ...]]` -- actually accepts a real, non-empty
     embedding value, unlike a naive `dict[str, str | float]` that could not
-    legally carry a tuple-of-floats value at all."""
+    legally carry a tuple-of-floats value at all.
+    """
     result = SemanticMatchResult(
         best_existing_id="obl_existing_d4e5f6",
         best_similarity=0.91,
@@ -206,7 +234,7 @@ def test_semantic_match_result_accepts_non_empty_newly_computed_existing_embeddi
 def test_dedup_result_mutation_raises() -> None:
     result = DedupResult(resolutions=(), near_misses=(), embedding_backfills={})
     with pytest.raises(dataclasses.FrozenInstanceError):
-        result.resolutions = ()  # type: ignore[misc]
+        _mutate(result, "resolutions", ())
 
 
 def test_dedup_result_constructs_with_valid_fields() -> None:
@@ -218,7 +246,8 @@ def test_dedup_result_accepts_non_empty_embedding_backfills() -> None:
     """The direct proof (B2) that `embedding_backfills` -- `dict[str,
     tuple[float, ...]]` -- legitimately carries a real embedding value for
     a pre-existing canonical node whose embedding was freshly computed this
-    run."""
+    run.
+    """
     result = DedupResult(
         resolutions=(),
         near_misses=(),
@@ -238,7 +267,7 @@ def test_merge_result_mutation_raises() -> None:
         near_misses=(),
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        result.regulatory_instrument_id = "changed"  # type: ignore[misc]
+        _mutate(result, "regulatory_instrument_id", "changed")
 
 
 def test_merge_result_constructs_with_valid_fields() -> None:

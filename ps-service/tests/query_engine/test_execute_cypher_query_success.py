@@ -15,14 +15,17 @@ only that `execute_cypher_query` itself behaves correctly.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine.cypher_query import execute_cypher_query
 from ps_service.query_engine.models import QueryResult
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -34,7 +37,8 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 
 class _ScriptedQueryResult:
     """Satisfies `GraphQueryResult` structurally with scripted `header`/
-    `result_set` values."""
+    `result_set` values.
+    """
 
     def __init__(self, *, header: list[list[object]], result_set: list[object]) -> None:
         self.header = header
@@ -43,7 +47,8 @@ class _ScriptedQueryResult:
 
 class _ScriptedGraphHandle:
     """Satisfies `GraphHandle` structurally -- always returns the one
-    scripted `_ScriptedQueryResult` regardless of the query text."""
+    scripted `_ScriptedQueryResult` regardless of the query text.
+    """
 
     def __init__(self, result: _ScriptedQueryResult) -> None:
         self._result = result
@@ -59,7 +64,9 @@ def test_success_path_maps_header_and_result_set_to_exact_query_result(emitter: 
     )
     fake_graph = _ScriptedGraphHandle(scripted)
 
-    result = execute_cypher_query("MATCH (n) RETURN n.id, n.name", graph=fake_graph, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n) RETURN n.id, n.name", graph=fake_graph, emitter=emitter
+    )
 
     assert result == QueryResult(
         columns=["id", "name"],

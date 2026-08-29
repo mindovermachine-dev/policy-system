@@ -10,19 +10,20 @@ from __future__ import annotations
 
 
 class WriteClauseRejectedError(Exception):
-    """Raised by `execute_cypher_query` when the query contains a write
-    clause (CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH, case-insensitive)
-    -- AC-002. Raised BEFORE `graph.query` is ever called.
+    """Raised by `execute_cypher_query` when the query contains a write clause.
 
-    The message is `cypher_query._WRITE_CLAUSE_REJECTION_MESSAGE` verbatim
-    -- no added prefix/wrapping text.
+    The clause set is CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH
+    (case-insensitive) -- AC-002; raised BEFORE `graph.query` is ever
+    called. The message is `cypher_query._WRITE_CLAUSE_REJECTION_MESSAGE`
+    verbatim -- no added prefix/wrapping text.
     """
 
 
 class QueryEngineExecutionError(Exception):
-    """Raised by `execute_cypher_query` when `graph.query(...)` itself
-    raises. The message is the original exception's `str(exc)` verbatim
-    (CA doc: "FalkorDB errors surfaced verbatim as error: <exception
-    message>") -- no added prefix/wrapping text beyond what the original
-    exception already said. Chained via `raise ... from exc`.
+    """Raised by `execute_cypher_query` when `graph.query(...)` itself raises.
+
+    The message is the original exception's `str(exc)` verbatim (CA doc:
+    "FalkorDB errors surfaced verbatim as error: <exception message>") --
+    no added prefix/wrapping text beyond what the original exception
+    already said. Chained via `raise ... from exc`.
     """

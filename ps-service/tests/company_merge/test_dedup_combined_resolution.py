@@ -20,6 +20,11 @@ false-convergence negative test (test (g), Q1's fix) has its own file too
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 from collections import Counter
 
 from litellm.types.utils import Embedding, EmbeddingResponse
@@ -46,7 +51,8 @@ class _ScriptedSingleTenantGraph:
     """Satisfies `GraphHandle` structurally: answers
     `read_existing_canonical_index`'s one read query with pre-seeded
     Obligation rows, and records every `query()` call it receives -- used
-    to assert `dedupe_canonical_nodes` never issues a write call."""
+    to assert `dedupe_canonical_nodes` never issues a write call.
+    """
 
     def __init__(self, *, capability_rows: list[object] | None = None) -> None:
         self._capability_rows = capability_rows if capability_rows is not None else []
@@ -61,15 +67,16 @@ class _ScriptedSingleTenantGraph:
 
 class _ScriptedCallEmbedding:
     """A hand-written `EmbeddingCaller` fake, scripted per input `text` --
-    mirrors `test_dedup_semantic_match.py`'s own fake exactly."""
+    mirrors `test_dedup_semantic_match.py`'s own fake exactly.
+    """
 
     def __init__(self, vectors_by_text: dict[str, list[float]]) -> None:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         vector = self._vectors_by_text.get(text)
         if vector is None:
@@ -83,10 +90,13 @@ def _obligation(node_id: str, text: str) -> BaselineNode:
     return BaselineNode(id=node_id, properties={"name": text, "confidence": 0.9})
 
 
-def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(make_emitter) -> None:
+def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(
+    make_emitter: MakeEmitter,
+) -> None:
     """(a): two incoming nodes, one exact-matches an existing node, the
     other is a first-time mint -> correct DedupResult, exactly one
-    match_kind="new"."""
+    match_kind="new".
+    """
     emitter, _log_path = make_emitter()
     existing_id = "obl_existing_report_incident"
     new_id = "obl_new_never_seen_before"
@@ -119,10 +129,13 @@ def test_dedupe_canonical_nodes_exact_match_and_first_time_mint(make_emitter) ->
     assert sum(1 for r in result.resolutions if r.match_kind == "new") == 1
 
 
-def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(make_emitter) -> None:
+def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(
+    make_emitter: MakeEmitter,
+) -> None:
     """(b): one incoming node's best semantic score >= threshold ->
     match_kind="semantic", canonical_id is the EXISTING node's id, not its
-    own."""
+    own.
+    """
     emitter, _log_path = make_emitter()
     existing_id = "obl_existing_conduct_risk_assessment"
     incoming_id = "obl_incoming_perform_risk_assessment"
@@ -152,10 +165,13 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(make_em
     assert resolution.canonical_id != incoming_id
 
 
-def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(make_emitter) -> None:
+def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(
+    make_emitter: MakeEmitter,
+) -> None:
     """(d): two incoming nodes with no existing match but semantically
     equivalent to EACH OTHER (mocked identical embeddings) -> the second
-    resolves onto the first's id, not a separate mint."""
+    resolves onto the first's id, not a separate mint.
+    """
     emitter, _log_path = make_emitter()
     first_id = "obl_incoming_first_alpha"
     second_id = "obl_incoming_second_beta"
@@ -193,7 +209,9 @@ def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(make
     assert result.embedding_backfills == {}
 
 
-def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(make_emitter) -> None:
+def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(
+    make_emitter: MakeEmitter,
+) -> None:
     """(f), B2's within-run reuse integration proof: 3 existing entries with
     no cached embeddings, and 2 incoming nodes that both end up comparing
     against those same 3 entries -> the total call_embedding invocation
@@ -203,7 +221,8 @@ def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(make_
     returned for it. All five vectors below (3 existing + 2 incoming) are
     mutually orthogonal standard basis vectors, guaranteeing every score is
     0.0 (well below threshold), so nothing ever converges here -- the test
-    is purely about embedding-call cost and backfill bookkeeping."""
+    is purely about embedding-call cost and backfill bookkeeping.
+    """
     emitter, _log_path = make_emitter()
     existing_texts = {
         "obl_existing_one": "Existing duty one.",

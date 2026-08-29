@@ -10,17 +10,21 @@ like `"reg#art_1"`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
-from ps_service.domain_mapper.falkordb_client import GraphQueryResult
 from ps_service.domain_mapper.models import ExtractionUnit
+
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.falkordb_client import GraphQueryResult
 
 
 @dataclass(frozen=True)
 class _FakeNode:
     """One native-graph node, labeled the same way #14's `structure.py`
     labels it (`ARTICLE`, `PARAGRAPH`, `RECITAL`, `ANNEX`, `CHAPTER`,
-    `SECTION`)."""
+    `SECTION`).
+    """
 
     label: str
     id: str
@@ -62,16 +66,17 @@ class _FakeGraphHandle:
                 if node.label == "ARTICLE"
             ]
             rows.sort(key=lambda row: row[0])
-            return _FakeGraphQueryResult(rows)
+            return _FakeGraphQueryResult([*rows])
         if "PARAGRAPH" in q:
             assert params is not None
             article_id = params["id"]
+            assert isinstance(article_id, str)
             child_ids = self.article_children.get(article_id, [])
             rows = [
                 [self._nodes_by_id[child_id].citation_ref, self._nodes_by_id[child_id].text]
                 for child_id in child_ids
             ]
-            return _FakeGraphQueryResult(rows)
+            return _FakeGraphQueryResult([*rows])
         raise AssertionError(f"unexpected query: {q!r}")
 
 
@@ -144,7 +149,8 @@ def test_reads_one_unit_for_whole_article_when_it_has_no_paragraphs() -> None:
 def test_document_order_is_by_numeric_article_and_paragraph_number_not_id_string() -> None:
     """`ORDER BY a.id` sorts `"art_10"` before `"art_2"` lexicographically —
     the adapter must still return units in true document order (Art. 1
-    before Art. 2 before Art. 10)."""
+    before Art. 2 before Art. 10).
+    """
     graph = _FakeGraphHandle(
         nodes=[
             _FakeNode("ARTICLE", "reg#art_1", "Art. 1", heading="Article 1"),
@@ -153,9 +159,7 @@ def test_document_order_is_by_numeric_article_and_paragraph_number_not_id_string
             _FakeNode(
                 "ARTICLE", "reg#art_10", "Art. 10", text="Article 10 text", heading="Article 10"
             ),
-            _FakeNode(
-                "ARTICLE", "reg#art_2", "Art. 2", text="Article 2 text", heading="Article 2"
-            ),
+            _FakeNode("ARTICLE", "reg#art_2", "Art. 2", text="Article 2 text", heading="Article 2"),
         ],
         article_children={"reg#art_1": ["reg#001.001", "reg#001.002"]},
     )
@@ -174,7 +178,8 @@ def test_recital_annex_chapter_section_nodes_are_ignored() -> None:
     """Open Question 4, locked in: only ARTICLE/PARAGRAPH ever become
     ExtractionUnits — RECITAL/ANNEX/CHAPTER/SECTION nodes present in the
     same native graph must never surface, structurally proven via the
-    fake's label-filtered `MATCH (a:ARTICLE)` query."""
+    fake's label-filtered `MATCH (a:ARTICLE)` query.
+    """
     graph = _FakeGraphHandle(
         nodes=[
             _FakeNode("ARTICLE", "reg#art_1", "Art. 1", text="Article 1 text", heading="Article 1"),
@@ -191,6 +196,4 @@ def test_recital_annex_chapter_section_nodes_are_ignored() -> None:
     ignored_keywords = ("Recital", "Annex", "Chapter", "Section")
     assert len(units) == 1
     assert units[0].citation_ref == "Art. 1"
-    assert not any(
-        keyword in unit.citation_ref for unit in units for keyword in ignored_keywords
-    )
+    assert not any(keyword in unit.citation_ref for unit in units for keyword in ignored_keywords)

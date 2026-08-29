@@ -1,6 +1,7 @@
-"""ps_service.domain_mapper core types — the shapes `extraction.py`/
-`derivation.py` build and consume internally, plus the two actions' return
-values.
+"""ps_service.domain_mapper core types.
+
+The shapes `extraction.py`/`derivation.py` build and consume internally,
+plus the two actions' return values.
 
 Per PLAN_REVIEWED.md §2: `ExtractionUnit`/`ExtractionResult`/
 `DerivationResult` are plain frozen dataclasses — internal pipeline
@@ -58,12 +59,14 @@ class RequirementCandidate(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class RoleNode:
-    """One canonicalized Role, ready for `graph_writer.persist_role_and_requirement_graph`
-    to `MERGE`. `id` is `identity.role_id()`'s output; `properties` carries
-    `name`/`confidence` (CA doc §0.1's Role attributes) — a plain properties
-    dict, not a per-field Pydantic model, mirroring `ps_service.ingestion.
-    models.StructuralNode`'s established shape for graph-write payloads in
-    this codebase (PLAN_REVIEWED.md §5.4)."""
+    """A canonicalized Role for `graph_writer.persist_role_and_requirement_graph` to `MERGE`.
+
+    `id` is `identity.role_id()`'s output; `properties` carries
+    `name`/`confidence` (CA doc §0.1's Role attributes) — a plain
+    properties dict, not a per-field Pydantic model, mirroring
+    `ps_service.ingestion.models.StructuralNode`'s established shape for
+    graph-write payloads in this codebase (PLAN_REVIEWED.md §5.4).
+    """
 
     id: str
     properties: dict[str, str | float]
@@ -71,9 +74,12 @@ class RoleNode:
 
 @dataclass(frozen=True, slots=True)
 class RoleDefinesEdge:
-    """RegulatoryInstrument -[:DEFINES {source_ref}]-> Role. `role_node_id` is the
-    target Role's `id`; `source_ref` is the first duty-bearing candidate's
-    `unit_citation_ref` (PLAN_REVIEWED.md §5.2 step 4)."""
+    """RegulatoryInstrument -[:DEFINES {source_ref}]-> Role.
+
+    `role_node_id` is the target Role's `id`; `source_ref` is the first
+    duty-bearing candidate's `unit_citation_ref` (PLAN_REVIEWED.md §5.2
+    step 4).
+    """
 
     role_node_id: str
     source_ref: str
@@ -81,13 +87,15 @@ class RoleDefinesEdge:
 
 @dataclass(frozen=True, slots=True)
 class RequirementNode:
-    """One Requirement, ready for `graph_writer.persist_role_and_requirement_graph`
-    to `MERGE`. `id` is `identity.requirement_id()`'s output, possibly
-    disambiguated with a `#2`/`#3` suffix (PLAN_REVIEWED.md §5.2 step 5).
-    `properties` carries `text`/`type`/`confidence` (CA doc §0.1's
-    Requirement attributes) plus `role_id` — a plain bookkeeping property
-    (NOT an Edge Catalog relationship) pointing at the owning Role node's
-    `id`, written here and read back by `derivation.py` per §7.2."""
+    """A Requirement for `graph_writer.persist_role_and_requirement_graph` to `MERGE`.
+
+    `id` is `identity.requirement_id()`'s output, possibly disambiguated
+    with a `#2`/`#3` suffix (PLAN_REVIEWED.md §5.2 step 5). `properties`
+    carries `text`/`type`/`confidence` (CA doc §0.1's Requirement
+    attributes) plus `role_id` — a plain bookkeeping property (NOT an Edge
+    Catalog relationship) pointing at the owning Role node's `id`, written
+    here and read back by `derivation.py` per §7.2.
+    """
 
     id: str
     properties: dict[str, str | float]
@@ -95,8 +103,10 @@ class RequirementNode:
 
 @dataclass(frozen=True, slots=True)
 class RequirementExpressesEdge:
-    """RegulatoryInstrument -[:EXPRESSES {source_ref}]-> Requirement. `source_ref` is
-    the candidate's own `unit_citation_ref` (AC-001)."""
+    """RegulatoryInstrument -[:EXPRESSES {source_ref}]-> Requirement.
+
+    `source_ref` is the candidate's own `unit_citation_ref` (AC-001).
+    """
 
     requirement_node_id: str
     source_ref: str
@@ -104,8 +114,10 @@ class RequirementExpressesEdge:
 
 @dataclass(frozen=True, slots=True)
 class ExtractionResult:
-    """`extract_roles_and_requirements()`'s return value — the outcome of
-    one `ExtractRolesAndRequirements` call."""
+    """`extract_roles_and_requirements()`'s return value.
+
+    The outcome of one `ExtractRolesAndRequirements` call.
+    """
 
     regulatory_instrument_id: str
     role_node_ids: dict[str, str]  # role_name -> role node id, for derivation's use
@@ -121,8 +133,9 @@ class ExtractionResult:
 
 @dataclass(frozen=True, slots=True)
 class RoleRequirements:
-    """One Role's ordered Requirements, as read back from the baseline
-    graph via `Requirement.properties["role_id"]` (PLAN_REVIEWED.md §7.2).
+    """One Role's ordered Requirements, as read back from the baseline graph.
+
+    Via `Requirement.properties["role_id"]` (PLAN_REVIEWED.md §7.2).
 
     `derivation.py::_derive_obligations` (Increment 12) consumes this shape
     but does not itself read the graph — building it from a live baseline
@@ -132,7 +145,8 @@ class RoleRequirements:
     `_read_requirements_by_role`"). Increment 12's own tests construct this
     directly, in the document order the whole-run algorithm requires
     (§7.3: "iterating Roles in document order, and within each Role its
-    Requirements in document order")."""
+    Requirements in document order").
+    """
 
     role_node_id: str
     role_name: str
@@ -140,9 +154,10 @@ class RoleRequirements:
 
 
 class ObligationAssignment(BaseModel):
-    """Stage-2 LLM output — one per Requirement, the mint-or-match-or-
-    unmatchable decision `derivation.py::_derive_obligations` makes for it
-    (PLAN_REVIEWED.md §7.3/§7.5).
+    """Stage-2 LLM output — one mint-or-match-or-unmatchable decision per Requirement.
+
+    Made by `derivation.py::_derive_obligations` (PLAN_REVIEWED.md
+    §7.3/§7.5).
 
     `obligation_node_id`/`obligation_text` are `prompts.py::
     parse_obligation_response`'s own PROPOSED identity/text — for a match,
@@ -153,7 +168,8 @@ class ObligationAssignment(BaseModel):
     for this Role); for a mint, both are freshly derived from `new_text`.
     This is a PROPOSAL only — `derivation.py`'s whole-run registry resolves
     the final id (a mint, or a same-Role reuse); `obligation_node_id` here
-    is not assumed to be the final persisted id."""
+    is not assumed to be the final persisted id.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -166,14 +182,15 @@ class ObligationAssignment(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ObligationNode:
-    """One Obligation, ready for a future `graph_writer.
-    persist_obligation_and_capability_graph` (Increment 15, out of this
-    batch's scope) to `MERGE`. `id` is `identity.obligation_id(role_node_id,
-    text)`'s output — Role-scoped (#42), so this Obligation belongs to
-    exactly one Role. `properties` carries `text`/`confidence`
-    (CA doc's Obligation attributes; the Edge Catalog states Obligation
-    carries no `source_ref` of its own — provenance is transitive via
-    `SATISFIED_BY` -> `EXPRESSES`)."""
+    """One Obligation for a future `persist_obligation_and_capability_graph` `MERGE`.
+
+    In `graph_writer` (Increment 15, out of this batch's scope). `id` is
+    `identity.obligation_id(role_node_id, text)`'s output — Role-scoped
+    (#42), so this Obligation belongs to exactly one Role. `properties`
+    carries `text`/`confidence` (CA doc's Obligation attributes; the Edge
+    Catalog states Obligation carries no `source_ref` of its own —
+    provenance is transitive via `SATISFIED_BY` -> `EXPRESSES`).
+    """
 
     id: str
     properties: dict[str, str | float]
@@ -181,10 +198,13 @@ class ObligationNode:
 
 @dataclass(frozen=True, slots=True)
 class ObligationHasEdge:
-    """Role -[:HAS]-> Obligation. No properties (Edge Catalog, §0.2) —
-    exactly one per Obligation node, structurally: the Obligation id is
-    Role-scoped (#42), and this edge is created only at the moment an
-    Obligation id is first minted, never again for the same id."""
+    """Role -[:HAS]-> Obligation.
+
+    No properties (Edge Catalog, §0.2) — exactly one per Obligation node,
+    structurally: the Obligation id is Role-scoped (#42), and this edge is
+    created only at the moment an Obligation id is first minted, never
+    again for the same id.
+    """
 
     role_node_id: str
     obligation_node_id: str
@@ -192,16 +212,20 @@ class ObligationHasEdge:
 
 @dataclass(frozen=True, slots=True)
 class RequirementSatisfiedByEdge:
-    """Requirement -[:SATISFIED_BY]-> Obligation. No properties (Edge
-    Catalog, §0.2)."""
+    """Requirement -[:SATISFIED_BY]-> Obligation.
+
+    No properties (Edge Catalog, §0.2).
+    """
 
     requirement_id: str
     obligation_node_id: str
 
 
 class CapabilityDecision(BaseModel):
-    """Stage-3 LLM output — one per Capability a distinct Obligation
-    requires (PLAN_REVIEWED.md §7.4)."""
+    """Stage-3 LLM output — one per Capability a distinct Obligation requires.
+
+    PLAN_REVIEWED.md §7.4.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -214,15 +238,16 @@ class CapabilityDecision(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class CapabilityNode:
-    """One Capability, ready for a future `graph_writer.
-    persist_obligation_and_capability_graph` (Increment 15, out of this
-    batch's scope) to `MERGE`. `id` is `identity.capability_id()`'s
-    output — content-derived from `name` alone (deliberately Obligation-
-    and Role-independent, PLAN_REVIEWED.md §7.4), so identical names
-    across distinct Obligations converge onto one shared node.
-    `properties` carries `name`/`confidence` and, when set, `description`
-    (CA doc's Capability attributes; the Edge Catalog states Capability
-    carries no `source_ref` of its own)."""
+    """One Capability for a future `persist_obligation_and_capability_graph` `MERGE`.
+
+    In `graph_writer` (Increment 15, out of this batch's scope). `id` is
+    `identity.capability_id()`'s output — content-derived from `name`
+    alone (deliberately Obligation- and Role-independent, PLAN_REVIEWED.md
+    §7.4), so identical names across distinct Obligations converge onto one
+    shared node. `properties` carries `name`/`confidence` and, when set,
+    `description` (CA doc's Capability attributes; the Edge Catalog states
+    Capability carries no `source_ref` of its own).
+    """
 
     id: str
     properties: dict[str, str | float]
@@ -230,10 +255,13 @@ class CapabilityNode:
 
 @dataclass(frozen=True, slots=True)
 class CapabilityRequiresEdge:
-    """Obligation -[:REQUIRES]-> Capability. No properties (Edge Catalog,
-    §0.2). More than one such edge may share the same `capability_node_id`
-    (Capability convergence across distinct Obligations, §7.4) or the same
-    `obligation_node_id` (multi-capability-per-Obligation, also §7.4)."""
+    """Obligation -[:REQUIRES]-> Capability.
+
+    No properties (Edge Catalog, §0.2). More than one such edge may share
+    the same `capability_node_id` (Capability convergence across distinct
+    Obligations, §7.4) or the same `obligation_node_id`
+    (multi-capability-per-Obligation, also §7.4).
+    """
 
     obligation_node_id: str
     capability_node_id: str
@@ -241,8 +269,10 @@ class CapabilityRequiresEdge:
 
 @dataclass(frozen=True, slots=True)
 class DerivationResult:
-    """`derive_obligations_and_capabilities()`'s return value — the outcome
-    of one `DeriveObligationsAndCapabilities` call."""
+    """`derive_obligations_and_capabilities()`'s return value.
+
+    The outcome of one `DeriveObligationsAndCapabilities` call.
+    """
 
     regulatory_instrument_id: str
     obligation_node_ids: tuple[str, ...]

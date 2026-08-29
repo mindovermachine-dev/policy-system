@@ -26,7 +26,7 @@ alone; that is an explicitly out-of-scope behavior change.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TypeIs
 
 from pydantic import ValidationError
 
@@ -41,6 +41,17 @@ from ps_service.domain_mapper.models import (
     ObligationAssignment,
     RequirementCandidate,
 )
+
+
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:
+    """Narrow a `json.loads` result to a JSON object (keys are always strings)."""
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:
+    """Narrow a `json.loads` result to a JSON array."""
+    return isinstance(value, list)
+
 
 EXTRACTION_SYSTEM_PROMPT = """You extract operative regulatory duties from one paragraph (or \
 single-block article) of an EU regulation/directive, for a compliance graph.
@@ -113,14 +124,14 @@ def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[Requireme
             f"extraction response for {unit.citation_ref!r} was not valid JSON: {exc}"
         ) from exc
 
-    if not isinstance(payload, dict) or "requirements" not in payload:
+    if not _is_json_object(payload) or "requirements" not in payload:
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} is missing the top-level "
             f"'requirements' key: {payload!r}"
         )
 
-    items: Any = payload["requirements"]
-    if not isinstance(items, list):
+    items = payload["requirements"]
+    if not _is_json_array(items):
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} has a non-list 'requirements' "
             f"value: {items!r}"
@@ -129,11 +140,13 @@ def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[Requireme
     return [_build_candidate(item, unit) for item in items]
 
 
-def _build_candidate(item: Any, unit: ExtractionUnit) -> RequirementCandidate:
-    """Validate one raw JSON item against `RequirementCandidate`, raising
-    `DomainMapperExtractionError` (naming `unit.citation_ref`) on a
+def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate:
+    """Validate one raw JSON item against `RequirementCandidate`.
+
+    Raises `DomainMapperExtractionError` (naming `unit.citation_ref`) on a
     `pydantic.ValidationError` — a missing/invalid `confidence` (or any
-    other field) is a typed error, never a silent default."""
+    other field) is a typed error, never a silent default.
+    """
     if not isinstance(item, dict):
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} has a non-object requirement "
@@ -150,8 +163,7 @@ def _build_candidate(item: Any, unit: ExtractionUnit) -> RequirementCandidate:
         )
     except ValidationError as exc:
         raise DomainMapperExtractionError(
-            f"extraction response for {unit.citation_ref!r} had a malformed requirement "
-            f"item: {exc}"
+            f"extraction response for {unit.citation_ref!r} had a malformed requirement item: {exc}"
         ) from exc
 
 
@@ -198,8 +210,7 @@ def parse_obligation_response(
     role_node_id: str,
     role_view_registry: dict[str, str],
 ) -> ObligationAssignment:
-    """Parse one Requirement's raw obligation-derivation completion text
-    into an `ObligationAssignment`.
+    """Parse a Requirement's obligation-derivation completion into an `ObligationAssignment`.
 
     `role_view_registry` is the calling Role's own slice of the whole-run
     registry (`obligation_id -> text`, §7.3) — used to resolve a
@@ -251,7 +262,7 @@ def parse_obligation_response(
     )
 
 
-def _load_obligation_payload(text: str, requirement_id: str) -> dict[str, Any]:
+def _load_obligation_payload(text: str, requirement_id: str) -> dict[str, object]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -259,7 +270,7 @@ def _load_obligation_payload(text: str, requirement_id: str) -> dict[str, Any]:
             f"obligation derivation response for requirement {requirement_id!r} was not "
             f"valid JSON: {exc}"
         ) from exc
-    if not isinstance(payload, dict):
+    if not _is_json_object(payload):
         raise DomainMapperDerivationError(
             f"obligation derivation response for requirement {requirement_id!r} was not a "
             f"JSON object: {payload!r}"
@@ -268,11 +279,13 @@ def _load_obligation_payload(text: str, requirement_id: str) -> dict[str, Any]:
 
 
 def _resolve_proposed_obligation_text(
-    payload: dict[str, Any], requirement_id: str, role_view_registry: dict[str, str]
+    payload: dict[str, object], requirement_id: str, role_view_registry: dict[str, str]
 ) -> str:
-    """Resolve a match-or-mint outcome to its proposed duty text, or raise
-    the LEARNINGS.md B1-shaped `DomainMapperDerivationError` when neither
-    a resolvable match nor a valid mint is present."""
+    """Resolve a match-or-mint outcome to its proposed duty text.
+
+    Raises the LEARNINGS.md B1-shaped `DomainMapperDerivationError` when
+    neither a resolvable match nor a valid mint is present.
+    """
     matched_existing_id = payload.get("matched_existing_id")
     if isinstance(matched_existing_id, str) and matched_existing_id in role_view_registry:
         return role_view_registry[matched_existing_id]
@@ -359,9 +372,10 @@ def parse_capability_response(
     obligation_node_id: str,
     registry: dict[str, tuple[str, str | None]],
 ) -> list[CapabilityDecision]:
-    """Parse one Obligation's raw capability-derivation completion text
-    into a list of `CapabilityDecision`s — ZERO OR MORE per Obligation
-    (multi-capability-per-Obligation support, PLAN_REVIEWED.md §7.4).
+    """Parse an Obligation's capability-derivation completion into `CapabilityDecision`s.
+
+    ZERO OR MORE per Obligation (multi-capability-per-Obligation support,
+    PLAN_REVIEWED.md §7.4).
 
     `registry` is the whole-run Capability registry (`capability_id ->
     (name, description)`, §7.4) built up so far across every distinct
@@ -389,12 +403,10 @@ def parse_capability_response(
     - an invalid/missing `confidence` on any item.
     """
     items = _load_capability_items(text, obligation_node_id)
-    return [
-        _build_capability_decision(item, obligation_node_id, registry) for item in items
-    ]
+    return [_build_capability_decision(item, obligation_node_id, registry) for item in items]
 
 
-def _load_capability_items(text: str, obligation_node_id: str) -> list[Any]:
+def _load_capability_items(text: str, obligation_node_id: str) -> list[object]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -403,14 +415,14 @@ def _load_capability_items(text: str, obligation_node_id: str) -> list[Any]:
             f"valid JSON: {exc}"
         ) from exc
 
-    if not isinstance(payload, dict) or "capabilities" not in payload:
+    if not _is_json_object(payload) or "capabilities" not in payload:
         raise DomainMapperDerivationError(
             f"capability derivation response for obligation {obligation_node_id!r} is missing "
             f"the top-level 'capabilities' key: {payload!r}"
         )
 
-    items: Any = payload["capabilities"]
-    if not isinstance(items, list):
+    items = payload["capabilities"]
+    if not _is_json_array(items):
         raise DomainMapperDerivationError(
             f"capability derivation response for obligation {obligation_node_id!r} has a "
             f"non-list 'capabilities' value: {items!r}"
@@ -419,11 +431,11 @@ def _load_capability_items(text: str, obligation_node_id: str) -> list[Any]:
 
 
 def _build_capability_decision(
-    item: Any,
+    item: object,
     obligation_node_id: str,
     registry: dict[str, tuple[str, str | None]],
 ) -> CapabilityDecision:
-    if not isinstance(item, dict):
+    if not _is_json_object(item):
         raise DomainMapperDerivationError(
             f"capability derivation response for obligation {obligation_node_id!r} has a "
             f"non-object capability item: {item!r}"
@@ -447,14 +459,15 @@ def _build_capability_decision(
 
 
 def _resolve_capability(
-    item: dict[str, Any],
+    item: dict[str, object],
     obligation_node_id: str,
     registry: dict[str, tuple[str, str | None]],
 ) -> tuple[str, str, str | None]:
-    """Resolve one response item to `(capability_node_id, name,
-    description)`, or raise the LEARNINGS.md B1-shaped
-    `DomainMapperDerivationError` when neither a resolvable match nor a
-    valid mint is present."""
+    """Resolve one response item to `(capability_node_id, name, description)`.
+
+    Raises the LEARNINGS.md B1-shaped `DomainMapperDerivationError` when
+    neither a resolvable match nor a valid mint is present.
+    """
     matched_existing_id = item.get("matched_existing_id")
     if isinstance(matched_existing_id, str) and matched_existing_id in registry:
         name, description = registry[matched_existing_id]

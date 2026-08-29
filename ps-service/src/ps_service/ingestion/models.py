@@ -1,5 +1,7 @@
-"""ps_service.ingestion core types — the shapes that cross the Adapter ->
-Ingestion-core boundary (`RegulatoryInstrumentMetadata`, `FetchedRegulatoryInstrumentStructure`)
+"""ps_service.ingestion core types.
+
+The shapes that cross the Adapter -> Ingestion-core boundary
+(`RegulatoryInstrumentMetadata`, `FetchedRegulatoryInstrumentStructure`)
 plus the Ingestion pipeline's own structural/result types.
 
 See `docs/architecture/ps-service-container-architecture.md`'s RegulatoryInstrument
@@ -21,10 +23,12 @@ InstrumentType = Literal["regulation", "directive", "national_transposition"]
 
 
 class RegulatoryInstrumentMetadata(BaseModel):
-    """Bibliographic metadata for a RegulatoryInstrument node — crosses the Adapter ->
-    Ingestion-core boundary, so modeled as Pydantic (frozen) per L2 Data
-    Modeling's principle for boundary-crossing fixed-shape entities, even
-    though RegulatoryInstrument isn't in L2's named PS-Conceptual-Model-type list
+    """Bibliographic metadata for a RegulatoryInstrument node.
+
+    Crosses the Adapter -> Ingestion-core boundary, so modeled as Pydantic
+    (frozen) per L2 Data Modeling's principle for boundary-crossing
+    fixed-shape entities, even though RegulatoryInstrument isn't in L2's
+    named PS-Conceptual-Model-type list
     (Role/Requirement/Obligation/Capability/Policy/Standard/Control) — a
     reasoned extension of that principle (PLAN_REVIEWED.md §2.2, Open
     Question 4).
@@ -46,9 +50,10 @@ class RegulatoryInstrumentMetadata(BaseModel):
 
     @model_validator(mode="after")
     def _check_instrument_type_matches_source_type(self) -> Self:
-        """`instrument_type` is required for external sources and must be
-        absent for internal ones (`ps-domain-concepts.md`, Regulatory
-        instrument -> Properties)."""
+        """Require `instrument_type` for external sources, forbid it for internal.
+
+        Per `ps-domain-concepts.md`, Regulatory instrument -> Properties.
+        """
         if self.source_type == "external" and self.instrument_type is None:
             raise ValueError("instrument_type is required when source_type is 'external'")
         if self.source_type == "internal" and self.instrument_type is not None:
@@ -58,9 +63,12 @@ class RegulatoryInstrumentMetadata(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class StructuralNode:
-    """One native structural element. Not a PS Conceptual Model type — CA
-    doc line 164 explicitly says this shape is adapter-defined, not a fixed
-    project-wide schema — so a plain typed dataclass, not Pydantic."""
+    """One native structural element.
+
+    Not a PS Conceptual Model type — CA doc line 164 explicitly says this
+    shape is adapter-defined, not a fixed project-wide schema — so a plain
+    typed dataclass, not Pydantic.
+    """
 
     element_type: str  # Cellar/ELI vocabulary: CHAPTER/SECTION/ARTICLE/PARAGRAPH/ANNEX/RECITAL
     id: str
@@ -71,7 +79,9 @@ class StructuralNode:
 class StructuralEdge:
     """One parent -> child edge in the native structural graph."""
 
-    parent_element_type: str  # "RegulatoryInstrument" for top-level children, else a StructuralNode.element_type
+    parent_element_type: (
+        str  # "RegulatoryInstrument" for top-level children, else a StructuralNode.element_type
+    )
     parent_id: str
     child_element_type: str
     child_id: str
@@ -79,10 +89,12 @@ class StructuralEdge:
 
 @dataclass(frozen=True, slots=True)
 class FetchedRegulatoryInstrumentStructure:
-    """The Adapter's single return type — `FetchRegulatoryInstrumentStructure`'s
-    post-condition ('structural text held in memory, ready for
-    PersistNativeStructuralGraph') confirms fetch+parse are one Adapter
-    action, not two."""
+    """The Adapter's single return type.
+
+    `FetchRegulatoryInstrumentStructure`'s post-condition ('structural text
+    held in memory, ready for PersistNativeStructuralGraph') confirms
+    fetch+parse are one Adapter action, not two.
+    """
 
     metadata: RegulatoryInstrumentMetadata
     nodes: tuple[StructuralNode, ...]
@@ -91,9 +103,11 @@ class FetchedRegulatoryInstrumentStructure:
 
 @dataclass(frozen=True, slots=True)
 class ReachabilityCount:
-    """Per-label result of `verify_structural_graph_reachable`: how many
-    nodes of one label exist in the graph versus how many are actually
-    reachable from the RegulatoryInstrument node."""
+    """Per-label result of `verify_structural_graph_reachable`.
+
+    How many nodes of one label exist in the graph versus how many are
+    actually reachable from the RegulatoryInstrument node.
+    """
 
     total: int
     reachable: int

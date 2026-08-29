@@ -35,7 +35,8 @@ class _FakeQueryResult:
 
 class _FakeGraph:
     """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion."""
+    params)` call for assertion.
+    """
 
     def __init__(self) -> None:
         self.calls: list[_RecordedCall] = []
@@ -48,10 +49,13 @@ class _FakeGraph:
 def test_has_edge_target_is_rewritten_to_canonical_id() -> None:
     """A HAS edge with a resolution mapping the baseline-local Obligation id
     onto a DIFFERENT existing node's canonical id -- the written edge's
-    target must be the canonical id, never the baseline-local one."""
+    target must be the canonical id, never the baseline-local one.
+    """
     graph = _FakeGraph()
     edge = BareEdge(
-        relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_baseline_local"
+        relationship_type="HAS",
+        source_id="role_manufacturer_abc123",
+        target_id="obl_baseline_local",
     )
     canonical_id_by_incoming_id = {"obl_baseline_local": "obl_canonical_existing"}
 
@@ -60,8 +64,7 @@ def test_has_edge_target_is_rewritten_to_canonical_id() -> None:
     assert len(graph.calls) == 1
     call = graph.calls[0]
     assert call.query == (
-        "MATCH (s:Role {id: $source_id}), (t:Obligation {id: $target_id}) "
-        "MERGE (s)-[:HAS]->(t)"
+        "MATCH (s:Role {id: $source_id}), (t:Obligation {id: $target_id}) MERGE (s)-[:HAS]->(t)"
     )
     # Exact dict equality already proves the target is the canonical id,
     # never the baseline-local one.
@@ -100,7 +103,8 @@ def test_requires_edge_source_is_rewritten_to_canonical_id() -> None:
     (`cap_encrypt_data`) is a realistic exact-match resolution -- mapping
     onto itself -- since validation now requires an entry for every
     dedupe-eligible endpoint (Obligation OR Capability), not just the
-    Obligation-typed one."""
+    Obligation-typed one.
+    """
     graph = _FakeGraph()
     edge = BareEdge(
         relationship_type="REQUIRES", source_id="obl_baseline_local", target_id="cap_encrypt_data"
@@ -137,7 +141,8 @@ def test_requires_edge_target_is_rewritten_to_canonical_capability_id() -> None:
     unconditionally, so a matched (never separately node-written) Capability
     would make the MATCH clause match zero rows and the MERGE would silently
     write NOTHING at all. So this test asserts both that a call WAS made
-    (the previously-missing-edge case) and that its target is correct."""
+    (the previously-missing-edge case) and that its target is correct.
+    """
     graph = _FakeGraph()
     edge = BareEdge(
         relationship_type="REQUIRES",
@@ -166,7 +171,8 @@ def test_requires_edge_target_is_rewritten_to_canonical_capability_id() -> None:
 def test_role_and_requirement_endpoints_pass_through_unchanged() -> None:
     """Role (HAS's source) and Requirement (SATISFIED_BY's source) are
     never in any resolution mapping -- they pass through unchanged, and an
-    empty mapping doesn't break either of them."""
+    empty mapping doesn't break either of them.
+    """
     graph = _FakeGraph()
     has_edge = BareEdge(
         relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"
@@ -195,7 +201,8 @@ def test_rerunning_identical_edge_set_targets_the_same_triple_both_times() -> No
     target) triples -- the second run's MERGE targets the exact same
     triple as the first (full duplicate-count proof against real FalkorDB
     MERGE semantics is deferred to the live capstone, PLAN_REVIEWED.md §10
-    Increment 12)."""
+    Increment 12).
+    """
     graph = _FakeGraph()
     edges = (
         BareEdge(relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"),
@@ -230,7 +237,8 @@ def test_has_edge_obligation_target_absent_from_mapping_passes_through() -> None
     absent one is a pass-through (write its baseline-local id verbatim),
     not a `CompanyMergePersistenceError`. Contrast
     `test_requires_edge_target_missing_from_mapping_raises_before_any_write`
-    below, where the Capability target still must be present."""
+    below, where the Capability target still must be present.
+    """
     graph = _FakeGraph()
     edges = (
         BareEdge(relationship_type="HAS", source_id="role_manufacturer_abc123", target_id="obl_x"),
@@ -259,7 +267,8 @@ def test_requires_edge_target_missing_from_mapping_raises_before_any_write() -> 
     Capability id verbatim instead of raising -- reproducing a milder
     version of the exact dangling-edge bug the write-side fix already
     closed, just triggered by an incomplete mapping instead of a
-    never-looked-up endpoint."""
+    never-looked-up endpoint.
+    """
     graph = _FakeGraph()
     edge = BareEdge(
         relationship_type="REQUIRES",

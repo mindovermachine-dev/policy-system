@@ -50,7 +50,8 @@ def test_obligation_id_is_role_scoped() -> None:
     """Same duty text under two different Roles is two distinct Obligation
     nodes — the resolution of issue #42. An Obligation is a weak entity of
     exactly one Role, so `Role -[:HAS]-> Obligation` `1 : 0..*` holds
-    structurally rather than by a runtime collision check."""
+    structurally rather than by a runtime collision check.
+    """
     text = "Report Security Incidents"
     manufacturer_id = obligation_id("role_manufacturer_a1b2c3", text)
     operator_id = obligation_id("role_operator_essential_services_d4e5f6", text)
@@ -59,7 +60,8 @@ def test_obligation_id_is_role_scoped() -> None:
 
 def test_obligation_id_slug_is_still_text_only() -> None:
     """The Role enters only the opaque hash, never the human-readable slug —
-    mirrors `role_id`'s own shape."""
+    mirrors `role_id`'s own shape.
+    """
     assert obligation_id("role_manufacturer_a1b2c3", "Report Security Incidents").startswith(
         "obl_report_security_incidents_"
     )

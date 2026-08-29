@@ -1,6 +1,7 @@
-"""`read_baseline_graph` -- reads a complete `{short}_baseline` graph back
-into a `BaselineGraph` (PLAN_REVIEWED.md §4), ready for
-`company_merge.dedup`/`company_merge.merge` to consume.
+"""`read_baseline_graph` -- read a complete `{short}_baseline` graph into a `BaselineGraph`.
+
+Ready for `company_merge.dedup`/`company_merge.merge` to consume
+(PLAN_REVIEWED.md §4).
 
 Read-only: every query here is a `MATCH ... RETURN ...`, never a `MERGE`/
 `SET`/`DELETE`. RegulatoryInstrument/Role/Requirement/`DEFINES`/`EXPRESSES` are
@@ -56,9 +57,8 @@ and does not fix a specific number.
 
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
-from ps_service.company_merge.falkordb_client import GraphHandle
 from ps_service.company_merge.models import (
     BareEdge,
     BaselineGraph,
@@ -66,7 +66,12 @@ from ps_service.company_merge.models import (
     ProvenanceEdge,
 )
 
-_REGULATORY_INSTRUMENT_QUERY = "MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n"
+if TYPE_CHECKING:
+    from ps_service.company_merge.falkordb_client import GraphHandle
+
+_REGULATORY_INSTRUMENT_QUERY = (
+    "MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n"
+)
 _ROLE_QUERY = "MATCH (n:Role) RETURN n.id, n.name, n.confidence"
 _REQUIREMENT_QUERY = "MATCH (n:Requirement) RETURN n.id, n.text, n.type, n.confidence, n.role_id"
 _OBLIGATION_QUERY = "MATCH (n:Obligation) RETURN n.id, n.text, n.confidence"
@@ -85,23 +90,28 @@ _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id,
 
 
 class _RegulatoryInstrumentNode(Protocol):
-    """Structural stand-in for the `falkordb.Node` `MATCH (n:RegulatoryInstrument
-    {id: $regulatory_instrument_id}) RETURN n` returns -- only `.properties` is ever
-    read, mirroring `ps_service.domain_mapper.extraction._RegulatoryInstrumentNode`'s
-    own minimal structural-Protocol style (own copy, per this component's
+    """Structural stand-in for the `falkordb.Node` a `RETURN n` on RegulatoryInstrument returns.
+
+    Only `.properties` is ever read, mirroring
+    `ps_service.domain_mapper.extraction._RegulatoryInstrumentNode`'s own
+    minimal structural-Protocol style (own copy, per this component's
     "vendored as an independent copy" convention). A hand-written test fake
-    needs only this one attribute to satisfy it."""
+    needs only this one attribute to satisfy it.
+    """
 
     @property
     def properties(self) -> dict[str, object]: ...
 
 
-def read_baseline_graph(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> BaselineGraph:
-    """Read one regulation's complete `{short}_baseline` graph -- the
-    caller has already selected `baseline_graph` (e.g. via
+def read_baseline_graph(
+    baseline_graph: GraphHandle, regulatory_instrument_id: str
+) -> BaselineGraph:
+    """Read one regulation's complete `{short}_baseline` graph.
+
+    The caller has already selected `baseline_graph` (e.g. via
     `ps_service.domain_mapper.falkordb_client.select_graph` +
-    `baseline_graph_name(short_name)`); this function does no graph
-    selection of its own.
+    `baseline_graph_name(short_name)`); this function does no graph selection
+    of its own.
 
     Every query below is read-only. A baseline graph with zero Obligation/
     Capability nodes (a regulation whose derivation surfaced everything as
@@ -110,7 +120,9 @@ def read_baseline_graph(baseline_graph: GraphHandle, regulatory_instrument_id: s
     every edge collection that would otherwise reference them -- with no
     exception raised.
     """
-    regulatory_instrument_properties = _read_regulatory_instrument_properties(baseline_graph, regulatory_instrument_id)
+    regulatory_instrument_properties = _read_regulatory_instrument_properties(
+        baseline_graph, regulatory_instrument_id
+    )
     role_nodes = _read_role_nodes(baseline_graph)
     requirement_nodes = _read_requirement_nodes(baseline_graph)
     obligation_nodes = _read_obligation_nodes(baseline_graph)
@@ -133,19 +145,24 @@ def read_baseline_graph(baseline_graph: GraphHandle, regulatory_instrument_id: s
 def _read_regulatory_instrument_properties(
     baseline_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, object]:
-    """`MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n`, read back as a
-    plain properties dict -- mirrors `ps_service.domain_mapper.extraction.
-    _read_regulatory_instrument_properties`'s exact read shape. Absent RegulatoryInstrument node
-    (a baseline graph left in an unexpected state) yields an empty dict
-    rather than raising -- this function's own contract only covers reading
-    whatever is present; whether a missing RegulatoryInstrument node should abort the
-    whole merge is `merge.py`'s call, not this reader's.
+    """Read the RegulatoryInstrument node back as a plain properties dict.
+
+    `MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n`,
+    mirroring
+    `ps_service.domain_mapper.extraction._read_regulatory_instrument_properties`'s
+    exact read shape. An absent RegulatoryInstrument node (a baseline graph
+    left in an unexpected state) yields an empty dict rather than raising --
+    this function's own contract only covers reading whatever is present;
+    whether a missing RegulatoryInstrument node should abort the whole merge
+    is `merge.py`'s call, not this reader's.
     """
-    result = baseline_graph.query(_REGULATORY_INSTRUMENT_QUERY, params={"regulatory_instrument_id": regulatory_instrument_id})
+    result = baseline_graph.query(
+        _REGULATORY_INSTRUMENT_QUERY, params={"regulatory_instrument_id": regulatory_instrument_id}
+    )
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
         return {}
-    node = cast(_RegulatoryInstrumentNode, rows[0][0])
+    node = cast("_RegulatoryInstrumentNode", rows[0][0])
     return dict(node.properties)
 
 
@@ -157,8 +174,8 @@ def _read_role_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
         node_id, name, confidence = row
         nodes.append(
             BaselineNode(
-                id=cast(str, node_id),
-                properties={"name": cast(str, name), "confidence": cast(float, confidence)},
+                id=cast("str", node_id),
+                properties={"name": cast("str", name), "confidence": cast("float", confidence)},
             )
         )
     return tuple(nodes)
@@ -172,12 +189,12 @@ def _read_requirement_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, 
         node_id, text, requirement_type, confidence, role_id = row
         nodes.append(
             BaselineNode(
-                id=cast(str, node_id),
+                id=cast("str", node_id),
                 properties={
-                    "text": cast(str, text),
-                    "type": cast(str, requirement_type),
-                    "confidence": cast(float, confidence),
-                    "role_id": cast(str, role_id),
+                    "text": cast("str", text),
+                    "type": cast("str", requirement_type),
+                    "confidence": cast("float", confidence),
+                    "role_id": cast("str", role_id),
                 },
             )
         )
@@ -192,8 +209,8 @@ def _read_obligation_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, .
         node_id, text, confidence = row
         nodes.append(
             BaselineNode(
-                id=cast(str, node_id),
-                properties={"text": cast(str, text), "confidence": cast(float, confidence)},
+                id=cast("str", node_id),
+                properties={"text": cast("str", text), "confidence": cast("float", confidence)},
             )
         )
     return tuple(nodes)
@@ -206,32 +223,37 @@ def _read_capability_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, .
     for row in rows:
         node_id, name, confidence, description = row
         properties: dict[str, str | float] = {
-            "name": cast(str, name),
-            "confidence": cast(float, confidence),
+            "name": cast("str", name),
+            "confidence": cast("float", confidence),
         }
         if description is not None:
-            properties["description"] = cast(str, description)
-        nodes.append(BaselineNode(id=cast(str, node_id), properties=properties))
+            properties["description"] = cast("str", description)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
     return tuple(nodes)
 
 
 def _read_provenance_edges(
     baseline_graph: GraphHandle, regulatory_instrument_id: str
 ) -> tuple[ProvenanceEdge, ...]:
-    """`DEFINES` (RegulatoryInstrument -> Role) then `EXPRESSES` (RegulatoryInstrument ->
-    Requirement) -- each read via its own fixed-relationship-type query, so
-    `relationship_type` is always a Python literal known at the call site,
-    never parsed from a returned string (see module docstring)."""
+    """Read the `DEFINES` then `EXPRESSES` provenance edges from the RegulatoryInstrument.
+
+    `DEFINES` targets Role, `EXPRESSES` targets Requirement. Each is read via
+    its own fixed-relationship-type query, so `relationship_type` is always a
+    Python literal known at the call site, never parsed from a returned
+    string (see module docstring).
+    """
     edges: list[ProvenanceEdge] = []
 
-    defines_result = baseline_graph.query(_DEFINES_QUERY, params={"regulatory_instrument_id": regulatory_instrument_id})
+    defines_result = baseline_graph.query(
+        _DEFINES_QUERY, params={"regulatory_instrument_id": regulatory_instrument_id}
+    )
     for row in cast("list[list[object]]", defines_result.result_set):
         target_id, source_ref = row
         edges.append(
             ProvenanceEdge(
                 relationship_type="DEFINES",
-                target_id=cast(str, target_id),
-                source_ref=cast(str, source_ref),
+                target_id=cast("str", target_id),
+                source_ref=cast("str", source_ref),
             )
         )
 
@@ -243,8 +265,8 @@ def _read_provenance_edges(
         edges.append(
             ProvenanceEdge(
                 relationship_type="EXPRESSES",
-                target_id=cast(str, target_id),
-                source_ref=cast(str, source_ref),
+                target_id=cast("str", target_id),
+                source_ref=cast("str", source_ref),
             )
         )
 
@@ -252,14 +274,17 @@ def _read_provenance_edges(
 
 
 def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
-    """`HAS` (Role -> Obligation), then `SATISFIED_BY` (Requirement ->
+    """Read the `HAS`, `SATISFIED_BY`, and `REQUIRES` bare edges.
+
+    `HAS` (Role -> Obligation), then `SATISFIED_BY` (Requirement ->
     Obligation), then `REQUIRES` (Obligation -> Capability) -- each read via
     its own fixed-relationship-type query, same reasoning as
     `_read_provenance_edges`. Endpoint ids here are BASELINE-LOCAL; rewiring
     a `REQUIRES` edge's Capability endpoint onto its canonical id is
     `dedup`/`graph_writer`'s job, not this reader's (§6). Obligation, Role,
     and Requirement endpoints are passthrough (#42) -- their baseline-local
-    id is already final."""
+    id is already final.
+    """
     edges: list[BareEdge] = []
 
     has_result = baseline_graph.query(_HAS_QUERY)
@@ -268,8 +293,8 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
         edges.append(
             BareEdge(
                 relationship_type="HAS",
-                source_id=cast(str, source_id),
-                target_id=cast(str, target_id),
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
             )
         )
 
@@ -279,8 +304,8 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
         edges.append(
             BareEdge(
                 relationship_type="SATISFIED_BY",
-                source_id=cast(str, source_id),
-                target_id=cast(str, target_id),
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
             )
         )
 
@@ -290,8 +315,8 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
         edges.append(
             BareEdge(
                 relationship_type="REQUIRES",
-                source_id=cast(str, source_id),
-                target_id=cast(str, target_id),
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
             )
         )
 

@@ -16,7 +16,7 @@ def _query_result() -> QueryResult:
 def test_query_result_mutation_raises() -> None:
     result = _query_result()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        result.row_count = 2  # type: ignore[misc]
+        result.row_count = 2  # pyright: ignore[reportAttributeAccessIssue]  # asserting frozen-dataclass mutation is rejected at runtime
 
 
 def test_query_result_constructs_with_valid_fields() -> None:

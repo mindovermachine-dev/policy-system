@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""MCP stdio server exposing read-only Cypher access to the policy_system
-graph, for clients (e.g. Claude Desktop) that have no shell of their own.
+"""MCP stdio server exposing read-only Cypher access to the policy_system graph.
+
+For clients (e.g. Claude Desktop) that have no shell of their own.
 
 Deliberately a thin wrapper around `ps.py cypher`, not a reimplementation:
 every query is executed via subprocess through the exact same script the
@@ -14,7 +15,6 @@ when FalkorDB is reachable at a non-default address, e.g. the devcontainer's
 `falkordb` hostname instead of `localhost`).
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -51,14 +51,23 @@ def cypher(query: str, host: str = "", port: str = "", graph: str = "") -> str:
     cmd = [
         sys.executable,
         str(PS_PY),
-        "--host", host or DEFAULT_HOST,
-        "--port", str(port or DEFAULT_PORT),
-        "--graph", graph or DEFAULT_GRAPH,
-        "--format", "json",
+        "--host",
+        host or DEFAULT_HOST,
+        "--port",
+        str(port or DEFAULT_PORT),
+        "--graph",
+        graph or DEFAULT_GRAPH,
+        "--format",
+        "json",
         "cypher",
         query,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    # Safe subprocess: cmd[0] is sys.executable and cmd[1] is a fixed path; the
+    # remaining items are argv entries (no shell), and `query` is write-guarded
+    # by ps.py before it ever reaches FalkorDB.
+    result = subprocess.run(  # noqa: S603 -- argv list, no shell; query guarded downstream
+        cmd, capture_output=True, text=True, timeout=60, check=False
+    )
     if result.returncode != 0:
         return result.stderr.strip() or "error: ps.py exited non-zero with no stderr output"
     return result.stdout

@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import TYPE_CHECKING
 
-from ps_service.ingestion.adapters.base import IngestionAdapter
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
     RegulatoryInstrumentMetadata,
 )
 
+if TYPE_CHECKING:
+    from ps_service.ingestion.adapters.base import IngestionAdapter
+
 
 class _FakeAdapter:
     """A minimal structural implementation — proves `IngestionAdapter` is
-    satisfied by duck typing (Protocol), not by inheritance."""
+    satisfied by duck typing (Protocol), not by inheritance.
+    """
 
-    def fetch_regulatory_instrument_structure(self, identifier: str) -> FetchedRegulatoryInstrumentStructure:
+    def fetch_regulatory_instrument_structure(
+        self, identifier: str
+    ) -> FetchedRegulatoryInstrumentStructure:
         metadata = RegulatoryInstrumentMetadata(
             title="Fake Regulation",
             jurisdiction="EU",

@@ -33,6 +33,7 @@ from __future__ import annotations
 import ast
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import ps_service.ingestion as ingestion_package
 from ps_service.ingestion.models import (
@@ -44,6 +45,25 @@ from ps_service.ingestion.models import (
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import bind_run_context
 
+if TYPE_CHECKING:
+    from ps_service.logging import LogEmitter
+    from ps_service.logging.emitter import TextSink
+
+
+class _MakeEmitter(Protocol):
+    """Call shape of the shared `make_emitter` fixture (`tests/conftest.py`)."""
+
+    def __call__(
+        self, *, filename: str = ..., fallback: TextSink | None = ...
+    ) -> tuple[LogEmitter, Path]: ...
+
+
+class _ReadLines(Protocol):
+    """Call shape of the shared `read_lines` fixture (`tests/conftest.py`)."""
+
+    def __call__(self, log_path: Path) -> list[dict[str, object]]: ...
+
+
 # --- shared fakes (structurally satisfy IngestionAdapter / GraphHandle) ---
 
 
@@ -53,7 +73,8 @@ class _FakeQueryResult:
     are always equal (0 == 0) for every label — no gap, no raise. Cheap and
     sufficient: this test suite's job is to prove `run_id` correlation and
     regulation-independence, not to re-prove `graph_writer`'s own Cypher
-    shape (already covered by `test_graph_writer.py`)."""
+    shape (already covered by `test_graph_writer.py`).
+    """
 
     def __init__(self) -> None:
         self.result_set: list[object] = [[0]]
@@ -74,12 +95,17 @@ class _FakeAdapter:
     """Satisfies `IngestionAdapter` structurally: one canned
     `FetchedRegulatoryInstrumentStructure` per identifier, looked up from a dict built
     by the test — the dispatch-by-identifier lives here, in test fakery,
-    never inside `pipeline.py`."""
+    never inside `pipeline.py`.
+    """
 
-    def __init__(self, structures_by_identifier: dict[str, FetchedRegulatoryInstrumentStructure]) -> None:
+    def __init__(
+        self, structures_by_identifier: dict[str, FetchedRegulatoryInstrumentStructure]
+    ) -> None:
         self._structures_by_identifier = structures_by_identifier
 
-    def fetch_regulatory_instrument_structure(self, identifier: str) -> FetchedRegulatoryInstrumentStructure:
+    def fetch_regulatory_instrument_structure(
+        self, identifier: str
+    ) -> FetchedRegulatoryInstrumentStructure:
         return self._structures_by_identifier[identifier]
 
 
@@ -93,7 +119,11 @@ def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
         source_type="external",
         instrument_type="regulation",
     )
-    nodes = (StructuralNode("ARTICLE", f"{title}#art_1", {"text": "t", "citation_ref": "Art. 1", "order": 1}),)
+    nodes = (
+        StructuralNode(
+            "ARTICLE", f"{title}#art_1", {"text": "t", "citation_ref": "Art. 1", "order": 1}
+        ),
+    )
     edges = (StructuralEdge("RegulatoryInstrument", f"{title}-id", "ARTICLE", f"{title}#art_1"),)
     return FetchedRegulatoryInstrumentStructure(metadata=metadata, nodes=nodes, edges=edges)
 
@@ -101,7 +131,9 @@ def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
 # --- (a) AC-005: two calls, two distinct run_ids ---------------------------
 
 
-def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(make_emitter, read_lines) -> None:
+def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
+    make_emitter: _MakeEmitter, read_lines: _ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter(
         {
@@ -138,7 +170,9 @@ def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(make_e
     assert run_ids_for_one != run_ids_for_two
 
 
-def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(make_emitter, read_lines) -> None:
+def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(
+    make_emitter: _MakeEmitter, read_lines: _ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
 
@@ -147,7 +181,9 @@ def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(make_emitter
     )
     emitter.flush()
 
-    actions = [line["action"] for line in read_lines(log_path) if line.get("entity_id") == "SHORT-1.0"]
+    actions = [
+        line["action"] for line in read_lines(log_path) if line.get("entity_id") == "SHORT-1.0"
+    ]
     assert actions == [
         "fetch_regulatory_instrument_structure",
         "register_regulatory_instrument_version",
@@ -156,8 +192,8 @@ def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(make_emitter
     ]
 
 
-def test_ingest_regulatory_instrument_computes_regulatory_instrument_id_from_caller_supplied_short_name_and_version(
-    make_emitter,
+def test_ingest_computes_regulatory_instrument_id_from_short_name_and_version(
+    make_emitter: _MakeEmitter,
 ) -> None:
     emitter, _ = make_emitter()
     adapter = _FakeAdapter({"ANY_IDENTIFIER": _structure("Fixture")})
@@ -170,19 +206,25 @@ def test_ingest_regulatory_instrument_computes_regulatory_instrument_id_from_cal
 
 
 def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in_an_outer_context(
-    make_emitter, read_lines
+    make_emitter: _MakeEmitter, read_lines: _ReadLines
 ) -> None:
     """`bind_run_context()`'s own nested-scope restore semantics (run_context.py)
     mean `ingest_regulatory_instrument()`'s inner `run_id` is still what gets baked into
     its own log entries, even when called from within an already-bound outer
     scope — proving the pipeline always uses its own freshly bound id, not
-    whatever happened to be active on entry."""
+    whatever happened to be active on entry.
+    """
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
 
     with bind_run_context("outer-run"):
         result = ingest_regulatory_instrument(
-            "IDENTIFIER", "SHORT", version="1.0", adapter=adapter, graph=_FakeGraph(), emitter=emitter
+            "IDENTIFIER",
+            "SHORT",
+            version="1.0",
+            adapter=adapter,
+            graph=_FakeGraph(),
+            emitter=emitter,
         )
     emitter.flush()
 
@@ -206,7 +248,8 @@ def _files_to_scan() -> list[Path]:
     `ps_service/ingestion/`, found by walking the real filesystem
     (`rglob("*.py")`) rather than a hardcoded list — this must catch a
     violation in `models.py`/`errors.py`/`falkordb_client.py`/
-    `graph_writer.py`/any `adapters/**` module, not just `pipeline.py`."""
+    `graph_writer.py`/any `adapters/**` module, not just `pipeline.py`.
+    """
     ingestion_root = Path(ingestion_package.__file__).parent
     return sorted(ingestion_root.rglob("*.py"))
 
@@ -297,7 +340,8 @@ def test_no_forbidden_literal_conditionals_in_ingestion_package() -> None:
 def test_files_to_scan_covers_every_known_ingestion_module() -> None:
     """Guards against `_files_to_scan` silently narrowing back down to a
     hardcoded-looking subset (the exact defect B2 fixed) — asserts the
-    rglob walk actually finds every module Increments 1-11 delivered."""
+    rglob walk actually finds every module Increments 1-11 delivered.
+    """
     scanned_relative_paths = {
         str(path.relative_to(Path(ingestion_package.__file__).parent)) for path in _files_to_scan()
     }
@@ -323,12 +367,10 @@ def test_files_to_scan_covers_every_known_ingestion_module() -> None:
 def test_find_forbidden_literals_flags_a_hypothetical_conditional() -> None:
     """Proves the scan's positive case: a `short_name == "CRA"` comparison
     inside an `if` test is flagged, wherever it occurs — not just against
-    this package's real files (which contain none)."""
+    this package's real files (which contain none).
+    """
     tree = ast.parse(
-        "def f(short_name):\n"
-        "    if short_name == 'CRA':\n"
-        "        return True\n"
-        "    return False\n"
+        "def f(short_name):\n    if short_name == 'CRA':\n        return True\n    return False\n"
     )
 
     violations = _find_forbidden_literals(tree)
@@ -339,7 +381,8 @@ def test_find_forbidden_literals_flags_a_hypothetical_conditional() -> None:
 def test_find_forbidden_literals_flags_a_hypothetical_celex_conditional() -> None:
     """Proves the scan now also flags a branch on a specific CELEX
     identifier — the same per-instrument conditional AC-BI-013 forbids,
-    just keyed on the source identifier rather than the short name."""
+    just keyed on the source identifier rather than the short name.
+    """
     tree = ast.parse(
         "def f(identifier):\n"
         "    if identifier == '32016R0679':\n"
@@ -354,7 +397,8 @@ def test_find_forbidden_literals_ignores_docstring_examples() -> None:
     """Proves the scan's negative case: a docstring naming all three
     regulations (and their CELEX identifiers) as illustrative examples
     (exactly `pipeline.py`'s / `metadata.py`'s own docstring shape) is not
-    flagged."""
+    flagged.
+    """
     tree = ast.parse(
         '"""Ingests a regulation, e.g. CRA, GDPR, or NIS2, from its source."""\n'
         "def f(short_name: str) -> None:\n"

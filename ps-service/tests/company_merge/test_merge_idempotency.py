@@ -39,6 +39,11 @@ construction.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter
+
 from dataclasses import dataclass
 from typing import cast
 
@@ -66,7 +71,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
-    `.properties` is ever read."""
+    `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -88,7 +94,8 @@ def _is_read_call(call: _RecordedCall) -> bool:
 class _FakeBaselineGraph:
     """Answers every one of `read_baseline_graph`'s queries with its own
     scripted row set -- copied from `test_merge_baseline_graph.py`'s own
-    `_FakeBaselineGraph` (dispatch-by-substring style)."""
+    `_FakeBaselineGraph` (dispatch-by-substring style).
+    """
 
     def __init__(
         self,
@@ -137,7 +144,9 @@ class _FakeBaselineGraph:
         if "(n:Obligation) RETURN" in q:
             return _FakeQueryResult(self._obligation_rows)
         if "(n:RegulatoryInstrument {id: $regulatory_instrument_id}) RETURN n" in q:
-            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
+            return _FakeQueryResult(
+                [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
+            )
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 
@@ -146,7 +155,8 @@ class _FakeSingleTenantGraph:
     `MERGE ... ON CREATE SET`/`WHERE n.embedding IS NULL` semantics exactly
     -- copied from `test_merge_baseline_graph.py`'s own `_FakeSingleTenantGraph`,
     plus `capability_ids()` (this increment's own small addition, the
-    Capability-side analogue of the original's `obligation_ids()`)."""
+    Capability-side analogue of the original's `obligation_ids()`).
+    """
 
     def __init__(
         self,
@@ -157,11 +167,11 @@ class _FakeSingleTenantGraph:
         self._obligations: dict[str, list[object]] = {}
         for row in obligation_rows or []:
             row_list = list(cast("list[object]", row))
-            self._obligations[cast(str, row_list[0])] = row_list
+            self._obligations[cast("str", row_list[0])] = row_list
         self._capabilities: dict[str, list[object]] = {}
         for row in capability_rows or []:
             row_list = list(cast("list[object]", row))
-            self._capabilities[cast(str, row_list[0])] = row_list
+            self._capabilities[cast("str", row_list[0])] = row_list
         self.calls: list[_RecordedCall] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
@@ -186,7 +196,7 @@ class _FakeSingleTenantGraph:
         text_key: str,
     ) -> None:
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         if node_id in table:
             return
         properties = cast("dict[str, object]", params["properties"])
@@ -199,15 +209,16 @@ class _FakeSingleTenantGraph:
         text_key: str,
     ) -> None:
         """Unconditional `MERGE ... SET n += $properties` -- rewrites the row
-        every call (idempotent when the params are identical)."""
+        every call (idempotent when the params are identical).
+        """
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         properties = cast("dict[str, object]", params["properties"])
         table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
 
     def _backfill(self, table: dict[str, list[object]], params: dict[str, object] | None) -> None:
         assert params is not None
-        node_id = cast(str, params["id"])
+        node_id = cast("str", params["id"])
         row = table.get(node_id)
         if row is None or row[2] is not None:
             return
@@ -226,7 +237,8 @@ class _FakeSingleTenantGraph:
         """This increment's own addition: the Capability-side analogue of
         `obligation_ids()` -- the current set of distinct canonical
         Capability node ids accumulated so far across however many
-        `merge_baseline_graph` calls have run against this instance."""
+        `merge_baseline_graph` calls have run against this instance.
+        """
         return frozenset(self._capabilities)
 
 
@@ -237,9 +249,9 @@ class _ScriptedCallEmbedding:
         self._vectors_by_text = dict(vectors_by_text)
         self.calls: list[str] = []
 
-    def __call__(self, *, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
-        assert len(input) == 1
-        text = input[0]
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
         self.calls.append(text)
         vector = self._vectors_by_text.get(text)
         if vector is None:
@@ -256,14 +268,15 @@ def _edge_write_triples(single_tenant: _FakeSingleTenantGraph) -> set[tuple[str,
     not a raw call-count assertion, since a `MERGE`-based fake graph is
     expected to reissue the identical call on every idempotent re-run.
     What must not grow across a re-run is the DISTINCT triple set, which is
-    exactly what this helper computes."""
+    exactly what this helper computes.
+    """
     triples: set[tuple[str, str, str]] = set()
     for call in single_tenant.writes():
         for relationship_type in ("HAS", "SATISFIED_BY", "REQUIRES"):
             if f"[:{relationship_type}]" in call.query:
                 assert call.params is not None
-                source_id = cast(str, call.params["source_id"])
-                target_id = cast(str, call.params["target_id"])
+                source_id = cast("str", call.params["source_id"])
+                target_id = cast("str", call.params["target_id"])
                 triples.add((source_id, relationship_type, target_id))
     return triples
 
@@ -297,9 +310,7 @@ def _idempotency_fixture() -> tuple[
     baseline = _FakeBaselineGraph(
         regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
         role_rows=[[role_id, "Operator", 0.9]],
-        requirement_rows=[
-            [requirement_id, "Must report incidents.", "requirement", 0.9, role_id]
-        ],
+        requirement_rows=[[requirement_id, "Must report incidents.", "requirement", 0.9, role_id]],
         obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
         capability_rows=[[incoming_capability_id, incoming_capability_name, 0.8, None]],
         defines_rows=[[role_id, "Article 1(1)"]],
@@ -321,14 +332,15 @@ def _idempotency_fixture() -> tuple[
 
 
 def test_second_identical_call_produces_field_for_field_identical_merge_result(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """The core AC-005 claim: `merge_baseline_graph`'s second call's resolved
     `MergeResult`, against IDENTICAL inputs (same baseline graph object, same
     accumulating fake single-tenant graph, same scripted embedding
     responses), is field-for-field identical to the first's -- `MergeResult`
     is a frozen dataclass, so `==` already compares every field
-    (`regulatory_instrument_id`, both canonical-id tuples, `near_misses`) recursively."""
+    (`regulatory_instrument_id`, both canonical-id tuples, `near_misses`) recursively.
+    """
     emitter, _log_path = make_emitter()
     baseline, single_tenant, call_embedding, existing_obligation_id, existing_capability_id = (
         _idempotency_fixture()
@@ -361,14 +373,15 @@ def test_second_identical_call_produces_field_for_field_identical_merge_result(
 
 
 def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """The fake `single_tenant_graph`'s accumulated node-id set is IDENTICAL
     after both calls to what it was after the first call alone -- no new
     node id appears on the second call. Proven both by direct set comparison
     and by asserting zero `ON CREATE SET` mint calls occur on either call
     (both resolutions are `match_kind="semantic"` onto pre-existing ids, so
-    neither call ever mints)."""
+    neither call ever mints).
+    """
     emitter, _log_path = make_emitter()
     baseline, single_tenant, call_embedding, existing_obligation_id, existing_capability_id = (
         _idempotency_fixture()
@@ -404,14 +417,17 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
     assert not single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
 
 
-def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(make_emitter) -> None:
+def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(
+    make_emitter: MakeEmitter,
+) -> None:
     """The fake `single_tenant_graph`'s edge-write log, deduplicated by
     `(source, type, target)` triple, is unchanged in SIZE after the second
     call. This is deliberately not a raw call-count assertion: a
     `MERGE`-based fake graph is expected to reissue the identical `HAS`/
     `SATISFIED_BY`/`REQUIRES` calls on every re-run (that's what makes it
     idempotent, not a bug) -- what must not grow is the distinct triple/id
-    set the calls collectively describe."""
+    set the calls collectively describe.
+    """
     emitter, _log_path = make_emitter()
     baseline, single_tenant, call_embedding, _existing_obligation_id, _existing_capability_id = (
         _idempotency_fixture()
@@ -456,7 +472,9 @@ def test_second_call_leaves_the_distinct_edge_triple_set_unchanged(make_emitter)
     assert len(second_call_edge_writes) == 3
 
 
-def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) -> None:
+def test_second_call_makes_zero_further_embedding_backfill_writes(
+    make_emitter: MakeEmitter,
+) -> None:
     """The embedding-backfill effect, not just its call shape: the fake
     graph's `WHERE n.embedding IS NULL` handler mutates real in-memory state
     (`_backfill`, guarding on `row[2] is not None` -- mirrors FalkorDB's own
@@ -491,7 +509,7 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) 
     # embedding, no backfill.)
     assert len(backfill_writes_after_first) == 1
     backfilled_ids_after_first = {
-        cast(str, c.params["id"]) for c in backfill_writes_after_first if c.params is not None
+        cast("str", c.params["id"]) for c in backfill_writes_after_first if c.params is not None
     }
     assert backfilled_ids_after_first == {existing_capability_id}
 
@@ -514,7 +532,9 @@ def test_second_call_makes_zero_further_embedding_backfill_writes(make_emitter) 
     )
 
     second_call_calls = single_tenant.calls[calls_before_second:]
-    second_call_backfill_writes = [c for c in second_call_calls if "WHERE n.embedding IS NULL" in c.query]
+    second_call_backfill_writes = [
+        c for c in second_call_calls if "WHERE n.embedding IS NULL" in c.query
+    ]
     assert second_call_backfill_writes == [], (
         "the second run must issue ZERO embedding-backfill write calls -- both "
         "existing nodes were already backfilled by the first run, so there is "

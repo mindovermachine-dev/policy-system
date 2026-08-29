@@ -12,11 +12,9 @@ from __future__ import annotations
 import ast
 import inspect
 import json
-from collections.abc import Callable
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
-import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,6 +27,12 @@ from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
 from ps_service.logging.facade import reset_for_tests
 from ps_service.main import create_app
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    import httpx
 
 _FORBIDDEN_IMPORT_PREFIXES = (
     "ps_service.api",
@@ -43,7 +47,9 @@ _LEAK_SHAPED_KEYS = frozenset({"path", "config", "env", "traceback"})
 
 
 @pytest.fixture(autouse=True)
-def _stub_dependency_checks_as_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Default every dependency probe `_check_dependencies_at_startup` (issue #22) calls
     to succeed, so every pre-existing test below (written before real dependencies
     existed) keeps working without a real FalkorDB/LLM Provider/Cellar-ELI to talk to.
@@ -57,10 +63,30 @@ def _stub_dependency_checks_as_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
     never-recorded dependency as healthy by default, and `conftest.py`'s
     autouse fixture resets it before every test.
     """
-    monkeypatch.setattr(main_module, "connect_from_config", lambda config: object())
-    monkeypatch.setattr(main_module, "check_falkordb_connectivity", lambda db, host, port: None)
-    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", lambda config: None)
-    monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", lambda: None)
+
+    def stub_connect_from_config(config: ServiceConfig) -> object:
+        """No-op FalkorDB connect: return an opaque handle standing in for a live `FalkorDB`."""
+        return object()
+
+    def stub_check_falkordb_connectivity(db: object, host: str, port: int) -> None:
+        """No-op FalkorDB connectivity probe: a healthy dependency by default."""
+
+    def stub_check_llm_interface_connectivity(config: ServiceConfig) -> None:
+        """No-op LLM Interface connectivity probe: a healthy dependency by default."""
+
+    def stub_check_cellar_eli_connectivity() -> None:
+        """No-op Cellar/ELI connectivity probe: a healthy dependency by default."""
+
+    monkeypatch.setattr(main_module, "connect_from_config", stub_connect_from_config)
+    monkeypatch.setattr(
+        main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
+    )
+    monkeypatch.setattr(
+        main_module, "check_llm_interface_connectivity", stub_check_llm_interface_connectivity
+    )
+    monkeypatch.setattr(
+        main_module, "check_cellar_eli_connectivity", stub_check_cellar_eli_connectivity
+    )
 
 
 @pytest.fixture
@@ -99,7 +125,9 @@ def test_ready_returns_200_and_not_ready_status_before_lifespan_runs(app: FastAP
 
 
 def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> None:
-    """Entering TestClient as a context manager runs `lifespan` startup, flipping /ready to 'ready'."""
+    """Entering TestClient as a context manager runs `lifespan` startup, flipping
+    /ready to 'ready'.
+    """
     with TestClient(app) as client:
         response = client.get("/ready")
 
@@ -107,7 +135,9 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
     assert response.json() == {"status": "ready"}
 
 
-def test_lifespan_calls_configure_before_emit_log_entry(monkeypatch: pytest.MonkeyPatch, app: FastAPI) -> None:
+def test_lifespan_calls_configure_before_emit_log_entry(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
     """AC-BI-011: `configure()` is called before `emit_log_entry()` during lifespan startup.
 
     Patches `ps_service.main.configure`/`emit_log_entry` (where they are
@@ -133,7 +163,8 @@ def test_lifespan_calls_configure_before_emit_log_entry(monkeypatch: pytest.Monk
 
 
 def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, app: FastAPI) -> None:
-    """AC-BI-012: exactly one structured log entry with action="startup"/outcome="success" is written.
+    """AC-BI-012: exactly one structured log entry with
+    action="startup"/outcome="success" is written.
 
     Uses the real Logging facade (no monkeypatching), writing to the
     `PS_LOGGING_DIR`-isolated `tmp_path` set up by the autouse conftest
@@ -151,7 +182,9 @@ def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, ap
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
     startup_success_entries = [
-        line for line in lines if line.get("action") == "startup" and line.get("outcome") == "success"
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
     ]
 
     assert len(startup_success_entries) == 1
@@ -159,7 +192,9 @@ def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, ap
 
 @pytest.mark.parametrize("path", ["/health", "/ready"])
 @pytest.mark.parametrize("method", ["post", "put", "delete"])
-def test_non_get_request_to_health_or_ready_returns_405(path: str, method: str, app: FastAPI) -> None:
+def test_non_get_request_to_health_or_ready_returns_405(
+    path: str, method: str, app: FastAPI
+) -> None:
     """AC-BI-008: POST/PUT/DELETE to `/health` or `/ready` are rejected with 405.
 
     Likely passes with zero extra code (FastAPI/Starlette auto-405s a path
@@ -172,7 +207,9 @@ def test_non_get_request_to_health_or_ready_returns_405(path: str, method: str, 
 
 @pytest.mark.parametrize("path", ["/health", "/ready"])
 @pytest.mark.parametrize("method", ["post", "put", "delete"])
-def test_405_response_body_does_not_leak_path_config_env_or_traceback(path: str, method: str, app: FastAPI) -> None:
+def test_405_response_body_does_not_leak_path_config_env_or_traceback(
+    path: str, method: str, app: FastAPI
+) -> None:
     """D5: the 405 body's key set must not contain any leak-shaped key.
 
     It need not equal `{"status"}` — Starlette's default 405 body
@@ -186,18 +223,18 @@ def test_405_response_body_does_not_leak_path_config_env_or_traceback(path: str,
 
 def _get_bare_health(app: FastAPI) -> httpx.Response:
     """Helper: bare (never-entered) `TestClient` GET /health — lifespan never runs."""
-    return TestClient(app).get("/health")
+    return TestClient(app).get("/health")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
 
 
 def _get_bare_ready(app: FastAPI) -> httpx.Response:
     """Helper: bare (never-entered) `TestClient` GET /ready — lifespan never runs."""
-    return TestClient(app).get("/ready")
+    return TestClient(app).get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
 
 
 def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
     """Helper: GET /ready with `lifespan` startup run to completion."""
     with TestClient(app) as client:
-        return client.get("/ready")
+        return client.get("/ready")  # pyright: ignore[reportReturnType]  # httpx double-build in dep tree (issue #48 R6): httpx2._models.Response vs httpx._models.Response
 
 
 @pytest.mark.parametrize(
@@ -220,7 +257,8 @@ def test_200_response_body_contains_only_a_status_key(
 
 @pytest.mark.parametrize("path", ["/health", "/ready"])
 def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -> None:
-    """AC-BI-001 (final, consolidated): unauthenticated GET to /health or /ready never returns 401/403.
+    """AC-BI-001 (final, consolidated): unauthenticated GET to /health or /ready
+    never returns 401/403.
 
     Explicit, dedicated test naming AC-BI-001 directly, per increment 12 —
     exercises both TestClient states (bare, and after lifespan startup
@@ -299,7 +337,8 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-002/AC-BI-006/AC-BI-007: with no env overrides, `main()` wires `uvicorn.run` with the default config.
+    """AC-BI-002/AC-BI-006/AC-BI-007: with no env overrides, `main()` wires
+    `uvicorn.run` with the default config.
 
     Monkeypatches `uvicorn.run` (as imported into `ps_service.main`) with a
     `Mock` so no real bind happens, then asserts `main()` invokes it with a
@@ -355,7 +394,8 @@ def test_main_calls_load_config_exactly_once(monkeypatch: pytest.MonkeyPatch) ->
 def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
     env_var: str, env_value: str, kwarg: str, expected: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-003/004/005 (unit half): `main()` reflects a `PS_SERVICE_*` env override in `uvicorn.run`'s kwargs.
+    """AC-BI-003/004/005 (unit half): `main()` reflects a `PS_SERVICE_*` env
+    override in `uvicorn.run`'s kwargs.
 
     Sets exactly one override env var at a time (the other two left cleared),
     mocks `uvicorn.run`, calls `main()`, and asserts the corresponding
@@ -394,7 +434,8 @@ def test_main_module_has_zero_os_environ_references() -> None:
 
 
 def test_create_app_instances_have_independent_readiness_state() -> None:
-    """AC-BI-008 (partial, readiness isolation only): two `create_app()` apps don't share `app.state.ready`.
+    """AC-BI-008 (partial, readiness isolation only): two `create_app()` apps
+    don't share `app.state.ready`.
 
     Constructs two independently-configured apps (configs are otherwise
     identical here — this test is scoped to readiness-flag isolation only,
@@ -468,7 +509,8 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
 
 
 def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path) -> None:
-    """AC-BI-008 (full): two `create_app()` calls with different `logging_dir`s stay independently configured.
+    """AC-BI-008 (full): two `create_app()` calls with different `logging_dir`s
+    stay independently configured.
 
     Distinct from `test_create_app_instances_have_independent_readiness_state`
     (which only proves `app.state.ready` isolation): this proves `config`
@@ -511,9 +553,13 @@ def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path
     reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
     first_log_path = first_logging_dir / "ps-service.jsonl"
-    lines = [json.loads(line) for line in first_log_path.read_text(encoding="utf-8").splitlines() if line]
+    lines = [
+        json.loads(line) for line in first_log_path.read_text(encoding="utf-8").splitlines() if line
+    ]
     startup_success_entries = [
-        line for line in lines if line.get("action") == "startup" and line.get("outcome") == "success"
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
     ]
     assert len(startup_success_entries) == 1
 
@@ -524,8 +570,11 @@ def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path
     assert second_app.state.ready is False
 
 
-def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(tmp_path: Path) -> None:
-    """Regression guard: `logging_dir=None` still resolves via `resolve_default_log_path()`, end to end.
+def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(
+    tmp_path: Path,
+) -> None:
+    """Regression guard: `logging_dir=None` still resolves via
+    `resolve_default_log_path()`, end to end.
 
     Guards against a regression where someone "fixes" the `None` branch too
     (e.g. always joining `_LOG_FILENAME`, even when `config.logging_dir` is
@@ -553,13 +602,16 @@ def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(t
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
     startup_success_entries = [
-        line for line in lines if line.get("action") == "startup" and line.get("outcome") == "success"
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
     ]
     assert len(startup_success_entries) == 1
 
 
 def test_lifespan_emits_warning_log_entry_for_non_loopback_host(tmp_path: Path) -> None:
-    """AC-BI-011: a non-loopback `config.host` (e.g. "0.0.0.0") produces exactly one warning log entry.
+    """AC-BI-011: a non-loopback `config.host` (e.g. "0.0.0.0") produces exactly
+    one warning log entry.
 
     The existing `outcome="success"` entry must still also be present (order:
     `configure()` succeeds, then the warning-if-non-loopback entry, then the
@@ -582,8 +634,16 @@ def test_lifespan_emits_warning_log_entry_for_non_loopback_host(tmp_path: Path) 
 
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    warning_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "warning"]
-    success_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "success"]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
+    success_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
+    ]
 
     assert len(warning_entries) == 1
     assert warning_entries[0].get("host") == "0.0.0.0"
@@ -613,8 +673,16 @@ def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -
 
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    warning_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "warning"]
-    success_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "success"]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
+    success_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
+    ]
 
     assert len(warning_entries) == 0
     assert len(success_entries) == 1
@@ -652,7 +720,11 @@ def test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_depende
 
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    warning_entries = [line for line in lines if line.get("action") == "startup" and line.get("outcome") == "warning"]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
 
     assert any(entry.get("dependency") == "llm_interface" for entry in warning_entries)
 
@@ -662,7 +734,8 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
 ) -> None:
     """A FalkorDB failure must not short-circuit the LLM Interface/Cellar-ELI
     checks — a single startup should surface every failing dependency, not
-    just the first one hit."""
+    just the first one hit.
+    """
     called: list[str] = []
 
     def failing_connect(config: ServiceConfig) -> object:
@@ -691,7 +764,8 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
     """The live gate (`dependency_health.all_healthy`), not just the one-time
     startup gate: a call site elsewhere (e.g. `graph_writer`'s write path)
     marking FalkorDB unhealthy mid-run must be reflected on the next
-    `/ready` poll, without needing a restart."""
+    `/ready` poll, without needing a restart.
+    """
     with TestClient(app) as client:
         assert client.get("/ready").json() == {"status": "ready"}
 

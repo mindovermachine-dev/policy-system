@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import email.message
 import urllib.error
 import urllib.request
-from typing import Self
+from typing import NoReturn, Self
 
 import pytest
 
@@ -18,7 +19,8 @@ from ps_service.ingestion.adapters.errors import CellarFetchError
 
 class _FakeResponse:
     """A minimal stand-in for what `urllib.request.urlopen` returns: a
-    context manager whose `read()` yields the body bytes."""
+    context manager whose `read()` yields the body bytes.
+    """
 
     def __init__(self, body: bytes) -> None:
         self._body = body
@@ -36,7 +38,8 @@ class _FakeResponse:
 class _RecordingTransport:
     """Captures the exact `Request`/`timeout` it was called with, so the
     test can assert URL/headers precisely — mocking at the transport
-    boundary, per L2 Testing Patterns."""
+    boundary, per L2 Testing Patterns.
+    """
 
     def __init__(self, body: bytes) -> None:
         self._body = body
@@ -121,11 +124,14 @@ def test_check_connectivity_marks_cellar_eli_unhealthy_on_transport_failure() ->
 def test_check_connectivity_treats_http_error_status_as_reachable() -> None:
     """A 404 on the bare domain still means the host responded — the point
     of this probe is confirming network reachability, not that any
-    particular resource exists there."""
+    particular resource exists there.
+    """
 
     class _HttpErrorTransport:
-        def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> None:
-            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", None, None)
+        def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> NoReturn:
+            raise urllib.error.HTTPError(
+                request.full_url, 404, "Not Found", email.message.Message(), None
+            )
 
     check_connectivity(transport=_HttpErrorTransport())
 
@@ -135,7 +141,8 @@ def test_check_connectivity_treats_http_error_status_as_reachable() -> None:
 @pytest.mark.cellar_live
 def test_fetch_xhtml_live_fetch_of_cra_returns_eli_container_markup() -> None:
     """Real fetch of CRA (Regulation (EU) 2024/2847, CELEX 32024R2847) —
-    no local file/fixture/PDF as source, per AC-001."""
+    no local file/fixture/PDF as source, per AC-001.
+    """
     result = fetch_xhtml("32024R2847")
 
     assert len(result) > 0

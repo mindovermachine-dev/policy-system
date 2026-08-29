@@ -18,7 +18,7 @@ repo convention (no `unittest.mock`).
 from __future__ import annotations
 
 import json
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 
@@ -29,10 +29,20 @@ from ps_service.query_engine.errors import (
     WriteClauseRejectedError,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from ps_service.logging.emitter import LogEmitter
+
+    type MakeEmitter = Callable[..., tuple[LogEmitter, Path]]
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
+
 
 class _ScriptedQueryResult:
     """Satisfies `GraphQueryResult` structurally with scripted `header`/
-    `result_set` values."""
+    `result_set` values.
+    """
 
     def __init__(self, *, header: list[list[object]], result_set: list[object]) -> None:
         self.header = header
@@ -41,7 +51,8 @@ class _ScriptedQueryResult:
 
 class _FakeSuccessGraphHandle:
     """Satisfies `GraphHandle` structurally -- always succeeds with a
-    scripted two-row result."""
+    scripted two-row result.
+    """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
         return _ScriptedQueryResult(
@@ -67,13 +78,16 @@ def _assert_no_query_text_logged(entry: dict[str, object], query: str) -> None:
     serialized entry (note: `LogEntry.to_json_line` merges `extra`'s pairs
     directly into the top-level payload -- there is no nested `"extra"` key
     to check separately, so this substring check over the whole serialized
-    entry is the correct, exhaustive form of the check)."""
+    entry is the correct, exhaustive form of the check).
+    """
     serialized = json.dumps(entry)
     assert query not in serialized
     assert query not in entry.values()
 
 
-def test_success_emits_entry_with_bound_run_id_and_succeeded_outcome(make_emitter, read_lines) -> None:
+def test_success_emits_entry_with_bound_run_id_and_succeeded_outcome(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     fake_graph = _FakeSuccessGraphHandle()
 
@@ -91,7 +105,9 @@ def test_success_emits_entry_with_bound_run_id_and_succeeded_outcome(make_emitte
     _assert_no_query_text_logged(entry, _SUCCESS_QUERY)
 
 
-def test_rejected_emits_entry_with_bound_run_id_and_rejected_outcome(make_emitter, read_lines) -> None:
+def test_rejected_emits_entry_with_bound_run_id_and_rejected_outcome(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     fake_graph = _FakeSuccessGraphHandle()
 
@@ -109,7 +125,9 @@ def test_rejected_emits_entry_with_bound_run_id_and_rejected_outcome(make_emitte
     _assert_no_query_text_logged(entry, _WRITE_QUERY)
 
 
-def test_failed_emits_entry_with_bound_run_id_and_failed_outcome(make_emitter, read_lines) -> None:
+def test_failed_emits_entry_with_bound_run_id_and_failed_outcome(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     fake_graph = _FakeRaisingGraphHandle()
 
@@ -127,7 +145,9 @@ def test_failed_emits_entry_with_bound_run_id_and_failed_outcome(make_emitter, r
     _assert_no_query_text_logged(entry, _FAILING_QUERY)
 
 
-def test_no_bound_run_context_run_id_absent_and_no_crash(make_emitter, read_lines) -> None:
+def test_no_bound_run_context_run_id_absent_and_no_crash(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     fake_graph = _FakeSuccessGraphHandle()
 

@@ -14,13 +14,16 @@ import atexit
 import contextlib
 import os
 import threading
-from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter, TextSink
 from ps_service.logging.errors import LoggingConfigurationError, LoggingLifecycleError
 from ps_service.logging.models import EntityId, LogEntry
 from ps_service.logging.run_context import current_run_id
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _LOGGING_DIR_ENV_VAR = "PS_LOGGING_DIR"  # L2 env naming: PS_<COMPONENT>_<SETTING>
 _DEFAULT_LOG_DIRNAME = "logs"
@@ -49,14 +52,20 @@ def resolve_default_log_path(*, repo_root: Path | None = None) -> Path:
     """
     base = repo_root if repo_root is not None else _find_repo_root(Path(__file__))
     override = os.environ.get(_LOGGING_DIR_ENV_VAR)
-    log_dir = Path(override).expanduser().resolve() if override else (base / _DEFAULT_LOG_DIRNAME).resolve()
+    log_dir = (
+        Path(override).expanduser().resolve()
+        if override
+        else (base / _DEFAULT_LOG_DIRNAME).resolve()
+    )
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise LoggingConfigurationError(f"cannot create log directory {log_dir}: {exc}") from exc
     log_file = (log_dir / _DEFAULT_LOG_FILENAME).resolve()
     if log_dir not in log_file.parents:
-        raise LoggingConfigurationError(f"resolved log file {log_file} escapes its directory {log_dir}")
+        raise LoggingConfigurationError(
+            f"resolved log file {log_file} escapes its directory {log_dir}"
+        )
     return log_file
 
 
@@ -65,11 +74,13 @@ def _find_repo_root(start: Path) -> Path:
     for candidate in (start, *start.parents):
         if (candidate / ".git").is_dir():
             return candidate
-    raise LoggingConfigurationError(f"could not locate a repo root (no .git ancestor) above {start}")
+    raise LoggingConfigurationError(
+        f"could not locate a repo root (no .git ancestor) above {start}"
+    )
 
 
 def configure(log_path: Path | None = None, *, fallback: TextSink | None = None) -> LogEmitter:
-    """(Re)point the process-wide default emitter; stops the previous one after installing the new one.
+    """Repoint the process-wide default emitter, stopping the previous one after install.
 
     `log_path=None` resolves the default via `resolve_default_log_path()`
     (AC#5). Registers an `atexit` drain hook exactly once per process (D9),
@@ -80,7 +91,7 @@ def configure(log_path: Path | None = None, *, fallback: TextSink | None = None)
     lost. Multi-process/durable delivery is explicitly "under exploration"
     in the architecture doc and out of scope here.
     """
-    global _default_emitter, _atexit_registered
+    global _default_emitter, _atexit_registered  # noqa: PLW0603 — module-level default emitter is the documented facade singleton (see module docstring)
     resolved_path = log_path if log_path is not None else resolve_default_log_path()
     emitter = LogEmitter(EmitterConfig(log_path=resolved_path, fallback=fallback))
     with _lock:
@@ -99,7 +110,9 @@ def _drain_default_emitter_at_exit() -> None:
     with _lock:
         emitter = _default_emitter
     if emitter is not None:
-        with contextlib.suppress(LoggingLifecycleError):  # interpreter is tearing down; nothing further to do
+        with contextlib.suppress(
+            LoggingLifecycleError
+        ):  # interpreter is tearing down; nothing further to do
             emitter.flush(timeout=5.0)
 
 

@@ -8,10 +8,9 @@ so its tests are a deliberate near-duplicate too.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
 from ps_service import config as config_module
 from ps_service.config import load_config
@@ -26,10 +25,14 @@ from ps_service.domain_mapper.falkordb_client import (
     native_graph_name,
 )
 
+if TYPE_CHECKING:
+    from falkordb import FalkorDB
+
 
 class _FakeConnectivityProbeThatRaises:
     """Satisfies `_ConnectivityProbe` structurally; `list_graphs` always
-    fails, simulating an unreachable FalkorDB instance."""
+    fails, simulating an unreachable FalkorDB instance.
+    """
 
     def list_graphs(self) -> list[str]:
         raise ConnectionRefusedError("connection refused")
@@ -37,7 +40,8 @@ class _FakeConnectivityProbeThatRaises:
 
 class _FakeConnectivityProbeThatSucceeds:
     """Satisfies `_ConnectivityProbe` structurally; `list_graphs` returns
-    normally, simulating a reachable FalkorDB instance."""
+    normally, simulating a reachable FalkorDB instance.
+    """
 
     def list_graphs(self) -> list[str]:
         return ["cra_baseline"]
@@ -116,12 +120,12 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
     """
     env_host = "10.20.30.40"
     env_port = 7000
-    assert env_host != config_module._DEFAULT_FALKORDB_HOST
-    assert env_port != config_module._DEFAULT_FALKORDB_PORT
+    assert env_host != config_module._DEFAULT_FALKORDB_HOST  # pyright: ignore[reportPrivateUsage]  # test asserts its literals differ from the module's own default constants
+    assert env_port != config_module._DEFAULT_FALKORDB_PORT  # pyright: ignore[reportPrivateUsage]  # test asserts its literals differ from the module's own default constants
     monkeypatch.setenv("PS_FALKORDB_HOST", env_host)
     monkeypatch.setenv("PS_FALKORDB_PORT", str(env_port))
     captured: dict[str, object] = {}
-    sentinel = cast(FalkorDB, object())
+    sentinel = cast("FalkorDB", object())
 
     def _fake_connect(host: str, port: int) -> FalkorDB:
         captured["host"] = host
@@ -140,7 +144,8 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 @pytest.mark.falkordb_live
 def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
     """Real connect to 127.0.0.1:6379 — requires a reachable FalkorDB
-    instance."""
+    instance.
+    """
     db = connect(host="127.0.0.1", port=6379)
 
     check_connectivity(db, host="127.0.0.1", port=6379)

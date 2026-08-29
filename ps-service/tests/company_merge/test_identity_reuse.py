@@ -5,7 +5,7 @@ hash function -- it imports it directly from
 same* id Domain Mapper already used to write the baseline graph's Capability
 node ids. (Since issue #42 Company Merge dedupes Capability only; Obligation
 is Role-scoped and passed through, so `obligation_id` is no longer imported
-here -- but a fresh *definition* of it in this package is still forbidden.)
+here -- but a fresh *definition* of it in this package is still forbidden.).
 
 Two independent proofs:
 
@@ -41,7 +41,8 @@ def _files_to_scan() -> list[Path]:
     (source only -- `ps-service/src/ps_service/company_merge/`, never
     `tests/`), found by walking the real filesystem (`rglob("*.py")`)
     rather than a hardcoded list -- mirrors #15's `_files_to_scan`
-    precedent exactly."""
+    precedent exactly.
+    """
     company_merge_root = Path(company_merge_package.__file__).parent
     return sorted(company_merge_root.rglob("*.py"))
 
@@ -52,10 +53,14 @@ def _find_forbidden_function_defs(tree: ast.AST) -> list[ast.FunctionDef | ast.A
     a call or import (importing `obligation_id`/`capability_id` from
     `ps_service.domain_mapper.identity` is exactly what this package is
     required to do; only a fresh *definition* of one of these names would
-    indicate reimplementation)."""
+    indicate reimplementation).
+    """
     violations: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in _FORBIDDEN_FUNCTION_NAMES:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in _FORBIDDEN_FUNCTION_NAMES
+        ):
             violations.append(node)
     return violations
 
@@ -74,9 +79,11 @@ def test_files_to_scan_covers_every_known_company_merge_module() -> None:
     """Guards against `_files_to_scan` silently narrowing down to a
     hardcoded-looking subset -- mirrors #15's own
     `test_files_to_scan_covers_every_known_domain_mapper_module` regression
-    guard."""
+    guard.
+    """
     scanned_relative_paths = {
-        str(path.relative_to(Path(company_merge_package.__file__).parent)) for path in _files_to_scan()
+        str(path.relative_to(Path(company_merge_package.__file__).parent))
+        for path in _files_to_scan()
     }
     expected = {"__init__.py", "errors.py", "models.py", "similarity.py", "dedup.py"}
     assert expected <= scanned_relative_paths
@@ -85,7 +92,8 @@ def test_files_to_scan_covers_every_known_company_merge_module() -> None:
 def test_find_forbidden_function_defs_flags_a_hypothetical_reimplementation() -> None:
     """Positive case: a hypothetical fresh `def obligation_id(...)` inside
     this package would be flagged -- proving the scan actually catches a
-    reimplementation, not just an absence of any function at all."""
+    reimplementation, not just an absence of any function at all.
+    """
     tree = ast.parse("def obligation_id(text):\n    return text\n")
 
     violations = _find_forbidden_function_defs(tree)
@@ -95,7 +103,8 @@ def test_find_forbidden_function_defs_flags_a_hypothetical_reimplementation() ->
 
 def test_find_forbidden_function_defs_ignores_unrelated_function_names() -> None:
     """Negative case: an ordinary, unrelated function definition is not
-    flagged."""
+    flagged.
+    """
     tree = ast.parse("def read_existing_canonical_index(label):\n    return ()\n")
 
     violations = _find_forbidden_function_defs(tree)
@@ -113,5 +122,6 @@ def test_capability_id_matches_domain_mapper_identity_exactly() -> None:
 
 def test_company_merge_dedup_reexports_the_same_function_object() -> None:
     """Byte-for-byte identity, not just behavioral equality: `dedup.py`
-    imports (not wraps/reimplements) Domain Mapper's own function object."""
+    imports (not wraps/reimplements) Domain Mapper's own function object.
+    """
     assert capability_id is domain_mapper_capability_id

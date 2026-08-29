@@ -31,9 +31,7 @@ Two tests:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -41,6 +39,10 @@ from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine.cypher_query import execute_cypher_query
 from ps_service.query_engine.errors import WriteClauseRejectedError
 from ps_service.query_engine.falkordb_client import GraphHandle, connect, select_graph
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 _HOST = "127.0.0.1"
 _PORT = 6379
@@ -52,7 +54,8 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
     """Mirrors the other `tests/query_engine/` unit tests' throwaway-emitter
     fixture pattern -- `execute_cypher_query` logs on every branch
     (succeeded/rejected/failed), so it needs a live emitter or a configured
-    process default. Neither test here asserts on log content."""
+    process default. Neither test here asserts on log content.
+    """
     log_emitter = LogEmitter(EmitterConfig(log_path=tmp_path / "test.jsonl"))
     yield log_emitter
     log_emitter.stop()
@@ -62,7 +65,8 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 def real_graph() -> GraphHandle:
     """Connects to the real, reachable FalkorDB instance and selects the
     real `policy_system` graph via the real `connect`/`select_graph` from
-    `falkordb_client.py` -- no fake `GraphHandle`."""
+    `falkordb_client.py` -- no fake `GraphHandle`.
+    """
     db = connect(host=_HOST, port=_PORT)
     return select_graph(db, _GRAPH_NAME)
 
@@ -72,10 +76,11 @@ def _count_nodes(graph: GraphHandle) -> int:
     `execute_cypher_query` -- used only to observe the real node count
     before/after the guarded write attempt below. Routing this through
     `execute_cypher_query` itself would be circular; this is a plain
-    `MATCH ... RETURN` query, never anything else."""
+    `MATCH ... RETURN` query, never anything else.
+    """
     result = graph.query("MATCH (n) RETURN count(n)")
     rows = cast("list[list[object]]", result.result_set)
-    return cast(int, rows[0][0])
+    return cast("int", rows[0][0])
 
 
 @pytest.mark.falkordb_live
@@ -136,7 +141,9 @@ def test_live_write_clause_rejected_and_graph_provably_unmutated(
     count_before = _count_nodes(real_graph)
 
     with pytest.raises(WriteClauseRejectedError):
-        execute_cypher_query("CREATE (n:LiveCapstoneProbe) RETURN n", graph=real_graph, emitter=emitter)
+        execute_cypher_query(
+            "CREATE (n:LiveCapstoneProbe) RETURN n", graph=real_graph, emitter=emitter
+        )
 
     count_after = _count_nodes(real_graph)
     assert count_after == count_before, (

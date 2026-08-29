@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage, CompletionResult
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
 
 pytestmark = pytest.mark.llm_live
 
@@ -25,7 +28,7 @@ _LLM_INTERFACE_MODEL = os.environ.get("PS_LLMINTERFACE_MODEL")
 
 @pytest.fixture
 def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
-    """A real `LogEmitter` writing to a per-test tmp path — `route_completion`'s `_log` call
+    """A real `LogEmitter` writing to a per-test tmp path — `route_completion`'s `log` call.
 
     needs a live emitter (or a configured process default) or it raises
     `LoggingLifecycleError`; this test doesn't assert on log content, only
@@ -42,7 +45,9 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_route_completion_returns_nonempty_text_from_live_provider(emitter: LogEmitter) -> None:
-    assert _LLM_INTERFACE_MODEL is not None  # narrows type for mypy/ruff; skipif already guards this
+    assert (
+        _LLM_INTERFACE_MODEL is not None
+    )  # narrows type for mypy/ruff; skipif already guards this
     result = route_completion(
         [ChatMessage(role="user", content="Reply with a short greeting.")],
         model=_LLM_INTERFACE_MODEL,

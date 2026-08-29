@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
@@ -24,13 +25,22 @@ from mcp.types import CallToolResult, TextContent
 
 from ps_service.config import ServiceConfigurationError
 from ps_service.logging import configure
-from ps_service.logging.emitter import LogEmitter
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.errors import McpGraphUnavailableError
-from ps_service.query_engine.cypher_query import _WRITE_CLAUSE_REJECTION_MESSAGE
-from ps_service.query_engine.falkordb_client import GraphHandle
-from ps_service.query_engine.models import QueryResult
+from ps_service.query_engine.cypher_query import (
+    _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from ps_service.logging.emitter import LogEmitter
+    from ps_service.query_engine.falkordb_client import GraphHandle
+    from ps_service.query_engine.models import QueryResult
+
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 
 class _FakeQueryResult:
@@ -44,7 +54,8 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. `query()` records every call
     and either returns a scripted `_FakeQueryResult` or raises a scripted
-    exception."""
+    exception.
+    """
 
     def __init__(
         self,
@@ -66,7 +77,8 @@ class _FakeGraphHandle:
 
 class _FakeFalkorDB:
     """Stands in for the eager `falkordb.FalkorDB` client. `select_graph`
-    records the requested name and returns the scripted handle."""
+    records the requested name and returns the scripted handle.
+    """
 
     def __init__(self, handle: _FakeGraphHandle) -> None:
         self._handle = handle
@@ -79,7 +91,11 @@ class _FakeFalkorDB:
 
 def _install_graph(monkeypatch: pytest.MonkeyPatch, handle: _FakeGraphHandle) -> _FakeFalkorDB:
     fake_db = _FakeFalkorDB(handle)
-    monkeypatch.setattr(mcp_server, "connect_from_config", lambda _config: fake_db)
+
+    def _connect_from_config(_config: object) -> _FakeFalkorDB:
+        return fake_db
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
     return fake_db
 
 
@@ -120,9 +136,7 @@ def test_delegates_in_process_via_call_tool(monkeypatch: pytest.MonkeyPatch) -> 
     real_execute = mcp_server.execute_cypher_query
     seen: list[str] = []
 
-    def spy(
-        query: str, *, graph: GraphHandle, emitter: LogEmitter | None = None
-    ) -> QueryResult:
+    def spy(query: str, *, graph: GraphHandle, emitter: LogEmitter | None = None) -> QueryResult:
         seen.append(query)
         return real_execute(query, graph=graph, emitter=emitter)
 
@@ -201,7 +215,7 @@ def test_service_configuration_error_does_not_leak(monkeypatch: pytest.MonkeyPat
 
 
 def test_connection_failure_emits_unavailable_log_entry(
-    monkeypatch: pytest.MonkeyPatch, read_lines
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
     emitter = configure()
 
@@ -237,9 +251,9 @@ def test_resolve_graph_wraps_any_failure_as_graph_unavailable(
     monkeypatch.setattr(mcp_server, "connect_from_config", boom)
 
     with pytest.raises(McpGraphUnavailableError) as excinfo:
-        mcp_server._resolve_graph()
+        mcp_server._resolve_graph()  # pyright: ignore[reportPrivateUsage]  # test drives the module-internal graph resolver directly
 
     message = str(excinfo.value)
-    assert message == mcp_server._GRAPH_UNAVAILABLE_DETAIL
+    assert message == mcp_server._GRAPH_UNAVAILABLE_DETAIL  # pyright: ignore[reportPrivateUsage]  # test pins the module-internal sanitised detail string
     assert "10.0.0.5" not in message
     assert "6379" not in message

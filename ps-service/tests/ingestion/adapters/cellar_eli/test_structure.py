@@ -9,6 +9,8 @@ these mirror.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ps_service.ingestion.adapters.cellar_eli.structure import (
     ANNEX,
     ARTICLE,
@@ -17,7 +19,9 @@ from ps_service.ingestion.adapters.cellar_eli.structure import (
     RECITAL,
     parse_structure,
 )
-from ps_service.ingestion.models import StructuralEdge, StructuralNode
+
+if TYPE_CHECKING:
+    from ps_service.ingestion.models import StructuralEdge, StructuralNode
 
 _REGULATION_ID = "TEST-1.0"
 
@@ -44,7 +48,8 @@ _FIXTURE_XHTML = b"""
 </div>
 </div>
 </div>
-<div class="eli-subdivision" id="rct_1">Whereas this Regulation is necessary for the internal market.</div>
+<div class="eli-subdivision" id="rct_1">Whereas this Regulation is necessary
+for the internal market.</div>
 </div>
 <div class="eli-container" id="anx_I">
 <div class="eli-title" id="anx_I.tit_1">ANNEX I Technical requirements</div>
@@ -81,13 +86,16 @@ def test_parse_structure_mints_expected_element_types() -> None:
     nodes, _ = _parse()
 
     element_types = sorted(node.element_type for node in nodes)
-    assert element_types == sorted([CHAPTER, ARTICLE, ARTICLE, PARAGRAPH, PARAGRAPH, RECITAL, ANNEX])
+    assert element_types == sorted(
+        [CHAPTER, ARTICLE, ARTICLE, PARAGRAPH, PARAGRAPH, RECITAL, ANNEX]
+    )
 
 
 def test_title_shaped_div_is_not_minted_as_a_node() -> None:
     """S2: a TITLE-shaped div id (`ttl_1`, not matched by the structural
     id-dispatch table) is a transparent pass-through — it must never
-    appear as a node's own element_type."""
+    appear as a node's own element_type.
+    """
     nodes, _ = _parse()
 
     assert not any(node.id.endswith("#ttl_1") for node in nodes)
@@ -96,7 +104,8 @@ def test_title_shaped_div_is_not_minted_as_a_node() -> None:
 
 def test_chapter_nested_under_title_pass_through_attaches_directly_to_regulation() -> None:
     """S2: since TITLE mints nothing, CHAPTER's parent edge must point
-    straight at the Regulation — not at a TITLE node that doesn't exist."""
+    straight at the Regulation — not at a TITLE node that doesn't exist.
+    """
     nodes, edges = _parse()
     chapter = _node(nodes, CHAPTER)
 
@@ -142,7 +151,10 @@ def test_single_block_article_has_own_text_and_no_paragraph_children() -> None:
     nodes, edges = _parse()
     article_2 = next(node for node in nodes if node.id == f"{_REGULATION_ID}#art_2")
 
-    assert article_2.properties["text"] == "For the purposes of this Regulation, the following definitions apply."
+    assert (
+        article_2.properties["text"]
+        == "For the purposes of this Regulation, the following definitions apply."
+    )
     assert article_2.properties["citation_ref"] == "Art. 2"
 
     child_edges = [edge for edge in edges if edge.parent_id == article_2.id]
@@ -164,7 +176,10 @@ def test_recital_is_top_level_child_of_regulation_with_its_own_text() -> None:
     nodes, edges = _parse()
     recital = _node(nodes, RECITAL)
 
-    assert recital.properties["text"] == "Whereas this Regulation is necessary for the internal market."
+    assert (
+        recital.properties["text"]
+        == "Whereas this Regulation is necessary for the internal market."
+    )
     assert recital.properties["citation_ref"] == "Recital 1"
 
     recital_edges = [edge for edge in edges if edge.child_id == recital.id]

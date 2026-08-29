@@ -19,8 +19,7 @@ only that `execute_cypher_query` itself behaves correctly.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -28,6 +27,10 @@ from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine import cypher_query
 from ps_service.query_engine.cypher_query import execute_cypher_query, is_write_clause
 from ps_service.query_engine.errors import WriteClauseRejectedError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -40,7 +43,8 @@ def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
 class _FakeQueryResult:
     """Satisfies `GraphQueryResult` structurally. Never actually returned
     on the rejection path -- present only so `_FakeGraphHandle.query` has a
-    valid return type if it were ever (wrongly) called."""
+    valid return type if it were ever (wrongly) called.
+    """
 
     def __init__(self) -> None:
         self.header: list[list[object]] = []
@@ -50,7 +54,8 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. Records every `.query()`
     invocation in `calls` so tests can assert the guard short-circuited
-    before FalkorDB was ever touched."""
+    before FalkorDB was ever touched.
+    """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -63,16 +68,19 @@ class _FakeGraphHandle:
 _WRITE_CLAUSES = ["CREATE", "MERGE", "DELETE", "SET", "REMOVE", "DROP", "FOREACH"]
 
 
+def _mixed_case(s: str) -> str:
+    return s[0] + s[1:].lower() if len(s) > 1 else s.lower()
+
+
+_CASE_TRANSFORMS: list[Callable[[str], str]] = [str.upper, str.lower, _mixed_case]
+
+
 @pytest.mark.parametrize("clause", _WRITE_CLAUSES)
-@pytest.mark.parametrize(
-    "case_transform",
-    [str.upper, str.lower, lambda s: s[0] + s[1:].lower() if len(s) > 1 else s.lower()],
-    ids=["upper", "lower", "mixed"],
-)
+@pytest.mark.parametrize("case_transform", _CASE_TRANSFORMS, ids=["upper", "lower", "mixed"])
 def test_write_clause_rejected_before_graph_query_called(
-    clause: str, case_transform: object, emitter: LogEmitter
+    clause: str, case_transform: Callable[[str], str], emitter: LogEmitter
 ) -> None:
-    keyword = case_transform(clause)  # type: ignore[operator]
+    keyword = case_transform(clause)
     query = f"{keyword} (n:Thing) RETURN n"
     fake_graph = _FakeGraphHandle()
 
@@ -85,22 +93,26 @@ def test_write_clause_rejected_before_graph_query_called(
 def test_write_clause_rejected_error_exact_message_text(emitter: LogEmitter) -> None:
     """Q3 fix: pins the exact rejection wording, not just the exception
     type, so wording drift (like the original S1 flaw) is caught
-    mechanically by this suite."""
+    mechanically by this suite.
+    """
     fake_graph = _FakeGraphHandle()
 
     with pytest.raises(WriteClauseRejectedError) as excinfo:
         execute_cypher_query("CREATE (n:Thing) RETURN n", graph=fake_graph, emitter=emitter)
 
-    assert str(excinfo.value) == cypher_query._WRITE_CLAUSE_REJECTION_MESSAGE
+    assert str(excinfo.value) == cypher_query._WRITE_CLAUSE_REJECTION_MESSAGE  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
 
 
 def test_word_boundary_does_not_false_positive_on_identifier_substring(emitter: LogEmitter) -> None:
-    """`CreateEvent` contains the substring `Create` but is not the write
+    r"""`CreateEvent` contains the substring `Create` but is not the write
     clause keyword -- the `\\b...\\b` word-boundary regex must not reject
-    this query."""
+    this query.
+    """
     fake_graph = _FakeGraphHandle()
 
-    result = execute_cypher_query("MATCH (n:CreateEvent) RETURN n", graph=fake_graph, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n:CreateEvent) RETURN n", graph=fake_graph, emitter=emitter
+    )
 
     assert fake_graph.calls == ["MATCH (n:CreateEvent) RETURN n"]
     assert result.row_count == 0

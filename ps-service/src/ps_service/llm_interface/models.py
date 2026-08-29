@@ -1,5 +1,6 @@
-"""ps_service.llm_interface record shapes — request/response types for
-RouteCompletion/RouteEmbedding. Pydantic, frozen (L1 Immutability by Default).
+"""Record shapes for ps_service.llm_interface RouteCompletion/RouteEmbedding.
+
+Request/response types. Pydantic, frozen (L1 Immutability by Default).
 """
 
 from __future__ import annotations

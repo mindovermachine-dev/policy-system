@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Python quality gates (issue #48) — fail the commit on any violation.
+uv run pre-commit run --all-files
+
 gh insitu run trunk-worthy

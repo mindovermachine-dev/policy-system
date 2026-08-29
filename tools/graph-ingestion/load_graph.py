@@ -14,12 +14,31 @@ Requires a running FalkorDB instance, e.g.:
     podman run --rm -d --name falkordb -p 6379:6379 falkordb/falkordb:latest
 """
 
+from __future__ import annotations
+
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from falkordb import FalkorDB
+
+if TYPE_CHECKING:
+    # falkordb ships no py.typed; these Protocols pin the slice of its surface
+    # this script touches so the rest of the module stays precisely typed.
+    class _QueryResult(Protocol):
+        @property
+        def result_set(self) -> list[list[Any]]: ...
+
+    class _Graph(Protocol):
+        def query(self, q: str, params: dict[str, Any] | None = None) -> _QueryResult: ...
+        def delete(self) -> object: ...
+
+    class _FalkorDB(Protocol):
+        def select_graph(self, name: str) -> _Graph: ...
+
 
 DEFAULT_DATA_FILE = (
     Path(__file__).resolve().parents[2]
@@ -29,12 +48,12 @@ DEFAULT_DATA_FILE = (
 )
 
 
-def load_data(path: Path) -> dict:
-    with open(path) as f:
+def load_data(path: Path) -> dict[str, Any]:
+    with path.open() as f:
         return json.load(f)
 
 
-def upsert_node(graph, node: dict) -> None:
+def upsert_node(graph: _Graph, node: dict[str, Any]) -> None:
     label = node["label"]
     node_id = node["id"]
     properties = node["properties"]
@@ -46,11 +65,11 @@ def upsert_node(graph, node: dict) -> None:
     graph.query(query, params={"id": node_id, "properties": properties})
 
 
-def upsert_edge(graph, edge: dict) -> None:
+def upsert_edge(graph: _Graph, edge: dict[str, Any]) -> None:
     edge_type = edge["type"]
     from_label, from_id = edge["from"]["label"], edge["from"]["id"]
     to_label, to_id = edge["to"]["label"], edge["to"]["id"]
-    properties = edge.get("properties") or {}
+    properties: dict[str, Any] = edge.get("properties") or {}
 
     query = f"""
     MATCH (a:{from_label} {{id: $from_id}}), (b:{to_label} {{id: $to_id}})
@@ -63,14 +82,14 @@ def upsert_edge(graph, edge: dict) -> None:
     )
 
 
-def load_graph(graph, data: dict) -> None:
+def load_graph(graph: _Graph, data: dict[str, Any]) -> None:
     for node in data["nodes"]:
         upsert_node(graph, node)
     for edge in data["edges"]:
         upsert_edge(graph, edge)
 
 
-def print_summary(graph, data: dict) -> None:
+def print_summary(graph: _Graph, data: dict[str, Any]) -> None:
     node_labels = sorted({n["label"] for n in data["nodes"]})
     edge_types = sorted({e["type"] for e in data["edges"]})
 
@@ -103,17 +122,21 @@ def print_summary(graph, data: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--file", type=Path, default=DEFAULT_DATA_FILE,
+        "--file",
+        type=Path,
+        default=DEFAULT_DATA_FILE,
         help=f"Path to the graph JSON file (default: {DEFAULT_DATA_FILE.name})",
     )
     parser.add_argument("--host", default="localhost", help="FalkorDB host")
     parser.add_argument("--port", type=int, default=6379, help="FalkorDB port")
     parser.add_argument(
-        "--graph-name", default=None,
+        "--graph-name",
+        default=None,
         help="Override the graph name (default: graph_name from the JSON file)",
     )
     parser.add_argument(
-        "--reset", action="store_true",
+        "--reset",
+        action="store_true",
         help="Delete the graph before loading (destructive)",
     )
     args = parser.parse_args()
@@ -122,10 +145,10 @@ def main() -> int:
     graph_name = args.graph_name or data["graph_name"]
 
     try:
-        db = FalkorDB(host=args.host, port=args.port)
+        db = cast("_FalkorDB", FalkorDB(host=args.host, port=args.port))
         graph = db.select_graph(graph_name)
         graph.query("RETURN 1")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- top-level connection guard: print a hint and exit non-zero
         print(
             f"FalkorDB connection failed at {args.host}:{args.port}. "
             f"Is FalkorDB running? Error: {e}",
@@ -135,13 +158,15 @@ def main() -> int:
 
     if args.reset:
         print(f"Resetting graph '{graph_name}'...")
-        try:
+        # A delete of a graph that was never created raises from the client; that
+        # is the expected no-op case here, so any error is safe to ignore.
+        with contextlib.suppress(Exception):
             graph.delete()
-        except Exception:
-            pass  # graph did not exist yet
 
-    print(f"Loading {len(data['nodes'])} nodes and {len(data['edges'])} edges "
-          f"into graph '{graph_name}' at {args.host}:{args.port}...")
+    print(
+        f"Loading {len(data['nodes'])} nodes and {len(data['edges'])} edges "
+        f"into graph '{graph_name}' at {args.host}:{args.port}..."
+    )
     load_graph(graph, data)
 
     print_summary(graph, data)

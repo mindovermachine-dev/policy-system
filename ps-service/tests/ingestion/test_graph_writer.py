@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from typing import cast
 
 import pytest
 import redis.exceptions
@@ -24,8 +25,11 @@ from ps_service.ingestion.graph_writer import (
     verify_structural_graph_reachable,
 )
 from ps_service.ingestion.models import (
+    InstrumentType,
     ReachabilityCount,
     RegulatoryInstrumentMetadata,
+    RegulatoryInstrumentStatus,
+    SourceType,
     StructuralEdge,
     StructuralNode,
 )
@@ -52,7 +56,8 @@ class _FakeGraph:
     """Satisfies `GraphHandle` structurally, capturing every `(query,
     params)` call for assertion — this is what lets the B1 regression tests
     below assert `graph.calls == []` (zero writes) rather than merely
-    "raised eventually"."""
+    "raised eventually".
+    """
 
     def __init__(self) -> None:
         self.calls: list[_RecordedCall] = []
@@ -71,7 +76,8 @@ class _ScriptedReachabilityGraph:
     parsing which label the query string names — deliberately independent
     of `_KNOWN_ELEMENT_TYPES` frozenset iteration order (which varies
     process-to-process under randomized `str` hashing/`PYTHONHASHSEED`, so
-    a test must not assume a fixed call order over that set)."""
+    a test must not assume a fixed call order over that set).
+    """
 
     def __init__(self, counts_by_label: dict[str, tuple[int, int]]) -> None:
         self._counts_by_label = counts_by_label
@@ -86,18 +92,31 @@ class _ScriptedReachabilityGraph:
         return _FakeQueryResult([[value]])
 
 
-def _metadata(**overrides: object) -> RegulatoryInstrumentMetadata:
-    fields: dict[str, object] = {
-        "title": "Cyber Resilience Act",
-        "jurisdiction": "EU",
-        "effective_date": date(2027, 12, 11),
-        "version": "1.0",
-        "status": "active",
-        "source_type": "external",
-        "instrument_type": "regulation",
-    }
-    fields.update(overrides)
-    return RegulatoryInstrumentMetadata(**{k: v for k, v in fields.items() if v is not None})
+def _metadata(
+    *,
+    title: str = "Cyber Resilience Act",
+    jurisdiction: str = "EU",
+    effective_date: date = date(2027, 12, 11),
+    version: str = "1.0",
+    status: RegulatoryInstrumentStatus = "active",
+    source_type: SourceType = "external",
+    instrument_type: InstrumentType | None = "regulation",
+) -> RegulatoryInstrumentMetadata:
+    return RegulatoryInstrumentMetadata(
+        title=title,
+        jurisdiction=jurisdiction,
+        effective_date=effective_date,
+        version=version,
+        status=status,
+        source_type=source_type,
+        instrument_type=instrument_type,
+    )
+
+
+def _properties(call: _RecordedCall) -> dict[str, object]:
+    """The nested ``properties`` dict a `graph_writer` MERGE call carries."""
+    assert call.params is not None
+    return cast("dict[str, object]", call.params["properties"])
 
 
 def _node(element_type: str, node_id: str) -> StructuralNode:
@@ -115,7 +134,7 @@ def _edge(
 # --- Increment 8: register_regulatory_instrument_version --------------------------
 
 
-def test_register_regulatory_instrument_version_merges_regulation_node_with_parameterized_metadata() -> None:
+def test_register_regulatory_instrument_version_merges_regulation_node_with_metadata() -> None:
     graph = _FakeGraph()
 
     register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
@@ -137,10 +156,13 @@ def test_register_regulatory_instrument_version_merges_regulation_node_with_para
     }
 
 
-def test_register_regulatory_instrument_version_never_interpolates_metadata_into_query_string() -> None:
+def test_register_regulatory_instrument_version_never_interpolates_metadata_into_query_string() -> (
+    None
+):
     """The injection-safety property: every metadata value (and the
     regulation id) flows through `params` only — none of them ever appear
-    as a substring of the query string itself."""
+    as a substring of the query string itself.
+    """
     graph = _FakeGraph()
 
     register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
@@ -162,30 +184,38 @@ def test_register_regulatory_instrument_version_never_interpolates_metadata_into
 def test_register_regulatory_instrument_version_writes_instrument_type_when_present() -> None:
     graph = _FakeGraph()
 
-    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulatory_instrument_version(
+        graph, "NIS2-1.0", _metadata(instrument_type="directive")
+    )
 
-    assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
+    assert _properties(graph.calls[0])["instrument_type"] == "directive"
 
 
-def test_register_regulatory_instrument_version_omits_instrument_type_key_for_internal_source() -> None:
+def test_register_regulatory_instrument_version_omits_instrument_type_key_for_internal_source() -> (
+    None
+):
     graph = _FakeGraph()
 
     register_regulatory_instrument_version(
         graph, "ENGPRAC-3.0", _metadata(source_type="internal", instrument_type=None)
     )
 
-    assert "instrument_type" not in graph.calls[0].params["properties"]
+    assert "instrument_type" not in _properties(graph.calls[0])
 
 
 def test_register_regulatory_instrument_version_is_idempotent_on_instrument_type() -> None:
     graph = _FakeGraph()
 
-    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
-    register_regulatory_instrument_version(graph, "NIS2-1.0", _metadata(instrument_type="directive"))
+    register_regulatory_instrument_version(
+        graph, "NIS2-1.0", _metadata(instrument_type="directive")
+    )
+    register_regulatory_instrument_version(
+        graph, "NIS2-1.0", _metadata(instrument_type="directive")
+    )
 
     assert graph.calls[0].params == graph.calls[1].params
-    assert graph.calls[0].params["properties"]["instrument_type"] == "directive"
-    assert graph.calls[1].params["properties"]["instrument_type"] == "directive"
+    assert _properties(graph.calls[0])["instrument_type"] == "directive"
+    assert _properties(graph.calls[1])["instrument_type"] == "directive"
 
 
 # --- Increment 9: persist_native_structural_graph (THE B1 FIX) ----------
@@ -221,8 +251,7 @@ def test_persist_native_structural_graph_writes_every_valid_node_and_edge() -> N
     )
     assert first_edge_call.params == {"parent_id": "CRA-1.0", "child_id": "CRA#art_1"}
     assert second_edge_call.query == (
-        "MATCH (a:ARTICLE {id: $parent_id}), (b:PARAGRAPH {id: $child_id}) "
-        "MERGE (a)-[:HAS]->(b)"
+        "MATCH (a:ARTICLE {id: $parent_id}), (b:PARAGRAPH {id: $child_id}) MERGE (a)-[:HAS]->(b)"
     )
     assert second_edge_call.params == {
         "parent_id": "CRA#art_1",
@@ -240,9 +269,7 @@ def test_persist_native_structural_graph_raises_before_any_write_when_first_node
     assert graph.calls == []
 
 
-def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_node_follows_valid_one() -> (
-    None
-):
+def test_persist_raises_with_zero_writes_when_invalid_node_follows_valid_one() -> None:
     """The critical B1 regression test.
 
     Against the ORIGINAL per-element-interleaved design (allow-list check
@@ -272,9 +299,7 @@ def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_no
     assert graph.calls == []
 
 
-def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_edge_follows_valid_ones() -> (
-    None
-):
+def test_persist_raises_with_zero_writes_when_invalid_edge_follows_valid_ones() -> None:
     """Edge half of the B1 regression proof (mirrors the node case above).
 
     One valid node and one valid edge are listed first, followed by a
@@ -297,9 +322,7 @@ def test_persist_native_structural_graph_raises_with_zero_writes_when_invalid_ed
     assert graph.calls == []
 
 
-def test_persist_native_structural_graph_substitutes_real_regulatory_instrument_id_for_celex_placeholder_parent_id() -> (
-    None
-):
+def test_persist_substitutes_real_instrument_id_for_celex_placeholder_parent_id() -> None:
     """Increment 13 regression test — the bug this increment found and
     fixed (see `graph_writer.py`'s module docstring, "Increment 13 fix").
 
@@ -324,7 +347,8 @@ def test_persist_native_structural_graph_substitutes_real_regulatory_instrument_
 
     edge_call = graph.calls[-1]
     assert edge_call.query == (
-        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ANNEX {id: $child_id}) MERGE (a)-[:HAS]->(b)"
+        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ANNEX {id: $child_id}) "
+        "MERGE (a)-[:HAS]->(b)"
     )
     assert edge_call.params == {"parent_id": "CRA-1.0", "child_id": "32024R2847#anx_I"}
 
@@ -332,7 +356,8 @@ def test_persist_native_structural_graph_substitutes_real_regulatory_instrument_
 def test_persist_native_structural_graph_raises_on_invalid_parent_element_type() -> None:
     """Bonus coverage: the parent-side allow-list check (the one branch of
     `_validate_element_types` not otherwise exercised above — every other
-    test's valid edges use `"RegulatoryInstrument"` as `parent_element_type`)."""
+    test's valid edges use `"RegulatoryInstrument"` as `parent_element_type`).
+    """
     graph = _FakeGraph()
     nodes = (_node("ARTICLE", "CRA#art_1"),)
     edges = (_edge("BOGUS", "CRA#bogus_1", "ARTICLE", "CRA#art_1"),)
@@ -383,13 +408,16 @@ def test_verify_structural_graph_reachable_raises_on_gap() -> None:
 class _FakeGraphThatRaisesConnectionError:
     """Satisfies `GraphHandle` structurally; every `query()` call raises
     `redis.exceptions.ConnectionError` — the same exception shape a real
-    unreachable FalkorDB instance raises mid-write."""
+    unreachable FalkorDB instance raises mid-write.
+    """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         raise redis.exceptions.ConnectionError("Error 111 connecting to 127.0.0.1:6379")
 
 
-def test_register_regulatory_instrument_version_marks_falkordb_unhealthy_on_connection_error() -> None:
+def test_register_regulatory_instrument_version_marks_falkordb_unhealthy_on_connection_error() -> (
+    None
+):
     graph = _FakeGraphThatRaisesConnectionError()
 
     with pytest.raises(IngestionPersistenceError):
@@ -420,7 +448,8 @@ def test_falkordb_self_heals_after_a_later_successful_write() -> None:
 
 def test_data_validation_error_does_not_mark_falkordb_unhealthy() -> None:
     """A B1-style validation failure (bad `element_type`) never reaches
-    `graph.query()` at all — it must not be mistaken for a FalkorDB outage."""
+    `graph.query()` at all — it must not be mistaken for a FalkorDB outage.
+    """
     graph = _FakeGraph()
     nodes = (_node("NOT_A_REAL_TYPE", "CRA#bad"),)
 

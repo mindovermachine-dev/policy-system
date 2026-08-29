@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -33,17 +33,20 @@ from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.errors import McpResourceUnavailableError
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 _KNOWN_MARKDOWN = "# PS domain concepts\n\nRegulation → Obligation -- café ✅\n"
 
 
 @pytest.fixture(autouse=True)
-def _clear_domain_concepts_path_cache() -> None:
+def clear_domain_concepts_path_cache() -> None:
     """`_domain_concepts_path` is `@functools.cache`d. Tests that monkeypatch the
     module attribute by name replace the whole cached object (no pollution), but
     `test_domain_concepts_path_is_absolute_and_fixed` calls the real one -- clear
     the cache around every test so nothing leaks a cached `Path` between them.
     """
-    mcp_server._domain_concepts_path.cache_clear()
+    mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # test reaches into a module-internal cached helper by design
 
 
 def _point_helper_at(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
@@ -57,17 +60,17 @@ def test_read_returns_file_content_verbatim(
     md_file.write_text(_KNOWN_MARKDOWN, encoding="utf-8")
     _point_helper_at(monkeypatch, md_file)
 
-    assert mcp_server._read_domain_concepts() == _KNOWN_MARKDOWN
+    assert mcp_server.read_domain_concepts() == _KNOWN_MARKDOWN
 
 
 def test_read_helper_takes_no_parameters() -> None:
-    assert inspect.signature(mcp_server._read_domain_concepts).parameters == {}
+    assert inspect.signature(mcp_server.read_domain_concepts).parameters == {}
 
 
 def test_domain_concepts_path_is_absolute_and_fixed() -> None:
-    mcp_server._domain_concepts_path.cache_clear()
+    mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # test reaches into a module-internal cached helper by design
 
-    path = mcp_server._domain_concepts_path()
+    path = mcp_server._domain_concepts_path()  # pyright: ignore[reportPrivateUsage]  # test invokes the real module-internal path helper
 
     assert path.is_absolute()
     assert path.as_posix().endswith("docs/artifacts/ps-domain-concepts.md")
@@ -80,7 +83,7 @@ def test_helper_raises_domain_error_on_missing_file(
     _point_helper_at(monkeypatch, missing)
 
     with pytest.raises(McpResourceUnavailableError) as excinfo:
-        mcp_server._read_domain_concepts()
+        mcp_server.read_domain_concepts()
 
     message = str(excinfo.value)
     assert "does-not-exist.md" not in message

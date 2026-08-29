@@ -147,8 +147,7 @@ def _parse_falkordb_host(raw: str) -> str:
 
 
 def _parse_similarity_threshold(raw: str) -> float:
-    """Parse and range-check `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`, failing
-    closed on any invalid value.
+    """Parse `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`, failing closed on any invalid value.
 
     Mirrors `_parse_falkordb_port`'s exact validation shape (parse, then
     range-check, raising `ServiceConfigurationError` naming the env var and
@@ -228,16 +227,12 @@ def load_config() -> ServiceConfig:
         else None
     )
 
-    falkordb_host = _parse_falkordb_host(
-        os.environ.get("PS_FALKORDB_HOST", _DEFAULT_FALKORDB_HOST)
-    )
+    falkordb_host = _parse_falkordb_host(os.environ.get("PS_FALKORDB_HOST", _DEFAULT_FALKORDB_HOST))
     falkordb_port = _parse_falkordb_port(
         os.environ.get("PS_FALKORDB_PORT", str(_DEFAULT_FALKORDB_PORT))
     )
 
-    company_merge_similarity_threshold_raw = os.environ.get(
-        "PS_COMPANYMERGE_SIMILARITY_THRESHOLD"
-    )
+    company_merge_similarity_threshold_raw = os.environ.get("PS_COMPANYMERGE_SIMILARITY_THRESHOLD")
     company_merge_similarity_threshold = (
         _parse_similarity_threshold(company_merge_similarity_threshold_raw)
         if company_merge_similarity_threshold_raw is not None

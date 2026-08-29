@@ -1,15 +1,20 @@
-"""AC-005 test: a RouteEmbedding call emits a structured log entry that includes the bound run_id."""
+"""AC-005 test: a RouteEmbedding call emits a structured log entry with the bound run_id."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.llm_interface.embedding import route_embedding
 from ps_service.logging import bind_run_context
 
+if TYPE_CHECKING:
+    from conftest import MakeEmitter, ReadLines
+
 
 def test_route_embedding_when_run_id_bound_then_emits_log_entry_with_bound_run_id(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     emitter, log_path = make_emitter()
     fake_response = EmbeddingResponse(
@@ -17,7 +22,7 @@ def test_route_embedding_when_run_id_bound_then_emits_log_entry_with_bound_run_i
         data=[Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding")],
     )
 
-    def fake_call_embedding(*, model: str, input: list[str], timeout: float) -> EmbeddingResponse:
+    def fake_call_embedding(*, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
         return fake_response
 
     with bind_run_context("run-llm-005"):

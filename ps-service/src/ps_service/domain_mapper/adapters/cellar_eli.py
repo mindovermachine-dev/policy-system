@@ -1,7 +1,7 @@
-"""Cellar/ELI Domain Mapping Adapter (`ps_service.domain_mapper.adapters.
-cellar_eli`) — paired 1:1 with #14's Cellar/ELI Ingestion Adapter
-(`ps_service.ingestion.adapters.cellar_eli.structure`), reading the exact
-native-graph shape that component writes.
+r"""Cellar/ELI Domain Mapping Adapter, paired 1:1 with #14's Cellar/ELI Ingestion Adapter.
+
+Paired with `ps_service.ingestion.adapters.cellar_eli.structure`, reading
+the exact native-graph shape that component writes.
 
 PLAN_REVIEWED.md §4.2: one `ExtractionUnit` per `PARAGRAPH` when an
 `ARTICLE` has them, one per whole `ARTICLE` when it doesn't. Query pattern
@@ -31,29 +31,31 @@ re-sorts numerically before returning.
 from __future__ import annotations
 
 import re
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
-from ps_service.domain_mapper.falkordb_client import GraphHandle
 from ps_service.domain_mapper.models import ExtractionUnit
+
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
 
 _ARTICLE_CITATION_RE = re.compile(r"^Art\.\s*(\d+)$")
 _PARAGRAPH_CITATION_RE = re.compile(r"^Art\.\s*(\d+)\((\d+)\)$")
 
 
 class CellarEliDomainMappingAdapter:
-    """Reads `ARTICLE`/`PARAGRAPH` nodes from a Cellar/ELI-ingested native
+    """Cellar/ELI implementation of `DomainMappingAdapter` (structural, Protocol).
+
+    Reads `ARTICLE`/`PARAGRAPH` nodes from a Cellar/ELI-ingested native
     structural graph and returns the ordered sequence of extraction units.
-    Satisfies `DomainMappingAdapter` structurally (Protocol, no base class
-    needed).
     """
 
     def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+        """Return the graph's extraction units in document order (article, then paragraph)."""
         article_rows = cast(
             "list[list[object]]",
             graph.query(
-                "MATCH (a:ARTICLE) RETURN a.id, a.citation_ref, a.text, a.heading "
-                "ORDER BY a.id"
+                "MATCH (a:ARTICLE) RETURN a.id, a.citation_ref, a.text, a.heading ORDER BY a.id"
             ).result_set,
         )
 
@@ -65,10 +67,10 @@ class CellarEliDomainMappingAdapter:
         return tuple(units)
 
     def _units_for_article(self, graph: GraphHandle, row: list[object]) -> list[ExtractionUnit]:
-        article_id = cast(str, row[0])
-        citation_ref = cast(str, row[1])
-        text = cast(str, row[2])
-        heading = cast(str, row[3])
+        article_id = cast("str", row[0])
+        citation_ref = cast("str", row[1])
+        text = cast("str", row[2])
+        heading = cast("str", row[3])
 
         article_match = _ARTICLE_CITATION_RE.match(citation_ref)
         if article_match is None:
@@ -92,8 +94,8 @@ class CellarEliDomainMappingAdapter:
         return [self._paragraph_unit(paragraph_row, heading) for paragraph_row in paragraph_rows]
 
     def _paragraph_unit(self, paragraph_row: list[object], heading: str) -> ExtractionUnit:
-        para_citation_ref = cast(str, paragraph_row[0])
-        para_text = cast(str, paragraph_row[1])
+        para_citation_ref = cast("str", paragraph_row[0])
+        para_text = cast("str", paragraph_row[1])
 
         paragraph_match = _PARAGRAPH_CITATION_RE.match(para_citation_ref)
         if paragraph_match is None:

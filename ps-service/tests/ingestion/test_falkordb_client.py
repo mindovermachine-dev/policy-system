@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
 from ps_service import config as config_module
 from ps_service.config import load_config
@@ -20,10 +19,14 @@ from ps_service.ingestion.falkordb_client import (
     native_graph_name,
 )
 
+if TYPE_CHECKING:
+    from falkordb import FalkorDB
+
 
 class _FakeConnectivityProbeThatRaises:
     """Satisfies `_ConnectivityProbe` structurally; `list_graphs` always
-    fails, simulating an unreachable FalkorDB instance."""
+    fails, simulating an unreachable FalkorDB instance.
+    """
 
     def list_graphs(self) -> list[str]:
         raise ConnectionRefusedError("connection refused")
@@ -31,7 +34,8 @@ class _FakeConnectivityProbeThatRaises:
 
 class _FakeConnectivityProbeThatSucceeds:
     """Satisfies `_ConnectivityProbe` structurally; `list_graphs` returns
-    normally, simulating a reachable FalkorDB instance."""
+    normally, simulating a reachable FalkorDB instance.
+    """
 
     def list_graphs(self) -> list[str]:
         return ["cra_native"]
@@ -49,7 +53,8 @@ def test_check_connectivity_raises_falkordb_connection_error_on_failure() -> Non
 
 def test_falkordb_connection_error_is_ingestion_configuration_error_subclass() -> None:
     """Catchable via the broader `IngestionConfigurationError` family per
-    that type's own docstring (Increment 1)."""
+    that type's own docstring (Increment 1).
+    """
     assert issubclass(FalkorDBConnectionError, IngestionConfigurationError)
 
 
@@ -105,12 +110,12 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
     env_host = "10.20.30.40"
     env_port = 7000
     # asserting the test's own fixture values are genuinely non-default
-    assert env_host != config_module._DEFAULT_FALKORDB_HOST
-    assert env_port != config_module._DEFAULT_FALKORDB_PORT
+    assert env_host != config_module._DEFAULT_FALKORDB_HOST  # pyright: ignore[reportPrivateUsage]  # intentionally pinned to the module's own default constant
+    assert env_port != config_module._DEFAULT_FALKORDB_PORT  # pyright: ignore[reportPrivateUsage]  # intentionally pinned to the module's own default constant
     monkeypatch.setenv("PS_FALKORDB_HOST", env_host)
     monkeypatch.setenv("PS_FALKORDB_PORT", str(env_port))
     captured: dict[str, object] = {}
-    sentinel = cast(FalkorDB, object())
+    sentinel = cast("FalkorDB", object())
 
     def _fake_connect(host: str, port: int) -> FalkorDB:
         captured["host"] = host
@@ -129,7 +134,8 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 @pytest.mark.falkordb_live
 def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
     """Real connect to 127.0.0.1:6379 — requires a reachable FalkorDB
-    instance (confirmed running via podman for this session)."""
+    instance (confirmed running via podman for this session).
+    """
     db = connect(host="127.0.0.1", port=6379)
 
     check_connectivity(db, host="127.0.0.1", port=6379)

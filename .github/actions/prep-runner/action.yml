@@ -44,6 +44,18 @@ runs:
       with:
         node-version: 24
 
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.12.4"          # D-4: pin to match local uv; bump deliberately
+        enable-cache: true         # D-4
+      # Fallback if repo action policy ever forbids astral-sh/setup-uv:
+      #   curl -LsSf https://astral.sh/uv/install.sh | sh   (in a `shell: bash` step)
+
+    - name: Sync Python dev dependencies
+      shell: bash
+      run: uv sync --group dev
+
     - name: Prepare runner environment
       shell: bash
       run: |

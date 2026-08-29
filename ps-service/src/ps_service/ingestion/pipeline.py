@@ -12,7 +12,7 @@ gap): this is the first real caller of `bind_run_context()` for Ingestion.
 One `with bind_run_context() as run_id:` block wraps the whole pipeline;
 every `emit_log_entry(...)` call inside it auto-bakes that run_id via the
 `run_context` ContextVar mechanism (never passed explicitly — see
-`ps_service.llm_interface._logging_support._log`'s identical precedent).
+`ps_service.llm_interface._logging_support.log`'s identical precedent).
 Two separate `ingest_regulatory_instrument()` calls therefore carry two distinct
 run_ids in their emitted log entries.
 
@@ -30,8 +30,8 @@ naming a regulation would.
 
 from __future__ import annotations
 
-from ps_service.ingestion.adapters.base import IngestionAdapter
-from ps_service.ingestion.falkordb_client import GraphHandle
+from typing import TYPE_CHECKING
+
 from ps_service.ingestion.graph_writer import (
     persist_native_structural_graph,
     register_regulatory_instrument_version,
@@ -39,6 +39,10 @@ from ps_service.ingestion.graph_writer import (
 )
 from ps_service.ingestion.models import IngestResult
 from ps_service.logging import LogEmitter, bind_run_context, emit_log_entry
+
+if TYPE_CHECKING:
+    from ps_service.ingestion.adapters.base import IngestionAdapter
+    from ps_service.ingestion.falkordb_client import GraphHandle
 
 _COMPONENT = "ingestion"
 
@@ -77,12 +81,24 @@ def ingest_regulatory_instrument(
         regulatory_instrument_id = f"{short_name}-{version}"
 
         structure = adapter.fetch_regulatory_instrument_structure(identifier)
-        _emit(component=_COMPONENT, action="fetch_regulatory_instrument_structure", regulatory_instrument_id=regulatory_instrument_id, emitter=emitter)
+        _emit(
+            component=_COMPONENT,
+            action="fetch_regulatory_instrument_structure",
+            regulatory_instrument_id=regulatory_instrument_id,
+            emitter=emitter,
+        )
 
         register_regulatory_instrument_version(graph, regulatory_instrument_id, structure.metadata)
-        _emit(component=_COMPONENT, action="register_regulatory_instrument_version", regulatory_instrument_id=regulatory_instrument_id, emitter=emitter)
+        _emit(
+            component=_COMPONENT,
+            action="register_regulatory_instrument_version",
+            regulatory_instrument_id=regulatory_instrument_id,
+            emitter=emitter,
+        )
 
-        persist_native_structural_graph(graph, regulatory_instrument_id, structure.nodes, structure.edges)
+        persist_native_structural_graph(
+            graph, regulatory_instrument_id, structure.nodes, structure.edges
+        )
         _emit(
             component=_COMPONENT,
             action="persist_native_structural_graph",
@@ -98,13 +114,19 @@ def ingest_regulatory_instrument(
             emitter=emitter,
         )
 
-        return IngestResult(regulatory_instrument_id=regulatory_instrument_id, run_id=run_id, counts=counts)
+        return IngestResult(
+            regulatory_instrument_id=regulatory_instrument_id, run_id=run_id, counts=counts
+        )
 
 
-def _emit(*, component: str, action: str, regulatory_instrument_id: str, emitter: LogEmitter | None) -> None:
-    """One completed-stage log entry. `run_id` is never passed explicitly —
-    `emit_log_entry` auto-bakes the currently bound run context (AC-005's
-    mechanism; mirrors `ps_service.llm_interface._logging_support._log`).
+def _emit(
+    *, component: str, action: str, regulatory_instrument_id: str, emitter: LogEmitter | None
+) -> None:
+    """Emit one completed-stage log entry.
+
+    `run_id` is never passed explicitly — `emit_log_entry` auto-bakes the
+    currently bound run context (AC-005's mechanism; mirrors
+    `ps_service.llm_interface._logging_support.log`).
     """
     emit_log_entry(
         component=component,

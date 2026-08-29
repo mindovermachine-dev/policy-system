@@ -1,6 +1,7 @@
-"""ps_service.company_merge core types — the shapes `graph_reader.py`/
-`dedup.py`/`graph_writer.py`/`merge.py` build and consume internally, plus
-`MergeBaselineGraph`'s own return value.
+"""ps_service.company_merge core types.
+
+The shapes `graph_reader.py`/`dedup.py`/`graph_writer.py`/`merge.py` build
+and consume internally, plus `MergeBaselineGraph`'s own return value.
 
 Per PLAN_REVIEWED.md §2: all types here are plain frozen dataclasses —
 internal pipeline plumbing, not PS Conceptual Model types crossing an LLM
@@ -16,12 +17,13 @@ from typing import Literal
 
 @dataclass(frozen=True, slots=True)
 class BaselineNode:
-    """A Role, Requirement, Obligation, or Capability node read back from a
-    {short}_baseline graph, exactly as Domain Mapper wrote it. Used for
-    Role/Requirement/Obligation, which never carry an embedding -- this
-    shape is deliberately NOT reused for the properties dict Company Merge
-    itself writes onto a canonical Capability node (see
-    CanonicalNodeProperties below, S1's fix)."""
+    """A Role, Requirement, Obligation, or Capability node read from a {short}_baseline graph.
+
+    Exactly as Domain Mapper wrote it. Used for Role/Requirement/Obligation,
+    which never carry an embedding -- this shape is deliberately NOT reused
+    for the properties dict Company Merge itself writes onto a canonical
+    Capability node (see CanonicalNodeProperties below, S1's fix).
+    """
 
     id: str
     properties: dict[str, str | float]
@@ -38,12 +40,15 @@ class ProvenanceEdge:
 
 @dataclass(frozen=True, slots=True)
 class BareEdge:
-    """Role-[:HAS]->Obligation | Requirement-[:SATISFIED_BY]->Obligation |
-    Obligation-[:REQUIRES]->Capability, as read from the baseline graph.
-    Endpoint ids here are BASELINE-LOCAL -- since #42 only a `REQUIRES`
-    edge's Capability target is rewritten to its canonical id before being
-    persisted; every other endpoint (Role, Requirement, Obligation) is a
-    passthrough node whose baseline-local id is already final (§6)."""
+    """One `HAS`, `SATISFIED_BY`, or `REQUIRES` edge as read from the baseline graph.
+
+    Role-[:HAS]->Obligation | Requirement-[:SATISFIED_BY]->Obligation |
+    Obligation-[:REQUIRES]->Capability. Endpoint ids here are BASELINE-LOCAL
+    -- since #42 only a `REQUIRES` edge's Capability target is rewritten to
+    its canonical id before being persisted; every other endpoint (Role,
+    Requirement, Obligation) is a passthrough node whose baseline-local id is
+    already final (§6).
+    """
 
     relationship_type: Literal["HAS", "SATISFIED_BY", "REQUIRES"]
     source_id: str
@@ -52,9 +57,11 @@ class BareEdge:
 
 @dataclass(frozen=True, slots=True)
 class BaselineGraph:
-    """The complete contents of one regulation's {short}_baseline graph,
-    read back by graph_reader.read_baseline_graph -- MergeBaselineGraph's
-    input."""
+    """The complete contents of one regulation's {short}_baseline graph.
+
+    Read back by graph_reader.read_baseline_graph -- MergeBaselineGraph's
+    input.
+    """
 
     regulatory_instrument_id: str
     regulatory_instrument_properties: dict[str, object]
@@ -68,11 +75,14 @@ class BaselineGraph:
 
 @dataclass(frozen=True, slots=True)
 class ExistingCanonicalNode:
-    """One Capability already present in the single-tenant graph, as read by
-    dedup.read_existing_canonical_index, OR an in-memory stand-in for one
-    just minted/updated during this same dedup run (§5.4). `embedding` is
-    None when this node has never had one computed/cached. (Since #42
-    Obligation is not a canonical node -- it is passed through, not deduped.)"""
+    """One Capability already present in the single-tenant graph.
+
+    As read by dedup.read_existing_canonical_index, OR an in-memory stand-in
+    for one just minted/updated during this same dedup run (§5.4).
+    `embedding` is None when this node has never had one computed/cached.
+    (Since #42 Obligation is not a canonical node -- it is passed through,
+    not deduped.)
+    """
 
     id: str
     text: str  # Capability.name
@@ -92,8 +102,7 @@ class NearMissPair:
 
 @dataclass(frozen=True, slots=True)
 class CanonicalResolution:
-    """The outcome of resolving one incoming Capability node to its
-    canonical id in the single-tenant graph."""
+    """The outcome of resolving one incoming Capability node to its canonical id."""
 
     incoming_id: str
     canonical_id: str
@@ -104,18 +113,20 @@ class CanonicalResolution:
 
 @dataclass(frozen=True, slots=True)
 class SemanticMatchResult:
-    """find_best_semantic_match's return value when existing_index is
-    non-empty (§5.3, B2's fix). `newly_computed_existing_embeddings` holds
-    every existing_index entry's embedding that had to be freshly computed
-    during THIS call (existing_id -> embedding) -- an entry that already
-    carried a cached embedding is excluded, since nothing was computed for
-    it. This type only carries values, it performs no I/O: the caller
+    """find_best_semantic_match's return value when existing_index is non-empty.
+
+    §5.3, B2's fix. `newly_computed_existing_embeddings` holds every
+    existing_index entry's embedding that had to be freshly computed during
+    THIS call (existing_id -> embedding) -- an entry that already carried a
+    cached embedding is excluded, since nothing was computed for it. This
+    type only carries values, it performs no I/O: the caller
     (dedupe_canonical_nodes) is responsible for (a) folding these into its
     own in-memory working index before the next incoming node is processed
     -- closing the within-run reuse gap -- and (b) arranging their eventual
     persistence onto the already-existing graph nodes they belong to via
     graph_writer.backfill_canonical_embeddings -- closing the across-run
-    reuse gap. See §5.4/§5.5/§6.2 for the full mechanism."""
+    reuse gap. See §5.4/§5.5/§6.2 for the full mechanism.
+    """
 
     best_existing_id: str
     best_similarity: float

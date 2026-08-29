@@ -14,6 +14,17 @@ Note: We are in the transition from prototype to full implementation and the ins
 5. Commit your changes.
 6. Open a Pull Request.
 
+After cloning, run these once:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+uv run pre-commit install-hooks
+```
+
+Do not run `pre-commit install` — it refuses when `core.hooksPath` is set, which
+this repo sets. `install-hooks` only prepares the hook environments; the hook
+itself runs via `.githooks/pre-commit`.
+
 ## Development Setup
 
 This is very early mostly exploration development. To load data into the graph database and ask questions, you will need FalkorDB and Python 3.14, set up either via the dev container (recommended) or locally.
@@ -284,11 +295,28 @@ part of the repo-root `pyproject.toml`'s dependencies.
 
 ## Coding Standards
 
-See [`docs/coding-standards/python.instructions.md`](docs/coding-standards/python.instructions.md).
+See [`docs/coding-standards/level2-python-instructions.md`](docs/coding-standards/level2-python-instructions.md)
+and [`docs/coding-standards/level1-coding-principles.md`](docs/coding-standards/level1-coding-principles.md).
+
+Python code is linted with **ruff** (`select = ["ALL"]` minus a documented opt-out
+list), formatted with **ruff format**, type-checked with **basedpyright** in strict
+mode, and its dependencies audited with **pip-audit**. Config lives in the root
+`pyproject.toml`. All four run in CI (`trunk-worthy` wave) and in the pre-commit
+hook; a violation blocks the commit and fails CI.
 
 ## Testing
 
 When implementing code use TDD as the default way to ensure appropriate test coverage.
+
+Run the full local gate exactly as CI does:
+
+```bash
+uv sync --group dev
+uv run ruff check . && uv run ruff format --check . && uv run basedpyright && \
+  uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 -r /dev/stdin
+```
+
+(or `uv run pre-commit run --all-files`).
 
 ## Pull Request Process
 

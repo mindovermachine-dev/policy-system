@@ -1,5 +1,4 @@
-"""ps_service.domain_mapper.extraction — the ExtractRolesAndRequirements
-action.
+"""ps_service.domain_mapper.extraction — the ExtractRolesAndRequirements action.
 
 Holds the public orchestrating function (`extract_roles_and_requirements`,
 PLAN_REVIEWED.md §11 Increment 10, wiring Increments 4-9), the per-unit LLM
@@ -9,11 +8,9 @@ building with collision handling (Increment 8).
 
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
-from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
-from ps_service.domain_mapper.falkordb_client import GraphHandle
 from ps_service.domain_mapper.graph_writer import persist_role_and_requirement_graph
 from ps_service.domain_mapper.identity import requirement_id, role_id
 from ps_service.domain_mapper.models import (
@@ -29,21 +26,27 @@ from ps_service.domain_mapper.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     parse_extraction_response,
 )
-from ps_service.llm_interface.client import CompletionCaller
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import LogEmitter, emit_log_entry
+
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.llm_interface.client import CompletionCaller
 
 _COMPONENT = "domain_mapper"
 _ACTION = "extract_roles_and_requirements"
 
 
 class _RegulatoryInstrumentNode(Protocol):
-    """Structural stand-in for the `falkordb.Node` this module's own
-    `MATCH (r:RegulatoryInstrument) RETURN r` read returns -- only `.properties` is
-    ever read, mirroring `falkordb_client.GraphQueryResult`'s own minimal
-    structural-Protocol style. A hand-written test fake needs only this one
-    attribute to satisfy it."""
+    """Structural stand-in for the `falkordb.Node` from this module's RegulatoryInstrument read.
+
+    Only `.properties` is ever read, mirroring
+    `falkordb_client.GraphQueryResult`'s own minimal structural-Protocol
+    style. A hand-written test fake needs only this one attribute to
+    satisfy it.
+    """
 
     @property
     def properties(self) -> dict[str, object]: ...
@@ -84,14 +87,18 @@ def extract_roles_and_requirements(
        already bound, or `None`.
     8. Returns the `ExtractionResult`.
     """
-    regulatory_instrument_properties = _read_regulatory_instrument_properties(native_graph, regulatory_instrument_id)
+    regulatory_instrument_properties = _read_regulatory_instrument_properties(
+        native_graph, regulatory_instrument_id
+    )
     units = adapter.read_native_units(native_graph)
 
     candidates, skipped_unit_count = _extract_all_candidates(
         units, model=model, call_completion=call_completion, emitter=emitter
     )
 
-    role_nodes, role_edges, role_node_ids = _canonicalize_roles(candidates, regulatory_instrument_id)
+    role_nodes, role_edges, role_node_ids = _canonicalize_roles(
+        candidates, regulatory_instrument_id
+    )
     requirement_nodes, requirement_edges, collided_ids = _build_requirement_graph(
         candidates, regulatory_instrument_id, role_node_ids
     )
@@ -135,9 +142,11 @@ def extract_roles_and_requirements(
 def _read_regulatory_instrument_properties(
     native_graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, object]:
-    """PLAN_REVIEWED.md §5.2 step 1: `MATCH (r:RegulatoryInstrument) RETURN r`, read
-    back as a plain properties dict for `persist_role_and_requirement_graph`
-    to MERGE into `baseline_graph`.
+    """PLAN_REVIEWED.md §5.2 step 1: read the RegulatoryInstrument node's properties.
+
+    `MATCH (r:RegulatoryInstrument) RETURN r`, read back as a plain
+    properties dict for `persist_role_and_requirement_graph` to MERGE into
+    `baseline_graph`.
 
     Raises `DomainMapperExtractionError` if no RegulatoryInstrument node is found —
     `ExtractRolesAndRequirements`'s own pre-condition
@@ -151,7 +160,7 @@ def _read_regulatory_instrument_properties(
             f"no RegulatoryInstrument node found in native graph for {regulatory_instrument_id!r}; "
             "PersistNativeStructuralGraph must complete before ExtractRolesAndRequirements"
         )
-    node = cast(_RegulatoryInstrumentNode, rows[0][0])
+    node = cast("_RegulatoryInstrumentNode", rows[0][0])
     return dict(node.properties)
 
 
@@ -199,8 +208,7 @@ def _extract_candidates_for_unit(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> list[RequirementCandidate]:
-    """Call the LLM once for one `ExtractionUnit`, returning its
-    `RequirementCandidate`s.
+    """Call the LLM once for one `ExtractionUnit`, returning its `RequirementCandidate`s.
 
     Builds a system + user `ChatMessage` pair (the unit's own text is
     delimited from the system prompt per L2's untrusted-content rule — this
@@ -231,10 +239,13 @@ def _extract_candidates_for_unit(
 
 
 def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
-    """System prompt + one user message carrying the unit's own text,
-    clearly delimited from the system prompt's instructions (L2 LLM
-    Interface Patterns: "never interpolate [untrusted content] directly
-    into a system/instruction prompt... delimit it clearly")."""
+    """System prompt + one user message carrying the unit's own text.
+
+    The unit text is clearly delimited from the system prompt's
+    instructions (L2 LLM Interface Patterns: "never interpolate [untrusted
+    content] directly into a system/instruction prompt... delimit it
+    clearly").
+    """
     user_content = (
         f"Article heading: {unit.article_heading}\n"
         f"Citation: {unit.citation_ref}\n\n"
@@ -251,8 +262,7 @@ def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
 def _canonicalize_roles(
     candidates: list[RequirementCandidate], regulatory_instrument_id: str
 ) -> tuple[tuple[RoleNode, ...], tuple[RoleDefinesEdge, ...], dict[str, str]]:
-    """PLAN_REVIEWED.md §5.2 step 4 — deterministic dedup via
-    `identity.role_id()`, no LLM call.
+    """PLAN_REVIEWED.md §5.2 step 4 — deterministic Role dedup via `identity.role_id()`, no LLM.
 
     Candidates sharing the same `role_name` collapse onto one Role node
     (`role_id()` is a pure function of `role_name` + `regulatory_instrument_id`, so
@@ -302,8 +312,7 @@ def _build_requirement_graph(
     regulatory_instrument_id: str,
     role_node_ids: dict[str, str],
 ) -> tuple[tuple[RequirementNode, ...], tuple[RequirementExpressesEdge, ...], tuple[str, ...]]:
-    """PLAN_REVIEWED.md §5.2 step 5 — B2 fix: deterministic Requirement-id
-    collision disambiguation, never an exception.
+    """PLAN_REVIEWED.md §5.2 step 5 — B2 fix: deterministic Requirement-id collision handling.
 
     Walks `candidates` in document order (the caller's own list order —
     unit order, then within-unit response order), computing

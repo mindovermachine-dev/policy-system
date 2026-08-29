@@ -10,20 +10,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
 from ps_service.domain_mapper.derivation import (
-    _derive_capabilities,
-    _derive_obligations,
+    _derive_capabilities,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
+    _derive_obligations,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     derive_obligations_and_capabilities,
 )
 from ps_service.domain_mapper.errors import DomainMapperDerivationError
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import ObligationNode, RoleRequirements
-from ps_service.llm_interface.client import CompletionCaller
 from ps_service.logging import bind_run_context
+
+if TYPE_CHECKING:
+    from domain_mapper._fakes import MakeEmitter, ReadLines
+    from ps_service.llm_interface.client import CompletionCaller
 
 
 def _model_response(content: str) -> ModelResponse:
@@ -43,7 +47,8 @@ def _scripted_sequential_call_completion(responses: list[str]) -> CompletionCall
     order `_derive_obligations` calls the LLM — Role then Requirement
     document order (PLAN_REVIEWED.md §7.3). Raises if more calls are made
     than were scripted, so an unexpected extra call fails loudly rather
-    than silently reusing a stale response."""
+    than silently reusing a stale response.
+    """
     remaining = list(responses)
 
     def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
@@ -91,9 +96,12 @@ _ROLE_MANUFACTURER = "role_manufacturer_abc123"
 _ROLE_IMPORTER = "role_importer_def456"
 
 
-def test_derive_obligations_second_requirement_matches_first_minted_entry(make_emitter) -> None:
+def test_derive_obligations_second_requirement_matches_first_minted_entry(
+    make_emitter: MakeEmitter,
+) -> None:
     """(a) Single Role, first Requirement mints (registry empty), second
-    (matching-duty) Requirement matches the registry entry call 1 minted."""
+    (matching-duty) Requirement matches the registry entry call 1 minted.
+    """
     emitter, _log_path = make_emitter()
     role = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -129,11 +137,12 @@ def test_derive_obligations_second_requirement_matches_first_minted_entry(make_e
 
 
 def test_derive_obligations_unmatchable_response_produces_no_obligation_and_no_exception(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(b) An unmatchable response produces obligation_node_id=None with no
     exception -- no Obligation is created, the Requirement is surfaced in
-    unmatched_requirement_ids instead."""
+    unmatched_requirement_ids instead.
+    """
     emitter, _log_path = make_emitter()
     role = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -153,14 +162,15 @@ def test_derive_obligations_unmatchable_response_produces_no_obligation_and_no_e
 
 
 def test_derive_obligations_same_role_convergence_on_independent_identical_mints(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(c) Two Requirements under the SAME Role independently produce
     identical mint text (two separate LLM calls, both minting, not
     matching) -> a single Obligation node results because the second
     call's obligation_id() collides with the registry entry the FIRST call
     created for the SAME role, so it's reused, not re-minted. One HAS
-    edge, both Requirements SATISFIED_BY it, no role-qualification."""
+    edge, both Requirements SATISFIED_BY it, no role-qualification.
+    """
     emitter, _log_path = make_emitter()
     role = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -193,7 +203,7 @@ def test_derive_obligations_same_role_convergence_on_independent_identical_mints
 
 
 def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(d) #42's resolution: Role A's Requirement mints "Cooperate with
     Market Surveillance Authority Requests" (one HAS edge to Role A). Role B,
@@ -201,7 +211,8 @@ def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes
     Because `obligation_id` is Role-scoped, the two ids differ by
     construction — two distinct Obligation nodes, each with its own single
     HAS edge, each keeping the LLM's own unqualified duty text. No
-    `" as {role}"` text mangling, no runtime collision detection."""
+    `" as {role}"` text mangling, no runtime collision detection.
+    """
     emitter, _log_path = make_emitter()
     role_a = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -229,7 +240,9 @@ def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes
     # the id hash, never the text.
     assert [n.properties["text"] for n in obligation_nodes] == [duty_text, duty_text]
 
-    node_a = next(n for n in obligation_nodes if n.id == obligation_id(_ROLE_MANUFACTURER, duty_text))
+    node_a = next(
+        n for n in obligation_nodes if n.id == obligation_id(_ROLE_MANUFACTURER, duty_text)
+    )
     node_b = next(n for n in obligation_nodes if n.id == obligation_id(_ROLE_IMPORTER, duty_text))
     assert node_a.id != node_b.id
 
@@ -247,11 +260,12 @@ def test_derive_obligations_same_duty_text_under_two_roles_is_two_distinct_nodes
 
 
 def test_derive_obligations_malformed_response_marks_unmatched_without_aborting(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """§7.5: a malformed/unparseable response is unified with the explicit
     unmatchable outcome -- surfaced, not silently dropped, and the run does
-    not abort."""
+    not abort.
+    """
     emitter, _log_path = make_emitter()
     role = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -270,7 +284,9 @@ def test_derive_obligations_malformed_response_marks_unmatched_without_aborting(
     assert unmatched == ("CRA_req_art_13.1",)
 
 
-def test_derive_obligations_emits_unmatched_log_entry(make_emitter, read_lines) -> None:
+def test_derive_obligations_emits_unmatched_log_entry(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
     emitter, log_path = make_emitter()
     role = RoleRequirements(
         role_node_id=_ROLE_MANUFACTURER,
@@ -362,7 +378,7 @@ def _capability_multi_mint_response(
 
 
 def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """Two distinct Obligations (conceptually from two different Roles --
     this function has no Role awareness at all) whose scripted responses
@@ -371,7 +387,8 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
     shared Capability node, with TWO REQUIRES edges, one per Obligation.
     Both calls MINT (not match) on purpose -- proving the CODE-level
     registry, not the model, guarantees convergence, mirroring
-    _resolve_obligation_id's own same-Role reuse philosophy."""
+    _resolve_obligation_id's own same-Role reuse philosophy.
+    """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
     call_completion = _scripted_sequential_call_completion(
@@ -397,13 +414,14 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
 
 
 def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requires_edges(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """One Obligation's response lists TWO capabilities -> TWO REQUIRES
     edges off the SAME Obligation node, one new Capability minted for
     each -- multi-capability-per-Obligation support, a proven finding
     ported from spikes/cellar2/derive_capabilities.py and retained here
-    per §7.4/§11 Increment 13's explicit instruction."""
+    per §7.4/§11 Increment 13's explicit instruction.
+    """
     emitter, _log_path = make_emitter()
     call_completion = _scripted_sequential_call_completion(
         [
@@ -434,7 +452,7 @@ def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requir
 
 
 def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """If the same obligation_node_id appears TWICE in the input Obligation
     list (e.g. because two Requirements both routed to it upstream), the
@@ -443,7 +461,8 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
     (`_scripted_sequential_call_completion`'s own "no more scripted
     responses" guard). Since processing is keyed off the deduped list,
     exactly one Capability node and one REQUIRES edge result too, not
-    two."""
+    two.
+    """
     emitter, _log_path = make_emitter()
     call_completion = _scripted_sequential_call_completion(
         [_capability_mint_response("Access Control System")]
@@ -462,11 +481,14 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
     assert requires_edges[0].capability_node_id == capability_id("Access Control System")
 
 
-def test_derive_capabilities_match_response_reuses_registry_entry(make_emitter) -> None:
+def test_derive_capabilities_match_response_reuses_registry_entry(
+    make_emitter: MakeEmitter,
+) -> None:
     """A response that explicitly MATCHES an already-registered Capability
     (rather than re-minting identical text) resolves to the same node --
     the ordinary, model-cooperative convergence path, complementing the
-    code-guaranteed convergence proven above."""
+    code-guaranteed convergence proven above.
+    """
     emitter, _log_path = make_emitter()
     minted_name = "Access Control System"
     minted_id = capability_id(minted_name)
@@ -520,10 +542,11 @@ class _FakeBaselineGraph:
     `_read_requirements_by_role`'s `OPTIONAL MATCH (rl:Role...` query with a
     scripted row set; captures every other `(query, params)` call -- the
     write-side calls `persist_obligation_and_capability_graph` issues --
-    for assertion."""
+    for assertion.
+    """
 
     def __init__(self, requirement_rows: list[list[object]]) -> None:
-        self._requirement_rows = requirement_rows
+        self._requirement_rows: list[object] = [*requirement_rows]
         self.calls: list[_RecordedCall] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
@@ -540,7 +563,8 @@ def _find_edge_calls(graph: _FakeBaselineGraph, relationship_type: str) -> list[
 def _never_called_completion(invocations: list[bool]) -> CompletionCaller:
     """A `CompletionCaller` fake that raises if it is EVER invoked --
     Increment 16 test (e)'s direct proof that the dangling-`role_id` check
-    runs before any LLM call is made for any Role's Requirements."""
+    runs before any LLM call is made for any Role's Requirements.
+    """
 
     def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
         invocations.append(True)
@@ -549,10 +573,11 @@ def _never_called_completion(invocations: list[bool]) -> CompletionCaller:
     return _call
 
 
-def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter) -> None:
+def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeEmitter) -> None:
     """(a) AC-003: 2 Roles, 3 Requirements, all matchable -> every
     Requirement has >=1 SATISFIED_BY, every Obligation has exactly 1 HAS
-    from its Role, every Obligation has >=1 REQUIRES."""
+    from its Role, every Obligation has >=1 REQUIRES.
+    """
     emitter, _log_path = make_emitter()
     rows: list[list[object]] = [
         [
@@ -605,9 +630,7 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter) -> No
     has_calls = _find_edge_calls(baseline_graph, "HAS")
     requires_calls = _find_edge_calls(baseline_graph, "REQUIRES")
 
-    satisfied_source_ids = {
-        call.params["source_id"] for call in satisfied_by_calls if call.params
-    }
+    satisfied_source_ids = {call.params["source_id"] for call in satisfied_by_calls if call.params}
     assert satisfied_source_ids == {
         "CRA_req_art_13.1",
         "CRA_req_art_13.2",
@@ -630,12 +653,13 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter) -> No
 
 
 def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surfaced(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """(b) AC-004: one Requirement's scripted response is unmatchable -> it
     appears in DerivationResult.unmatched_requirement_ids, has no
     SATISFIED_BY edge written, and an outcome="unmatched" log entry is
-    emitted naming its id."""
+    emitted naming its id.
+    """
     emitter, log_path = make_emitter()
     rows: list[list[object]] = [
         [
@@ -674,9 +698,7 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
     assert result.unmatched_requirement_ids == ("CRA_req_art_13.9",)
 
     satisfied_by_calls = _find_edge_calls(baseline_graph, "SATISFIED_BY")
-    satisfied_source_ids = {
-        call.params["source_id"] for call in satisfied_by_calls if call.params
-    }
+    satisfied_source_ids = {call.params["source_id"] for call in satisfied_by_calls if call.params}
     assert "CRA_req_art_13.9" not in satisfied_source_ids
 
     lines = read_lines(log_path)
@@ -686,7 +708,7 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
 
 
 def test_derive_obligations_and_capabilities_ac007_emits_log_entry_with_bound_run_id(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """(c) AC-007: mirrors the AC-006 pattern exactly."""
     emitter, log_path = make_emitter()
@@ -730,11 +752,12 @@ def test_derive_obligations_and_capabilities_ac007_emits_log_entry_with_bound_ru
 
 
 def test_derive_obligations_and_capabilities_all_requirements_unmatchable_for_role(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(d) A Role with 2 Requirements, both scripted unmatchable -> both ids
     in unmatched_requirement_ids, zero Obligation nodes/HAS edges for that
-    Role (permitted -- HAS is 1:0..*), no exception."""
+    Role (permitted -- HAS is 1:0..*), no exception.
+    """
     emitter, _log_path = make_emitter()
     rows: list[list[object]] = [
         [
@@ -771,12 +794,13 @@ def test_derive_obligations_and_capabilities_all_requirements_unmatchable_for_ro
 
 
 def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_llm_call(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """(e) A fake baseline graph scripted so one Requirement's role_id does
     not resolve to any Role node -> raises DomainMapperDerivationError
     naming the Requirement id and the dangling role_id, BEFORE any LLM call
-    is made (the structural fake for call_completion is never invoked)."""
+    is made (the structural fake for call_completion is never invoked).
+    """
     emitter, _log_path = make_emitter()
     rows: list[list[object]] = [
         ["CRA_req_art_13.1", "Some duty.", "role_ghost_999", None, None],

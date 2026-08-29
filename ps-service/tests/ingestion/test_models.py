@@ -17,6 +17,17 @@ from ps_service.ingestion.models import (
 )
 
 
+def _mutate(obj: object, attr: str, value: object) -> None:
+    """Write ``obj.attr = value`` through a dynamic path.
+
+    The frozen model's own write guard -- not the type checker -- is what must
+    reject the assignment, so the target is kept off the statically-known
+    attribute path (basedpyright strict would otherwise flag every one of
+    these as ``reportAttributeAccessIssue``).
+    """
+    setattr(obj, attr, value)
+
+
 def _metadata(**overrides: object) -> RegulatoryInstrumentMetadata:
     fields: dict[str, object] = {
         "title": "Regulation (EU) 2024/2847",
@@ -36,7 +47,7 @@ def _metadata(**overrides: object) -> RegulatoryInstrumentMetadata:
 def test_regulatory_instrument_metadata_mutation_raises() -> None:
     metadata = _metadata()
     with pytest.raises(ValidationError):
-        metadata.title = "changed"  # type: ignore[misc]
+        _mutate(metadata, "title", "changed")
 
 
 def test_regulatory_instrument_metadata_rejects_empty_title() -> None:
@@ -92,7 +103,7 @@ def test_regulatory_instrument_metadata_accepts_national_transposition_instrumen
 def test_structural_node_mutation_raises() -> None:
     node = StructuralNode(element_type="ARTICLE", id="CRA-1.0#art_1", properties={"order": 1})
     with pytest.raises(AttributeError):
-        node.id = "changed"  # type: ignore[misc]
+        _mutate(node, "id", "changed")
 
 
 def test_structural_edge_mutation_raises() -> None:
@@ -103,22 +114,22 @@ def test_structural_edge_mutation_raises() -> None:
         child_id="CRA-1.0#art_1",
     )
     with pytest.raises(AttributeError):
-        edge.parent_id = "changed"  # type: ignore[misc]
+        _mutate(edge, "parent_id", "changed")
 
 
 def test_fetched_regulatory_instrument_structure_mutation_raises() -> None:
     structure = FetchedRegulatoryInstrumentStructure(metadata=_metadata(), nodes=(), edges=())
     with pytest.raises(AttributeError):
-        structure.nodes = ()  # type: ignore[misc]
+        _mutate(structure, "nodes", ())
 
 
 def test_reachability_count_mutation_raises() -> None:
     count = ReachabilityCount(total=5, reachable=5)
     with pytest.raises(AttributeError):
-        count.total = 1  # type: ignore[misc]
+        _mutate(count, "total", 1)
 
 
 def test_ingest_result_mutation_raises() -> None:
     result = IngestResult(regulatory_instrument_id="CRA-1.0", run_id="run-1", counts={})
     with pytest.raises(AttributeError):
-        result.run_id = "changed"  # type: ignore[misc]
+        _mutate(result, "run_id", "changed")

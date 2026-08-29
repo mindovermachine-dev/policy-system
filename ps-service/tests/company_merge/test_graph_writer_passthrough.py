@@ -38,7 +38,8 @@ class _FakeQueryResult:
 
 class _FakeGraph:
     """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion."""
+    params)` call for assertion.
+    """
 
     def __init__(self) -> None:
         self.calls: list[_RecordedCall] = []
@@ -49,7 +50,9 @@ class _FakeGraph:
 
 
 def _role_node() -> BaselineNode:
-    return BaselineNode(id="role_manufacturer_abc123", properties={"name": "Manufacturer", "confidence": 0.9})
+    return BaselineNode(
+        id="role_manufacturer_abc123", properties={"name": "Manufacturer", "confidence": 0.9}
+    )
 
 
 def _requirement_node() -> BaselineNode:
@@ -89,10 +92,18 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     )
 
     assert len(graph.calls) == 5
-    regulatory_instrument_call, role_call, requirement_call, defines_call, expresses_call = graph.calls
+    regulatory_instrument_call, role_call, requirement_call, defines_call, expresses_call = (
+        graph.calls
+    )
 
-    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert regulatory_instrument_call.params == {"id": "CRA-1.0", "properties": _regulatory_instrument_properties()}
+    assert (
+        regulatory_instrument_call.query
+        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    )
+    assert regulatory_instrument_call.params == {
+        "id": "CRA-1.0",
+        "properties": _regulatory_instrument_properties(),
+    }
 
     assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
     assert role_call.params == {"id": role.id, "properties": role.properties}
@@ -111,7 +122,8 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     }
 
     assert expresses_call.query == (
-        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), (n:Requirement {id: $target_id}) "
+        "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id}), "
+        "(n:Requirement {id: $target_id}) "
         "MERGE (r)-[e:EXPRESSES]->(n) SET e.source_ref = $source_ref"
     )
     assert expresses_call.params == {
@@ -125,7 +137,8 @@ def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
     """AC-BI-011 (Company Merge, write side): `instrument_type` rides
     through the Regulation MERGE verbatim inside `params["properties"]` —
     `regulatory_instrument_properties` is `dict[str, object]` with no key allow-list,
-    so the key propagates by construction with NO src change."""
+    so the key propagates by construction with NO src change.
+    """
     graph = _FakeGraph()
 
     persist_role_and_requirement_passthrough(
@@ -139,7 +152,10 @@ def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
 
     assert len(graph.calls) == 1
     regulatory_instrument_call = graph.calls[0]
-    assert regulatory_instrument_call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert (
+        regulatory_instrument_call.query
+        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    )
     assert regulatory_instrument_call.params is not None
     properties = regulatory_instrument_call.params["properties"]
     assert isinstance(properties, dict)
@@ -149,7 +165,8 @@ def test_persist_passthrough_writes_instrument_type_verbatim() -> None:
 def test_persist_is_idempotent_across_repeated_calls() -> None:
     """Re-running with identical input twice against the same fake graph
     produces the same two sets of calls each time (trivial idempotency
-    shape check -- PLAN_REVIEWED.md §10 Increment 10)."""
+    shape check -- PLAN_REVIEWED.md §10 Increment 10).
+    """
     graph = _FakeGraph()
     role = _role_node()
     requirement = _requirement_node()

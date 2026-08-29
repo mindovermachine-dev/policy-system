@@ -53,19 +53,20 @@
 - `uv` workspace at the repo root; one shared `uv.lock` across all members.
 - Each member (`ps-service`, `ps-cli`) has its own `pyproject.toml` with only the dependencies it actually needs — do not add a dependency to a member that doesn't use it.
 - Build backend: `hatchling`, with `[tool.hatch.build.targets.wheel] packages = ["src/<package>"]` per member.
-- Dependency vulnerability scanning: `uv pip audit` runs in CI against the shared `uv.lock` and blocks merge on a known CVE — covers transitive dependencies pulled in via LiteLLM's provider SDKs, not just direct dependencies.
+- Dependency vulnerability scanning: `pip-audit` (run via `uvx pip-audit` against `uv export` output — `uv` has no `pip audit` subcommand) runs in the `trunk-worthy` CI wave against the shared lock and fails the wave on a known CVE — covers transitive dependencies pulled in via LiteLLM's provider SDKs, not just direct dependencies.
 
 ### Linting & Code Quality
 
-- `ruff`, selecting at least: `B` (bugbear), `SIM` (simplify), `RET` (return-statement cleanliness), `C4` (comprehension cleanup), `PERF`/`FURB` (performance & modernization anti-patterns), `PIE` (misc simplifications), `I` (import sorting) — matches the proven selection in `gh-tt`'s `pyproject.toml`, used as reference.
-- Max cyclomatic complexity: 8 (`ruff`'s `mccabe` check), per L1's Cyclomatic Complexity principle — stricter than `gh-tt`'s reference `max-complexity = 10`; ps-service/ps-cli intentionally diverge from the `gh-tt` value here.
-- Absolute imports only, no relative imports (`ban-relative-imports = "all"` in `gh-tt`'s ruff config) — clearer with the `src/` layout's nested packages.
+- `ruff` with `select = ["ALL"]` minus an enumerated, individually-commented `ignore` list in the root `pyproject.toml` (`line-length = 100`, `target-version = "py314"`, `pydocstyle` convention `google`). The opt-out list is the authoritative record of what is disabled and why.
+- Max cyclomatic complexity: 8 (`ruff`'s `mccabe` check), per L1's Cyclomatic Complexity principle — enforced via `[tool.ruff.lint.mccabe] max-complexity = 8`; `[tool.ruff.lint.pylint] max-args = 8` matches it.
+- Absolute imports only, no relative imports (`[tool.ruff.lint.flake8-tidy-imports] ban-relative-imports = "all"`) — clearer with the `src/` layout's nested packages.
 - DRY: don't duplicate logic across modules — extract a shared function/class within the same package once a pattern repeats a third time.
-- Docstrings required on public functions/classes and anything crossing a component boundary; a one-line summary is enough unless the behavior is non-obvious (the MCP tool-docstring rule under ps-service is a stricter special case of this, not a separate rule).
+- Docstrings required on public functions/classes and anything crossing a component boundary; a one-line summary is enough unless the behavior is non-obvious (the MCP tool-docstring rule under ps-service is a stricter special case of this, not a separate rule). Enforced by `pydocstyle` (`google` convention); tests and `tools/` are exempted from docstring rules via `per-file-ignores` — but `tools/` and `docs/**.py` are still type-checked by basedpyright.
+- Scope: config is workspace-wide from the root `pyproject.toml`, applied uniformly to `ps-service`, `ps-cli`, `tools/`, and `docs/**.py`. `spikes/` (nested git repo) and `ps-question-skill/` contain no `.py` today and are excluded; bring them into scope when they gain Python code.
 
 ### Types Handling
 
-- Code must pass Pylance strict mode.
+- Code must pass **`basedpyright` strict** mode (`[tool.basedpyright] typeCheckingMode = "strict"`, `pythonVersion = "3.14"`), which is the headless CI enforcement of this section. Pylance strict in the editor (`.vscode/settings.json`) is the interactive mirror of the same bar. Untyped third-party libraries (`falkordb`, `litellm`, `graphrag_sdk`) are handled by commented inline `# pyright: ignore[…]  # <lib>: <reason>` at their single boundary module — never a global rule downgrade.
 - No implicit Any.
 - No unknown or partially-known types.
 - Every function must declare parameter and return types.
@@ -75,7 +76,7 @@
 - Use dataclasses for structured data.
 - Use Protocol for interfaces.
 - Use cast() only when unavoidable and document why.
-- Avoid disabling type checks with type: ignore unless absolutely necessary.
+- `# type: ignore` is prohibited anywhere in the tree; an unavoidable suppression uses `# pyright: ignore[<rule>]  # <reason>` with a specific rule code and a reason.
 - Public APIs must be fully typed.
 
 ---

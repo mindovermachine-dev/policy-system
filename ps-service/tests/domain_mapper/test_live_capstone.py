@@ -28,13 +28,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from falkordb import FalkorDB
 
 from ps_service.config import load_config
-from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
 from ps_service.domain_mapper.adapters.cellar_eli import CellarEliDomainMappingAdapter
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
@@ -45,8 +43,14 @@ from ps_service.domain_mapper.falkordb_client import (
     native_graph_name,
     select_graph,
 )
-from ps_service.domain_mapper.models import DerivationResult, ExtractionUnit
 from ps_service.logging import LogEmitter, bind_run_context
+
+if TYPE_CHECKING:
+    from falkordb import FalkorDB
+
+    from domain_mapper._fakes import MakeEmitter, ReadLines
+    from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
+    from ps_service.domain_mapper.models import DerivationResult, ExtractionUnit
 
 _LIMIT_PER_REGULATORY_INSTRUMENT = 15
 _LOG_FILENAME = "capstone.jsonl"
@@ -78,7 +82,8 @@ class _LimitedDomainMappingAdapter:
     """Wraps a real `DomainMappingAdapter`, capping the `ExtractionUnit`s
     returned to the first `limit` (the inner adapter's own document order).
     Satisfies `DomainMappingAdapter` structurally — no production code
-    change needed for this test's bounding requirement."""
+    change needed for this test's bounding requirement.
+    """
 
     def __init__(self, inner: DomainMappingAdapter, limit: int) -> None:
         self._inner = inner
@@ -105,8 +110,8 @@ def _query_rows(
 def _native_citation_refs(native_graph: GraphHandle) -> set[str]:
     article_refs = _query_rows(native_graph, "MATCH (a:ARTICLE) RETURN a.citation_ref")
     paragraph_refs = _query_rows(native_graph, "MATCH (p:PARAGRAPH) RETURN p.citation_ref")
-    return {cast(str, row[0]) for row in article_refs} | {
-        cast(str, row[0]) for row in paragraph_refs
+    return {cast("str", row[0]) for row in article_refs} | {
+        cast("str", row[0]) for row in paragraph_refs
     }
 
 
@@ -123,7 +128,8 @@ def _run_pipeline_for_regulatory_instrument(
     no orchestrator wires a single shared `run_id` across both actions yet
     (Open Question 6), so this test binds one per action per regulation
     (6 distinct run_ids total) to exercise AC-006/AC-007 unambiguously
-    rather than leave the "same or different" choice implicit."""
+    rather than leave the "same or different" choice implicit.
+    """
     native_graph = select_graph(db, native_graph_name(fixture.short_name))
     baseline_graph = select_graph(db, baseline_graph_name(fixture.short_name))
     limited_adapter = _LimitedDomainMappingAdapter(adapter, _LIMIT_PER_REGULATORY_INSTRUMENT)
@@ -177,7 +183,8 @@ def _assert_ac001_provenance(
     assert expresses_refs, f"{regulatory_instrument_id}: no EXPRESSES edges written"
     for ref in (*defines_refs, *expresses_refs):
         assert ref in native_refs, (
-            f"{regulatory_instrument_id}: source_ref {ref!r} does not match any native-graph element"
+            f"{regulatory_instrument_id}: source_ref {ref!r} does not match any "
+            f"native-graph element"
         )
 
 
@@ -186,14 +193,17 @@ def _assert_ac002_confidence(baseline_graph: GraphHandle, regulatory_instrument_
         row[0] for row in _query_rows(baseline_graph, "MATCH (n:Role) RETURN n.confidence")
     ]
     requirement_confidences = [
-        row[0]
-        for row in _query_rows(baseline_graph, "MATCH (n:Requirement) RETURN n.confidence")
+        row[0] for row in _query_rows(baseline_graph, "MATCH (n:Requirement) RETURN n.confidence")
     ]
     all_confidences = role_confidences + requirement_confidences
-    assert all_confidences, f"{regulatory_instrument_id}: no confidence-bearing Role/Requirement nodes found"
+    assert all_confidences, (
+        f"{regulatory_instrument_id}: no confidence-bearing Role/Requirement nodes found"
+    )
     for value in all_confidences:
-        confidence = cast(float, value)
-        assert 0.0 <= confidence <= 1.0, f"{regulatory_instrument_id}: confidence out of range: {confidence!r}"
+        confidence = cast("float", value)
+        assert 0.0 <= confidence <= 1.0, (
+            f"{regulatory_instrument_id}: confidence out of range: {confidence!r}"
+        )
     # Low-confidence existence is explicitly non-blocking (Open Question 8) —
     # deliberately no assertion either way on whether one happens to appear.
 
@@ -209,8 +219,9 @@ def _assert_ac003_derivation_shape(
     for requirement_id_value, satisfied_count in requirement_rows:
         if requirement_id_value in unmatched_ids:
             continue
-        assert cast(int, satisfied_count) >= 1, (
-            f"{regulatory_instrument_id}: Requirement {requirement_id_value!r} has no SATISFIED_BY edge"
+        assert cast("int", satisfied_count) >= 1, (
+            f"{regulatory_instrument_id}: Requirement {requirement_id_value!r} "
+            f"has no SATISFIED_BY edge"
         )
 
     has_rows = _query_rows(
@@ -218,7 +229,7 @@ def _assert_ac003_derivation_shape(
         "MATCH (o:Obligation) OPTIONAL MATCH (:Role)-[h:HAS]->(o) RETURN o.id, count(h)",
     )
     for obligation_id_value, has_count in has_rows:
-        assert cast(int, has_count) == 1, (
+        assert cast("int", has_count) == 1, (
             f"{regulatory_instrument_id}: Obligation {obligation_id_value!r} has {has_count} HAS "
             "edges, expected exactly 1"
         )
@@ -228,15 +239,20 @@ def _assert_ac003_derivation_shape(
         "MATCH (o:Obligation) OPTIONAL MATCH (o)-[r:REQUIRES]->(:Capability) RETURN o.id, count(r)",
     )
     for obligation_id_value, requires_count in requires_rows:
-        assert cast(int, requires_count) >= 1, (
+        assert cast("int", requires_count) >= 1, (
             f"{regulatory_instrument_id}: Obligation {obligation_id_value!r} has no REQUIRES edge"
         )
 
 
-def _assert_ac005_regulatory_instrument_scope(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> None:
-    regulatory_instrument_rows = _query_rows(baseline_graph, "MATCH (r:RegulatoryInstrument) RETURN r.id")
+def _assert_ac005_regulatory_instrument_scope(
+    baseline_graph: GraphHandle, regulatory_instrument_id: str
+) -> None:
+    regulatory_instrument_rows = _query_rows(
+        baseline_graph, "MATCH (r:RegulatoryInstrument) RETURN r.id"
+    )
     assert regulatory_instrument_rows == [[regulatory_instrument_id]], (
-        f"unexpected Regulation node set in {regulatory_instrument_id}'s baseline graph: {regulatory_instrument_rows}"
+        f"unexpected Regulation node set in {regulatory_instrument_id}'s baseline graph: "
+        f"{regulatory_instrument_rows}"
     )
 
     requirement_ids = [
@@ -244,13 +260,16 @@ def _assert_ac005_regulatory_instrument_scope(baseline_graph: GraphHandle, regul
     ]
     prefix = f"{regulatory_instrument_id}_req_art_"
     for requirement_id_value in requirement_ids:
-        assert cast(str, requirement_id_value).startswith(prefix), (
-            f"Requirement {requirement_id_value!r} in {regulatory_instrument_id}'s baseline graph does not "
-            "carry that regulation's own id prefix — possible cross-regulation contamination"
+        assert cast("str", requirement_id_value).startswith(prefix), (
+            f"Requirement {requirement_id_value!r} in {regulatory_instrument_id}'s "
+            "baseline graph does not carry that regulation's own id prefix — "
+            "possible cross-regulation contamination"
         )
 
 
-def _assert_ac008_no_governance_nodes(baseline_graph: GraphHandle, regulatory_instrument_id: str) -> None:
+def _assert_ac008_no_governance_nodes(
+    baseline_graph: GraphHandle, regulatory_instrument_id: str
+) -> None:
     for label in _GOVERNANCE_LABELS:
         count = _query_rows(baseline_graph, f"MATCH (n:{label}) RETURN count(n)")[0][0]
         assert count == 0, f"{regulatory_instrument_id}: unexpected {label} node(s) found: {count}"
@@ -278,7 +297,7 @@ def _assert_run_id_logged(
     reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
 )
 def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis2(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
     model = _LLM_INTERFACE_MODEL

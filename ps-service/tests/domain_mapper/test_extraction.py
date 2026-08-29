@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 import openai
@@ -19,17 +20,20 @@ from litellm.types.utils import Choices, Message, ModelResponse
 
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.extraction import (
-    _build_requirement_graph,
-    _canonicalize_roles,
-    _extract_candidates_for_unit,
-    _read_regulatory_instrument_properties,
+    _build_requirement_graph,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
+    _canonicalize_roles,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
+    _extract_candidates_for_unit,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
+    _read_regulatory_instrument_properties,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     extract_roles_and_requirements,
 )
-from ps_service.domain_mapper.falkordb_client import GraphHandle
 from ps_service.domain_mapper.models import ExtractionUnit, RequirementCandidate
-from ps_service.llm_interface.client import CompletionCaller
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
+
+if TYPE_CHECKING:
+    from domain_mapper._fakes import MakeEmitter, ReadLines
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.llm_interface.client import CompletionCaller
 
 _REGULATION_ID = "CRA-1.0"
 
@@ -55,7 +59,7 @@ def _model_response(content: str) -> ModelResponse:
 
 
 def test_extract_candidates_for_unit_returns_candidates_from_scripted_response(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     emitter, _log_path = make_emitter()
     scripted_text = json.dumps(
@@ -92,10 +96,13 @@ def test_extract_candidates_for_unit_returns_candidates_from_scripted_response(
     assert candidate.unit_paragraph_number == "1"
 
 
-def test_extract_candidates_for_unit_sends_system_and_user_messages(make_emitter) -> None:
+def test_extract_candidates_for_unit_sends_system_and_user_messages(
+    make_emitter: MakeEmitter,
+) -> None:
     """The system prompt and the unit's own text are sent as two distinct
     messages, with the unit's text delimited (not concatenated into the
-    system prompt) — L2's untrusted-content rule."""
+    system prompt) — L2's untrusted-content rule.
+    """
     emitter, _log_path = make_emitter()
     captured: dict[str, list[dict[str, str]]] = {}
 
@@ -117,10 +124,13 @@ def test_extract_candidates_for_unit_sends_system_and_user_messages(make_emitter
     assert _UNIT.text not in sent[0]["content"]
 
 
-def test_extract_candidates_for_unit_propagates_llm_provider_error_unchanged(make_emitter) -> None:
+def test_extract_candidates_for_unit_propagates_llm_provider_error_unchanged(
+    make_emitter: MakeEmitter,
+) -> None:
     """An infra failure calling the LLM at all (route_completion's own
     LlmProviderError) is not caught here — it propagates unchanged, the
-    infra-vs-content failure split PLAN_REVIEWED.md §5.2 requires."""
+    infra-vs-content failure split PLAN_REVIEWED.md §5.2 requires.
+    """
     emitter, _log_path = make_emitter()
 
     def fake_call_completion(
@@ -135,12 +145,13 @@ def test_extract_candidates_for_unit_propagates_llm_provider_error_unchanged(mak
 
 
 def test_extract_candidates_for_unit_propagates_extraction_error_for_malformed_response(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """A malformed/unparseable LLM *response* (as opposed to an infra
     failure) surfaces as DomainMapperExtractionError, naming the unit —
     this function does not swallow it; per-unit failure isolation is the
-    orchestrating extract_roles_and_requirements's job, not this one's."""
+    orchestrating extract_roles_and_requirements's job, not this one's.
+    """
     emitter, _log_path = make_emitter()
 
     def fake_call_completion(
@@ -176,7 +187,8 @@ def _candidate(**overrides: object) -> RequirementCandidate:
 def test_canonicalize_roles_collapses_same_role_name_onto_one_node() -> None:
     """Two candidates naming the same role_name -> one Role node, and the
     DEFINES edge carries the FIRST candidate's citation_ref, not the
-    second's."""
+    second's.
+    """
     first = _candidate(unit_citation_ref="Art. 13(1)", role_name="Manufacturer")
     second = _candidate(unit_citation_ref="Art. 14(2)", role_name="Manufacturer")
 
@@ -206,9 +218,7 @@ def test_canonicalize_roles_stamps_first_candidates_confidence() -> None:
     first = _candidate(role_name="Manufacturer", confidence=0.4)
     second = _candidate(role_name="Manufacturer", confidence=0.95)
 
-    role_nodes, _role_edges, _role_node_ids = _canonicalize_roles(
-        [first, second], _REGULATION_ID
-    )
+    role_nodes, _role_edges, _role_node_ids = _canonicalize_roles([first, second], _REGULATION_ID)
 
     assert role_nodes[0].properties["confidence"] == 0.4
 
@@ -220,7 +230,8 @@ def test_build_requirement_graph_deduplicates_identical_id_and_text() -> None:
     """A trivial same-input sanity check (two candidates that happen to
     compute the same id and carry byte-identical text within one call) —
     NOT proof of cross-call idempotent re-extraction, which is out of this
-    test's scope."""
+    test's scope.
+    """
     text = "Manufacturers shall conduct a cybersecurity risk assessment."
     first = _candidate(text=text)
     second = _candidate(text=text)
@@ -239,7 +250,8 @@ def test_build_requirement_graph_disambiguates_same_id_different_text() -> None:
     """No exception is ever raised for a Requirement-id collision — two
     Requirement nodes are persisted, the second carries id `f"{base_id}#2"`,
     both original texts are preserved unchanged, and collided_ids names the
-    disambiguated id."""
+    disambiguated id.
+    """
     first = _candidate(text="Conduct a cybersecurity risk assessment.")
     second = _candidate(text="Report vulnerabilities without undue delay.")
     role_node_ids = {"Manufacturer": "role_manufacturer_abc123"}
@@ -261,7 +273,8 @@ def test_build_requirement_graph_disambiguates_three_distinct_texts_deterministi
     """Three candidates at the same base id, three different texts -> ids
     base_id, base_id#2, base_id#3 in document order — proves the
     disambiguation is deterministic given a fixed candidate order, not just
-    a two-way case."""
+    a two-way case.
+    """
     first = _candidate(text="Text A")
     second = _candidate(text="Text B")
     third = _candidate(text="Text C")
@@ -314,7 +327,8 @@ class _FakeQueryResult:
 
 class _FakeRegulatoryInstrumentNode:
     """Satisfies extraction.py's own `_RegulatoryInstrumentNode` Protocol structurally
-    — only `.properties` is ever read."""
+    — only `.properties` is ever read.
+    """
 
     def __init__(self, properties: dict[str, object]) -> None:
         self.properties = properties
@@ -324,19 +338,23 @@ class _FakeNativeGraph:
     """Satisfies `GraphHandle` structurally. Answers
     `MATCH (r:RegulatoryInstrument) RETURN r` with a scripted Regulation node;
     ignores any other query (the fake adapter never actually queries it in
-    these tests)."""
+    these tests).
+    """
 
     def __init__(self, regulatory_instrument_properties: dict[str, object]) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]])
+        return _FakeQueryResult(
+            [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
+        )
 
 
 class _FakeBaselineGraph:
     """Satisfies `GraphHandle` structurally, capturing every `(query,
     params)` call for assertion — mirrors `test_graph_writer.py`'s
-    `_FakeGraph`."""
+    `_FakeGraph`.
+    """
 
     def __init__(self) -> None:
         self.calls: list[_RecordedCall] = []
@@ -348,7 +366,8 @@ class _FakeBaselineGraph:
 
 class _FakeAdapter:
     """Satisfies `DomainMappingAdapter` structurally — returns a
-    pre-scripted tuple of `ExtractionUnit`s regardless of `graph`."""
+    pre-scripted tuple of `ExtractionUnit`s regardless of `graph`.
+    """
 
     def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
         self._units = units
@@ -361,7 +380,8 @@ def _scripted_call_completion(responses: dict[str, str | Exception]) -> Completi
     """A `CompletionCaller` fake keyed by the unit's `citation_ref`, which
     `_build_extraction_messages` always embeds in the user message as
     `"Citation: {citation_ref}"` — lets a test script one canned response
-    (or an exception to raise) per unit regardless of call order."""
+    (or an exception to raise) per unit regardless of call order.
+    """
 
     def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
         user_content = messages[1]["content"]
@@ -414,10 +434,11 @@ def _find_edge_call(graph: _FakeBaselineGraph, relationship_type: str) -> list[_
 
 
 def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edges_with_source_ref(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """AC-001: two units, two different roles -> Role/Requirement nodes with
-    DEFINES/EXPRESSES edges carrying source_ref == unit.citation_ref."""
+    DEFINES/EXPRESSES edges carrying source_ref == unit.citation_ref.
+    """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID, "title": "Cyber Resilience Act"})
     baseline_graph = _FakeBaselineGraph()
@@ -459,7 +480,7 @@ def test_extract_roles_and_requirements_ac001_produces_role_and_requirement_edge
 
 
 def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """AC-002: a candidate with confidence=0.1 is still persisted, not filtered."""
     emitter, _log_path = make_emitter()
@@ -495,21 +516,18 @@ def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
     ]
     assert len(requirement_calls) == 1
     assert requirement_calls[0].params is not None
-    properties = cast_dict(requirement_calls[0].params["properties"])
+    properties = requirement_calls[0].params["properties"]
+    assert isinstance(properties, dict)
     assert properties["confidence"] == 0.1
 
 
-def cast_dict(value: object) -> dict[str, object]:
-    assert isinstance(value, dict)
-    return value
-
-
 def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """AC-006: with a run context bound, the emitted outcome="succeeded"
     entry carries the bound run_id — mirrors
-    test_route_completion_logs_run_id.py exactly."""
+    test_route_completion_logs_run_id.py exactly.
+    """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     baseline_graph = _FakeBaselineGraph()
@@ -547,11 +565,12 @@ def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
 
 
 def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """One of two units' scripted response is malformed JSON -> the OTHER
     unit's candidates still persist, an outcome="error" entry is emitted
-    for the bad unit's citation_ref, and skipped_unit_count == 1."""
+    for the bad unit's citation_ref, and skipped_unit_count == 1.
+    """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     baseline_graph = _FakeBaselineGraph()
@@ -591,11 +610,12 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
 
 
 def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """An LlmProviderError from one unit's call propagates and aborts the
     whole call — infra failures are not per-unit-isolated (no partial-write
-    guarantee claimed either way)."""
+    guarantee claimed either way).
+    """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     baseline_graph = _FakeBaselineGraph()
@@ -624,11 +644,12 @@ def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts
 
 
 def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_result(
-    make_emitter,
+    make_emitter: MakeEmitter,
 ) -> None:
     """Q2 fix: an adapter returning zero units is not an error — the
     Regulation node is still MERGEd, and a well-formed all-zero
-    ExtractionResult is returned."""
+    ExtractionResult is returned.
+    """
     emitter, _log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     baseline_graph = _FakeBaselineGraph()
@@ -650,17 +671,21 @@ def test_extract_roles_and_requirements_zero_units_returns_well_formed_all_zero_
     assert result.requirement_ids == ()
     assert result.requirement_id_collisions == ()
     assert len(baseline_graph.calls) == 1
-    assert baseline_graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    assert (
+        baseline_graph.calls[0].query
+        == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+    )
 
 
 def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
-    make_emitter, read_lines
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
     """B2 fix: two units whose candidates land on the same requirement_id
     with different text -> both Requirement nodes persisted (one
     #2-suffixed), requirement_id_collisions is non-empty, an
     outcome="collision" entry is emitted naming the base id — no exception,
-    no aborted call."""
+    no aborted call.
+    """
     emitter, log_path = make_emitter()
     native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
     baseline_graph = _FakeBaselineGraph()
@@ -731,7 +756,8 @@ def test_extract_roles_and_requirements_surfaces_collision_without_aborting(
 def test_read_regulatory_instrument_properties_includes_instrument_type() -> None:
     """AC-BI-010 (Domain Mapper, read side): `_read_regulatory_instrument_properties`
     returns `dict(node.properties)` — the whole property bag, no field
-    filter — so `instrument_type` is carried through with NO src change."""
+    filter — so `instrument_type` is carried through with NO src change.
+    """
     native_graph = _FakeNativeGraph(
         {"id": "NIS2-1.0", "title": "NIS2 Directive", "instrument_type": "directive"}
     )

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""MCP stdio server: in-process read-only Cypher access to the policy_system graph
-plus the ps-domain-concepts resource, for clients (e.g. Claude Desktop) with no shell.
+"""MCP stdio server: in-process read-only Cypher access to the policy_system graph.
 
-Calls ps_service.query_engine.execute_cypher_query IN-PROCESS. The write-clause guard
-and all execution live in Query Engine and are never duplicated here. No network
-transport, no auth, no query timeout / result-size cap (issues #38 / #39).
+Also serves the ps-domain-concepts resource, for clients (e.g. Claude
+Desktop) with no shell. Calls ps_service.query_engine.execute_cypher_query
+IN-PROCESS. The write-clause guard and all execution live in Query Engine
+and are never duplicated here. No network transport, no auth, no query
+timeout / result-size cap (issues #38 / #39).
 """
 
 from __future__ import annotations
@@ -12,12 +13,12 @@ from __future__ import annotations
 import functools
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcp.server import MCPServer
 
 from ps_service.config import load_config
 from ps_service.logging import bind_run_context, configure, emit_log_entry
-from ps_service.logging.emitter import LogEmitter
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
@@ -34,6 +35,9 @@ from ps_service.query_engine.falkordb_client import (
     select_graph,
 )
 
+if TYPE_CHECKING:
+    from ps_service.logging.emitter import LogEmitter
+
 _COMPONENT = "mcp_interface"
 _ACTION = "handle_mcp_tool_call"
 _DEFAULT_GRAPH_NAME = "policy_system"
@@ -44,18 +48,22 @@ _GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
 
 @functools.cache
 def _domain_concepts_path() -> Path:
-    """Absolute path to docs/artifacts/ps-domain-concepts.md, resolved from the repo
-    checkout by a fixed parent count (mirrors how CYPHER_CLI was computed with
-    parents[1] today). Lazy + cached: never touched at import, so the module imports
-    outside a checkout / in a wheel. Wheel-packaging docs/ is part of the same
-    remote-deployment migration already flagged for the transport.
+    """Absolute path to docs/artifacts/ps-domain-concepts.md.
+
+    Resolved from the repo checkout by a fixed parent count (mirrors how
+    CYPHER_CLI was computed with parents[1] today). Lazy + cached: never
+    touched at import, so the module imports outside a checkout / in a
+    wheel. Wheel-packaging docs/ is part of the same remote-deployment
+    migration already flagged for the transport.
     """
     return Path(__file__).resolve().parents[4] / "docs" / "artifacts" / "ps-domain-concepts.md"
 
 
 def _graph_name() -> str:
-    """The single company-graph name. Reads PS_FALKORDB_GRAPH directly (config.py
-    deliberately has no falkordb_graph field -- see PLAN_REVIEWED §2 Q4). Rejects an
+    """The single company-graph name.
+
+    Reads PS_FALKORDB_GRAPH directly (config.py deliberately has no
+    falkordb_graph field -- see PLAN_REVIEWED §2 Q4). Rejects an
     explicitly-empty value, mirroring config._parse_falkordb_host.
     """
     name = os.environ.get("PS_FALKORDB_GRAPH", _DEFAULT_GRAPH_NAME)
@@ -78,8 +86,11 @@ server = MCPServer(
 def handle_mcp_tool_call(
     query: str, *, graph: GraphHandle, emitter: LogEmitter | None = None
 ) -> dict[str, object] | str:
-    """HandleMcpToolCall: bind a fresh run_id, delegate to Query Engine in-process,
-    return {columns, rows, row_count} or an 'error: <message>' string verbatim.
+    """HandleMcpToolCall: run `query` through Query Engine in-process.
+
+    Binds a fresh run_id, then returns `{columns, rows, row_count}` on
+    success or an `error: <message>` string verbatim on a rejected or
+    failed query.
     """
     with bind_run_context():
         try:
@@ -90,17 +101,21 @@ def handle_mcp_tool_call(
 
 
 def _resolve_graph() -> GraphHandle:
-    """Acquire a GraphHandle for one tool call. ANY failure here -- bad PS_FALKORDB_*
-    config, DB unreachable/refused, driver I/O in the eager FalkorDB constructor or in
-    select_graph -- is sanitised to a fixed generic McpGraphUnavailableError. Host,
-    port, driver, and env-var text must not cross the MCP boundary (L2 MCP Interface
-    Patterns; PLAN_REVIEWED §2 Q6 / F-01 / F-17).
+    """Acquire a GraphHandle for one tool call.
+
+    ANY failure here -- bad PS_FALKORDB_* config, DB unreachable/refused,
+    driver I/O in the eager FalkorDB constructor or in select_graph -- is
+    sanitised to a fixed generic McpGraphUnavailableError. Host, port,
+    driver, and env-var text must not cross the MCP boundary (L2 MCP
+    Interface Patterns; PLAN_REVIEWED §2 Q6 / F-01 / F-17).
     """
     try:
         return select_graph(connect_from_config(load_config()), _graph_name())
     except McpGraphUnavailableError:
         raise
-    except Exception as exc:  # broad by design: every failure here is sanitised to a fixed message and chained, never re-raised raw
+    # broad by design: every failure here is sanitised to a fixed message
+    # and chained, never re-raised raw
+    except Exception as exc:
         raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
 
 
@@ -128,10 +143,12 @@ def cypher(query: str) -> dict[str, object] | str:
     description="The canonical PS compliance-graph vocabulary and schema, served verbatim.",
     mime_type="text/markdown",
 )
-def _read_domain_concepts() -> str:
-    """GetDomainConcepts: serve docs/artifacts/ps-domain-concepts.md verbatim. Zero
-    parameters -- no client-supplied input reaches the read (AC-012). Resolves from a
-    repo checkout only.
+def read_domain_concepts() -> str:
+    """GetDomainConcepts: return the full ps-domain-concepts.md text.
+
+    Takes no parameters -- no client-supplied input reaches the read
+    (AC-012). Resolves from a repo checkout only; raises a
+    resource-unavailable error if the file cannot be read.
     """
     try:
         return _domain_concepts_path().read_text(encoding="utf-8")

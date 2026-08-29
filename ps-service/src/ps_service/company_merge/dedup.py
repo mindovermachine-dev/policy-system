@@ -1,5 +1,6 @@
-"""ps_service.company_merge.dedup -- exact-key identity reuse (PLAN_REVIEWED.md §3)
-plus the existing-canonical-index reader, exact-match resolution,
+"""ps_service.company_merge.dedup -- exact-key identity reuse (PLAN_REVIEWED.md §3).
+
+Also the existing-canonical-index reader, exact-match resolution,
 semantic-match resolution, and the combined whole-collection resolution
 algorithm (PLAN_REVIEWED.md §5.1/§5.2/§5.3/§5.4, Increments 6-9).
 
@@ -18,7 +19,9 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from ps_service.company_merge.falkordb_client import GraphHandle
+from ps_service.company_merge.falkordb_client import (
+    GraphHandle,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
+)
 from ps_service.company_merge.models import (
     BaselineNode,
     CanonicalResolution,
@@ -29,9 +32,13 @@ from ps_service.company_merge.models import (
 )
 from ps_service.company_merge.similarity import cosine_similarity
 from ps_service.domain_mapper.identity import capability_id
-from ps_service.llm_interface.client import EmbeddingCaller
+from ps_service.llm_interface.client import (
+    EmbeddingCaller,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
+)
 from ps_service.llm_interface.embedding import route_embedding
-from ps_service.logging.emitter import LogEmitter
+from ps_service.logging.emitter import (
+    LogEmitter,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
+)
 
 __all__ = [
     "capability_id",
@@ -41,22 +48,19 @@ __all__ = [
     "resolve_exact_match",
 ]
 
-_CAPABILITY_INDEX_QUERY = "MATCH (n:Capability) RETURN n.id, n.name, n.embedding"
-
 
 def read_existing_canonical_index(
     single_tenant_graph: GraphHandle, label: Literal["Capability"]
 ) -> tuple[ExistingCanonicalNode, ...]:
-    """Read every existing `label` node already present in the single-tenant
-    graph, as an `ExistingCanonicalNode` tuple (PLAN_REVIEWED.md §5.2).
+    """Read every existing `label` node in the single-tenant graph (PLAN_REVIEWED.md §5.2).
 
-    `label` is always this module's own fixed literal (`"Capability"`),
-    passed only by this component's own code (`dedupe_canonical_nodes`) --
-    never sourced from an adapter/LLM/external input -- so it is
-    interpolated directly into the query string, mirroring
-    `graph_reader.py`'s own "fixed literal, no allow-list needed" precedent
-    for its own per-relationship-type queries. The parameter is kept for
-    symmetry with a future internal-SoP Policy pass.
+    Returned as an `ExistingCanonicalNode` tuple. `label` is this module's
+    own fixed literal (`"Capability"`), passed only by `dedupe_canonical_nodes`
+    -- never sourced from an adapter/LLM/external input -- so it is
+    interpolated directly into the query string, mirroring `graph_reader.py`'s
+    own "fixed literal, no allow-list needed" precedent for its own
+    per-relationship-type queries. The parameter is also the scope hook for a
+    future internal-SoP Policy pass.
 
     `n.embedding` is a cached `list[float]` property once computed
     (PLAN_REVIEWED.md §5.5) -- `None`/absent for a canonical node whose
@@ -65,7 +69,7 @@ def read_existing_canonical_index(
     empty graph (no nodes of this label) returns an empty tuple, no
     exception.
     """
-    result = single_tenant_graph.query(_CAPABILITY_INDEX_QUERY)
+    result = single_tenant_graph.query(f"MATCH (n:{label}) RETURN n.id, n.name, n.embedding")
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[ExistingCanonicalNode] = []
     for row in rows:
@@ -73,8 +77,8 @@ def read_existing_canonical_index(
         raw_embedding = cast("list[float] | None", embedding)
         nodes.append(
             ExistingCanonicalNode(
-                id=cast(str, node_id),
-                text=cast(str, text),
+                id=cast("str", node_id),
+                text=cast("str", text),
                 embedding=tuple(raw_embedding) if raw_embedding is not None else None,
             )
         )
@@ -82,11 +86,13 @@ def read_existing_canonical_index(
 
 
 def resolve_exact_match(incoming_id: str, existing_ids: frozenset[str]) -> bool:
-    """Exact-key match (PLAN_REVIEWED.md §5.1): does `incoming_id` already
-    exist as a canonical node id in the single-tenant graph? Domain Mapper
-    already computed every baseline Capability node's id via `capability_id`,
-    so the incoming node's own `id` field already equals its canonical id --
-    this is nothing more than a membership check."""
+    """Exact-key match (PLAN_REVIEWED.md §5.1): is `incoming_id` already a canonical node id?
+
+    Domain Mapper already computed every baseline Capability node's id via
+    `capability_id`, so the incoming node's own `id` field already equals its
+    canonical id -- this is nothing more than a membership check against the
+    single-tenant graph's existing ids.
+    """
     return incoming_id in existing_ids
 
 
@@ -95,7 +101,6 @@ def find_best_semantic_match(
     existing_index: tuple[ExistingCanonicalNode, ...],
     *,
     model: str,
-    threshold: float,
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> SemanticMatchResult | None:
@@ -112,9 +117,9 @@ def find_best_semantic_match(
     `embedding` is reused as-is, with NO call made for it.
     `similarity.cosine_similarity` scores every entry (using either its
     cached or freshly-computed embedding) against the incoming embedding;
-    the maximum-scoring entry is returned regardless of whether it clears
-    `threshold` -- the caller (`dedupe_canonical_nodes`, a later increment)
-    decides merge-vs-surface, not this function.
+    the maximum-scoring entry is returned regardless of its score -- the
+    caller (`dedupe_canonical_nodes`) decides merge-vs-surface by comparing
+    it against a similarity threshold, not this function.
 
     Every existing entry that needed a fresh embedding this call -- not just
     the eventual best match -- is returned via
@@ -127,11 +132,11 @@ def find_best_semantic_match(
     existing candidate during the scan.
 
     A `LlmProviderError` from any `route_embedding` call propagates
-    unchanged -- no try/except in this function. `threshold` is accepted
-    here only so callers have a single, stable signature to call through
-    regardless of which layer ends up applying it; this function itself
-    never consults it -- the merge-vs-surface decision belongs entirely to
-    the caller (`dedupe_canonical_nodes`)."""
+    unchanged -- no try/except in this function. This function never applies
+    a similarity threshold: it always returns the maximum-scoring entry, and
+    the merge-vs-surface decision belongs entirely to the caller
+    (`dedupe_canonical_nodes`).
+    """
     if not existing_index:
         return None
 
@@ -164,10 +169,12 @@ def find_best_semantic_match(
 
 
 def _incoming_name(node: BaselineNode) -> str:
-    """An incoming Capability's name lives under `properties["name"]` --
-    mirrors `graph_reader.read_baseline_graph`'s own property-key convention
-    (see `test_graph_reader.py`'s fixtures)."""
-    return cast(str, node.properties["name"])
+    """Return an incoming Capability's name from `properties["name"]`.
+
+    Mirrors `graph_reader.read_baseline_graph`'s own property-key convention
+    (see `test_graph_reader.py`'s fixtures).
+    """
+    return cast("str", node.properties["name"])
 
 
 def dedupe_canonical_nodes(
@@ -180,11 +187,13 @@ def dedupe_canonical_nodes(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
-    """Combined resolution, whole-collection, before any write
-    (PLAN_REVIEWED.md §5.4, Increment 9) -- run for the WHOLE incoming
+    """Combined resolution over the whole incoming collection, before any write.
+
+    PLAN_REVIEWED.md §5.4, Increment 9 -- run for the WHOLE incoming
     Capability collection before `merge.py` writes anything. `kind` is
-    `"Capability"` only since #42 (Obligation is passed through, not
-    deduped); the parameter is kept for a future internal-SoP Policy pass.
+    `"Capability"` only since #42 (Obligation is passed through, not deduped);
+    it is passed straight to `read_existing_canonical_index` as its `label`
+    and is also the scope hook for a future internal-SoP Policy pass.
 
     Makes exactly one read call (`read_existing_canonical_index`) and never
     a single write call -- "abort with no partial write" on a
@@ -234,7 +243,6 @@ def dedupe_canonical_nodes(
             node_text,
             tuple(working_index.values()),
             model=model,
-            threshold=threshold,
             call_embedding=call_embedding,
             emitter=emitter,
         )

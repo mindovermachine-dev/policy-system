@@ -40,7 +40,7 @@ class LogEntry:
     extra: tuple[tuple[str, object], ...] = field(default_factory=tuple)
 
     def to_json_line(self) -> str:
-        """Render this entry as one JSON object, one line, terminated by '\\n'.
+        r"""Render this entry as one JSON object, one line, terminated by '\\n'.
 
         D2: a convention field whose value is `None` is omitted, not emitted
         as `null`. B1 fix: `entity_id` is included exactly like every other

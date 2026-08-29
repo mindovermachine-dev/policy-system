@@ -10,10 +10,9 @@ component actually exposes (no `check_connectivity`/graph-naming helper).
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
 from ps_service import config as config_module
 from ps_service.config import load_config
@@ -23,6 +22,9 @@ from ps_service.query_engine.falkordb_client import (
     connect_from_config,
     select_graph,
 )
+
+if TYPE_CHECKING:
+    from falkordb import FalkorDB
 
 
 def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defaults(
@@ -37,12 +39,12 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
     """
     env_host = "10.20.30.40"
     env_port = 7000
-    assert env_host != config_module._DEFAULT_FALKORDB_HOST
-    assert env_port != config_module._DEFAULT_FALKORDB_PORT
+    assert env_host != config_module._DEFAULT_FALKORDB_HOST  # pyright: ignore[reportPrivateUsage]  # asserts the test's env value differs from the shipped default
+    assert env_port != config_module._DEFAULT_FALKORDB_PORT  # pyright: ignore[reportPrivateUsage]  # asserts the test's env value differs from the shipped default
     monkeypatch.setenv("PS_FALKORDB_HOST", env_host)
     monkeypatch.setenv("PS_FALKORDB_PORT", str(env_port))
     captured: dict[str, object] = {}
-    sentinel = cast(FalkorDB, object())
+    sentinel = cast("FalkorDB", object())
 
     def _fake_connect(host: str, port: int) -> FalkorDB:
         captured["host"] = host

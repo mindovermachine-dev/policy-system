@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ps_service.logging import EmitterConfig, LogEmitter
-from ps_service.logging.emitter import TextSink
 from ps_service.logging.models import LogEntry
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ps_service.logging.emitter import TextSink
 
 
 class _GatedSink:

@@ -13,29 +13,50 @@ CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH are rejected before execution,
 not just discouraged.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
 import sys
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from falkordb import FalkorDB  # noqa: E402
+from falkordb import FalkorDB
+
+if TYPE_CHECKING:
+    # falkordb ships no py.typed; these Protocols pin the slice of its surface
+    # this script touches so the rest of the module stays precisely typed.
+    class _QueryResult(Protocol):
+        @property
+        def header(self) -> list[list[Any]]: ...
+        @property
+        def result_set(self) -> list[list[Any]]: ...
+
+    class _Graph(Protocol):
+        def query(self, q: str) -> _QueryResult: ...
+
+    class _FalkorDB(Protocol):
+        def select_graph(self, name: str) -> _Graph: ...
+
 
 # Cypher clauses that mutate the graph. Best-effort textual guard, not a
 # security boundary -- do not run CREATE/MERGE/DELETE/SET against the live
 # graph through any other path either.
-_WRITE_CLAUSE = re.compile(
-    r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b", re.I
-)
+_WRITE_CLAUSE = re.compile(r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|FOREACH)\b", re.IGNORECASE)
 
 
-def _connect(args):
-    db = FalkorDB(host=args.host, port=args.port)
+def _connect(args: argparse.Namespace) -> _Graph:
+    db = cast("_FalkorDB", FalkorDB(host=args.host, port=args.port))
     return db.select_graph(args.graph)
 
 
-def _print_rows(columns, rows, fmt):
+def _print_rows(columns: list[Any], rows: list[list[Any]], fmt: str) -> None:
     if fmt == "json":
-        print(json.dumps({"columns": columns, "rows": rows, "row_count": len(rows)}, indent=2, default=str))
+        print(
+            json.dumps(
+                {"columns": columns, "rows": rows, "row_count": len(rows)}, indent=2, default=str
+            )
+        )
         return
     if not rows:
         print("(no rows)")
@@ -44,13 +65,13 @@ def _print_rows(columns, rows, fmt):
         max(len(str(col)), max((len(str(r[i])) for r in rows), default=0))
         for i, col in enumerate(columns)
     ]
-    print("  ".join(str(c).ljust(w) for c, w in zip(columns, widths)))
+    print("  ".join(str(c).ljust(w) for c, w in zip(columns, widths, strict=False)))
     print("  ".join("-" * w for w in widths))
     for row in rows:
-        print("  ".join(str(v).ljust(w) for v, w in zip(row, widths)))
+        print("  ".join(str(v).ljust(w) for v, w in zip(row, widths, strict=False)))
 
 
-def cmd_cypher(args):
+def cmd_cypher(args: argparse.Namespace) -> int:
     if _WRITE_CLAUSE.search(args.query):
         print(
             "error: this command is read-only -- query contains a write clause "
@@ -72,7 +93,7 @@ def cmd_cypher(args):
     return 0
 
 
-def _common_flags():
+def _common_flags() -> argparse.ArgumentParser:
     # A parent parser, not top-level-only args: agents put flags in varying
     # positions relative to the subcommand (`ps --format json cypher ...`
     # vs `ps cypher ... --format json`), and only accepting the first form
@@ -90,16 +111,25 @@ def _common_flags():
     # to, so a single shared instance plus set_defaults() on any one parser
     # mutates the default for all of them.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--host", default=argparse.SUPPRESS, help="FalkorDB host (default: localhost)")
-    common.add_argument("--port", type=int, default=argparse.SUPPRESS, help="FalkorDB port (default: 6379)")
-    common.add_argument("--graph", default=argparse.SUPPRESS, help="Graph name (default: policy_system)")
     common.add_argument(
-        "--format", choices=["text", "json"], default=argparse.SUPPRESS, help="Output format (default: text)"
+        "--host", default=argparse.SUPPRESS, help="FalkorDB host (default: localhost)"
+    )
+    common.add_argument(
+        "--port", type=int, default=argparse.SUPPRESS, help="FalkorDB port (default: 6379)"
+    )
+    common.add_argument(
+        "--graph", default=argparse.SUPPRESS, help="Graph name (default: policy_system)"
+    )
+    common.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default=argparse.SUPPRESS,
+        help="Output format (default: text)",
     )
     return common
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ps",
         description="PS CLI -- read-only Cypher access to the policy_system graph.",
@@ -124,7 +154,7 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

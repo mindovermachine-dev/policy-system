@@ -1,5 +1,4 @@
-"""ps_service.domain_mapper.derivation — the DeriveObligationsAndCapabilities
-action.
+"""ps_service.domain_mapper.derivation — the DeriveObligationsAndCapabilities action.
 
 Holds the public orchestrating function (`derive_obligations_and_capabilities`,
 PLAN_REVIEWED.md §11 Increment 16, wiring Increments 11-15 plus §7.2's
@@ -31,10 +30,9 @@ never fire against a graph written by the current, B3-hardened
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ps_service.domain_mapper.errors import DomainMapperDerivationError
-from ps_service.domain_mapper.falkordb_client import GraphHandle
 from ps_service.domain_mapper.graph_writer import (
     persist_obligation_and_capability_graph,
 )
@@ -56,10 +54,13 @@ from ps_service.domain_mapper.prompts import (
     parse_capability_response,
     parse_obligation_response,
 )
-from ps_service.llm_interface.client import CompletionCaller
 from ps_service.llm_interface.completion import route_completion
 from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import LogEmitter, emit_log_entry
+
+if TYPE_CHECKING:
+    from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.llm_interface.client import CompletionCaller
 
 _COMPONENT = "domain_mapper"
 _ACTION = "derive_obligations_and_capabilities"
@@ -79,8 +80,7 @@ def derive_obligations_and_capabilities(
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
 ) -> DerivationResult:
-    """DeriveObligationsAndCapabilities — PLAN_REVIEWED.md §7.1/§11
-    Increment 16's orchestrating flow.
+    """DeriveObligationsAndCapabilities — PLAN_REVIEWED.md §7.1/§11 Increment 16's flow.
 
     No `adapter` parameter (§7.1) — this action reads only the baseline
     graph's own fixed PS-Conceptual-Model shape, identical regardless of
@@ -107,9 +107,7 @@ def derive_obligations_and_capabilities(
     roles = tuple(_read_requirements_by_role(baseline_graph).values())
 
     obligation_nodes, has_edges, satisfied_by_edges, unmatched_requirement_ids = (
-        _derive_obligations(
-            roles, model=model, call_completion=call_completion, emitter=emitter
-        )
+        _derive_obligations(roles, model=model, call_completion=call_completion, emitter=emitter)
     )
     capability_nodes, requires_edges = _derive_capabilities(
         obligation_nodes, model=model, call_completion=call_completion, emitter=emitter
@@ -141,8 +139,7 @@ def derive_obligations_and_capabilities(
 
 
 def _read_requirements_by_role(baseline_graph: GraphHandle) -> dict[str, RoleRequirements]:
-    """PLAN_REVIEWED.md §7.2's exact Cypher and validation logic — the B3
-    read-side fix.
+    """PLAN_REVIEWED.md §7.2's exact Cypher and validation logic — the B3 read-side fix.
 
     `MATCH (req:Requirement) OPTIONAL MATCH (rl:Role {id: req.role_id})
     RETURN req.id, req.text, req.role_id, rl.id, rl.name` — every row is
@@ -188,13 +185,13 @@ def _read_requirements_by_role(baseline_graph: GraphHandle) -> dict[str, RoleReq
         requirement_id, requirement_text, requirement_role_id, role_node_id, role_name = row
         if requirement_role_id is None:
             continue
-        role_node_id = cast(str, role_node_id)
+        role_node_id = cast("str", role_node_id)
         if role_node_id not in requirements_by_role:
             requirements_by_role[role_node_id] = []
-            role_names[role_node_id] = cast(str, role_name)
+            role_names[role_node_id] = cast("str", role_name)
             role_order.append(role_node_id)
         requirements_by_role[role_node_id].append(
-            (cast(str, requirement_id), cast(str, requirement_text))
+            (cast("str", requirement_id), cast("str", requirement_text))
         )
 
     return {
@@ -209,15 +206,17 @@ def _read_requirements_by_role(baseline_graph: GraphHandle) -> dict[str, RoleReq
 
 @dataclass
 class _DerivationState:
-    """Mutable whole-run accumulator threaded through `_process_requirement`
-    by `_derive_obligations`'s own loop — never returned to a caller outside
-    this module.
+    """Mutable whole-run accumulator threaded through `_process_requirement`.
+
+    Threaded by `_derive_obligations`'s own loop — never returned to a
+    caller outside this module.
 
     `registry` is the single whole-run registry (`obligation_id -> (text,
     assigned_role_node_id)`), seeded empty once for the entire run. It
     exists so the SAME Role minting identical duty text twice in one run
     converges onto one node; cross-Role separation is already guaranteed by
-    the Role-scoped `obligation_id` hash (#42), not by this registry."""
+    the Role-scoped `obligation_id` hash (#42), not by this registry.
+    """
 
     registry: dict[str, tuple[str, str]] = field(default_factory=dict)
     obligation_nodes: list[ObligationNode] = field(default_factory=list)
@@ -238,8 +237,9 @@ def _derive_obligations(
     tuple[RequirementSatisfiedByEdge, ...],
     tuple[str, ...],
 ]:
-    """Whole-run Obligation derivation (PLAN_REVIEWED.md §7.3, adapted for
-    #42's Role-scoped Obligation identity).
+    """Whole-run Obligation derivation, adapted for #42's Role-scoped Obligation identity.
+
+    PLAN_REVIEWED.md §7.3.
 
     Iterates `roles` in document order, and within each Role its
     `requirements` in document order (the caller's own tuple order — this
@@ -307,9 +307,11 @@ def _process_requirement(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One Requirement's mint-or-match-or-unmatchable decision, plus the
-    whole-registry id resolution and the corresponding node/edge
-    bookkeeping. Mutates `state` in place."""
+    """One Requirement's mint-or-match-or-unmatchable decision.
+
+    Plus the whole-registry id resolution and the corresponding node/edge
+    bookkeeping. Mutates `state` in place.
+    """
     role_view = _role_view(state.registry, role.role_node_id)
 
     try:
@@ -352,11 +354,12 @@ def _process_requirement(
 
 
 def _role_view(registry: dict[str, tuple[str, str]], role_node_id: str) -> dict[str, str]:
-    """PLAN_REVIEWED.md §7.3 step 1 — "the slice of the whole-run registry
-    already assigned to R." Recomputed fresh from the live whole-run
-    `registry` at each call site (not cached once per Role) so a Role's own
-    earlier mint in this run is visible to that same Role's later
-    Requirements."""
+    """PLAN_REVIEWED.md §7.3 step 1 — "the slice of the whole-run registry already assigned to R".
+
+    Recomputed fresh from the live whole-run `registry` at each call site
+    (not cached once per Role) so a Role's own earlier mint in this run is
+    visible to that same Role's later Requirements.
+    """
     return {
         oid: text
         for oid, (text, assigned_role_node_id) in registry.items()
@@ -364,11 +367,15 @@ def _role_view(registry: dict[str, tuple[str, str]], role_node_id: str) -> dict[
     }
 
 
-def _mark_unmatched(requirement_id: str, state: _DerivationState, emitter: LogEmitter | None) -> None:
-    """§7.5 — unifies the "explicit unmatchable" and "malformed response"
-    failure modes under one mechanism: surfaced via the return value and an
+def _mark_unmatched(
+    requirement_id: str, state: _DerivationState, emitter: LogEmitter | None
+) -> None:
+    """§7.5 — unify the "explicit unmatchable" and "malformed response" failure modes.
+
+    One mechanism: surfaced via the return value and an
     `outcome="unmatched"` log entry, never a silently-dropped Requirement
-    and never an uncaught exception."""
+    and never an uncaught exception.
+    """
     state.unmatched_requirement_ids.append(requirement_id)
     emit_log_entry(
         component=_COMPONENT,
@@ -385,9 +392,9 @@ def _resolve_obligation_id(
     role_node_id: str,
     registry: dict[str, tuple[str, str]],
 ) -> tuple[str, str, bool]:
-    """Resolve one proposed duty text to its final Obligation id against
-    the whole-run `registry`. Mutates `registry` in place on a mint; a
-    reuse never mutates it.
+    """Resolve one proposed duty text to its final Obligation id against the whole-run registry.
+
+    Mutates `registry` in place on a mint; a reuse never mutates it.
 
     Returns `(final_obligation_id, final_text, is_new_mint)`.
 
@@ -426,8 +433,9 @@ def _derive_obligation_for_requirement(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> ObligationAssignment:
-    """Call the LLM once for one Requirement, returning its
-    `ObligationAssignment` (Increment 11's prompt/parser).
+    """Call the LLM once for one Requirement, returning its `ObligationAssignment`.
+
+    Uses Increment 11's prompt/parser.
 
     A `DomainMapperDerivationError` from a malformed/unparseable LLM
     response propagates unchanged — this function does not catch it;
@@ -449,9 +457,11 @@ def _derive_obligation_for_requirement(
 def _build_obligation_messages(
     *, role_name: str, requirement_text: str, role_view: dict[str, str]
 ) -> list[ChatMessage]:
-    """System prompt + one user message carrying the Requirement's duty
-    text and the Role's own registry view, clearly delimited from the
-    system prompt's instructions (L2's untrusted-content rule)."""
+    """System prompt + one user message carrying the Requirement's duty text and registry view.
+
+    The duty text and the Role's own registry view are clearly delimited
+    from the system prompt's instructions (L2's untrusted-content rule).
+    """
     registry_text = "\n".join(f"- {oid}: {text}" for oid, text in role_view.items()) or "(empty)"
     user_content = (
         f"Role: {role_name}\n\n"
@@ -547,9 +557,12 @@ def _derive_capabilities(
 
 
 def _distinct_obligations(obligations: tuple[ObligationNode, ...]) -> list[tuple[str, str]]:
-    """First-seen-wins dedup by `.id` — the mechanism that guarantees the
-    LLM is called at most once per distinct Obligation, even if the same
-    Obligation appears more than once in `obligations` (§7.4)."""
+    """First-seen-wins dedup by `.id`.
+
+    The mechanism that guarantees the LLM is called at most once per
+    distinct Obligation, even if the same Obligation appears more than once
+    in `obligations` (§7.4).
+    """
     seen: dict[str, str] = {}
     for obligation in obligations:
         seen.setdefault(obligation.id, str(obligation.properties["text"]))
@@ -575,9 +588,10 @@ def _derive_capabilities_for_obligation(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> list[CapabilityDecision]:
-    """Call the LLM once for one distinct Obligation, returning its
-    `CapabilityDecision` list (Increment 13's prompt/parser) — possibly
-    more than one entry (multi-capability-per-Obligation, §7.4).
+    """Call the LLM once for one distinct Obligation, returning its `CapabilityDecision` list.
+
+    Uses Increment 13's prompt/parser — possibly more than one entry
+    (multi-capability-per-Obligation, §7.4).
 
     A `DomainMapperDerivationError` from a malformed/unparseable response
     propagates unchanged — this function does not catch it, mirroring
@@ -595,13 +609,14 @@ def _derive_capabilities_for_obligation(
 def _build_capability_messages(
     *, obligation_text: str, registry: dict[str, tuple[str, str | None]]
 ) -> list[ChatMessage]:
-    """System prompt + one user message carrying the Obligation's duty
-    text and the WHOLE-run Capability registry built so far, clearly
-    delimited from the system prompt's instructions (L2's untrusted-content
-    rule)."""
+    """System prompt + one user message carrying the Obligation's duty text and the registry.
+
+    The duty text and the WHOLE-run Capability registry built so far are
+    clearly delimited from the system prompt's instructions (L2's
+    untrusted-content rule).
+    """
     registry_text = (
-        "\n".join(f"- {cid}: {name}" for cid, (name, _description) in registry.items())
-        or "(empty)"
+        "\n".join(f"- {cid}: {name}" for cid, (name, _description) in registry.items()) or "(empty)"
     )
     user_content = (
         "<obligation_text>\n"

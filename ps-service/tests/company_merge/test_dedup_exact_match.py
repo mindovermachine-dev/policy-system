@@ -29,7 +29,8 @@ class _ScriptedFakeGraph:
     """Satisfies `GraphHandle` structurally. Dispatches by a distinctive
     substring of the query text, mirroring
     `tests/company_merge/test_graph_reader.py`'s own `_ScriptedFakeGraph`
-    dispatch style."""
+    dispatch style.
+    """
 
     def __init__(self, *, capability_rows: list[object]) -> None:
         self._capability_rows = capability_rows

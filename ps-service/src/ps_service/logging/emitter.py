@@ -17,10 +17,12 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ps_service.logging.errors import LoggingLifecycleError
-from ps_service.logging.models import LogEntry
+
+if TYPE_CHECKING:
+    from ps_service.logging.models import LogEntry
 
 
 class TextSink(Protocol):
@@ -30,20 +32,32 @@ class TextSink(Protocol):
     and `sys.stderr` all satisfy this without inheriting from it.
     """
 
-    def write(self, s: str, /) -> int: ...
-    def flush(self) -> None: ...
-    def close(self) -> None: ...
+    def write(self, s: str, /) -> int:
+        """Append `s` to the sink and return the number of characters written."""
+        ...
+
+    def flush(self) -> None:
+        """Flush any buffered text to the underlying destination."""
+        ...
+
+    def close(self) -> None:
+        """Close the sink, releasing its underlying file handle."""
+        ...
 
 
 class WriterFactory(Protocol):
     """Produces the primary `TextSink` a `LogEmitter` appends JSON lines to (M9 fix)."""
 
-    def __call__(self, log_path: Path) -> TextSink: ...
+    def __call__(self, log_path: Path) -> TextSink:
+        """Open `log_path` and return the `TextSink` the writer thread appends to."""
+        ...
 
 
 def default_writer_factory(log_path: Path) -> TextSink:
     """Open `log_path` for UTF-8 text append; the default `WriterFactory`."""
-    return open(log_path, mode="a", encoding="utf-8")  # lifetime owned by the writer thread, not a `with` block
+    return Path(log_path).open(
+        mode="a", encoding="utf-8"
+    )  # lifetime owned by the writer thread, not a `with` block
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +79,14 @@ class _Sentinel:
 class LogEmitter:
     """Owns an unbounded queue and one daemon writer thread (AC#4, AC#5, AC#6)."""
 
-    def __init__(self, config: EmitterConfig, *, writer_factory: WriterFactory | None = None) -> None:
+    def __init__(
+        self, config: EmitterConfig, *, writer_factory: WriterFactory | None = None
+    ) -> None:
         """Start the daemon writer thread immediately; construction is cheap and never raises."""
         self._config = config
-        self._writer_factory = writer_factory if writer_factory is not None else default_writer_factory
+        self._writer_factory = (
+            writer_factory if writer_factory is not None else default_writer_factory
+        )
         self._queue: queue.Queue[LogEntry | _Sentinel] = queue.Queue()
         self._stopped = False
         self._lifecycle_lock = threading.Lock()
@@ -106,7 +124,9 @@ class LogEmitter:
         sentinel = _Sentinel(event=threading.Event(), is_stop=False)
         self._queue.put(sentinel)
         if not sentinel.event.wait(timeout=timeout):
-            raise LoggingLifecycleError(f"flush() timed out after {timeout}s waiting for the writer thread")
+            raise LoggingLifecycleError(
+                f"flush() timed out after {timeout}s waiting for the writer thread"
+            )
 
     def stop(self, *, timeout: float = 5.0) -> None:
         """Stop the daemon writer thread, first draining anything already queued.
@@ -134,7 +154,7 @@ def _run_writer_loop(
     writer_factory: WriterFactory,
     configured_fallback: TextSink | None,
 ) -> None:
-    """Drain `entry_queue` until a stop sentinel; never lets an exception kill the thread (M3, M6)."""
+    """Drain `entry_queue` until a stop sentinel; never die on an exception (M3, M6)."""
     sink: TextSink | None = None
     while True:
         item = entry_queue.get()
@@ -153,7 +173,9 @@ def _run_writer_loop(
         _close_sink(sink, configured_fallback)
 
 
-def _append_line(line: str, sink: TextSink | None, log_path: Path, writer_factory: WriterFactory) -> TextSink:
+def _append_line(
+    line: str, sink: TextSink | None, log_path: Path, writer_factory: WriterFactory
+) -> TextSink:
     """Return an open sink for `log_path` (opening it lazily on first use) after writing `line`.
 
     Any failure here (parent-directory creation, open, write) propagates to
@@ -175,7 +197,9 @@ def _close_sink(sink: TextSink, configured_fallback: TextSink | None) -> None:
     try:
         sink.close()
     except Exception as exc:  # noqa: BLE001 - shutdown path must not raise (M3)
-        _write_fallback(configured_fallback, f"logging_error=close-failed: {type(exc).__name__}: {exc}\n")
+        _write_fallback(
+            configured_fallback, f"logging_error=close-failed: {type(exc).__name__}: {exc}\n"
+        )
 
 
 def _safe_fallback_line(item: LogEntry | _Sentinel, exc: Exception) -> str:
@@ -205,9 +229,11 @@ def _safe_fallback_line(item: LogEntry | _Sentinel, exc: Exception) -> str:
 
 
 def _write_fallback(configured_fallback: TextSink | None, line: str) -> None:
-    """Write `line` to the fallback sink, resolved dynamically (N1) so `capsys`
-    observes it even from the writer thread (a cached `sys.stderr` reference
-    captured once at thread start would NOT be the object `capsys` swaps).
+    """Write `line` to the fallback sink, resolved dynamically (N1).
+
+    Resolving dynamically lets `capsys` observe it even from the writer
+    thread (a cached `sys.stderr` reference captured once at thread start
+    would NOT be the object `capsys` swaps).
     Self-protected (M3, M6): a failing fallback sink falls back to a raw
     `sys.stderr` write, and even that is guarded — nothing in this function
     may propagate, or the daemon writer thread dies (M3's core defect).
@@ -217,5 +243,7 @@ def _write_fallback(configured_fallback: TextSink | None, line: str) -> None:
         sink.write(line)
         sink.flush()
     except Exception:  # noqa: BLE001 - last-resort sink; must not raise
-        with contextlib.suppress(Exception):  # truly last resort; nothing further can be done safely
+        with contextlib.suppress(
+            Exception
+        ):  # truly last resort; nothing further can be done safely
             sys.stderr.write(line)

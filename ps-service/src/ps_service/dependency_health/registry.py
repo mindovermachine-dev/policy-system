@@ -1,8 +1,8 @@
-"""Process-wide registry of whether each real external dependency (FalkorDB, LLM
-Interface, Cellar/ELI) was reachable on its most recent call.
+"""Process-wide registry of whether each real external dependency was reachable on its last call.
 
-Fed by the same call sites that already handle each dependency's exceptions for
-their own purposes (`falkordb_client.check_connectivity`, `graph_writer`'s
+Covers FalkorDB, the LLM Interface, and Cellar/ELI. Fed by the same call
+sites that already handle each dependency's exceptions for their own
+purposes (`falkordb_client.check_connectivity`, `graph_writer`'s
 `graph.query()` calls, `llm_interface.completion`/`embedding`,
 `cellar_eli.fetch_xhtml`) — this module adds no probing of its own, it only
 records outcomes those call sites already observe.
@@ -17,7 +17,10 @@ context and have no `app.state` to write into. `main.py` reads this registry via
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 FALKORDB = "falkordb"
 LLM_INTERFACE = "llm_interface"

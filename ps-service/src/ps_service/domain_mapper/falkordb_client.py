@@ -16,60 +16,78 @@ never the company's merged single-tenant graph.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker; this is the one boundary import
     FalkorDB,
 )
 
-from ps_service.config import ServiceConfig
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.domain_mapper.errors import DomainMapperConfigurationError
+
+if TYPE_CHECKING:
+    from ps_service.config import ServiceConfig
 
 _NATIVE_GRAPH_SUFFIX = "_native"
 _BASELINE_GRAPH_SUFFIX = "_baseline"
 
 
 class GraphQueryResult(Protocol):
-    """Structural stand-in for `falkordb.QueryResult` — the one field any
-    caller of `GraphHandle.query` needs to read off a response."""
+    """Structural stand-in for `falkordb.QueryResult`.
+
+    The one field any caller of `GraphHandle.query` needs to read off a
+    response.
+    """
 
     @property
-    def result_set(self) -> list[object]: ...
+    def result_set(self) -> list[object]:
+        """The rows returned by the query."""
+        ...
 
 
 class GraphHandle(Protocol):
-    """Structural stand-in for `falkordb.Graph` — the `query()` call
-    surface this component's adapters/graph writer/derivation logic need:
-    bare Cypher, or Cypher + `params=` for parameterized reads/writes.
-    Callers outside this module never import `falkordb.Graph` directly."""
+    """Structural stand-in for `falkordb.Graph`.
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult: ...
+    The `query()` call surface this component's adapters/graph
+    writer/derivation logic need: bare Cypher, or Cypher + `params=` for
+    parameterized reads/writes. Callers outside this module never import
+    `falkordb.Graph` directly.
+    """
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
+        """Run Cypher `q` (optionally parameterized via `params`) and return the result."""
+        ...
 
 
 class _ConnectivityProbe(Protocol):
-    """Structural requirement for `check_connectivity`'s `db` parameter —
-    only the one call surface needed to verify connectivity. A real
+    """Structural requirement for `check_connectivity`'s `db` parameter.
+
+    Only the one call surface needed to verify connectivity. A real
     `connect()`-returned `FalkorDB` instance satisfies this structurally
     with no change; tests can substitute a lightweight fake instead of
-    mocking the real client type."""
+    mocking the real client type.
+    """
 
     def list_graphs(self) -> list[str]: ...
 
 
 def connect(host: str, port: int) -> FalkorDB:
-    """Construct a FalkorDB client. Does not itself verify connectivity —
-    the underlying client connects lazily on first use; call
-    `check_connectivity()` against the result to fail loud early."""
+    """Construct a FalkorDB client.
+
+    Does not itself verify connectivity — the underlying client connects
+    lazily on first use; call `check_connectivity()` against the result to
+    fail loud early.
+    """
     return FalkorDB(host=host, port=port)
 
 
 def connect_from_config(config: ServiceConfig) -> FalkorDB:
-    """Build the real FalkorDB connection from `config.falkordb_host`/
-    `config.falkordb_port` — mirrors `ps_service.ingestion.falkordb_client.
-    connect_from_config` exactly. Callers build `config` via
-    `ps_service.config.load_config()`, never by constructing a
-    `ServiceConfig` with hardcoded host/port values.
+    """Build the real FalkorDB connection from `config`'s host/port.
+
+    Mirrors `ps_service.ingestion.falkordb_client.connect_from_config`
+    exactly. Callers build `config` via `ps_service.config.load_config()`,
+    never by constructing a `ServiceConfig` with hardcoded host/port
+    values.
     """
     return connect(host=config.falkordb_host, port=config.falkordb_port)
 
@@ -88,15 +106,15 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
     except Exception as exc:
         mark_unhealthy(FALKORDB, error=exc)
         raise DomainMapperConfigurationError(
-            f"FalkorDB connection failed at {host}:{port}. "
-            f"Is FalkorDB running? Error: {exc}"
+            f"FalkorDB connection failed at {host}:{port}. Is FalkorDB running? Error: {exc}"
         ) from exc
     mark_healthy(FALKORDB)
 
 
 def select_graph(db: FalkorDB, name: str) -> GraphHandle:
-    """The single conversion site from a real `falkordb.Graph` to this
-    module's local `GraphHandle` Protocol — callers elsewhere in
+    """Convert a real `falkordb.Graph` to this module's local `GraphHandle` Protocol.
+
+    The single conversion site — callers elsewhere in
     `ps_service.domain_mapper` never import `falkordb.Graph` directly.
 
     `name` is expected to already be the final graph name (e.g. the result
@@ -107,7 +125,8 @@ def select_graph(db: FalkorDB, name: str) -> GraphHandle:
 
 
 def native_graph_name(short_name: str) -> str:
-    """The same regulation-scoped native graph Ingestion wrote to
+    """The same regulation-scoped native graph Ingestion wrote to.
+
     (`{short_name.lower()}_native`, e.g. `"CRA"` -> `"cra_native"`) —
     Domain Mapper reads this, never writes it.
     """
@@ -115,10 +134,10 @@ def native_graph_name(short_name: str) -> str:
 
 
 def baseline_graph_name(short_name: str) -> str:
-    """PLAN_REVIEWED.md §8: one FalkorDB graph per regulation for this
-    component's own writes (`{short_name.lower()}_baseline`, e.g.
-    `"CRA"` -> `"cra_baseline"`) — distinct from `{short_name}_native` and
-    from the company's merged single-tenant graph. AC-005's isolation
-    requirement.
+    """PLAN_REVIEWED.md §8: one FalkorDB graph per regulation for this component's own writes.
+
+    (`{short_name.lower()}_baseline`, e.g. `"CRA"` -> `"cra_baseline"`) —
+    distinct from `{short_name}_native` and from the company's merged
+    single-tenant graph. AC-005's isolation requirement.
     """
     return f"{short_name.lower()}{_BASELINE_GRAPH_SUFFIX}"

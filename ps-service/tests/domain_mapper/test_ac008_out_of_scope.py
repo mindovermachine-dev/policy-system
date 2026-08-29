@@ -49,7 +49,8 @@ def _files_to_scan() -> list[Path]:
     `tests/`), found by walking the real filesystem (`rglob("*.py")`)
     rather than a hardcoded list -- mirrors #14's `_files_to_scan`
     precedent exactly, so this must catch a violation in ANY module under
-    the package, including `adapters/**`, not just a specific file."""
+    the package, including `adapters/**`, not just a specific file.
+    """
     domain_mapper_root = Path(domain_mapper_package.__file__).parent
     return sorted(domain_mapper_root.rglob("*.py"))
 
@@ -104,8 +105,7 @@ def test_no_governance_artifact_literals_in_domain_mapper_package() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         violations = _find_forbidden_literals(tree)
         assert not violations, (
-            f"{path}: forbidden AC-008 literal found at "
-            f"{[(v.value, v.lineno) for v in violations]}"
+            f"{path}: forbidden AC-008 literal found at {[(v.value, v.lineno) for v in violations]}"
         )
 
 
@@ -114,7 +114,8 @@ def test_files_to_scan_covers_every_known_domain_mapper_module() -> None:
     hardcoded-looking subset -- mirrors #14's own
     `test_files_to_scan_covers_every_known_ingestion_module` regression
     guard, asserting the rglob walk actually finds every module Batches
-    1-9 delivered."""
+    1-9 delivered.
+    """
     scanned_relative_paths = {
         str(path.relative_to(Path(domain_mapper_package.__file__).parent))
         for path in _files_to_scan()
@@ -141,7 +142,8 @@ def test_find_forbidden_literals_flags_a_hypothetical_literal_anywhere_in_the_mo
     literal assignment naming a forbidden governance-artifact term is
     flagged -- proving the scan is NOT restricted to a conditional's
     decision subtree (the deliberate divergence from #14's own scan, see
-    this module's docstring)."""
+    this module's docstring).
+    """
     tree = ast.parse('_LABEL = "Policy"\n')
 
     violations = _find_forbidden_literals(tree)
@@ -152,12 +154,10 @@ def test_find_forbidden_literals_flags_a_hypothetical_literal_anywhere_in_the_mo
 def test_find_forbidden_literals_flags_a_hypothetical_conditional_too() -> None:
     """A forbidden literal used inside a conditional's decision is also
     flagged -- the broader whole-tree scan is a superset of #14's own
-    conditional-only check, not a replacement that narrows coverage."""
+    conditional-only check, not a replacement that narrows coverage.
+    """
     tree = ast.parse(
-        "def f(label):\n"
-        "    if label == 'Control':\n"
-        "        return True\n"
-        "    return False\n"
+        "def f(label):\n    if label == 'Control':\n        return True\n    return False\n"
     )
 
     violations = _find_forbidden_literals(tree)
@@ -168,10 +168,11 @@ def test_find_forbidden_literals_flags_a_hypothetical_conditional_too() -> None:
 def test_find_forbidden_literals_ignores_docstring_examples() -> None:
     """Negative case: a docstring mentioning these terms as illustrative
     prose (e.g. explaining what AC-008 excludes, exactly like this test
-    module's own docstring) is not flagged."""
+    module's own docstring) is not flagged.
+    """
     tree = ast.parse(
         '"""This component never derives Policy, Standard, or Control '
-        'nodes, and never writes GOVERNED_BY, SUPPORTED_BY, or '
+        "nodes, and never writes GOVERNED_BY, SUPPORTED_BY, or "
         'IMPLEMENTED_BY edges."""\n'
         "def f() -> None:\n"
         "    pass\n"

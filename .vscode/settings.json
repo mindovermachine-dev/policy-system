@@ -2,9 +2,17 @@
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {
     "source.fixAll.markdownlint": "always",
-    "source.fixAll.cspell": "explicit"
+    "source.fixAll.cspell": "explicit",
+    "source.fixAll.ruff": "explicit",
+    "source.organizeImports.ruff": "explicit"
   },
   "files.autoSave": "afterDelay",
   "markdownlint.configFile": ".markdownlint-cli2.jsonc",
-  "python.analysis.typeCheckingMode": "strict"
+  "python.analysis.typeCheckingMode": "strict",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+  "ruff.configuration": "pyproject.toml",
+  "ruff.importStrategy": "fromEnvironment"
 }

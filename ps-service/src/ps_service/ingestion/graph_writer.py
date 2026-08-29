@@ -1,5 +1,4 @@
-"""FalkorDB persistence for `ps_service.ingestion`'s RegulatoryInstrument node and
-native structural graph.
+"""FalkorDB persistence for the RegulatoryInstrument node and native structural graph.
 
 Implements PLAN_REVIEWED.md §7 Increments 8-10:
 
@@ -80,13 +79,12 @@ there either.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 from ps_service.ingestion.errors import IngestionPersistenceError
-from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
 from ps_service.ingestion.models import (
     ReachabilityCount,
     RegulatoryInstrumentMetadata,
@@ -94,27 +92,34 @@ from ps_service.ingestion.models import (
     StructuralNode,
 )
 
+if TYPE_CHECKING:
+    from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
+
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
 
-_KNOWN_ELEMENT_TYPES = frozenset({
-    "TITLE",
-    "CHAPTER",
-    "SECTION",
-    "ARTICLE",
-    "PARAGRAPH",
-    "ANNEX",
-    "RECITAL",
-})
+_KNOWN_ELEMENT_TYPES = frozenset(
+    {
+        "TITLE",
+        "CHAPTER",
+        "SECTION",
+        "ARTICLE",
+        "PARAGRAPH",
+        "ANNEX",
+        "RECITAL",
+    }
+)
 
 
 def _execute_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every `graph.query()` write/read in this module goes
-    through, so FalkorDB connectivity failures get recorded in
+    """The one call site every `graph.query()` write/read in this module goes through.
+
+    FalkorDB connectivity failures get recorded in
     `ps_service.dependency_health` for `/ready`'s live signal, self-healing
-    on the next successful call the same way `falkordb_client.check_connectivity`
-    already does for the startup probe.
+    on the next successful call the same way
+    `falkordb_client.check_connectivity` already does for the startup
+    probe.
 
     Wraps `redis.exceptions.RedisError` — the base class every
     connection/timeout error the underlying `falkordb`/`redis-py` stack
@@ -135,9 +140,10 @@ def _execute_query(
 def register_regulatory_instrument_version(
     graph: GraphHandle, regulatory_instrument_id: str, metadata: RegulatoryInstrumentMetadata
 ) -> None:
-    """MERGE the RegulatoryInstrument node, keyed by `regulatory_instrument_id`
-    (`{SHORT}-{VERSION}`, computed by the caller — see `pipeline.py`, never
-    by this function or an adapter).
+    """MERGE the RegulatoryInstrument node, keyed by `regulatory_instrument_id`.
+
+    The id is `{SHORT}-{VERSION}`, computed by the caller — see
+    `pipeline.py`, never by this function or an adapter.
 
     All bibliographic fields flow through `params` only, never
     interpolated into the query string (L2 Query Safety's parameterization
@@ -168,15 +174,17 @@ def _validate_element_types(
     nodes: tuple[StructuralNode, ...],
     edges: tuple[StructuralEdge, ...],
 ) -> None:
-    """B1 FIX: a whole-collection validation pass. Called once, before
-    `persist_native_structural_graph` issues a single `graph.query` call
-    for ANY element — not interleaved validate-then-write per element.
-    Checks every node's `element_type` and every edge's parent/child
-    `element_type` (`"RegulatoryInstrument"` is the one allowed non-`element_type`
-    parent label, for edges anchoring a top-level structural node directly
-    to the RegulatoryInstrument node) against the allow-list. Raises
-    `IngestionPersistenceError` on the first violation found, with zero
-    `graph.query` calls having been made by the time this raises.
+    """B1 FIX: a whole-collection validation pass.
+
+    Called once, before `persist_native_structural_graph` issues a single
+    `graph.query` call for ANY element — not interleaved
+    validate-then-write per element. Checks every node's `element_type` and
+    every edge's parent/child `element_type` (`"RegulatoryInstrument"` is
+    the one allowed non-`element_type` parent label, for edges anchoring a
+    top-level structural node directly to the RegulatoryInstrument node)
+    against the allow-list. Raises `IngestionPersistenceError` on the first
+    violation found, with zero `graph.query` calls having been made by the
+    time this raises.
     """
     for node in nodes:
         if node.element_type not in _KNOWN_ELEMENT_TYPES:
@@ -205,8 +213,10 @@ def persist_native_structural_graph(
     nodes: tuple[StructuralNode, ...],
     edges: tuple[StructuralEdge, ...],
 ) -> None:
-    """CA doc post-condition: "Abort with no partial write if structure
-    can't be fully persisted." Validation of the whole collection
+    """Persist the whole structural graph, or nothing at all.
+
+    CA doc post-condition: "Abort with no partial write if structure can't
+    be fully persisted." Validation of the whole collection
     (`_validate_element_types`) happens entirely before any write (B1 fix)
     — if this function raises, the graph has recorded zero `query()` calls.
     Only once validation passes completely does this loop and call
@@ -245,7 +255,11 @@ def _upsert_edge(graph: GraphHandle, regulatory_instrument_id: str, edge: Struct
     # module's docstring). Substitute the real id for that one case only;
     # every other edge's `parent_id` (a StructuralNode's own id) is used
     # unchanged.
-    parent_id = regulatory_instrument_id if edge.parent_element_type == _REGULATORY_INSTRUMENT_LABEL else edge.parent_id
+    parent_id = (
+        regulatory_instrument_id
+        if edge.parent_element_type == _REGULATORY_INSTRUMENT_LABEL
+        else edge.parent_id
+    )
     _execute_query(
         graph,
         f"MATCH (a:{edge.parent_element_type} {{id: $parent_id}}), "
@@ -256,9 +270,10 @@ def _upsert_edge(graph: GraphHandle, regulatory_instrument_id: str, edge: Struct
 
 
 def _scalar_count(result: GraphQueryResult) -> int:
-    """Extract a single integer from a `RETURN count(...)`/
-    `RETURN count(DISTINCT ...)` query's first row, first column.
+    """Extract a single integer from a `RETURN count(...)` query's first cell.
 
+    Reads the first row, first column of a `RETURN count(...)` /
+    `RETURN count(DISTINCT ...)` result.
     `cast` used twice, unavoidably: `GraphQueryResult.result_set` is typed
     `list[object]` (matching `falkordb.QueryResult`'s own untyped shape —
     the library ships no more specific stub), so a first cast recovers the
@@ -266,7 +281,7 @@ def _scalar_count(result: GraphQueryResult) -> int:
     recovers the cell's runtime `int` value from a `count(...)` clause.
     """
     rows = cast("list[list[object]]", result.result_set)
-    return cast(int, rows[0][0])
+    return cast("int", rows[0][0])
 
 
 def _count_nodes(graph: GraphHandle, label: str) -> int:
@@ -277,7 +292,8 @@ def _count_reachable(graph: GraphHandle, regulatory_instrument_id: str, label: s
     return _scalar_count(
         _execute_query(
             graph,
-            f"MATCH (:RegulatoryInstrument {{id: $id}})-[:HAS*1..]->(n:{label}) RETURN count(DISTINCT n)",
+            f"MATCH (:RegulatoryInstrument {{id: $id}})-[:HAS*1..]->(n:{label}) "
+            "RETURN count(DISTINCT n)",
             params={"id": regulatory_instrument_id},
         )
     )
@@ -286,7 +302,9 @@ def _count_reachable(graph: GraphHandle, regulatory_instrument_id: str, label: s
 def verify_structural_graph_reachable(
     graph: GraphHandle, regulatory_instrument_id: str
 ) -> dict[str, ReachabilityCount]:
-    """AC-004: for every structural label (plus `RegulatoryInstrument` itself), the
+    """AC-004: node count vs. reachable count for every structural label.
+
+    For every structural label (plus `RegulatoryInstrument` itself), the
     node count in this regulation's own graph versus how many of those
     nodes are actually reachable from the RegulatoryInstrument node via `HAS` (any
     depth) — not just present. One FalkorDB graph per regulation
@@ -303,7 +321,9 @@ def verify_structural_graph_reachable(
     for label in (_REGULATORY_INSTRUMENT_LABEL, *_KNOWN_ELEMENT_TYPES):
         total = _count_nodes(graph, label)
         reachable = (
-            total if label == _REGULATORY_INSTRUMENT_LABEL else _count_reachable(graph, regulatory_instrument_id, label)
+            total
+            if label == _REGULATORY_INSTRUMENT_LABEL
+            else _count_reachable(graph, regulatory_instrument_id, label)
         )
         counts[label] = ReachabilityCount(total=total, reachable=reachable)
         if reachable != total:

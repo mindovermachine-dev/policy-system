@@ -1,5 +1,7 @@
-"""Domain-specific exception types for ps_service.logging (L1/L2: no generic
-`Exception` raised to a caller of this component's setup/lifecycle API).
+"""Domain-specific exception types for ps_service.logging.
+
+L1/L2: no generic `Exception` is raised to a caller of this component's
+setup/lifecycle API.
 
 Neither type is ever raised by the hot path (`emit_log_entry`,
 `bind_run_context`, `LogEmitter.emit`) — AC#6 requires those to never raise;

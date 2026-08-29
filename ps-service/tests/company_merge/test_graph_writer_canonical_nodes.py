@@ -1,8 +1,8 @@
 """Tests for `ps_service.company_merge.graph_writer.persist_canonical_nodes`
 (PLAN_REVIEWED.md §10 Increment 11, mint half): the `ON CREATE SET` canonical
-Obligation/Capability node writer -- the load-bearing invariant that makes
-"existing canonical node's properties are never overwritten" a
-database-engine guarantee.
+Capability node writer (Capability is the only canonically-deduped kind since
+#42) -- the load-bearing invariant that makes "existing canonical node's
+properties are never overwritten" a database-engine guarantee.
 """
 
 from __future__ import annotations
@@ -37,23 +37,25 @@ class _FakeGraph:
         return _FakeQueryResult([[0]])
 
 
-def _obligation_node(node_id: str = "obligation_abc123", text: str = "Do the thing.") -> BaselineNode:
+def _canonical_node(
+    node_id: str = "capability_abc123", text: str = "Do the thing."
+) -> BaselineNode:
     return BaselineNode(id=node_id, properties={"text": text, "confidence": 0.9})
 
 
 def test_new_resolution_mints_node_with_on_create_set_and_embedding() -> None:
     graph = _FakeGraph()
-    node = _obligation_node()
+    node = _canonical_node()
     embedding = (0.1, 0.2, 0.3)
     resolution = CanonicalResolution(
         incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=embedding
     )
 
-    persist_canonical_nodes(graph, (node,), (resolution,), kind="Obligation")
+    persist_canonical_nodes(graph, (node,), (resolution,), kind="Capability")
 
     assert len(graph.calls) == 1
     call = graph.calls[0]
-    assert call.query == "MERGE (n:Obligation {id: $id}) ON CREATE SET n += $properties"
+    assert call.query == "MERGE (n:Capability {id: $id}) ON CREATE SET n += $properties"
     assert "ON CREATE SET" in call.query
     assert call.params == {
         "id": node.id,
@@ -64,14 +66,15 @@ def test_new_resolution_mints_node_with_on_create_set_and_embedding() -> None:
 def test_new_resolution_with_no_embedding_gets_no_embedding_key() -> None:
     """A mint that never triggered any comparison (embedding=None) gets no
     `embedding` key at all in its properties -- not `None`, not an empty
-    list."""
+    list.
+    """
     graph = _FakeGraph()
-    node = _obligation_node()
+    node = _canonical_node()
     resolution = CanonicalResolution(
         incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=None
     )
 
-    persist_canonical_nodes(graph, (node,), (resolution,), kind="Obligation")
+    persist_canonical_nodes(graph, (node,), (resolution,), kind="Capability")
 
     assert len(graph.calls) == 1
     call = graph.calls[0]
@@ -86,37 +89,43 @@ def test_new_resolution_with_no_embedding_gets_no_embedding_key() -> None:
 
 def test_exact_match_resolution_gets_no_write_call() -> None:
     graph = _FakeGraph()
-    node = _obligation_node()
+    node = _canonical_node()
     resolution = CanonicalResolution(
         incoming_id=node.id, canonical_id=node.id, match_kind="exact", embedding=None
     )
 
-    persist_canonical_nodes(graph, (node,), (resolution,), kind="Obligation")
+    persist_canonical_nodes(graph, (node,), (resolution,), kind="Capability")
 
     assert graph.calls == []
 
 
 def test_semantic_match_resolution_gets_no_write_call() -> None:
     graph = _FakeGraph()
-    node = _obligation_node(node_id="obligation_incoming", text="Some duty.")
+    node = _canonical_node(node_id="capability_incoming", text="Some duty.")
     resolution = CanonicalResolution(
-        incoming_id=node.id, canonical_id="obligation_existing", match_kind="semantic", embedding=None
+        incoming_id=node.id,
+        canonical_id="capability_existing",
+        match_kind="semantic",
+        embedding=None,
     )
 
-    persist_canonical_nodes(graph, (node,), (resolution,), kind="Obligation")
+    persist_canonical_nodes(graph, (node,), (resolution,), kind="Capability")
 
     assert graph.calls == []
 
 
 def test_mixed_resolutions_only_write_for_new() -> None:
     graph = _FakeGraph()
-    exact_node = _obligation_node(node_id="obligation_exact", text="Existing duty.")
-    new_node = _obligation_node(node_id="obligation_new", text="New duty.")
-    semantic_node = _obligation_node(node_id="obligation_semantic", text="Matched duty.")
+    exact_node = _canonical_node(node_id="capability_exact", text="Existing duty.")
+    new_node = _canonical_node(node_id="capability_new", text="New duty.")
+    semantic_node = _canonical_node(node_id="capability_semantic", text="Matched duty.")
 
     resolutions = (
         CanonicalResolution(
-            incoming_id=exact_node.id, canonical_id=exact_node.id, match_kind="exact", embedding=None
+            incoming_id=exact_node.id,
+            canonical_id=exact_node.id,
+            match_kind="exact",
+            embedding=None,
         ),
         CanonicalResolution(
             incoming_id=new_node.id,
@@ -126,14 +135,14 @@ def test_mixed_resolutions_only_write_for_new() -> None:
         ),
         CanonicalResolution(
             incoming_id=semantic_node.id,
-            canonical_id="obligation_existing_other",
+            canonical_id="capability_existing_other",
             match_kind="semantic",
             embedding=None,
         ),
     )
 
     persist_canonical_nodes(
-        graph, (exact_node, new_node, semantic_node), resolutions, kind="Obligation"
+        graph, (exact_node, new_node, semantic_node), resolutions, kind="Capability"
     )
 
     assert len(graph.calls) == 1
@@ -145,7 +154,9 @@ def test_mixed_resolutions_only_write_for_new() -> None:
 
 def test_capability_kind_writes_capability_label() -> None:
     graph = _FakeGraph()
-    node = BaselineNode(id="capability_abc123", properties={"name": "Encrypt data", "confidence": 0.8})
+    node = BaselineNode(
+        id="capability_abc123", properties={"name": "Encrypt data", "confidence": 0.8}
+    )
     resolution = CanonicalResolution(
         incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=None
     )
