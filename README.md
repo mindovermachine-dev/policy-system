@@ -37,7 +37,7 @@ The deployable container that implements PS Service functionality. This is what 
 The target audience outlined below will NOT be consuming the Policy System directly, they will be using one of several clients that consume it:
 
 - **PS Question Skill** — a Claude Desktop / VS Code skill included in this repo, functioning as a read-only client for asking questions, including falsification verification of answers
-- **PS-Cli** — a command-line interface for starting, stopping, and configuring PS Service, and for driving regulation ingestion — selecting EU regulations for Cellar/ELI-sourced ingestion, and a PDF ingestion pipeline for business regulations/policies (under exploration)
+- **PS-Cli** — a command-line interface driving PS Service's REST API on an already-running PS Service container: checking health/status, configuring which PS Service instance to target, selecting EU regulations for Cellar/ELI-sourced ingestion, and ingesting internal business regulations/policies (JSON fixtures today; a PDF ingestion pipeline is deferred, not yet designed)
 - **Policy Editor** — a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration, client not yet designed)
 
 | Role                     | Primary Use Case                                                                                                                                     |
@@ -52,4 +52,4 @@ The target audience outlined below will NOT be consuming the Policy System direc
 | **Software Engineers**   | Check what a specific Standard/Control requires before shipping; ideally check "is my service compliant?"                                            |
 | **Security Engineers**   | Find coverage gaps below the Policy level (governed capabilities with no working Control yet); reason about blast radius if a specific control fails |
 | **Engineering Managers** | Get whole-team/whole-org posture summaries and prioritized punch lists — open-ended synthesis questions, not single-entity lookups                   |
-| **System Admin**         | Start, stop, and configure PS Service via PS-Cli; run the PDF ingestion pipeline for business regulations and policies                        |
+| **System Admin**         | Check PS Service health/status and configure which instance PS-Cli targets; select and trigger regulation ingestion via PS-Cli (internal-document ingestion is JSON-fixture only today; PDF pipeline deferred)                        |

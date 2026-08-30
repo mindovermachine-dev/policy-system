@@ -107,6 +107,15 @@ get dir`), so `podman stop`/`start`, or even removing and recreating the
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `podman exec falkordb redis-cli config set appendonly yes`.
 
+### Option C: Helm chart on a local kind cluster (planned, not yet implemented)
+
+The target local-dev deployment path is a Helm chart deploying both PS
+Service and FalkorDB onto a local [`kind`](https://kind.sigs.k8s.io/) cluster
+running under Podman — mirroring the eventual Azure/AWS/on-prem Kubernetes
+production target more closely than Options A/B above. No chart exists yet;
+this section is a placeholder for that work. Options A/B remain how to
+actually develop today.
+
 ### Create a virtual environment and install dependencies
 
 A single `.venv` at the repo root (via the repo-root `pyproject.toml`/
@@ -181,6 +190,38 @@ setup (it's a public endpoint), so it only fails here if you're offline.
 To stop it, press Ctrl-C in the terminal it's running in, or send it
 `SIGTERM` from another terminal (`kill -TERM <pid>`) — either way, uvicorn's
 built-in graceful shutdown handles it: no forced kill needed.
+
+### Use ps-cli
+
+`ps-cli` is a thin operator client for PS Service's REST API — this is the
+primary way to drive the system by hand (ingest a regulation, list the
+catalog) without writing `curl`/Python against the API directly. It has no
+`[project.scripts]` entry point yet, so invoke it as a module, from the repo
+root, with PS Service already running (previous section):
+
+```bash
+uv run python -m ps_cli --version
+uv run python -m ps_cli regulations list
+uv run python -m ps_cli regulations ingest 32016R0679
+uv run python -m ps_cli internal ingest <fixture_path>.json
+```
+
+`regulations list`/`regulations ingest` only need PS Service itself —
+`regulations list` serves a static curated catalog, no FalkorDB/LLM
+dependency. `internal ingest` and real ingestion runs exercise the full
+pipeline, so PS Service needs FalkorDB and the LLM Interface configured (see
+below) — check `/ready` first if a command fails unexpectedly.
+
+By default `ps-cli` targets `http://127.0.0.1:8000`, matching PS Service's
+own default. Point it elsewhere with the `PS_CLI_SERVICE_URL` env var, or a
+`ps-cli.toml` (`service_url = "..."`) in your current directory — the env
+var wins over the file, which wins over the packaged default.
+
+```bash
+PS_CLI_SERVICE_URL=http://127.0.0.1:9000 uv run python -m ps_cli regulations list
+```
+
+**Planned (not yet implemented):** `ps-cli` is meant to be a distributed client, installed independently of this repo like `gh`/`az` — not a workspace-only script. The direction decided so far: `uv tool install git+https://github.com/<org>/policy-system@<tag>` (internal-only for now, no public PyPI publish), per-target config (e.g. dev/test/prod side by side) instead of a single `service_url`, and Auth0-based OIDC login (OAuth 2.0 Device Authorization Grant) for individual-operator identity once targeting a non-local PS Service instance. None of this exists yet — the invocation and config above are the only implemented path today.
 
 ### Configure the LLM Interface
 
