@@ -12,6 +12,18 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["ps-service/tests", "ps-cli/tests"]
+# Workspace root pytest RCA (issue #52): "prepend" (pytest's default import mode) requires
+# a globally-unique basename for every test module when no `__init__.py` chain disambiguates
+# it, because it imports each file as a bare top-level module keyed by filename and inserts
+# its directory onto sys.path. That collides the instant two uv-workspace members both ship
+# a same-named top-level test file (e.g. `test_config.py` in both ps-service/tests and
+# ps-cli/tests) -- surfaced when ps-cli/tests went from empty to real content. The tests-dirs-
+# have-no-__init__.py convention is deliberate (see the INP001 ruff ignore below) and correct
+# to keep, so the fix is on the pytest side: --import-mode=importlib imports each test file
+# via its full filesystem path without touching sys.path or requiring a unique basename --
+# pytest's own documented recommendation for exactly this multi-package-without-__init__.py
+# shape. No per-file renames needed as a workaround.
+addopts = ["--import-mode=importlib"]
 markers = [
     "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
     "llm_live: hits the live, configured LLM Provider over the network via LiteLLM (slow, costs tokens, requires real provider credentials)",
@@ -79,6 +91,14 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]  # keep Pydantic field t
     "A002", "A006",  # builtin-shadowing — test params mirror the SUT's param names (e.g. `id`). NOTE: `input` in tests/llm_interface is renamed by B7b, not ignored here.
     "PERF401",  # manual-list-comprehension — explicit loops are clearer in test arrange blocks
 ]
+"ps-cli/src/**" = [
+    "T201",     # print — a CLI IS its stdout interface
+]
+"ps-cli/src/ps_cli/__main__.py" = [
+    "D100",     # undocumented-module — AC-BI-005's literal proof (test_cli.py's AST test) asserts
+                # this file's body is *exactly* an ImportFrom + a conditional call to main(); a
+                # module docstring would be a third top-level statement and fail that structural test.
+]
 "tools/**" = [
     "T201",     # print — operator CLI scripts; stdout IS the interface (~36 occurrences)
     "INP001",   # implicit-namespace-package — standalone scripts, not an importable package
@@ -111,7 +131,7 @@ exclude = [
     "**/__pycache__",
     "spikes",                 # nested git repo, no .py, in .gitignore (basedpyright does NOT respect .gitignore, so this line is load-bearing)
 ]
-reportMissingTypeStubs = false  # falkordb / graphrag_sdk / litellm ship no py.typed. This is a stub-AVAILABILITY signal, not a type-correctness downgrade — kept as the single commented global key (AC-BI-003 permits it; verifier confirms it is the only global report* override).
+reportMissingTypeStubs = false  # falkordb / litellm ship no py.typed. This is a stub-AVAILABILITY signal, not a type-correctness downgrade — kept as the single commented global key (AC-BI-003 permits it; verifier confirms it is the only global report* override).
 
 # --- Per-library relaxation (AC-BI-003: commented, per-library, NOT a global rule downgrade) ---
 # basedpyright has no per-module rule-severity table, so each untyped 3rd-party
@@ -125,8 +145,9 @@ reportMissingTypeStubs = false  # falkordb / graphrag_sdk / litellm ship no py.t
 #   litellm (1.98.0)   — untyped. `litellm.completion` / `litellm.embedding`
 #                        return Unknown; ps_service/llm_interface casts the result
 #                        to the litellm response type at the boundary (see B13).
-#   graphrag_sdk (1.4.0, ps-cli) — untyped. Same boundary-cast pattern when
-#                        ps-cli grows real code (only __init__.py today).
+#
+#   ps-cli uses httpx (0.28.1) for its PS Service REST client, which ships
+#   `py.typed` — no per-library boundary-cast comment needed there.
 #
 # If inline suppressions proliferate (>~15), promote to local stub packages under
 # `typings/` + `stubPath = "typings"` — a follow-up, not this issue.

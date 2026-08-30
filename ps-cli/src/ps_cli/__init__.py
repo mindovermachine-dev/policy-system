@@ -1,1 +1,1 @@
-"""Policy System CLI: PS Service lifecycle and config, plus PDF ingestion for regulations."""
+"""Policy System CLI: thin operator client for PS Service's REST API (regulation ingestion)."""

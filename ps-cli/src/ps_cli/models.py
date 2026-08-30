@@ -1,0 +1,95 @@
+"""Parsed-response shapes for PS Service's REST API.
+
+Vendored per L2 Project Structure's "fully decoupled... vendors its own copy" rule.
+These are `ps-cli`'s own shapes for the JSON bodies PS Service returns, not imports of
+`ps_service.api.models` (that would violate AC-BI-004's architecture boundary — see
+`ps-cli/tests/test_architecture_boundary.py`). Per PLAN.md §1 D6, no Pydantic: a
+`TypedDict` for the raw JSON shape, and a frozen `dataclass` for the parsed result a
+command handler consumes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TypedDict
+
+
+class RegulationCatalogEntryBody(TypedDict):
+    """Raw JSON shape of one entry in `GET /regulations`'s `regulations` array."""
+
+    celex: str
+    title: str
+
+
+class RegulationCatalogResponseBody(TypedDict):
+    """Raw JSON shape of a `GET /regulations` 200 response body."""
+
+    regulations: list[RegulationCatalogEntryBody]
+    run_id: str
+
+
+@dataclass(frozen=True)
+class RegulationEntry:
+    """One regulation in the curated catalog: its CELEX identifier and title."""
+
+    celex: str
+    title: str
+
+
+@dataclass(frozen=True)
+class RegulationsResult:
+    """Parsed result of `PsServiceClient.list_regulations()`."""
+
+    regulations: list[RegulationEntry]
+    run_id: str
+
+
+class StageOutcomeBody(TypedDict):
+    """Raw JSON shape of one entry in a `POST /ingestions` 200 response's `stages` array."""
+
+    stage: str
+    status: str
+    summary: dict[str, int]
+
+
+class IngestionAcceptedResponseBody(TypedDict):
+    """Raw JSON shape of a `POST /ingestions` 200 response body."""
+
+    run_id: str
+    regulatory_instrument_id: str
+    source: str
+    stages: list[StageOutcomeBody]
+
+
+class ErrorDetailBody(TypedDict):
+    """Raw JSON shape of the `error` object inside a structured `POST /ingestions` error body."""
+
+    code: str
+    message: str
+    failing_stage: str | None
+
+
+class ErrorResponseBody(TypedDict):
+    """Raw JSON shape of a `POST /ingestions` non-2xx response body."""
+
+    error: ErrorDetailBody
+    run_id: str | None
+
+
+@dataclass(frozen=True)
+class StageOutcome:
+    """One completed pipeline stage, as reported in an ingestion's success result."""
+
+    stage: str
+    status: str
+    summary: dict[str, int]
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    """Parsed success result of `PsServiceClient.ingest_catalog()` / `ingest_internal()`."""
+
+    run_id: str
+    regulatory_instrument_id: str
+    source: str
+    stages: list[StageOutcome]
