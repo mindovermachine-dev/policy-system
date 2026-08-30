@@ -239,6 +239,34 @@ def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in
     assert all(line["run_id"] == result.run_id for line in lines)
 
 
+def test_ingest_regulatory_instrument_binds_caller_supplied_run_id_across_every_stage_entry(
+    make_emitter: _MakeEmitter, read_lines: _ReadLines
+) -> None:
+    """A caller (the REST API, per issue #51 T2) may pass a request-scoped
+    `run_id` so ingestion-stage log lines correlate with the rest of the
+    request. Every emitted line carries exactly that id, and it round-trips
+    on `IngestResult.run_id` — no fresh uuid4 is generated.
+    """
+    emitter, log_path = make_emitter()
+    adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
+
+    result = ingest_regulatory_instrument(
+        "IDENTIFIER",
+        "SHORT",
+        version="1.0",
+        adapter=adapter,
+        graph=_FakeGraph(),
+        run_id="req-abc",
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert result.run_id == "req-abc"
+    lines = [line for line in read_lines(log_path) if line.get("entity_id") == "SHORT-1.0"]
+    assert lines, "no entries were written — wiring bug"
+    assert all(line["run_id"] == "req-abc" for line in lines)
+
+
 # --- (b) AC-006: AST-based regulation-name-conditional scan (B2/B3 fix) ---
 #
 # The scan machinery (FORBIDDEN_LITERALS, find_forbidden_literals,

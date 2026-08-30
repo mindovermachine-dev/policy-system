@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     import httpx
 
 _FORBIDDEN_IMPORT_PREFIXES = (
-    "ps_service.api",
     "ps_service.domain_mapper",
     "ps_service.company_merge",
     "ps_service.query_engine",
@@ -274,17 +273,22 @@ def test_unauthenticated_get_never_returns_401_or_403(path: str, app: FastAPI) -
 
 
 def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_component() -> None:
-    """AC-BI-006 (narrowed by issue #22): `main.py` never imports `ps_service/api/` or any
-    pipeline/query-surface component it doesn't need for its own readiness contract.
+    """AC-BI-006 (narrowed by issues #22 and #51): `main.py` never imports a
+    pipeline/query-surface component it doesn't need for its own contract.
 
     `ps_service.ingestion`/`ps_service.llm_interface` were dropped from
     `_FORBIDDEN_IMPORT_PREFIXES` by issue #22: `main.py` now imports each
     component's `check_connectivity` (and `ingestion.falkordb_client.
     connect_from_config`) as `/ready`'s startup dependency probes — a
     deliberate, narrow exception to AC-BI-006's original decoupling, not a
-    reopening of it. Domain Mapper, Company Merge, Query Engine, MCP
-    Interface, and Regulatory Change Monitor stay forbidden; `main.py` has
-    no readiness relationship with any of them.
+    reopening of it. Issue #51 drops `ps_service.api` for the same reason:
+    `create_app` now mounts the `ps_service.api` REST router (a single
+    top-level `from ps_service.api.routes import build_api_router`), exactly
+    as #22 admitted `ingestion`/`llm_interface`. Domain Mapper, Company
+    Merge, Query Engine, MCP Interface, and Regulatory Change Monitor stay
+    forbidden — the AST scan is non-transitive (it parses `main.py`'s source
+    only), and the pipeline stage entry points those routes eventually drive
+    are imported lazily, function-local, never at `main.py` module load.
 
     Statically parses `main.py`'s source via `ast` and walks `Import`/
     `ImportFrom` nodes, rather than checking `sys.modules`, so it can't be

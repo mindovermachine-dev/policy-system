@@ -9,12 +9,15 @@ this component's own AC-004 reachability check).
 
 AC-005 (structured logging correlation, closing CA doc line 618's flagged
 gap): this is the first real caller of `bind_run_context()` for Ingestion.
-One `with bind_run_context() as run_id:` block wraps the whole pipeline;
-every `emit_log_entry(...)` call inside it auto-bakes that run_id via the
-`run_context` ContextVar mechanism (never passed explicitly — see
+One `with bind_run_context(run_id) as bound_run_id:` block wraps the whole
+pipeline; every `emit_log_entry(...)` call inside it auto-bakes that run_id
+via the `run_context` ContextVar mechanism (never passed explicitly — see
 `ps_service.llm_interface._logging_support.log`'s identical precedent).
-Two separate `ingest_regulatory_instrument()` calls therefore carry two distinct
-run_ids in their emitted log entries.
+When the caller passes no `run_id` (the default), `bind_run_context(None)`
+mints a fresh uuid4, so two `ingest_regulatory_instrument()` calls carry two
+distinct run_ids in their emitted log entries; an API caller may instead pass
+its request-scoped `run_id` to correlate these entries with the wider request
+(issue #51 T2).
 
 AC-006 (regulation-independence, verifiable at the code level): `short_name`
 (e.g. "CRA") and `version` (e.g. "1.0") are CALLER-SUPPLIED parameters —
@@ -54,13 +57,17 @@ def ingest_regulatory_instrument(
     version: str,
     adapter: IngestionAdapter,
     graph: GraphHandle,
+    run_id: str | None = None,
     emitter: LogEmitter | None = None,
 ) -> IngestResult:
     """Ingest one regulation end to end: fetch, register, persist, verify.
 
     The primary-use-case entry point (UC-1's manual trigger; UC-4's
     TriggerReingestion calls this too, later — out of scope here). Binds a
-    fresh run_id for the whole call (AC-005), then runs, in order:
+    run_id for the whole call (AC-005): a caller may pass a request-scoped
+    ``run_id`` to correlate ingestion-stage logs with the rest of an API
+    request (issue #51 T2); ``None`` (the default) preserves today's
+    fresh-uuid4 behaviour exactly. It then runs, in order:
     `adapter.fetch_regulatory_instrument_structure(identifier)` ->
     `register_regulatory_instrument_version` -> `persist_native_structural_graph` ->
     `verify_structural_graph_reachable`, emitting one log entry per
@@ -77,7 +84,7 @@ def ingest_regulatory_instrument(
     error handling of its own; a failure at any stage aborts the run with no
     further stage's log entry emitted.
     """
-    with bind_run_context() as run_id:
+    with bind_run_context(run_id) as bound_run_id:
         regulatory_instrument_id = f"{short_name}-{version}"
 
         structure = adapter.fetch_regulatory_instrument_structure(identifier)
@@ -115,7 +122,7 @@ def ingest_regulatory_instrument(
         )
 
         return IngestResult(
-            regulatory_instrument_id=regulatory_instrument_id, run_id=run_id, counts=counts
+            regulatory_instrument_id=regulatory_instrument_id, run_id=bound_run_id, counts=counts
         )
 
 

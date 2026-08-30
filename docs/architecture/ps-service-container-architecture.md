@@ -734,7 +734,7 @@ None — shared infrastructure utility; the process composition root.
 | Internal component (Python module) | FastAPI, uvicorn | Python 3.14 | `ps-service/src/ps_service/main.py`, `ps-service/src/ps_service/__main__.py` | `ps_service.main` |
 
 **Implementation Guidance:**
-- Deliberately decoupled from `ps_service/api/`'s REST layer and from Domain Mapper, Company Merge, Query Engine, MCP Interface, and Regulatory Change Monitor — it has no readiness relationship with any of them. Its only cross-component relationship is the three startup dependency probes below (issue #22); `load_config()`/`ServiceConfig` (Configuration) and Logging are its other two collaborators.
+- `create_app` now also mounts the `ps_service.api` REST router (issue #51); it still has no readiness relationship with, and no module-load import of, Domain Mapper, Company Merge, Query Engine, MCP Interface, or Regulatory Change Monitor (the pipeline stage entry points are imported lazily, function-local, inside `build_default_pipeline_dependencies`). Its only cross-component relationship is the three startup dependency probes below (issue #22); `load_config()`/`ServiceConfig` (Configuration) and Logging are its other two collaborators.
 - `CheckLiveness` (`/health`) must never depend on startup progress or any external dependency — a dependency outage must never fail liveness, or an orchestrator would restart an otherwise-healthy process for a problem restarting it cannot fix.
 - `CheckReadiness` (`/ready`) has two independent gates: a one-time startup probe of FalkorDB, LLM Interface, and Cellar/ELI (each via that component's own `CheckConnectivity`/`check_connectivity`), run once during process startup and never re-run on a schedule; and Dependency Health's live signal, updated by those same components' real-traffic exception handling as it happens. Both must hold for `/ready` to report ready. The live gate is what lets a mid-run dependency failure flip `/ready` back to not-ready, and a later success self-heal it, without a restart — the startup-only gate alone could never do that.
 - No per-poll re-probing: `/ready` never itself re-calls any `check_connectivity` function. Re-probing on every poll was rejected for LLM Interface (real API spend/quota consumption per poll) and considered unnecessary for Cellar/ELI and FalkorDB once the live gate already reflects real traffic.
@@ -797,6 +797,8 @@ sequenceDiagram
 
 *For the UC-4 (Regulatory Change Monitor) entry point, `TriggerReingestion` currently drives only the Ingestion leg of this flow plus its own `SUPERSEDED_BY` bookkeeping; the Domain Mapper and Company Merge legs are not yet chained from it — see [Regulatory Change Monitor](#regulatory-change-monitor).*
 
+*A second ingestion of the same identifier converges on the exact-canonical-identity nodes (the `RegulatoryInstrument` version node, and any Capability whose name is reproduced verbatim), but LLM-extraction non-determinism (issue #34) can still reword a Capability or Requirement between runs so that it falls outside Company Merge's semantic-equivalence threshold and is minted as a new canonical node — full re-ingestion convergence is not guaranteed until #34 is addressed.*
+
 ### Query path — happy path and error scenario
 
 *Every action below may also emit a log entry to Logging; only the run-ID binding is diagrammed, to keep the flow focused on business data.*
@@ -848,7 +850,7 @@ The Solution Architecture's own NFR Realization table is currently an unpopulate
 
 Implementation details (packages, middleware, configuration, testing infrastructure) live in the project's L2 coding standards — [`docs/coding-standards/level2-python-instructions.md`](../coding-standards/level2-python-instructions.md) — not here. This document records WHAT components exist and HOW they interact; the L2 doc records HOW to build them.
 
-The REST entry-point layer (`ps-service/src/ps_service/api/`) that routes external PS-Cli/Policy Editor requests to these components is implementation wiring, not a named component — see [Container Architectural Pattern](#container-architectural-pattern). Once MCP Interface is deployed remotely, its network transport is expected to be hosted within this same process rather than as a separate service — see [MCP Interface](#mcp-interface).
+The REST entry-point layer (`ps-service/src/ps_service/api/`) that routes external PS-Cli/Policy Editor requests to these components is implementation wiring, not a named component — see [Container Architectural Pattern](#container-architectural-pattern). Once MCP Interface is deployed remotely, its network transport is expected to be hosted within this same process rather than as a separate service — see [MCP Interface](#mcp-interface). It binds loopback-only and unauthenticated; a network-reachable transport and authentication are deferred to issue #39 (tracked with MCP Interface's remote transport, to be hosted in this same process).
 
 ---
 

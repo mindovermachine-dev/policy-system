@@ -108,7 +108,14 @@
 ### API Patterns
 
 - REST framework: **FastAPI** — chosen for its native Pydantic integration (already mandated above for REST/MCP request/response payloads), async support matching the rest of `ps-service`, and auto-generated OpenAPI docs.
-- Routing, middleware, and dependency-injection conventions for `ps_service/api/` are not yet decided — establish them when `api/` endpoints beyond a health check are actually implemented, not before.
+- Routing, middleware, and dependency-injection conventions for `ps_service/api/` (established in issue #51):
+  - **Routing**: one `APIRouter` per concern, built by a `build_*_router()` factory (no module-level singleton router — mirrors `create_app` being a factory), included via `app.include_router(...)` inside `create_app`. `main.py`'s own `/health`/`/ready` keep `app.add_api_route` — they predate the router and carry no request models.
+  - **Config injection**: `create_app` sets `app.state.config = config`; routes depend on `get_service_config(request) -> ServiceConfig`, which returns `request.app.state.config`. No closure over `create_app`, no module global.
+  - **Collaborator injection**: the pipeline stage/adapter/graph-opener bundle is a provider dependency (`provide_pipeline_dependencies`) overridden in tests via `app.dependency_overrides` — the idiomatic FastAPI seam, never monkeypatching.
+  - **Run-id**: `provide_run_id` is an **`async def` generator** dependency (`with bind_run_context() as run_id: request.state.run_id = run_id; yield run_id`). It must be async, not a sync generator (a sync generator dependency is entered on a worker thread via `run_in_threadpool`, so the `contextvars` binding is lost to the endpoint) and not `BaseHTTPMiddleware` (its `dispatch` runs the endpoint in a separate task the binding does not reach).
+  - **Blocking work**: endpoints are `async def`; the synchronous pipeline calls are dispatched with `from fastapi.concurrency import run_in_threadpool`.
+  - **Errors**: routes raise an `ApiError` subclass, never `fastapi.HTTPException` with free text; `register_exception_handlers(app)` in `create_app` shapes every response body.
+  - **Payloads**: every request/response body is a Pydantic model in `api/models.py` with `Field()` constraints on any value reaching query construction, a filesystem path, or an LLM call; request models add `model_config = ConfigDict(extra="forbid")`.
 
 ### Entrypoint / Process Lifecycle Patterns
 
@@ -179,5 +186,5 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 
 Not yet coding patterns — each needs a decision before the area it touches ships, tracked here instead of as asides inside the topic sections above.
 
-- **API authentication/authorization**: REST framework is now decided (FastAPI, ps-service → API Patterns) but auth/authz is still open — decide before any `ps_service/api/` endpoint beyond a health check ships. Do not ship an unauthenticated API by default.
+- **API authentication/authorization**: For the walking skeleton, `ps_service/api/` ships unauthenticated with a loopback-only bind as the documented interim access control (issue #51). Authentication/authorization/rate-limiting for a network-reachable deployment are deferred to issue #39, together with MCP Interface's remote transport.
 - **PII handling**: ingested content may contain PII (this system explicitly models GDPR). Needs a product/legal decision on retention/logging limits and third-party LLM data-processing terms before ingesting real business data.

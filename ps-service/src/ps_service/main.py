@@ -1,7 +1,10 @@
-"""PS Service process harness: FastAPI app exposing liveness/readiness only.
+"""PS Service process harness and composition root: the FastAPI app.
 
-Deliberately decoupled from `ps_service/api/`'s REST layer. It only proves
-the process boots and reports its own health.
+Owns liveness/readiness (`/health`, `/ready`) and, since issue #51, mounts the
+`ps_service.api` REST router into `create_app` (the one deliberate
+`ps_service.api` import). It still has no module-load import of, and no
+readiness relationship with, Domain Mapper, Company Merge, Query Engine, MCP
+Interface, or Regulatory Change Monitor.
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ from typing import TYPE_CHECKING
 import uvicorn
 from fastapi import FastAPI
 
+from ps_service.api.error_handlers import register_exception_handlers
+from ps_service.api.routes import build_api_router
 from ps_service.config import ServiceConfig, load_config
 from ps_service.dependency_health import (
     CELLAR_ELI,
@@ -112,6 +117,15 @@ def create_app(config: ServiceConfig) -> FastAPI:
     sink. If `config.host` is not one of the recognized loopback spellings
     (see `_is_loopback`), an additional warning-level startup log entry is
     emitted, noting this unauthenticated harness is binding beyond localhost.
+
+    The resolved `config` is stashed on `app.state.config` (read back by the
+    REST layer's `get_service_config` dependency),
+    `register_exception_handlers(app)` installs the `ps_service.api` structured
+    4xx/5xx error handlers (AC-BI-009: no stack-trace / path / infra-detail
+    leakage), and the `ps_service.api` REST router (`GET /regulations`, and, in
+    later increments, `POST /ingestions`) is mounted via `app.include_router`.
+    `/health` and `/ready` stay on `app.add_api_route` — they predate the
+    router and carry no request models.
     """
 
     @asynccontextmanager
@@ -163,6 +177,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
     app.state.ready = False
+    app.state.config = config
+    register_exception_handlers(app)
+    app.include_router(build_api_router())
 
     async def health() -> dict[str, str]:
         """Report liveness: "alive" as soon as the ASGI server accepts connections.
