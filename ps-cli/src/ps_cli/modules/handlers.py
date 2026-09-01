@@ -10,6 +10,9 @@ themselves; ``ps_cli.cli.run()`` owns the single catch site (PLAN.md §1 D5/D9).
 
 from __future__ import annotations
 
+import sys
+import threading
+import uuid
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -17,6 +20,18 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ps_cli.http_client import PsServiceClientProtocol
+
+# How often the background poller (`_poll_ingestion_progress`) checks PS Service for the
+# run's currently-executing stage (AC-BI-009). A test overrides this via
+# `handle_regulations_ingest`'s `poll_interval_seconds` keyword rather than waiting on the
+# real interval (PLAN.md §3 Increment 15).
+_POLL_INTERVAL_SECONDS = 2.0
+
+# Bound on how long `handle_regulations_ingest` waits for the poller thread to notice
+# `stop_event` and exit, before its own final summary prints (PLAN.md §3 Increment 15). The
+# poller's own loop granularity is `poll_interval_seconds`, not this value -- this is only a
+# safety bound against an unexpectedly slow/stuck thread.
+_POLLER_JOIN_TIMEOUT_SECONDS = 5.0
 
 
 def handle_regulations_list(client: PsServiceClientProtocol) -> None:
@@ -32,7 +47,40 @@ def handle_regulations_list(client: PsServiceClientProtocol) -> None:
         print(f"{regulation.celex}  {regulation.title}")
 
 
-def handle_regulations_ingest(celex: str, client: PsServiceClientProtocol) -> None:
+def _poll_ingestion_progress(
+    client: PsServiceClientProtocol,
+    run_id: str,
+    stop_event: threading.Event,
+    poll_interval_seconds: float,
+) -> None:
+    """Print each newly-observed in-flight stage to stderr until `stop_event` is set.
+
+    Runs on the daemon background thread `handle_regulations_ingest` starts
+    (AC-BI-009). Polls `client.poll_ingestion_status(run_id)` every
+    `poll_interval_seconds`, printing `"{stage}: running"` to `sys.stderr`
+    only when `stage` is not `None` and differs from the last stage printed
+    -- never repeating an unchanged stage. `stop_event.wait(...)` doubles as
+    both the sleep and the shutdown signal, so the loop wakes and exits as
+    soon as the main thread's blocking `ingest_catalog()` call returns,
+    rather than up to one full interval late. `poll_ingestion_status()`
+    never raises (PLAN.md §3 Increment 14) -- a poll failure surfaces here
+    as `None` and is silently skipped, never affecting the main thread's
+    ingestion result (PLAN.md §1 D4).
+    """
+    last_stage: str | None = None
+    while not stop_event.wait(timeout=poll_interval_seconds):
+        stage = client.poll_ingestion_status(run_id)
+        if stage is not None and stage != last_stage:
+            print(f"{stage}: running", file=sys.stderr)
+            last_stage = stage
+
+
+def handle_regulations_ingest(
+    celex: str,
+    client: PsServiceClientProtocol,
+    *,
+    poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
+) -> None:
     """Ingest a curated EU regulation, identified by `celex`, via PS Service.
 
     `celex`'s format is already validated by argparse's `type=_celex_type`
@@ -44,8 +92,32 @@ def handle_regulations_ingest(celex: str, client: PsServiceClientProtocol) -> No
     status (AC-BI-002, AC-BI-010). A `PsCliError` raised by the client (e.g. a
     structured PS Service failure response) propagates uncaught -- only
     `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
+
+    While `ingest_catalog()` blocks (a real ingestion runs for minutes), a
+    daemon background thread polls PS Service for the run's
+    currently-executing stage and prints stage changes to **stderr**
+    (AC-BI-009) -- stdout carries only the three summary lines above,
+    byte-identical to before this behavior was added (AC-BI-010).
+    `poll_interval_seconds` defaults to `_POLL_INTERVAL_SECONDS` (2.0s); a
+    caller (e.g. a test) may override it to avoid waiting on the real
+    interval.
     """
-    result = client.ingest_catalog(celex)
+    run_id = uuid.uuid4().hex
+    stop_event = threading.Event()
+    poller = threading.Thread(
+        target=_poll_ingestion_progress,
+        args=(client, run_id, stop_event, poll_interval_seconds),
+        name="ps-cli-ingest-poller",
+        daemon=True,
+    )
+    poller.start()
+    try:
+        result = client.ingest_catalog(celex, run_id=run_id)
+    finally:
+        # Stop and join the poller *before* the summary prints below, so no stderr
+        # progress line can ever interleave with stdout's final output (AC-BI-010).
+        stop_event.set()
+        poller.join(timeout=_POLLER_JOIN_TIMEOUT_SECONDS)
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
     for stage in result.stages:

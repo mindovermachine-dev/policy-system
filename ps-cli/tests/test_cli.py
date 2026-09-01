@@ -34,14 +34,19 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `list_regulations()` to be called."""
         raise AssertionError("list_regulations must not be called in this test")
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
-        msg = f"ingest_catalog must not be called in this test (celex={celex!r})"
+        msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
         raise AssertionError(msg)
 
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
         msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+        raise AssertionError(msg)
+
+    def poll_ingestion_status(self, run_id: str) -> str | None:
+        """Fail: this test's fake does not expect `poll_ingestion_status()` to be called."""
+        msg = f"poll_ingestion_status must not be called in this test (run_id={run_id!r})"
         raise AssertionError(msg)
 
 
@@ -167,9 +172,9 @@ def test_main_module_only_imports_and_conditionally_calls_main() -> None:
 class _FakeIngestSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_catalog() succeeds."""
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
-        """Return a fixed IngestionResult, ignoring `celex`."""
-        del celex
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
+        """Return a fixed IngestionResult, ignoring `celex`/`run_id`."""
+        del celex, run_id
         return IngestionResult(
             run_id="run-ingest-cli",
             regulatory_instrument_id="ri-cli",
@@ -181,9 +186,9 @@ class _FakeIngestSuccessClient(_UnusedPsServiceClientMethods):
 class _FakeIngestFailingClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_catalog() always raises."""
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Raise a PsCliError, simulating a 502 pipeline_stage_failed response."""
-        del celex
+        del celex, run_id
         raise PsCliError(
             msg="PS Service reported pipeline_stage_failed: the domain mapper stage failed "
             "(failing stage: domain_mapper)",
@@ -194,8 +199,9 @@ class _FakeIngestFailingClient(_UnusedPsServiceClientMethods):
 class _UncallableIngestClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_catalog() must never be called."""
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Fail the test if reached -- proves the CLI validated `celex` before calling out."""
+        del run_id
         msg = f"ingest_catalog must not be called for a malformed celex, got {celex!r}"
         raise AssertionError(msg)
 
@@ -239,6 +245,34 @@ def test_run_regulations_ingest_malformed_celex_exits_two_without_calling_client
 
     assert excinfo.value.code == 2
     assert "not a 10-character CELEX identifier" in capsys.readouterr().err
+
+
+class _FakeIngestRecordingClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in that records the `celex` it was called with."""
+
+    def __init__(self) -> None:
+        """Initialize with no recorded call yet."""
+        self.called_with_celex: str | None = None
+
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
+        """Record `celex`, then return a fixed IngestionResult."""
+        del run_id
+        self.called_with_celex = celex
+        return IngestionResult(
+            run_id="run-ingest-cli",
+            regulatory_instrument_id="ri-cli",
+            source="catalog",
+            stages=[],
+        )
+
+
+def test_run_regulations_ingest_trims_whitespace_padded_celex_before_calling_client() -> None:
+    """AC-BI-001: a whitespace-padded CELEX is trimmed before it reaches the client."""
+    fake_client = _FakeIngestRecordingClient()
+
+    run(["regulations", "ingest", "  32016R0679  "], client=fake_client)
+
+    assert fake_client.called_with_celex == "32016R0679"
 
 
 def test_run_regulations_ingest_propagates_client_ps_cli_error_as_exit_one(

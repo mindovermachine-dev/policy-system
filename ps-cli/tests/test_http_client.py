@@ -484,3 +484,151 @@ class TestIngestInternal:
         client.ingest_internal("seeds/internal-sop.json")
 
         assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
+
+
+class TestIngestCatalogRunId:
+    """Increment 14: `ingest_catalog(celex, *, run_id=...)`'s request-body shape."""
+
+    def test_includes_run_id_in_request_body_when_given(self) -> None:
+        """`run_id` is included in the POST body when the caller supplies one."""
+        captured_bodies: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.ingest_catalog("32016R0679", run_id="run-explicit-123")
+
+        assert captured_bodies == [
+            {"source": "catalog", "celex": "32016R0679", "run_id": "run-explicit-123"}
+        ]
+
+    def test_omits_run_id_from_request_body_when_not_given(self) -> None:
+        """Regression: today's exact wire shape is preserved when `run_id` is not passed."""
+        captured_bodies: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.ingest_catalog("32016R0679")
+
+        assert captured_bodies == [{"source": "catalog", "celex": "32016R0679"}]
+
+
+_STATUS_BODY_WITH_STAGE = {"run_id": "run-poll-001", "stage": "extraction"}
+_STATUS_BODY_NO_STAGE = {"run_id": "run-poll-001", "stage": None}
+
+
+class TestPollIngestionStatus:
+    """Increment 14: PsServiceClient.poll_ingestion_status(run_id)."""
+
+    def test_parses_the_stage_field(self) -> None:
+        """A 200 GET /ingestions/{run_id} body's `stage` field is returned as-is."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/ingestions/run-poll-001"
+            assert request.method == "GET"
+            return httpx.Response(200, json=_STATUS_BODY_WITH_STAGE)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage == "extraction"
+
+    def test_returns_none_when_stage_field_is_null(self) -> None:
+        """A 200 body with `stage: null` (no run in flight) returns None, not a crash."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200, json=_STATUS_BODY_NO_STAGE)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_returns_none_on_network_error_without_raising(self) -> None:
+        """A transport-level ConnectError is swallowed -- this is a best-effort read."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_returns_none_on_read_timeout_without_raising(self) -> None:
+        """A transport-level ReadTimeout is also swallowed -- never surfaced to the caller."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_returns_none_on_non_2xx_response_without_raising(self) -> None:
+        """A non-2xx response (e.g. a 404/500) is swallowed, not mapped to PsCliError."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(500, json={"error": "boom"})
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_returns_none_on_non_json_body_without_raising(self) -> None:
+        """A malformed (non-JSON) body is swallowed, not raised."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=b"<html>not json</html>")
+            ),
+        )
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_returns_none_on_wrong_shaped_body_without_raising(self) -> None:
+        """A 200 body that parses as JSON but doesn't match the expected shape is swallowed."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"unexpected": "shape"})
+            ),
+        )
+
+        stage = client.poll_ingestion_status("run-poll-001")
+
+        assert stage is None
+
+    def test_uses_a_short_timeout_not_the_1800s_override(self) -> None:
+        """A recording transport proves the new short timeout constant is used, not the
+        1800s `_INGESTION_REQUEST_TIMEOUT` override sized for `POST /ingestions`.
+        """
+        captured_timeouts: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_timeouts.append(request.extensions.get("timeout"))
+            return httpx.Response(200, json=_STATUS_BODY_WITH_STAGE)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.poll_ingestion_status("run-poll-001")
+
+        assert captured_timeouts == [{"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}]

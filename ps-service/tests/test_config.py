@@ -16,7 +16,13 @@ import inspect
 import pytest
 
 from ps_service import config as config_module
-from ps_service.config import ServiceConfig, ServiceConfigurationError, load_config
+from ps_service.config import (
+    INGESTION_REQUIRED_CONFIG_FIELDS,
+    ServiceConfig,
+    ServiceConfigurationError,
+    load_config,
+    missing_ingestion_config_fields,
+)
 
 
 def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
@@ -354,3 +360,48 @@ def test_service_config_four_field_construction_still_succeeds_with_none_thresho
     )
 
     assert config.company_merge_similarity_threshold is None
+
+
+def test_missing_ingestion_config_fields_returns_all_three_names_when_none_are_set() -> None:
+    """A default-constructed `ServiceConfig` (no ingestion fields set) reports all three names,
+    in `INGESTION_REQUIRED_CONFIG_FIELDS` order.
+    """
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+    )
+
+    assert missing_ingestion_config_fields(config) == list(INGESTION_REQUIRED_CONFIG_FIELDS)
+
+
+def test_missing_ingestion_config_fields_returns_empty_list_when_all_three_are_set() -> None:
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        llm_interface_model="azure/gpt-5.4-mini",
+        llm_interface_embed_model="azure/text-embedding-3-small",
+        company_merge_similarity_threshold=0.85,
+    )
+
+    assert missing_ingestion_config_fields(config) == []
+
+
+def test_missing_ingestion_config_fields_names_only_the_unset_ones() -> None:
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        llm_interface_model="azure/gpt-5.4-mini",
+        llm_interface_embed_model=None,
+        company_merge_similarity_threshold=None,
+    )
+
+    assert missing_ingestion_config_fields(config) == [
+        "llm_interface_embed_model",
+        "company_merge_similarity_threshold",
+    ]

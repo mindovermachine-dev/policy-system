@@ -10,6 +10,9 @@ handler -> client) end to end.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from ps_cli.errors import PsCliError
@@ -32,14 +35,19 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `list_regulations()` to be called."""
         raise AssertionError("list_regulations must not be called in this test")
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
-        msg = f"ingest_catalog must not be called in this test (celex={celex!r})"
+        msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
         raise AssertionError(msg)
 
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
         msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+        raise AssertionError(msg)
+
+    def poll_ingestion_status(self, run_id: str) -> str | None:
+        """Fail: this test's fake does not expect `poll_ingestion_status()` to be called."""
+        msg = f"poll_ingestion_status must not be called in this test (run_id={run_id!r})"
         raise AssertionError(msg)
 
 
@@ -100,8 +108,9 @@ class _FakeIngestClient(_UnusedPsServiceClientMethods):
         self._error = error
         self.called_with_celex: str | None = None
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Record `celex`, then return the scripted result or raise the scripted error."""
+        del run_id
         self.called_with_celex = celex
         if self._error is not None:
             raise self._error
@@ -150,3 +159,121 @@ def test_handle_regulations_ingest_propagates_ps_cli_error_from_client_uncaught(
 
     with pytest.raises(PsCliError):
         handle_regulations_ingest("32016R0679", fake)
+
+
+class _FakeProgressIngestClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake whose `ingest_catalog()` blocks briefly and whose
+    `poll_ingestion_status()` returns a scripted sequence of stages.
+
+    Simulates a real ingest in flight (PLAN.md §3 Increment 15): the main
+    thread's `ingest_catalog()` call sleeps for `block_seconds` before
+    returning a fixed `IngestionResult`, giving a concurrently-polling
+    background thread a real window to observe stage changes.
+    """
+
+    def __init__(
+        self,
+        *,
+        result: IngestionResult,
+        stages: list[str | None],
+        block_seconds: float,
+    ) -> None:
+        """Script this fake's `ingest_catalog()` delay/result and polled stage sequence."""
+        self._result = result
+        self._stages = stages
+        self._block_seconds = block_seconds
+        self._poll_calls = 0
+
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
+        """Record nothing; block briefly, then return the scripted result."""
+        del celex, run_id
+        time.sleep(self._block_seconds)
+        return self._result
+
+    def poll_ingestion_status(self, run_id: str) -> str | None:
+        """Return the next scripted stage, repeating the last one once exhausted."""
+        del run_id
+        index = min(self._poll_calls, len(self._stages) - 1)
+        self._poll_calls += 1
+        return self._stages[index]
+
+
+_PROGRESS_TEST_RESULT = IngestionResult(
+    run_id="run-progress-001",
+    regulatory_instrument_id="ri-progress",
+    source="catalog",
+    stages=[StageOutcome(stage="merge", status="succeeded", summary={})],
+)
+
+
+def test_handle_regulations_ingest_prints_stage_changes_to_stderr_while_waiting(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stage changes observed while `ingest_catalog()` blocks print to stderr, not stdout.
+
+    The final stdout summary (AC-BI-010) is unchanged by the presence of
+    progress output.
+    """
+    fake = _FakeProgressIngestClient(
+        result=_PROGRESS_TEST_RESULT,
+        stages=["ingestion", "extraction", "extraction"],
+        block_seconds=0.05,
+    )
+
+    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+
+    captured = capsys.readouterr()
+    assert "ingestion: running" in captured.err
+    assert "extraction: running" in captured.err
+    assert captured.out == (
+        "run_id: run-progress-001\nregulatory_instrument_id: ri-progress\nmerge: succeeded\n"
+    )
+
+
+def test_handle_regulations_ingest_does_not_repeat_an_unchanged_stage_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A stage that stays the same across multiple polls prints only once."""
+    fake = _FakeProgressIngestClient(
+        result=_PROGRESS_TEST_RESULT,
+        stages=["ingestion"],
+        block_seconds=0.08,
+    )
+
+    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+
+    captured = capsys.readouterr()
+    assert captured.err.count("ingestion: running") == 1
+
+
+def test_handle_regulations_ingest_stops_polling_after_ingest_catalog_returns() -> None:
+    """The poller thread is no longer alive once the handler has returned (no thread leak)."""
+    fake = _FakeProgressIngestClient(
+        result=_PROGRESS_TEST_RESULT,
+        stages=["ingestion", "extraction"],
+        block_seconds=0.05,
+    )
+
+    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+
+    poller_threads = [t for t in threading.enumerate() if t.name == "ps-cli-ingest-poller"]
+    assert not any(t.is_alive() for t in poller_threads)
+
+
+def test_handle_regulations_ingest_poll_failures_never_affect_the_final_result(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`poll_ingestion_status()` always returning `None` never affects the final output."""
+    fake = _FakeProgressIngestClient(
+        result=_PROGRESS_TEST_RESULT,
+        stages=[None, None, None],
+        block_seconds=0.05,
+    )
+
+    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == (
+        "run_id: run-progress-001\nregulatory_instrument_id: ri-progress\nmerge: succeeded\n"
+    )

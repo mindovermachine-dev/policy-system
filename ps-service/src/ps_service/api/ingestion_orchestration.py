@@ -15,7 +15,12 @@ pipeline for a catalog (CELEX) regulation. This module holds:
 * :func:`_run_stage` -- the per-stage ``try``/``except`` wrapper that converts any
   stage failure into a :class:`~ps_service.api.errors.PipelineStageError` with a
   caller-safe, path/host-scrubbed reason (AC-BI-008/009);
-* :func:`run_catalog_ingestion_pipeline` -- the sequencer itself.
+* :func:`resolve_via_cellar` -- the pre-pipeline Cellar/ELI existence-and-metadata
+  fallback for a CELEX absent from the curated catalog (AC-BI-003/004/005/006/007);
+* :func:`run_catalog_ingestion_pipeline` -- the sequencer itself, which also drives
+  :mod:`ps_service.api.run_status` (via :func:`_execute_catalog_stages`) so a
+  concurrent poller can read the currently-executing stage of an in-flight run
+  (AC-BI-008).
 
 No ``falkordb`` import ever crosses into ``ps_service.api``: graphs are opened
 through the injected :class:`GraphOpeners` callables and handled via the local
@@ -28,21 +33,32 @@ module covers the catalog path only.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from ps_service.api.catalog import CatalogEntry
 from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; IMPL_4 deviation 1 sanctions reuse
     is_safe_verbatim,
 )
-from ps_service.api.errors import IngestionConfigIncompleteError, PipelineStageError
+from ps_service.api.errors import (
+    CatalogIdentifierNotFoundError,
+    IngestionConfigIncompleteError,
+    PipelineStageError,
+)
+from ps_service.api.run_status import clear_stage, set_stage
+from ps_service.config import missing_ingestion_config_fields
+from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
+from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
+from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
+from ps_service.ingestion.adapters.errors import CellarNotFoundError
 from ps_service.logging.facade import emit_log_entry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from ps_service.api.catalog import CatalogEntry
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
@@ -206,19 +222,6 @@ class _ResolvedPipelineConfig:
     similarity_threshold: float
 
 
-def _missing_config_names(config: ServiceConfig) -> list[str]:
-    """Return the names of the pipeline-required config values that are ``None``."""
-    return [
-        name
-        for name, value in (
-            ("llm_interface_model", config.llm_interface_model),
-            ("llm_interface_embed_model", config.llm_interface_embed_model),
-            ("company_merge_similarity_threshold", config.company_merge_similarity_threshold),
-        )
-        if value is None
-    ]
-
-
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     """Return the narrowed pipeline config, or raise if any required value is unset.
 
@@ -240,7 +243,7 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     embed_model = config.llm_interface_embed_model
     threshold = config.company_merge_similarity_threshold
     if chat_model is None or embed_model is None or threshold is None:
-        missing = ", ".join(_missing_config_names(config))
+        missing = ", ".join(missing_ingestion_config_fields(config))
         message = f"ingestion configuration incomplete: {missing} not set"
         raise IngestionConfigIncompleteError(message)
     return _ResolvedPipelineConfig(
@@ -248,7 +251,68 @@ def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     )
 
 
+# --- short_name derivation for a Cellar-resolved (non-curated) entry (AC-BI-004) ---
+
+_SLUG_WORD_RE = re.compile(r"[A-Za-z0-9]+")
+_SLUG_MAX_WORDS = 6
+
+
+def _derive_short_name(title: str, celex: str) -> str:
+    """Derive a ``short_name`` for a Cellar-resolved, non-curated regulation.
+
+    A slug of the Cellar-extracted title (its first ``_SLUG_MAX_WORDS`` words,
+    lowercased and ``_``-joined) with the lowercase CELEX appended for
+    uniqueness -- the concrete slugging function for the rule already decided
+    for AC-BI-004 (a curated ``CatalogEntry.short_name`` is never derived this
+    way; this is the Cellar-fallback path only). Pure -- no I/O.
+
+    Args:
+        title: The regulation's title, as extracted from Cellar/ELI.
+        celex: The regulation's CELEX identifier.
+
+    Returns:
+        A deterministic, always-valid ``short_name`` component, unique per
+        CELEX even if two titles share their first ``_SLUG_MAX_WORDS`` words.
+    """
+    words = _SLUG_WORD_RE.findall(title)[:_SLUG_MAX_WORDS]
+    slug = "_".join(word.lower() for word in words)
+    return f"{slug}_{celex.lower()}"
+
+
 # --- per-stage failure wrapper (m2 / M5) ---
+
+
+def _classify_stage_failure(
+    name: str, exc: Exception, *, emitter: LogEmitter | None = None
+) -> PipelineStageError:
+    """Classify one stage failure into a caller-safe ``PipelineStageError``.
+
+    Extracted from :func:`_run_stage` so :func:`resolve_via_cellar` (a
+    pre-pipeline step, not itself a ``_run_stage``-wrapped stage) can reuse the
+    exact same classification for its own Cellar-fetch/parse failures.
+
+    Args:
+        name: The stage name (e.g. ``"extraction"``) for the error and log lines.
+        exc: The exception the stage (or stage-equivalent step) raised.
+        emitter: Optional log emitter for the server-side failure-detail entry.
+
+    Returns:
+        A :class:`PipelineStageError` whose ``reason`` is the scrubbed message
+        for a whitelisted domain error, else a generic ``"<name> failed"`` --
+        with the full ``repr`` emitted server-side only (AC-BI-009).
+    """
+    if is_safe_verbatim(exc):
+        reason = _scrub_text(f"{type(exc).__name__}: {exc}")[:_STAGE_REASON_MAX_LEN]
+    else:
+        reason = f"{name} failed"
+        emit_log_entry(
+            component=_COMPONENT,
+            action=_RUN_ACTION,
+            outcome="failed",
+            extra={"failing_stage": name, "detail": repr(exc)},
+            emitter=emitter,
+        )
+    return PipelineStageError(stage=name, reason=reason)
 
 
 def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | None = None) -> T:
@@ -271,18 +335,109 @@ def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | No
     try:
         return thunk()
     except Exception as exc:
-        if is_safe_verbatim(exc):
-            reason = _scrub_text(f"{type(exc).__name__}: {exc}")[:_STAGE_REASON_MAX_LEN]
-        else:
-            reason = f"{name} failed"
-            emit_log_entry(
-                component=_COMPONENT,
-                action=_RUN_ACTION,
-                outcome="failed",
-                extra={"failing_stage": name, "detail": repr(exc)},
-                emitter=emitter,
-            )
-        raise PipelineStageError(stage=name, reason=reason) from exc
+        raise _classify_stage_failure(name, exc, emitter=emitter) from exc
+
+
+# --- Cellar-fallback existence resolution (D1/D2/D3, AC-BI-003/004/005/006/007) ---
+
+
+@dataclass(frozen=True, slots=True)
+class _CellarResolution:
+    """A non-curated CELEX resolved via Cellar/ELI, plus its fetch-once adapter.
+
+    ``entry`` is a :class:`CatalogEntry` built exactly as a curated one is, so
+    downstream code (``_execute_catalog_stages``, graph naming, id
+    construction) cannot tell the two apart. ``adapter`` is a
+    :class:`CellarEliAdapter` whose fetch step replays the bytes already
+    retrieved during resolution -- the AC-BI-006 fetch-once mechanism (D2).
+    """
+
+    entry: CatalogEntry
+    adapter: IngestionAdapter
+
+
+def resolve_via_cellar(
+    celex: str,
+    *,
+    cellar_fetch: Callable[[str], bytes] | None = None,
+    cellar_fetch_rdf: Callable[[str], bytes] | None = None,
+) -> _CellarResolution:
+    """Resolve a CELEX absent from the curated catalog against Cellar/ELI.
+
+    Fetches the XHTML document once (``cellar_fetch``) and the RDF/XML
+    metadata document once (``cellar_fetch_rdf``), extracts bibliographic
+    metadata from both, and derives a ``short_name`` (D-slug) -- all
+    *before* the pipeline ever runs (D1), so a curated and a Cellar-resolved
+    :class:`CatalogEntry` are indistinguishable to
+    ``run_catalog_ingestion_pipeline``. The returned adapter's fetch steps
+    replay both already-fetched byte strings, so Stage 1 never re-fetches
+    either (D2, AC-BI-006) -- proven by counting fakes in this function's
+    own tests, not just documented here. Without this second cached-bytes
+    replay, Stage 1 would issue a third real Cellar/ELI request for the RDF
+    document, silently doubling the per-resolution request cost
+    (PLAN_REVISED.md §6 item 2).
+
+    Args:
+        celex: A well-formed CELEX identifier absent from the curated
+            catalog.
+        cellar_fetch: The Cellar/ELI XHTML fetch callable; injectable for
+            tests. When ``None`` (the default), the module-level
+            :func:`fetch_xhtml` name is resolved at call time -- not bound
+            as a literal default value -- so a caller-side
+            ``monkeypatch.setattr("ps_service.api.
+            ingestion_orchestration.fetch_xhtml", ...)`` takes effect even
+            for callers (e.g. ``routes.create_ingestion``) that never pass
+            ``cellar_fetch`` explicitly. A plain ``= fetch_xhtml`` default
+            would bind the real function at module-import time and silently
+            ignore such a monkeypatch -- confirmed by a real, unmocked
+            outbound call to Cellar/ELI during this increment's own TDD red
+            step before this ``None``-sentinel form was adopted.
+        cellar_fetch_rdf: The Cellar/ELI RDF/XML fetch callable; injectable
+            for tests. Same ``None``-sentinel-resolved-at-call-time pattern
+            as ``cellar_fetch``, for the same monkeypatch-safety reason,
+            resolving to the module-level :func:`fetch_rdf` name.
+
+    Returns:
+        A :class:`_CellarResolution` pairing the resolved entry with a
+        cached-bytes :class:`CellarEliAdapter`.
+
+    Raises:
+        CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI
+            either (a genuine 404, distinguished from an outage -- AC-BI-005).
+        PipelineStageError: The Cellar/ELI fetch failed for any other reason,
+            or the fetched document could not be turned into valid metadata
+            (an unparseable structure, an unsupported CELEX type code, or an
+            empty title) -- all classified as stage ``"ingestion"`` (the same
+            502 shape a Stage-1 failure would produce, D3).
+    """
+    fetch = cellar_fetch if cellar_fetch is not None else fetch_xhtml
+    fetch_rdf_ = cellar_fetch_rdf if cellar_fetch_rdf is not None else fetch_rdf
+    try:
+        xhtml = fetch(celex)
+        rdf = fetch_rdf_(celex)
+    except CellarNotFoundError as exc:
+        message = f"No curated regulation has CELEX {celex!r}, and it does not exist on Cellar/ELI."
+        raise CatalogIdentifierNotFoundError(message) from exc
+    except Exception as exc:
+        raise _classify_stage_failure("ingestion", exc) from exc
+
+    try:
+        metadata = extract_metadata(xhtml, rdf, celex)
+    except Exception as exc:
+        # Broad on purpose, not narrowed to CellarParseError: an empty
+        # extracted title (no `eli-main-title` div, or an empty one) does not
+        # make extract_metadata *return* with title="" -- RegulatoryInstrument
+        # Metadata.title is `Field(min_length=1)`, so that case raises
+        # pydantic.ValidationError instead (verified directly, not assumed).
+        # Both failure shapes -- and any other extract_metadata failure --
+        # get the same stage="ingestion" classification, so a degenerate
+        # `_<celex>`-shaped short_name is never derived from either.
+        raise _classify_stage_failure("ingestion", exc) from exc
+
+    short_name = _derive_short_name(metadata.title, celex)
+    entry = CatalogEntry(celex, metadata.title, short_name, metadata.version)
+    adapter = CellarEliAdapter(fetch=lambda _identifier: xhtml, fetch_rdf=lambda _identifier: rdf)
+    return _CellarResolution(entry=entry, adapter=adapter)
 
 
 # --- run outcome ---
@@ -401,35 +556,56 @@ def _execute_catalog_stages(
     graphs: _OpenGraphs,
     dependencies: PipelineDependencies,
     emitter: LogEmitter | None,
+    ingestion_adapter: IngestionAdapter | None = None,
 ) -> tuple[str, tuple[StageReport, ...]]:
     """Run ingest -> extract -> derive -> merge, aborting at the first failure.
 
     Each stage after the first consumes the ``regulatory_instrument_id`` the
     ingest stage returned (AC-BI-003). The first :func:`_run_stage` to raise a
     ``PipelineStageError`` aborts the sequence -- later stages never run
-    (AC-BI-008).
+    (AC-BI-008). :func:`~ps_service.api.run_status.set_stage` is called for each
+    stage name immediately *before* that stage runs, so a concurrent poller of
+    ``run_status`` sees "currently executing", never "just completed" -- the
+    caller (:func:`run_catalog_ingestion_pipeline`) clears the entry once the
+    whole run ends, success or failure.
+
+    Args:
+        entry: The catalog entry (curated or Cellar-resolved) being ingested.
+        run_id: The request-scoped run id, passed to the ingest stage.
+        resolved: The narrowed, non-``None`` pipeline config.
+        graphs: The three already-opened graph handles for this run.
+        dependencies: The injected stage functions and adapter factories.
+        emitter: Optional explicit log emitter; otherwise the process default.
+        ingestion_adapter: A pre-built adapter to use for the ingest stage
+            (AC-BI-006 -- the fetch-once Cellar-fallback adapter); when
+            ``None``, ``dependencies.adapters.ingestion()`` builds the default
+            one, exactly as the curated path does today.
 
     Returns:
         The ``regulatory_instrument_id`` and the per-stage :class:`StageReport`
         tuple, in pipeline order.
     """
     stages = dependencies.stages
-    ingestion_adapter = dependencies.adapters.ingestion()
+    resolved_ingestion_adapter = (
+        ingestion_adapter if ingestion_adapter is not None else dependencies.adapters.ingestion()
+    )
     mapping_adapter = dependencies.adapters.mapping()
 
+    set_stage(run_id, "ingestion")
     ingest_result = _run_stage(
         "ingestion",
         lambda: stages.ingest(
             entry.celex,
             entry.short_name,
             version=entry.version,
-            adapter=ingestion_adapter,
+            adapter=resolved_ingestion_adapter,
             graph=graphs.native,
             run_id=run_id,
         ),
         emitter=emitter,
     )
     rid = ingest_result.regulatory_instrument_id
+    set_stage(run_id, "extraction")
     extract_result = _run_stage(
         "extraction",
         lambda: stages.extract(
@@ -441,11 +617,13 @@ def _execute_catalog_stages(
         ),
         emitter=emitter,
     )
+    set_stage(run_id, "derivation")
     derive_result = _run_stage(
         "derivation",
         lambda: stages.derive(rid, baseline_graph=graphs.baseline, model=resolved.chat_model),
         emitter=emitter,
     )
+    set_stage(run_id, "merge")
     merge_result = _run_stage(
         "merge",
         lambda: stages.merge(
@@ -474,6 +652,7 @@ def run_catalog_ingestion_pipeline(
     caller: str,
     dependencies: PipelineDependencies,
     emitter: LogEmitter | None = None,
+    ingestion_adapter: IngestionAdapter | None = None,
 ) -> IngestionOutcome:
     """Run the external ingestion pipeline for one catalog regulation.
 
@@ -486,7 +665,13 @@ def run_catalog_ingestion_pipeline(
     fresh run context) and carried on the ``ingestion_run`` start/end log entries
     (AC-BI-010/011). A stage failure aborts the sequence and surfaces as a
     ``PipelineStageError`` naming the failing stage (AC-BI-008), with no
-    filesystem path / host / URL in its reason (AC-BI-009).
+    filesystem path / host / URL in its reason (AC-BI-009). The ``run_status``
+    entry :func:`_execute_catalog_stages` maintains for this ``run_id`` is
+    cleared unconditionally once the run ends -- success or failure -- via a
+    ``finally`` block, so the registry never grows unbounded across a long
+    server uptime (AC-BI-008; see ``ps_service.api.run_status``'s module
+    docstring for the accepted last-writer-wins tradeoff on a colliding
+    ``run_id``).
 
     Args:
         entry: The curated catalog entry (CELEX, title, short name, version).
@@ -497,6 +682,11 @@ def run_catalog_ingestion_pipeline(
             factories (``build_default_pipeline_dependencies`` in production; a
             fake in fast tests).
         emitter: Optional explicit log emitter; otherwise the process default.
+        ingestion_adapter: A pre-built adapter to use for the ingest stage
+            (AC-BI-006 -- the fetch-once Cellar-fallback adapter from
+            :func:`resolve_via_cellar`); when ``None``, the dependency
+            bundle's default factory builds one, exactly as the curated path
+            does today.
 
     Returns:
         An :class:`IngestionOutcome` with ``source="catalog"`` and one
@@ -522,25 +712,29 @@ def run_catalog_ingestion_pipeline(
         emitter=emitter,
     )
     try:
-        rid, reports = _execute_catalog_stages(
-            entry,
-            run_id=run_id,
-            resolved=resolved,
-            graphs=graphs,
-            dependencies=dependencies,
-            emitter=emitter,
-        )
-    except PipelineStageError as exc:
-        _emit_run(
-            outcome="failed",
-            run_id=run_id,
-            source_identifier=entry.celex,
-            caller=caller,
-            emitter=emitter,
-            duration_ms=_elapsed_ms(started),
-            failing_stage=exc.stage,
-        )
-        raise
+        try:
+            rid, reports = _execute_catalog_stages(
+                entry,
+                run_id=run_id,
+                resolved=resolved,
+                graphs=graphs,
+                dependencies=dependencies,
+                emitter=emitter,
+                ingestion_adapter=ingestion_adapter,
+            )
+        except PipelineStageError as exc:
+            _emit_run(
+                outcome="failed",
+                run_id=run_id,
+                source_identifier=entry.celex,
+                caller=caller,
+                emitter=emitter,
+                duration_ms=_elapsed_ms(started),
+                failing_stage=exc.stage,
+            )
+            raise
+    finally:
+        clear_stage(run_id)
     _emit_run(
         outcome="succeeded",
         run_id=run_id,

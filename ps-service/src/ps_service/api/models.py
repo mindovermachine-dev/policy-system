@@ -34,12 +34,20 @@ class RegulationCatalogResponse(BaseModel):
 
 
 class CatalogIngestionRequest(BaseModel):
-    """``POST /ingestions`` body naming a curated EU regulation by its CELEX identifier."""
+    """``POST /ingestions`` body naming a curated EU regulation by its CELEX identifier.
+
+    ``run_id`` is an optional, client-supplied correlation id (safe as both a
+    URL path segment and a dict key) letting a caller poll
+    ``GET /ingestions/{run_id}`` for live progress *while* this request is
+    still in flight (AC-BI-008). When omitted, the route falls back to a
+    fresh server-minted id -- today's exact behaviour, unchanged.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["catalog"]
     celex: str = Field(min_length=10, max_length=10, pattern=r"^3\d{4}[A-Z]\d{4}$")
+    run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class InternalIngestionRequest(BaseModel):
@@ -113,6 +121,21 @@ class IngestionAcceptedResponse(BaseModel):
     regulatory_instrument_id: str = Field(min_length=1)
     source: Literal["catalog", "internal"]
     stages: list[StageOutcome]
+
+
+class IngestionStatusResponse(BaseModel):
+    """Response body for ``GET /ingestions/{run_id}``: a best-effort live-progress read.
+
+    Always returned with HTTP 200, including for an unknown, completed, or
+    not-yet-started ``run_id`` (``stage: None``) -- this is a best-effort
+    observation of ``ps_service.api.run_status``, not authoritative resource
+    retrieval, so there is no 404 branch (AC-BI-008, D4).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str = Field(min_length=1)
+    stage: str | None = None
 
 
 class ErrorDetail(BaseModel):

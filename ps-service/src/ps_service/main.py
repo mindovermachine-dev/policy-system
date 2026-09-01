@@ -17,7 +17,7 @@ from fastapi import FastAPI
 
 from ps_service.api.error_handlers import register_exception_handlers
 from ps_service.api.routes import build_api_router
-from ps_service.config import ServiceConfig, load_config
+from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
     CELLAR_ELI,
     FALKORDB,
@@ -155,11 +155,19 @@ def create_app(config: ServiceConfig) -> FastAPI:
 
         `app.state.ready` only flips `True` once `_check_dependencies_at_startup`
         (issue #22) confirms FalkorDB, LLM Interface, and Cellar/ELI are all
-        reachable — unlike `configure()` above, a dependency failure here
-        never propagates: it only keeps this instance out of `/ready`'s pool,
-        preserving liveness/readiness's whole reason for existing (a
-        dependency outage must never crash-loop an otherwise-healthy
-        process).
+        reachable AND every `INGESTION_REQUIRED_CONFIG_FIELDS` value resolved
+        (issue #16 follow-up) — unlike `configure()` above, neither failure
+        here propagates: each only keeps this instance out of `/ready`'s
+        pool, preserving liveness/readiness's whole reason for existing (a
+        dependency outage, or an incomplete deploy, must never crash-loop an
+        otherwise-healthy process).
+
+        Missing config is checked once here, not folded into
+        `dependency_health`'s live-updating registry: `config` is a frozen
+        `ServiceConfig` resolved once by `load_config()` before `create_app`
+        is even called, so unlike dependency reachability it cannot change,
+        recover, or need re-probing for the life of this process — a
+        one-time startup check is the whole story.
         """
         log_path = (config.logging_dir / _LOG_FILENAME) if config.logging_dir is not None else None
         configure(log_path=log_path)
@@ -171,7 +179,15 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 extra={"host": config.host},
             )
         emit_log_entry(component="entrypoint", action="startup", outcome="success")
-        app.state.ready = _check_dependencies_at_startup(config)
+        missing_config = missing_ingestion_config_fields(config)
+        if missing_config:
+            emit_log_entry(
+                component="entrypoint",
+                action="startup",
+                outcome="warning",
+                extra={"missing_config": missing_config},
+            )
+        app.state.ready = _check_dependencies_at_startup(config) and not missing_config
         yield
         app.state.ready = False
 
@@ -193,11 +209,16 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """Report "ready" only once startup succeeded AND every dependency is currently healthy.
 
         Two independent gates (issue #22): `app.state.ready` (the one-time
-        startup probe from `lifespan`) AND `dependency_health.all_healthy(...)`
-        (the live signal, updated by real FalkorDB/LLM Interface/Cellar-ELI
-        traffic as it happens) both have to hold. The live gate is what lets
-        `/ready` flip back to `not_ready` if a dependency fails mid-run, and
-        self-heal on its next success, without waiting for a restart.
+        startup probe from `lifespan` — which itself folds in both the three
+        dependency probes AND ingestion config completeness, issue #16
+        follow-up) AND `dependency_health.all_healthy(...)` (the live signal,
+        updated by real FalkorDB/LLM Interface/Cellar-ELI traffic as it
+        happens) both have to hold. The live gate is what lets `/ready` flip
+        back to `not_ready` if a dependency fails mid-run, and self-heal on
+        its next success, without waiting for a restart — config
+        completeness has no equivalent live gate because it cannot change
+        mid-run (see `lifespan`'s docstring), so `app.state.ready` alone is
+        the whole story for that half.
         """
         is_ready = app.state.ready and all_healthy(_READY_DEPENDENCIES)
         return {"status": "ready" if is_ready else "not_ready"}

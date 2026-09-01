@@ -34,10 +34,11 @@ claim — see FLAWS_A finding 6 / PLAN_A §5 risk 4).
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date
 
 import pytest
 
-from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
+from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
 from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
 from ps_service.ingestion.adapters.cellar_eli.structure import (
     ANNEX,
@@ -116,6 +117,19 @@ def test_consolidated_structural_node_ids_are_scoped_to_the_instrument(
     assert all(node.id.startswith(f"{regulatory_instrument_id}#") for node in nodes)
 
 
+# The only date value present on a consolidated-expression document is
+# Cellar's own "amendments incorporated as of" bookkeeping date -- byte-for-
+# byte the same digits as the identifier's own `-YYYYMMDD` suffix (Defect 2's
+# live evidence, PLAN_REVISED.md's "Changes ... post-Slice-10" section). It is
+# NOT a real EV/MA/application legal date; asserted explicitly below (not
+# merely "no exception") specifically so a future silent change in Cellar's
+# own data is still caught.
+_CONSOLIDATION_AS_OF_DATE = {
+    "02016R0679-20160504": date(2016, 5, 4),
+    "02024R2847-20241120": date(2024, 11, 20),
+}
+
+
 @pytest.mark.parametrize(("base_celex", "consolidated_celex"), _PARITY_CASES)
 def test_consolidated_metadata_carries_the_base_act_celex(
     base_celex: str, consolidated_celex: str
@@ -123,8 +137,24 @@ def test_consolidated_metadata_carries_the_base_act_celex(
     """`extract_metadata` normalises a consolidated CELEX back to its
     base-act form, so a re-ingested consolidation stays pollable by
     `poll_for_amendments`.
+
+    Post-Slice-10 (Defect 2 fix): this used to raise `CellarParseError` --
+    the own subject's `resource_legal_id_celex` (asserted in unreduced
+    consolidated form, e.g. `"02024R2847-20241120"`) was compared raw against
+    the normalized `own_id` (`"32024R2847"`), so it was misclassified as a
+    foreign act and excluded from both tiers. Normalizing both sides
+    (`_base_celex_or_none`) now resolves this subject as "own", so resolution
+    succeeds -- but only into `effective_date == _CONSOLIDATION_AS_OF_DATE[...]`
+    (Cellar's consolidation bookkeeping date, NOT a real EV/MA/application
+    date -- see the module-level comment above). This is a known, accepted,
+    narrow limitation of fetching a consolidated-expression CELEX directly:
+    production ingestion never does this (see `_BASE_ACT_VERSION`'s
+    docstring in `metadata.py`), so it is not a violation of any AC.
     """
-    metadata = extract_metadata(fetch_xhtml(consolidated_celex), consolidated_celex)
+    metadata = extract_metadata(
+        fetch_xhtml(consolidated_celex), fetch_rdf(consolidated_celex), consolidated_celex
+    )
 
     assert metadata.celex == base_celex
     assert metadata.instrument_type == "regulation"
+    assert metadata.effective_date == _CONSOLIDATION_AS_OF_DATE[consolidated_celex]

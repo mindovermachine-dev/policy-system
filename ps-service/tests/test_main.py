@@ -88,6 +88,27 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     )
 
 
+def _complete_config(**overrides: object) -> ServiceConfig:
+    """A `ServiceConfig` with every `INGESTION_REQUIRED_CONFIG_FIELDS` value set.
+
+    The baseline for `app` below and any other fixture that needs `/ready`'s
+    startup gate to be reachable — the readiness-gated-on-config-completeness
+    tests further down build their own incomplete configs directly instead of
+    using this helper.
+    """
+    defaults: dict[str, object] = {
+        "host": "127.0.0.1",
+        "port": 8000,
+        "graceful_shutdown_seconds": 10,
+        "logging_dir": None,
+        "llm_interface_model": "azure/gpt-5.4-mini",
+        "llm_interface_embed_model": "azure/text-embedding-3-small",
+        "company_merge_similarity_threshold": 0.85,
+    }
+    defaults.update(overrides)
+    return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
+
+
 @pytest.fixture
 def app() -> FastAPI:
     """Build a fresh app instance via `create_app`, per PLAN_REVIEWED.md §6's migration table.
@@ -96,15 +117,11 @@ def app() -> FastAPI:
     expected behavior is unchanged; `logging_dir=None` preserves
     `conftest.py`'s existing `PS_LOGGING_DIR` isolation fixture behavior
     (falls back to `resolve_default_log_path()`, which reads the env var).
+    Ingestion-required config fields are all set (see `_complete_config`) so
+    pre-existing tests, written before issue #16's follow-up gated `/ready`
+    on config completeness too, keep passing unchanged.
     """
-    return create_app(
-        ServiceConfig(
-            host="127.0.0.1",
-            port=8000,
-            graceful_shutdown_seconds=10,
-            logging_dir=None,
-        )
-    )
+    return create_app(_complete_config())
 
 
 def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) -> None:
@@ -623,12 +640,7 @@ def test_lifespan_emits_warning_log_entry_for_non_loopback_host(tmp_path: Path) 
     replacement. Uses the real Logging facade end to end and the same
     drain-before-read technique as the sibling real-file-write tests.
     """
-    config = ServiceConfig(
-        host="0.0.0.0",
-        port=8000,
-        graceful_shutdown_seconds=10,
-        logging_dir=None,
-    )
+    config = _complete_config(host="0.0.0.0")
     non_loopback_app = create_app(config)
 
     with TestClient(non_loopback_app):
@@ -662,12 +674,7 @@ def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -
     total) by making the "zero warnings for loopback" property explicit and
     independently checked.
     """
-    config = ServiceConfig(
-        host="127.0.0.1",
-        port=8000,
-        graceful_shutdown_seconds=10,
-        logging_dir=None,
-    )
+    config = _complete_config()
     loopback_app = create_app(config)
 
     with TestClient(loopback_app):
@@ -786,3 +793,72 @@ def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -
         dependency_health.mark_healthy(dependency_health.FALKORDB)
 
         assert client.get("/ready").json() == {"status": "ready"}
+
+
+# --- Config-completeness-gated readiness (issue #16 follow-up) -------------
+
+
+def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete() -> None:
+    """A missing `INGESTION_REQUIRED_CONFIG_FIELDS` value keeps `/ready` at
+    `not_ready` even though every dependency probe succeeds — the same
+    outcome a caller previously only discovered by getting a 503 from
+    `POST /ingestions`.
+    """
+    incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
+
+    with TestClient(incomplete_app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "not_ready"}
+
+
+def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
+    """Regression guard: a fully-set config still reaches `ready` (proves the
+    new gate doesn't regress the already-passing case, independent of the
+    `app` fixture's own default).
+    """
+    complete_app = create_app(_complete_config())
+
+    with TestClient(complete_app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "ready"}
+
+
+def test_startup_config_incompleteness_emits_a_warning_log_entry_naming_missing_fields(
+    tmp_path: Path,
+) -> None:
+    incomplete_app = create_app(
+        _complete_config(llm_interface_model=None, company_merge_similarity_threshold=None)
+    )
+
+    with TestClient(incomplete_app):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
+    missing_config_entries = [
+        entry.get("missing_config") for entry in warning_entries if "missing_config" in entry
+    ]
+
+    assert missing_config_entries == [["llm_interface_model", "company_merge_similarity_threshold"]]
+
+
+def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -> None:
+    """Config completeness has no live gate (unlike dependency reachability):
+    it is a frozen `ServiceConfig` value, so nothing during the process's
+    life can ever make a missing field appear — proving there is no
+    equivalent of `dependency_health.mark_healthy` for this gate.
+    """
+    incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
+
+    with TestClient(incomplete_app) as client:
+        assert client.get("/ready").json() == {"status": "not_ready"}
+        assert client.get("/ready").json() == {"status": "not_ready"}

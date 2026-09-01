@@ -71,9 +71,7 @@ def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -
     command = cast("str", args.command)
 
     try:
-        active_client = (
-            client if client is not None else PsServiceClient(load_config().service_url)
-        )
+        active_client = client if client is not None else PsServiceClient(load_config().service_url)
         handler = DISPATCH[command]
         handler(args, active_client)
     except PsCliError as error:

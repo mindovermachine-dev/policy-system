@@ -145,7 +145,7 @@ class FakeIngestStage:
         emitter: LogEmitter | None = None,
     ) -> IngestResult:
         """Record the call and return (or raise) a canned :class:`IngestResult`."""
-        _ = (adapter, graph, emitter)
+        _ = (graph, emitter)
         self._recorder.calls.append(
             StageCall(
                 "ingestion",
@@ -155,6 +155,7 @@ class FakeIngestStage:
                     "short_name": short_name,
                     "version": version,
                     "run_id": run_id,
+                    "adapter": adapter,
                 },
             )
         )

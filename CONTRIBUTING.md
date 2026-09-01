@@ -137,23 +137,6 @@ at all -- `uv run` resolves the repo-root `.venv` on its own.
 
 1. Load test data into graph
 
-NOTE: This is a destructure data load. It will reset the database and delete all existing data.
-
-```bash
-tools/graph-ingestion/load_all.sh
-```
-
-1. Start asking questions to the graph like:
-
-```text
-Show me the names of the roles defined in CRA
-```
-
-If the skill (in the .claude/skills and .github/skills folder) does not automatically kick in the mention it explicitly:
-
-```text
-Use the Policy Question skill. Show me the names of the roles defined in CRA
-```
 
 ### Start PS Service (process harness)
 
@@ -161,10 +144,19 @@ Use the Policy Question skill. Show me the names of the roles defined in CRA
 served by uvicorn with `/health` (liveness) and `/ready` (readiness)
 endpoints, no domain routes yet.
 
+Or, to run it detached (backgrounded, PID-tracked, logs to
+`logs/ps-service-stdout.log`) instead of holding a foreground terminal:
+
 ```bash
-uv sync
-uv run python -m ps_service
+scripts/ps-service.sh start
+scripts/ps-service.sh status
+scripts/ps-service.sh stop
 ```
+
+`start` sources `.env` itself (check-env.example) and waits for `/health` before returning (fails
+loudly if the process exits or doesn't come up within
+`PS_SERVICE_STARTUP_TIMEOUT_SECONDS`, default 30s). `stop` sends `SIGTERM`
+and waits for uvicorn's graceful shutdown, same as the manual path below.
 
 Once it's running, verify it's alive:
 
@@ -173,23 +165,32 @@ curl http://127.0.0.1:8000/health
 ```
 
 `/ready` is stricter than `/health` — it only reports `ready` once FalkorDB,
-the LLM Interface, and Cellar/ELI are all confirmed reachable at startup, and
-stays that way only as long as each keeps succeeding on real traffic
-(self-heals on the next success if one fails mid-run, no restart needed):
+the LLM Interface, and Cellar/ELI are all confirmed reachable at startup AND
+every ingestion-required config value (`PS_LLMINTERFACE_MODEL`,
+`PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is
+set. The dependency half stays `ready` only as long as each keeps succeeding
+on real traffic (self-heals on the next success if one fails mid-run, no
+restart needed); the config half can't self-heal — it's fixed at startup, so
+fixing a missing env var needs a restart:
 
 ```bash
 curl http://127.0.0.1:8000/ready
 ```
 
 If you haven't set up FalkorDB (see [Option B](#option-b-local-setup-no-dev-container)
-above) or configured the LLM Interface (see the next section) yet, `/ready`
+above), configured the LLM Interface (see the next section), or set
+`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` (see
+[Configure Company Merge](#configure-company-merge) below) yet, `/ready`
 will report `not_ready` — check `logs/ps-service.jsonl` for a `startup`/
-`warning` entry naming which dependency failed. Cellar/ELI needs no local
-setup (it's a public endpoint), so it only fails here if you're offline.
+`warning` entry naming which dependency, or which config field(s) (`extra.
+missing_config`), is the problem. Cellar/ELI needs no local setup (it's a
+public endpoint), so it only fails here if you're offline.
 
 To stop it, press Ctrl-C in the terminal it's running in, or send it
 `SIGTERM` from another terminal (`kill -TERM <pid>`) — either way, uvicorn's
-built-in graceful shutdown handles it: no forced kill needed.
+built-in graceful shutdown handles it: no forced kill needed. If you started
+it via `scripts/ps-service.sh start`, use `scripts/ps-service.sh stop`
+instead — it already tracks the PID for you.
 
 ### Use ps-cli
 
@@ -306,6 +307,22 @@ e = route_embedding('hello world', model='ollama/nomic-embed-text')
 print(e.model, len(e.vector))
 "
 ```
+
+### Configure Company Merge
+
+`ps_service.company_merge.merge.merge_baseline_graph` needs
+`PS_COMPANYMERGE_SIMILARITY_THRESHOLD` set — the dedupe-match cutoff (a float
+greater than 0.0 and at most 1.0) it uses when deciding whether two company
+mentions from different regulations refer to the same real-world entity:
+
+```bash
+PS_COMPANYMERGE_SIMILARITY_THRESHOLD=0.85
+```
+
+Unlike `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`, there's no
+provider choice to make here — just the one value. If it's unset, `/ready`
+reports `not_ready` and `POST /ingestions` (`ps-cli regulations ingest`)
+fails fast with `ingestion_config_incomplete` before doing any I/O.
 
 ### Claude Desktop (alternative to Claude Code)
 

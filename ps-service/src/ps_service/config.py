@@ -67,6 +67,24 @@ class ServiceConfig:
     company_merge_similarity_threshold: float | None = None
 
 
+# The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
+# Merge) cannot run without, but that `load_config()` itself leaves optional
+# (see `ServiceConfig`'s docstring / B1's fix). Named once here so both the
+# request-time guard (`ingestion_orchestration._require_ingestion_config`)
+# and the Process Harness's `/ready` startup check (issue #16 follow-up) stay
+# in lockstep on exactly which three fields that is.
+INGESTION_REQUIRED_CONFIG_FIELDS = (
+    "llm_interface_model",
+    "llm_interface_embed_model",
+    "company_merge_similarity_threshold",
+)
+
+
+def missing_ingestion_config_fields(config: ServiceConfig) -> list[str]:
+    """Return the `INGESTION_REQUIRED_CONFIG_FIELDS` names that are unset (`None`) on `config`."""
+    return [name for name in INGESTION_REQUIRED_CONFIG_FIELDS if getattr(config, name) is None]
+
+
 def _parse_port(raw: str) -> int:
     """Parse and range-check `PS_SERVICE_PORT`, failing closed on any invalid value."""
     try:

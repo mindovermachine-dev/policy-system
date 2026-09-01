@@ -76,6 +76,45 @@ _FIXTURES_BY_IDENTIFIER = {
     "32020L2222": _FIXTURE_DIRECTIVE_B,
 }
 
+# RDF own-subject fixtures for the two XHTML fixtures above -- own subject
+# asserts both `resource_legal_id_celex` and the instrument type's target
+# predicate, matching the XHTML-derived expected `effective_date` values
+# (2030-01-01 / 2031-01-01) so existing assertions on those values still
+# hold now that `effective_date` resolves from RDF, not Article headings.
+_RDF_FIXTURE_REGULATION_A = b"""<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
+<rdf:Description rdf:about="http://publications.europa.eu/resource/celex/32020R1111">
+<j.0:resource_legal_id_celex rdf:datatype="http://www.w3.org/2001/XMLSchema#string">32020R1111</j.0:resource_legal_id_celex>
+<j.0:date_entry-into-force rdf:datatype="http://www.w3.org/2001/XMLSchema#date">2030-01-01</j.0:date_entry-into-force>
+</rdf:Description>
+</rdf:RDF>
+"""
+
+_RDF_FIXTURE_DIRECTIVE_B = b"""<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
+<rdf:Description rdf:about="http://publications.europa.eu/resource/celex/32020L2222">
+<j.0:resource_legal_id_celex rdf:datatype="http://www.w3.org/2001/XMLSchema#string">32020L2222</j.0:resource_legal_id_celex>
+<j.0:date_transposition rdf:datatype="http://www.w3.org/2001/XMLSchema#date">2031-01-01</j.0:date_transposition>
+</rdf:Description>
+</rdf:RDF>
+"""
+
+_RDF_FIXTURES_BY_IDENTIFIER = {
+    "32020R1111": _RDF_FIXTURE_REGULATION_A,
+    "32020L2222": _RDF_FIXTURE_DIRECTIVE_B,
+}
+
+# No subject at all -- used wherever a test needs `extract_metadata` to
+# raise `CellarParseError` because no admissible RDF subject asserts the
+# instrument type's target predicate (mirrors
+# `test_metadata.py::_RDF_EMPTY_FIXTURE`).
+_RDF_EMPTY_FIXTURE = b"""<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+</rdf:RDF>
+"""
+
 
 def _dispatching_fetch(identifier: str) -> bytes:
     """A single fetch function capable of serving multiple identifiers —
@@ -86,13 +125,22 @@ def _dispatching_fetch(identifier: str) -> bytes:
     return _FIXTURES_BY_IDENTIFIER[identifier]
 
 
+def _dispatching_fetch_rdf(identifier: str) -> bytes:
+    """The RDF counterpart of `_dispatching_fetch` — same dispatch-by-identifier
+    shape, exactly what the real `fetch_rdf(celex)` does for any CELEX value.
+    """
+    return _RDF_FIXTURES_BY_IDENTIFIER[identifier]
+
+
 def test_default_fetch_is_the_real_fetch_xhtml() -> None:
     signature = inspect.signature(CellarEliAdapter.__init__)
     assert signature.parameters["fetch"].default is fetch_xhtml
 
 
 def test_satisfies_ingestion_adapter_protocol() -> None:
-    adapter: IngestionAdapter = CellarEliAdapter(fetch=_dispatching_fetch)
+    adapter: IngestionAdapter = CellarEliAdapter(
+        fetch=_dispatching_fetch, fetch_rdf=_dispatching_fetch_rdf
+    )
 
     result = adapter.fetch_regulatory_instrument_structure("32020R1111")
 
@@ -100,7 +148,7 @@ def test_satisfies_ingestion_adapter_protocol() -> None:
 
 
 def test_one_instance_produces_different_results_for_different_identifiers() -> None:
-    adapter = CellarEliAdapter(fetch=_dispatching_fetch)
+    adapter = CellarEliAdapter(fetch=_dispatching_fetch, fetch_rdf=_dispatching_fetch_rdf)
 
     result_a = adapter.fetch_regulatory_instrument_structure("32020R1111")
     result_b = adapter.fetch_regulatory_instrument_structure("32020L2222")
@@ -142,7 +190,12 @@ def test_fetch_regulatory_instrument_structure_propagates_cellar_fetch_error_unc
 
 
 def test_fetch_regulatory_instrument_structure_propagates_cellar_parse_error_unchanged() -> None:
-    _unresolvable_effective_date_fixture = b"""
+    """`effective_date` is unresolvable when no admissible RDF subject asserts
+    the instrument type's target predicate (`_RDF_EMPTY_FIXTURE`) — the XHTML
+    body's own content is irrelevant to this failure now that `effective_date`
+    resolves from RDF, not Article headings.
+    """
+    _some_regulation_fixture = b"""
     <html xmlns="http://www.w3.org/1999/xhtml">
     <body>
     <div class="eli-container" id="enc_1">
@@ -157,9 +210,37 @@ def test_fetch_regulatory_instrument_structure_propagates_cellar_parse_error_unc
     """
 
     def _fetch(identifier: str) -> bytes:
-        return _unresolvable_effective_date_fixture
+        return _some_regulation_fixture
 
-    adapter = CellarEliAdapter(fetch=_fetch)
+    def _fetch_rdf(identifier: str) -> bytes:
+        return _RDF_EMPTY_FIXTURE
+
+    adapter = CellarEliAdapter(fetch=_fetch, fetch_rdf=_fetch_rdf)
 
     with pytest.raises(CellarParseError):
         adapter.fetch_regulatory_instrument_structure("32020R1111")
+
+
+def test_fetch_regulatory_instrument_structure_calls_both_fetch_and_fetch_rdf_exactly_once() -> (
+    None
+):
+    """AC-BI-006 (mirrored at the adapter level): one call to `fetch`, one call
+    to `fetch_rdf` — no re-fetching of either, no fetch skipped.
+    """
+    fetch_calls: list[str] = []
+    fetch_rdf_calls: list[str] = []
+
+    def _fetch(identifier: str) -> bytes:
+        fetch_calls.append(identifier)
+        return _dispatching_fetch(identifier)
+
+    def _fetch_rdf(identifier: str) -> bytes:
+        fetch_rdf_calls.append(identifier)
+        return _dispatching_fetch_rdf(identifier)
+
+    adapter = CellarEliAdapter(fetch=_fetch, fetch_rdf=_fetch_rdf)
+
+    adapter.fetch_regulatory_instrument_structure("32020R1111")
+
+    assert fetch_calls == ["32020R1111"]
+    assert fetch_rdf_calls == ["32020R1111"]

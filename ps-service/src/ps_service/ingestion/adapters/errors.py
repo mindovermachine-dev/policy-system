@@ -20,6 +20,18 @@ class CellarFetchError(Exception):
     """
 
 
+class CellarNotFoundError(CellarFetchError):
+    """The Cellar/ELI Adapter's HTTP fetch returned a genuine 404.
+
+    The CELEX identifier does not name a document Cellar/ELI knows about --
+    distinct from a transport failure or any other HTTP error status: the
+    host responded, so this is not a Cellar/ELI outage. Raised only for
+    ``urllib.error.HTTPError`` with ``code == 404``; every other failure
+    still raises the plain :class:`CellarFetchError`. Never accompanied by
+    ``mark_unhealthy(CELLAR_ELI)``.
+    """
+
+
 class CellarParseError(Exception):
     """The fetched Cellar/ELI XHTML could not be parsed.
 

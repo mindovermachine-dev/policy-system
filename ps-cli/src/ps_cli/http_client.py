@@ -48,6 +48,11 @@ _INGESTIONS_PATH = "/ingestions"
 # AMENDMENT / briefs/BATCH_H_FIX.md.
 _INGESTION_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=1800.0, write=5.0, pool=5.0)
 
+# `GET /ingestions/{run_id}` is a best-effort, fast poll of a run's currently-executing
+# stage (AC-BI-008/009) -- unlike `POST /ingestions`, it never waits on the pipeline
+# itself, so it stays at a short timeout, not `_INGESTION_REQUEST_TIMEOUT`'s 30 minutes.
+_STATUS_POLL_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
+
 
 def _should_warn_insecure(url: str) -> bool:
     """Return whether `url` should trigger the AC-BI-009 insecure-connection warning.
@@ -168,6 +173,20 @@ def _parse_ingestion_response(payload: object) -> IngestionResult:
     )
 
 
+def _parse_ingestion_status(payload: object) -> str | None:
+    """Parse a `GET /ingestions/{run_id}` 200 response body into a stage name, or `None`.
+
+    Unlike the other `_parse_*` helpers, this never raises `PsCliError` — a
+    malformed or wrong-shaped body is treated the same as "no stage known",
+    consistent with `poll_ingestion_status()`'s best-effort contract.
+    """
+    if not isinstance(payload, dict):
+        return None
+    body = cast("dict[str, object]", payload)
+    stage = body.get("stage")
+    return stage if isinstance(stage, str) else None
+
+
 def _raise_from_error_body(response: httpx.Response) -> NoReturn:
     """Parse a non-2xx `POST /ingestions` response into `PsCliError` per D5's mapping table.
 
@@ -221,12 +240,16 @@ class PsServiceClientProtocol(Protocol):
         """`GET /regulations`: the curated catalog of ingestible regulations."""
         ...
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """`POST /ingestions` with `{"source": "catalog", "celex": celex}`."""
         ...
 
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """`POST /ingestions` with `{"source": "internal", "fixture_path": fixture_path}`."""
+        ...
+
+    def poll_ingestion_status(self, run_id: str) -> str | None:
+        """`GET /ingestions/{run_id}`: the run's currently-executing stage, best-effort."""
         ...
 
 
@@ -264,19 +287,26 @@ class PsServiceClient:
             _raise_read_timeout_error(self._base_url, exc)
         return _parse_regulations_body(response.json())
 
-    def ingest_catalog(self, celex: str) -> IngestionResult:
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """`POST /ingestions` with `{"source": "catalog", "celex": celex}`.
 
         Ingests a curated EU regulation, identified by its CELEX identifier,
-        into the graph. Raises `PsCliError` if PS Service cannot be reached, if
-        it returns a non-2xx response (parsed per D5's error-body mapping —
-        `failing_stage`, when present, is included in the raised message), or
-        if a 200 response body does not match the expected success shape.
+        into the graph. When `run_id` is given, it is included in the request
+        body so the caller can correlate this run with `poll_ingestion_status()`
+        (AC-BI-009); when omitted (the default), the body is unchanged from
+        today's exact wire shape. Raises `PsCliError` if PS Service cannot be
+        reached, if it returns a non-2xx response (parsed per D5's error-body
+        mapping — `failing_stage`, when present, is included in the raised
+        message), or if a 200 response body does not match the expected
+        success shape.
         """
+        body: dict[str, str] = {"source": "catalog", "celex": celex}
+        if run_id is not None:
+            body["run_id"] = run_id
         try:
             response = self._client.post(
                 _INGESTIONS_PATH,
-                json={"source": "catalog", "celex": celex},
+                json=body,
                 timeout=_INGESTION_REQUEST_TIMEOUT,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
@@ -286,6 +316,30 @@ class PsServiceClient:
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
+
+    def poll_ingestion_status(self, run_id: str) -> str | None:
+        """`GET /ingestions/{run_id}`: the run's currently-executing stage, best-effort.
+
+        A live-progress read only (AC-BI-008/009), not authoritative resource
+        retrieval — every failure (network error, non-2xx response, a
+        non-JSON or wrong-shaped body) is swallowed and reported as `None`,
+        never raised as `PsCliError` or any other exception, so a poll
+        failure can never affect the caller's own `ingest_catalog()` result.
+        """
+        try:
+            response = self._client.get(
+                f"{_INGESTIONS_PATH}/{run_id}",
+                timeout=_STATUS_POLL_TIMEOUT,
+            )
+        except httpx.HTTPError:
+            return None
+        if not response.is_success:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        return _parse_ingestion_status(payload)
 
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """`POST /ingestions` with `{"source": "internal", "fixture_path": fixture_path}`.

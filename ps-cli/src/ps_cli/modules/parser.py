@@ -26,13 +26,14 @@ def _celex_type(value: str) -> str:
     check in the handler. By the time a handler runs, `celex` is guaranteed
     well-formed.
     """
-    if not _CELEX_PATTERN.fullmatch(value):
+    trimmed_value = value.strip()
+    if not _CELEX_PATTERN.fullmatch(trimmed_value):
         msg = (
-            f"'{value}' is not a 10-character CELEX identifier "
+            f"'{trimmed_value}' is not a 10-character CELEX identifier "
             "(expected: 3<4 digits><1 uppercase letter><4 digits>, e.g. 32016R0679)"
         )
         raise argparse.ArgumentTypeError(msg)
-    return value
+    return trimmed_value
 
 
 def _fixture_path_type(value: str) -> str:

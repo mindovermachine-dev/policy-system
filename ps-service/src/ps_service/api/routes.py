@@ -18,27 +18,28 @@ from ps_service.api.dependencies import (
     provide_pipeline_dependencies,
     provide_run_id,
 )
-from ps_service.api.errors import (
-    CatalogIdentifierNotFoundError,
-    InternalIngestionNotImplementedError,
-)
+from ps_service.api.errors import InternalIngestionNotImplementedError
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
+    resolve_via_cellar,
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.models import (
     IngestionAcceptedResponse,
     IngestionRequest,
+    IngestionStatusResponse,
     RegulationCatalogEntry,
     RegulationCatalogResponse,
     StageOutcome,
 )
+from ps_service.api.run_status import get_stage
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
+    from ps_service.ingestion.adapters.base import IngestionAdapter
 
 _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
     "Internal-document ingestion is not implemented in this walking-skeleton "
@@ -90,16 +91,22 @@ async def create_ingestion(
 
     A ``source: "catalog"`` request runs the full external pipeline (Ingestion ->
     Domain Mapper -> Company Merge) for the named CELEX, off the event loop via
-    ``run_in_threadpool``, and returns the per-stage outcome (AC-BI-002). An
-    unknown CELEX 404s before any stage runs (AC-BI-006); a stage failure surfaces
-    as a 502 naming the failing stage (AC-BI-008). A ``source: "internal"``
-    request validates and then returns a structured 501 -- the internal pipeline
-    is issue #54.
+    ``run_in_threadpool``, and returns the per-stage outcome (AC-BI-002). A CELEX
+    absent from the curated catalog falls back to a Cellar/ELI existence lookup
+    (``resolve_via_cellar``, also off the event loop) before the pipeline runs --
+    a genuine miss on both sources 404s (AC-BI-005/006), a resolved CELEX runs the
+    same pipeline a curated one would (AC-BI-003/004), fetching the document at
+    most once for the whole request (AC-BI-006). A stage failure -- including a
+    Cellar/ELI outage during resolution -- surfaces as a 502 naming the failing
+    stage (AC-BI-007/008). A ``source: "internal"`` request validates and then
+    returns a structured 501 -- the internal pipeline is issue #54.
 
     Args:
         request_body: The ``source``-discriminated request body.
         http_request: The raw request, for the caller host (M4).
-        run_id: The request-scoped run id (injected).
+        run_id: The request-scoped, server-minted run id (injected); used as
+            the effective correlation id only when the request body doesn't
+            supply its own (catalog requests only -- see ``effective_run_id``).
         config: The resolved service configuration (injected).
         dependencies: The pipeline dependency bundle (injected; overridden in tests).
 
@@ -107,32 +114,57 @@ async def create_ingestion(
         An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
 
     Raises:
-        CatalogIdentifierNotFoundError: The catalog request named an unknown CELEX (404).
+        CatalogIdentifierNotFoundError: The CELEX is absent from the curated
+            catalog and does not exist on Cellar/ELI either (404).
         InternalIngestionNotImplementedError: The request selected ``source: "internal"`` (501).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     if request_body.source == "internal":
         raise InternalIngestionNotImplementedError(_INTERNAL_NOT_IMPLEMENTED_MESSAGE)
+    effective_run_id = request_body.run_id or run_id
     entry = find_by_celex(request_body.celex)
+    ingestion_adapter: IngestionAdapter | None = None
     if entry is None:
-        message = f"No curated regulation has CELEX {request_body.celex!r}."
-        raise CatalogIdentifierNotFoundError(message)
+        resolution = await run_in_threadpool(resolve_via_cellar, request_body.celex)
+        entry = resolution.entry
+        ingestion_adapter = resolution.adapter
     outcome = await run_in_threadpool(
         run_catalog_ingestion_pipeline,
         entry,
         config=config,
-        run_id=run_id,
+        run_id=effective_run_id,
         caller=caller,
         dependencies=dependencies,
+        ingestion_adapter=ingestion_adapter,
     )
-    return _to_accepted_response(run_id, outcome)
+    return _to_accepted_response(effective_run_id, outcome)
+
+
+async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
+    """Return ``run_id``'s currently-executing pipeline stage, best-effort.
+
+    Always 200, including for an unknown, already-completed, or
+    not-yet-started ``run_id`` (``stage: null``) -- a best-effort live-progress
+    read over ``ps_service.api.run_status``, not authoritative resource
+    retrieval (AC-BI-008, D4). ``IngestionAcceptedResponse`` is unaffected by
+    this endpoint (AC-BI-011).
+
+    Args:
+        run_id: The run id to look up (path parameter).
+
+    Returns:
+        An :class:`IngestionStatusResponse` carrying ``run_id`` and the
+        currently-recorded stage, or ``None`` if none is recorded.
+    """
+    return IngestionStatusResponse(run_id=run_id, stage=get_stage(run_id))
 
 
 def build_api_router() -> APIRouter:
     """Build the PS Service REST ``APIRouter``.
 
     Returns:
-        An ``APIRouter`` exposing ``GET /regulations`` and ``POST /ingestions``.
+        An ``APIRouter`` exposing ``GET /regulations``, ``POST /ingestions``,
+        and ``GET /ingestions/{run_id}``.
     """
     router = APIRouter()
     router.add_api_route("/regulations", list_regulations, methods=["GET"])
@@ -142,4 +174,5 @@ def build_api_router() -> APIRouter:
         methods=["POST"],
         status_code=status.HTTP_200_OK,
     )
+    router.add_api_route("/ingestions/{run_id}", get_ingestion_status, methods=["GET"])
     return router
