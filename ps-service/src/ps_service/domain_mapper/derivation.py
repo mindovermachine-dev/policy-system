@@ -96,6 +96,15 @@ def derive_obligations_and_capabilities(
     3. `_derive_capabilities` (Increment 14), called with `_derive_obligations`'s
        `obligation_nodes` output directly — whole-run Capability
        mint/match.
+
+       Capability derivation's own `unmatched_obligation_ids` (issue #64)
+       flows straight into this function's returned
+       `DerivationResult.unmatched_obligation_ids`, mirroring
+       `unmatched_requirement_ids`'s own path from step 2 — this is
+       surfaced data, not a run failure. Every Obligation node is still
+       persisted via `graph_writer.persist_obligation_and_capability_graph`
+       (step 4) regardless of whether its own Capability derivation
+       resolved.
     4. `graph_writer.persist_obligation_and_capability_graph` (Increment 15)
        — plain writer, no validation of its own (see that module's
        docstring for why).
@@ -109,7 +118,7 @@ def derive_obligations_and_capabilities(
     obligation_nodes, has_edges, satisfied_by_edges, unmatched_requirement_ids = (
         _derive_obligations(roles, model=model, call_completion=call_completion, emitter=emitter)
     )
-    capability_nodes, requires_edges = _derive_capabilities(
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
         obligation_nodes, model=model, call_completion=call_completion, emitter=emitter
     )
 
@@ -135,6 +144,7 @@ def derive_obligations_and_capabilities(
         obligation_node_ids=tuple(node.id for node in obligation_nodes),
         capability_node_ids=tuple(node.id for node in capability_nodes),
         unmatched_requirement_ids=unmatched_requirement_ids,
+        unmatched_obligation_ids=unmatched_obligation_ids,
     )
 
 
@@ -479,13 +489,29 @@ def _build_obligation_messages(
 # --- Capability derivation (PLAN_REVIEWED.md §11 Increment 14) -------------
 
 
+@dataclass
+class _CapabilityDerivationState:
+    """Mutable whole-run accumulator threaded through `_derive_capabilities`'s loop.
+
+    Mirrors `_DerivationState`. `registry` is the single whole-run Capability
+    registry (`capability_id -> (name, description)`), seeded empty once for
+    the entire run — deliberately Obligation- and Role-independent (§7.4),
+    unlike Obligation derivation's Role-scoped registry.
+    """
+
+    registry: dict[str, tuple[str, str | None]] = field(default_factory=dict)
+    capability_nodes: list[CapabilityNode] = field(default_factory=list)
+    requires_edges: list[CapabilityRequiresEdge] = field(default_factory=list)
+    unmatched_obligation_ids: list[str] = field(default_factory=list)
+
+
 def _derive_capabilities(
     obligations: tuple[ObligationNode, ...],
     *,
     model: str,
     call_completion: CompletionCaller | None = None,
     emitter: LogEmitter | None = None,
-) -> tuple[tuple[CapabilityNode, ...], tuple[CapabilityRequiresEdge, ...]]:
+) -> tuple[tuple[CapabilityNode, ...], tuple[CapabilityRequiresEdge, ...], tuple[str, ...]]:
     """PLAN_REVIEWED.md §7.4 — whole-run Capability derivation.
 
     Dedups `obligations` by `.id` first (`_distinct_obligations`,
@@ -516,44 +542,109 @@ def _derive_capabilities(
     `spikes/cellar2/derive_capabilities.py`, a proven finding retained
     here per §7.4/§11 Increment 13's explicit instruction).
 
-    Returns `(capability_nodes, requires_edges)` — pure data, no graph
-    writes (Increment 15's `graph_writer.persist_obligation_and_capability_graph`,
-    out of this batch's scope). A malformed/unparseable response for one
-    Obligation (`DomainMapperDerivationError` from `parse_capability_response`)
-    propagates unchanged — unlike Obligation derivation, Capability
-    derivation has no `unmatchable`-style outcome to unify it with (every
-    Obligation is expected to require at least one Capability, AC-003);
-    how the orchestrating caller (Increment 16) handles this failure mode
-    is that increment's decision, not this function's. An
+    Returns `(capability_nodes, requires_edges, unmatched_obligation_ids)` —
+    pure data, no graph writes (Increment 15's
+    `graph_writer.persist_obligation_and_capability_graph`, out of this
+    batch's scope). A malformed/unparseable response for one Obligation
+    (`DomainMapperDerivationError` from `parse_capability_response`) is
+    isolated by `_process_obligation` (issue #64): that one Obligation's id
+    is added to `unmatched_obligation_ids` and an `outcome="unmatched"` log
+    entry is emitted, but derivation continues for every other distinct
+    Obligation — the failure neither aborts the run nor poisons the
+    whole-run registry state built up so far. `unmatched_obligation_ids` is
+    threaded all the way into `DerivationResult`, mirroring
+    `unmatched_requirement_ids` — surfaced, never silently dropped. An
     `LlmProviderError` (a genuine infra failure calling the LLM at all) is,
-    as elsewhere in this module, never caught here — it propagates and
-    aborts the whole run.
+    as elsewhere in this module, never caught here — it still propagates
+    and aborts the whole run.
     """
-    registry: dict[str, tuple[str, str | None]] = {}
-    capability_nodes: list[CapabilityNode] = []
-    requires_edges: list[CapabilityRequiresEdge] = []
+    state = _CapabilityDerivationState()
 
     for obligation_node_id, obligation_text in _distinct_obligations(obligations):
-        decisions = _derive_capabilities_for_obligation(
-            obligation_node_id=obligation_node_id,
-            obligation_text=obligation_text,
-            registry=registry,
+        _process_obligation(
+            obligation_node_id,
+            obligation_text,
+            state,
             model=model,
             call_completion=call_completion,
             emitter=emitter,
         )
-        for decision in decisions:
-            if decision.capability_node_id not in registry:
-                registry[decision.capability_node_id] = (decision.name, decision.description)
-                capability_nodes.append(_to_capability_node(decision))
-            requires_edges.append(
-                CapabilityRequiresEdge(
-                    obligation_node_id=obligation_node_id,
-                    capability_node_id=decision.capability_node_id,
-                )
-            )
 
-    return tuple(capability_nodes), tuple(requires_edges)
+    return (
+        tuple(state.capability_nodes),
+        tuple(state.requires_edges),
+        tuple(state.unmatched_obligation_ids),
+    )
+
+
+def _process_obligation(
+    obligation_node_id: str,
+    obligation_text: str,
+    state: _CapabilityDerivationState,
+    *,
+    model: str,
+    call_completion: CompletionCaller | None,
+    emitter: LogEmitter | None,
+) -> None:
+    """One distinct Obligation's Capability mint-or-match decision.
+
+    Mirrors `_process_requirement`'s isolation shape exactly (issue #64):
+    a `DomainMapperDerivationError` from a malformed/unparseable response is
+    caught here, one level up from `_derive_capabilities_for_obligation`
+    (which does not catch it itself), and unified with the
+    "surfaced, not silently dropped" outcome via `_mark_capability_unmatched`.
+    Mutates `state` in place.
+    """
+    try:
+        decisions = _derive_capabilities_for_obligation(
+            obligation_node_id=obligation_node_id,
+            obligation_text=obligation_text,
+            registry=state.registry,
+            model=model,
+            call_completion=call_completion,
+            emitter=emitter,
+        )
+    except DomainMapperDerivationError:
+        _mark_capability_unmatched(obligation_node_id, state, emitter)
+        return
+
+    for decision in decisions:
+        if decision.capability_node_id not in state.registry:
+            state.registry[decision.capability_node_id] = (
+                decision.name,
+                decision.description,
+            )
+            state.capability_nodes.append(_to_capability_node(decision))
+        state.requires_edges.append(
+            CapabilityRequiresEdge(
+                obligation_node_id=obligation_node_id,
+                capability_node_id=decision.capability_node_id,
+            )
+        )
+
+
+def _mark_capability_unmatched(
+    obligation_node_id: str, state: _CapabilityDerivationState, emitter: LogEmitter | None
+) -> None:
+    """§7.5-equivalent for Capability derivation (issue #64).
+
+    Unifies the malformed-response failure mode with the same "surfaced,
+    never silently dropped" mechanism `_mark_unmatched` establishes for
+    Obligation derivation: the Obligation's id is recorded and an
+    `outcome="unmatched"` log entry is emitted, never a silently-skipped
+    Obligation and never an uncaught exception. Not extracted into a shared
+    helper with `_mark_unmatched` — only the second occurrence of this
+    log-emission shape in this module, below L2's third-occurrence
+    extraction threshold.
+    """
+    state.unmatched_obligation_ids.append(obligation_node_id)
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_ACTION,
+        entity_id=obligation_node_id,
+        outcome="unmatched",
+        emitter=emitter,
+    )
 
 
 def _distinct_obligations(obligations: tuple[ObligationNode, ...]) -> list[tuple[str, str]]:

@@ -481,6 +481,7 @@ def _derivation_summary(result: DerivationResult) -> dict[str, int]:
         "obligations": len(result.obligation_node_ids),
         "capabilities": len(result.capability_node_ids),
         "unmatched_requirements": len(result.unmatched_requirement_ids),
+        "unmatched_obligations": len(result.unmatched_obligation_ids),
     }
 
 

@@ -212,6 +212,18 @@ def test_derivation_result_mutation_raises() -> None:
         obligation_node_ids=(),
         capability_node_ids=(),
         unmatched_requirement_ids=(),
+        unmatched_obligation_ids=(),
     )
     with pytest.raises(AttributeError):
         _mutate(result, "regulatory_instrument_id", "changed")
+
+
+def test_derivation_result_round_trips_unmatched_obligation_ids() -> None:
+    result = DerivationResult(
+        regulatory_instrument_id="CRA-1.0",
+        obligation_node_ids=(),
+        capability_node_ids=(),
+        unmatched_requirement_ids=(),
+        unmatched_obligation_ids=("obl_x_aaaaaa",),
+    )
+    assert result.unmatched_obligation_ids == ("obl_x_aaaaaa",)

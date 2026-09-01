@@ -278,3 +278,6 @@ class DerivationResult:
     obligation_node_ids: tuple[str, ...]
     capability_node_ids: tuple[str, ...]
     unmatched_requirement_ids: tuple[str, ...]  # AC-004 — surfaced, never silently absent
+    # AC-BI-002 (issue #64) — an Obligation whose Capability derivation response was malformed,
+    # surfaced, never silently dropped
+    unmatched_obligation_ids: tuple[str, ...]

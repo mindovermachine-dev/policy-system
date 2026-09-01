@@ -209,7 +209,10 @@ def _assert_ac002_confidence(baseline_graph: GraphHandle, regulatory_instrument_
 
 
 def _assert_ac003_derivation_shape(
-    baseline_graph: GraphHandle, unmatched_ids: tuple[str, ...], regulatory_instrument_id: str
+    baseline_graph: GraphHandle,
+    unmatched_ids: tuple[str, ...],
+    unmatched_obligation_ids: tuple[str, ...],
+    regulatory_instrument_id: str,
 ) -> None:
     requirement_rows = _query_rows(
         baseline_graph,
@@ -239,6 +242,8 @@ def _assert_ac003_derivation_shape(
         "MATCH (o:Obligation) OPTIONAL MATCH (o)-[r:REQUIRES]->(:Capability) RETURN o.id, count(r)",
     )
     for obligation_id_value, requires_count in requires_rows:
+        if obligation_id_value in unmatched_obligation_ids:
+            continue
         assert cast("int", requires_count) >= 1, (
             f"{regulatory_instrument_id}: Obligation {obligation_id_value!r} has no REQUIRES edge"
         )
@@ -331,9 +336,11 @@ def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis
         _assert_ac003_derivation_shape(
             baseline_graph,
             outcome.derivation_result.unmatched_requirement_ids,
+            outcome.derivation_result.unmatched_obligation_ids,
             fixture.regulatory_instrument_id,
         )
         assert isinstance(outcome.derivation_result.unmatched_requirement_ids, tuple)  # AC-004
+        assert isinstance(outcome.derivation_result.unmatched_obligation_ids, tuple)  # AC-BI-002
         _assert_ac005_regulatory_instrument_scope(baseline_graph, fixture.regulatory_instrument_id)
         _assert_ac008_no_governance_nodes(baseline_graph, fixture.regulatory_instrument_id)
         _assert_run_id_logged(

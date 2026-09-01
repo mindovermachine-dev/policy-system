@@ -228,6 +228,34 @@ def test_catalog_pipeline_runs_ingest_extract_derive_merge_in_order(
     ]
 
 
+def test_derivation_stage_summary_reports_unmatched_obligations_count(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 slice 9: the derivation stage's ``StageReport.summary`` dict
+    carries an ``unmatched_obligations`` count, symmetric with the existing
+    ``unmatched_requirements`` key, sourced from
+    ``DerivationResult.unmatched_obligation_ids``.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(
+        rid="CRA-1.0",
+        derive_unmatched_obligation_ids=("obl_conduct_risk_assessment_aaaaaa",),
+    )
+
+    outcome = run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-unmatched-obligations",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    derivation_report = next(report for report in outcome.stages if report.stage == "derivation")
+    assert derivation_report.summary["unmatched_obligations"] == 1
+    assert derivation_report.summary["unmatched_requirements"] == 0
+
+
 def test_each_stage_consumes_prior_stage_regulatory_instrument_id(
     make_emitter: MakeEmitter,
 ) -> None:
@@ -635,6 +663,7 @@ class _StageOrderDerive:
             obligation_node_ids=(),
             capability_node_ids=(),
             unmatched_requirement_ids=(),
+            unmatched_obligation_ids=(),
         )
 
 

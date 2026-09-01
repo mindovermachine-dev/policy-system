@@ -12,6 +12,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import httpx
+import openai
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -23,6 +25,7 @@ from ps_service.domain_mapper.derivation import (
 from ps_service.domain_mapper.errors import DomainMapperDerivationError
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import ObligationNode, RoleRequirements
+from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
@@ -42,19 +45,29 @@ def _model_response(content: str) -> ModelResponse:
     )
 
 
-def _scripted_sequential_call_completion(responses: list[str]) -> CompletionCaller:
+def _scripted_sequential_call_completion(responses: list[str | Exception]) -> CompletionCaller:
     """A `CompletionCaller` fake that returns `responses` in the exact
-    order `_derive_obligations` calls the LLM — Role then Requirement
-    document order (PLAN_REVIEWED.md §7.3). Raises if more calls are made
-    than were scripted, so an unexpected extra call fails loudly rather
-    than silently reusing a stale response.
+    order `_derive_obligations`/`_derive_capabilities` calls the LLM — Role
+    then Requirement document order (PLAN_REVIEWED.md §7.3), or Obligation
+    processing order for Capability derivation. Raises if more calls are
+    made than were scripted, so an unexpected extra call fails loudly
+    rather than silently reusing a stale response.
+
+    An item may be an `Exception` instance instead of a response string —
+    the fake raises it directly rather than returning a canned
+    `ModelResponse`, to simulate a genuine infra failure (e.g.
+    `openai.APIConnectionError`, issue #64 slice 7) partway through a
+    sequence.
     """
     remaining = list(responses)
 
     def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
         if not remaining:
             raise AssertionError("no more scripted responses -- unexpected extra LLM call")
-        return _model_response(remaining.pop(0))
+        next_item = remaining.pop(0)
+        if isinstance(next_item, Exception):
+            raise next_item
+        return _model_response(next_item)
 
     return _call
 
@@ -325,6 +338,10 @@ _OBLIGATION_B = ObligationNode(
     id="obl_report_security_incidents_bbbbbb",
     properties={"text": "Report security incidents to the authority.", "confidence": 0.9},
 )
+_OBLIGATION_C = ObligationNode(
+    id="obl_maintain_incident_log_cccccc",
+    properties={"text": "Maintain a log of all security incidents.", "confidence": 0.9},
+)
 
 
 def _capability_match_response(matched_existing_id: str, confidence: float = 0.9) -> str:
@@ -398,7 +415,7 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
         ]
     )
 
-    capability_nodes, requires_edges = _derive_capabilities(
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
         (_OBLIGATION_A, _OBLIGATION_B),
         model="fake-model",
         call_completion=call_completion,
@@ -411,6 +428,7 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
     assert len(requires_edges) == 2
     assert {e.obligation_node_id for e in requires_edges} == {_OBLIGATION_A.id, _OBLIGATION_B.id}
     assert all(e.capability_node_id == capability_nodes[0].id for e in requires_edges)
+    assert unmatched_obligation_ids == ()
 
 
 def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requires_edges(
@@ -437,7 +455,7 @@ def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requir
         ]
     )
 
-    capability_nodes, requires_edges = _derive_capabilities(
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
         (_OBLIGATION_A,), model="fake-model", call_completion=call_completion, emitter=emitter
     )
 
@@ -449,6 +467,7 @@ def test_derive_capabilities_one_obligation_two_capabilities_produces_two_requir
     assert len(requires_edges) == 2
     assert all(e.obligation_node_id == _OBLIGATION_A.id for e in requires_edges)
     assert {e.capability_node_id for e in requires_edges} == {n.id for n in capability_nodes}
+    assert unmatched_obligation_ids == ()
 
 
 def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
@@ -468,7 +487,7 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
         [_capability_mint_response("Access Control System")]
     )
 
-    capability_nodes, requires_edges = _derive_capabilities(
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
         (_OBLIGATION_A, _OBLIGATION_A),
         model="fake-model",
         call_completion=call_completion,
@@ -479,6 +498,7 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call(
     assert len(requires_edges) == 1
     assert requires_edges[0].obligation_node_id == _OBLIGATION_A.id
     assert requires_edges[0].capability_node_id == capability_id("Access Control System")
+    assert unmatched_obligation_ids == ()
 
 
 def test_derive_capabilities_match_response_reuses_registry_entry(
@@ -499,7 +519,7 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
         ]
     )
 
-    capability_nodes, requires_edges = _derive_capabilities(
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
         (_OBLIGATION_A, _OBLIGATION_B),
         model="fake-model",
         call_completion=call_completion,
@@ -509,6 +529,160 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
     assert len(capability_nodes) == 1
     assert len(requires_edges) == 2
     assert {e.obligation_node_id for e in requires_edges} == {_OBLIGATION_A.id, _OBLIGATION_B.id}
+    assert unmatched_obligation_ids == ()
+
+
+def test_derive_capabilities_malformed_response_marks_unmatched_without_aborting(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-001, AC-BI-002: a malformed/unparseable Capability
+    response for one Obligation is isolated -- surfaced via
+    `unmatched_obligation_ids`, not a silently dropped Obligation and not an
+    uncaught exception that aborts the whole run.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_sequential_call_completion(["{not valid json"])
+
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
+        (_OBLIGATION_A,), model="fake-model", call_completion=call_completion, emitter=emitter
+    )
+
+    assert capability_nodes == ()
+    assert requires_edges == ()
+    assert unmatched_obligation_ids == (_OBLIGATION_A.id,)
+
+
+def test_derive_capabilities_emits_unmatched_log_entry(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """Issue #64 / AC-BI-002: the isolated failure emits exactly one
+    `outcome="unmatched"` log entry keyed by the failing Obligation's id.
+    """
+    emitter, log_path = make_emitter()
+    call_completion = _scripted_sequential_call_completion(["{not valid json"])
+
+    _derive_capabilities(
+        (_OBLIGATION_A,), model="fake-model", call_completion=call_completion, emitter=emitter
+    )
+    emitter.flush()
+
+    lines = read_lines(log_path)
+    unmatched_entries = [line for line in lines if line.get("outcome") == "unmatched"]
+    assert len(unmatched_entries) == 1
+    assert unmatched_entries[0]["entity_id"] == _OBLIGATION_A.id
+    assert unmatched_entries[0]["component"] == "domain_mapper"
+    assert unmatched_entries[0]["action"] == "derive_obligations_and_capabilities"
+
+
+def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malformed_response(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-003: three distinct Obligations processed in order
+    A, C, B. A and B's responses both MINT the identical Capability name
+    (same code-level-convergence technique as
+    `test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability`),
+    while C -- in between -- gets a malformed response. The failure for C
+    neither poisons nor skips the whole-run registry state built up by A
+    and consumed by B: A and B still converge onto ONE shared Capability
+    node with TWO REQUIRES edges, and C alone is surfaced as unmatched.
+    """
+    emitter, _log_path = make_emitter()
+    capability_name = "Access Control System"
+    call_completion = _scripted_sequential_call_completion(
+        [
+            _capability_mint_response(capability_name),
+            "{not valid json",
+            _capability_mint_response(capability_name),
+        ]
+    )
+
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
+        (_OBLIGATION_A, _OBLIGATION_C, _OBLIGATION_B),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert len(capability_nodes) == 1
+    assert capability_nodes[0].id == capability_id(capability_name)
+    assert len(requires_edges) == 2
+    assert {e.obligation_node_id for e in requires_edges} == {_OBLIGATION_A.id, _OBLIGATION_B.id}
+    assert all(e.capability_node_id == capability_nodes[0].id for e in requires_edges)
+    assert unmatched_obligation_ids == (_OBLIGATION_C.id,)
+
+
+def test_derive_capabilities_dedups_repeated_obligation_node_id_even_when_it_fails(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-003 completeness: the same obligation_node_id
+    appearing TWICE in the input still results in exactly ONE LLM call even
+    when that one call's response is malformed -- proven by scripting
+    exactly one response; an unscripted second call raises inside the
+    structural fake's own "no more scripted responses" guard (same
+    technique as
+    `test_derive_capabilities_dedups_repeated_obligation_node_id_single_llm_call`).
+    The failing Obligation id appears exactly once in
+    unmatched_obligation_ids, not once per repetition.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_sequential_call_completion(["{not valid json"])
+
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
+        (_OBLIGATION_A, _OBLIGATION_A),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert capability_nodes == ()
+    assert requires_edges == ()
+    assert unmatched_obligation_ids == (_OBLIGATION_A.id,)
+
+
+def test_derive_capabilities_propagates_llm_provider_error_and_aborts(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-004: a genuine LLM Interface infra failure
+    (`openai.APIConnectionError`, wrapped by `route_completion` into
+    `LlmProviderError`) for one Obligation's call is NOT caught by
+    `_process_obligation`'s `try/except DomainMapperDerivationError` --
+    it propagates unchanged and aborts the whole `_derive_capabilities`
+    call, proving the isolation added for issue #64 does not accidentally
+    widen to catch infra failures too.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_sequential_call_completion(
+        [openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid"))]
+    )
+
+    with pytest.raises(LlmProviderError):
+        _derive_capabilities(
+            (_OBLIGATION_A, _OBLIGATION_B),
+            model="fake-model",
+            call_completion=call_completion,
+            emitter=emitter,
+        )
+
+
+def test_derive_capabilities_propagates_llm_provider_error_for_empty_completion_content_and_aborts(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-004 (CHANGES.md item 1): an empty-string completion
+    content is a distinct `LlmProviderError` trigger from
+    `openai.APIConnectionError` above -- `route_completion`'s
+    `_to_completion_result` (`completion.py:62-63`) raises `LlmProviderError`
+    itself, outside `route_completion`'s own `except openai.OpenAIError`
+    block, when the provider returns a response with empty completion text.
+    This too must propagate uncaught through `_process_obligation` and
+    abort the whole call.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion = _scripted_sequential_call_completion([""])
+
+    with pytest.raises(LlmProviderError):
+        _derive_capabilities(
+            (_OBLIGATION_A,), model="fake-model", call_completion=call_completion, emitter=emitter
+        )
 
 
 # --- derive_obligations_and_capabilities (Increment 16) --------------------
@@ -705,6 +879,70 @@ def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surface
     unmatched_entries = [line for line in lines if line.get("outcome") == "unmatched"]
     assert len(unmatched_entries) == 1
     assert unmatched_entries[0]["entity_id"] == "CRA_req_art_13.9"
+
+
+def test_derive_obligations_and_capabilities_unmatched_obligation_surfaced(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #64 / AC-BI-001, AC-BI-002, AC-BI-003 -- end-to-end integration
+    proof through the public entry point (not the module-internal
+    `_derive_capabilities`). 2 Requirements under one Role, both
+    Obligation-derivation calls succeed (2 distinct Obligations), but the
+    SECOND Obligation's capability-derivation response is malformed. The
+    failure is isolated: no exception, both Obligations are still
+    persisted, only the first Obligation gets a Capability/REQUIRES edge,
+    and the second Obligation's id is surfaced in
+    `unmatched_obligation_ids`.
+    """
+    emitter, _log_path = make_emitter()
+    rows: list[list[object]] = [
+        [
+            "CRA_req_art_13.1",
+            "Conduct a cybersecurity risk assessment.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ],
+        [
+            "CRA_req_art_13.2",
+            "Report security incidents to the authority.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ],
+    ]
+    baseline_graph = _FakeBaselineGraph(rows)
+    first_obligation_text = "Conduct Cybersecurity Risk Assessment"
+    second_obligation_text = "Report Security Incidents"
+    second_obligation_id = obligation_id(_ROLE_MANUFACTURER, second_obligation_text)
+    call_completion = _scripted_sequential_call_completion(
+        [
+            _mint_response(first_obligation_text),
+            _mint_response(second_obligation_text),
+            _capability_mint_response("Risk Assessment Tooling"),
+            "{not valid json",
+        ]
+    )
+
+    result = derive_obligations_and_capabilities(
+        "CRA-1.0",
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert result.unmatched_obligation_ids == (second_obligation_id,)
+    assert len(result.obligation_node_ids) == 2
+    assert second_obligation_id in result.obligation_node_ids
+    assert len(result.capability_node_ids) == 1
+
+    requires_calls = _find_edge_calls(baseline_graph, "REQUIRES")
+    requires_source_ids = {call.params["source_id"] for call in requires_calls if call.params}
+    assert requires_source_ids == {
+        oid for oid in result.obligation_node_ids if oid != second_obligation_id
+    }
+    assert second_obligation_id not in requires_source_ids
 
 
 def test_derive_obligations_and_capabilities_ac007_emits_log_entry_with_bound_run_id(

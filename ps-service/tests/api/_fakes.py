@@ -205,10 +205,21 @@ class FakeExtractStage:
 class FakeDeriveStage:
     """Stand-in for ``derive_obligations_and_capabilities``."""
 
-    def __init__(self, recorder: StageRecorder, *, error: Exception | None = None) -> None:
-        """Prime the recorder and an optional error to raise."""
+    def __init__(
+        self,
+        recorder: StageRecorder,
+        *,
+        error: Exception | None = None,
+        unmatched_obligation_ids: tuple[str, ...] = (),
+    ) -> None:
+        """Prime the recorder, an optional error to raise, and the canned
+        ``unmatched_obligation_ids`` (issue #64 slice 9 -- lets a test exercise
+        the derivation stage's summary with a non-empty count without
+        scripting a real capability-derivation failure).
+        """
         self._recorder = recorder
         self._error = error
+        self._unmatched_obligation_ids = unmatched_obligation_ids
 
     def __call__(
         self,
@@ -231,6 +242,7 @@ class FakeDeriveStage:
             obligation_node_ids=(),
             capability_node_ids=(),
             unmatched_requirement_ids=(),
+            unmatched_obligation_ids=self._unmatched_obligation_ids,
         )
 
 
@@ -314,6 +326,7 @@ def build_fake_pipeline_dependencies(
     extract_error: Exception | None = None,
     derive_error: Exception | None = None,
     merge_error: Exception | None = None,
+    derive_unmatched_obligation_ids: tuple[str, ...] = (),
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -323,6 +336,8 @@ def build_fake_pipeline_dependencies(
         extract_error: If set, the extract stage raises this.
         derive_error: If set, the derive stage raises this.
         merge_error: If set, the merge stage raises this.
+        derive_unmatched_obligation_ids: Canned ``unmatched_obligation_ids`` for
+            the fake derive stage's ``DerivationResult`` (issue #64 slice 9).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
@@ -352,7 +367,11 @@ def build_fake_pipeline_dependencies(
         stages=PipelineStages(
             ingest=FakeIngestStage(recorder, rid=rid, error=ingest_error),
             extract=FakeExtractStage(recorder, error=extract_error),
-            derive=FakeDeriveStage(recorder, error=derive_error),
+            derive=FakeDeriveStage(
+                recorder,
+                error=derive_error,
+                unmatched_obligation_ids=derive_unmatched_obligation_ids,
+            ),
             merge=FakeMergeStage(recorder, error=merge_error),
         ),
         adapters=PipelineAdapters(ingestion=FakeIngestionAdapter, mapping=FakeDomainMappingAdapter),
