@@ -47,7 +47,7 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 - Cypher Query interface
 
 **Consuming clients**
-- PS-Cli a distributed command-line client (installed independently of PS Service, like `gh`/`az`) that drives PS Service's REST API — checking status/health, selecting EU regulations for Cellar/ELI-sourced ingestion, and ingesting internal business regulations/policies (JSON fixtures today; a PDF ingestion pipeline is deferred, not yet designed). Individual operators authenticate via OIDC (planned: Auth0 device authorization flow) before PS-Cli can reach a non-local PS Service instance
+- PS-Cli a distributed command-line client (installed independently of PS Service, like `gh`/`az`) that drives PS Service's REST API — checking health and readiness, selecting EU regulations for Cellar/ELI-sourced ingestion, and ingesting internal business regulations/policies (JSON fixtures today; a PDF ingestion pipeline is deferred, not yet designed). Individual operators authenticate via OIDC (planned: Auth0 device authorization flow) before PS-Cli can reach a non-local PS Service instance
 - PS Question Skill a skill that allows agents in VSCode or Claude Desktop ask questions, send Cypher queries to the PS Service and articulate answers to the users question
 - Policy Editor a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration — client not yet designed)
 
@@ -104,7 +104,7 @@ graph TB
         MainSystem[PS Service]
     end
 
-    PSCli -->|"REST: status/health; regulation ingestion (Cellar/ELI selection; internal JSON fixtures; PDF pipeline under exploration)"| MainSystem
+    PSCli -->|"REST: health/readiness; regulation ingestion (Cellar/ELI selection; internal JSON fixtures; PDF pipeline under exploration)"| MainSystem
     PSSkill -->|"MCP: submit query"| MainSystem
     MainSystem -->|"Query results"| PSSkill
     PolicyEditor -.->|"REST: author policy/standard/control (under exploration)"| MainSystem
@@ -128,7 +128,7 @@ graph TB
 | :--- | :--- | :--- | :--- | :--- |
 | Cellar/ELI | PS Service fetches EU regulatory document structure (TITLE/CHAPTER/SECTION/ARTICLE/PARAGRAPH), verbatim text per element, ELI citation identity, and amendment history | Policy System | External platform service (EU Publications Office) | Ingest authoritative, structurally-addressable EU regulatory text to keep the compliance knowledge graph current, replacing non-deterministic PDF extraction as the source of truth |
 | LLM Provider | PS Service sends prompts/text for chat and embedding completions (provider-agnostic via LiteLLM: Ollama, Azure Foundry, AWS Bedrock, Anthropic, OpenAI, …) and receives generated text/embeddings back | Policy System | External platform service (LLM provider, swappable) | Enable LLM-assisted curation of regulatory/business content into the PS Conceptual Model, without coupling the system to a single LLM vendor |
-| PS-Cli | A distributed client, installed independently of PS Service (like `gh`/`az`), that checks PS Service's status/health via its REST API and selects EU regulations for Cellar/ELI-sourced ingestion (UC-1). Also drives a PDF ingestion pipeline (single file or folder) for business regulations/policies producing proposed Policy/Standard/Control content and suggested edge links to existing Capabilities — **pipeline design is under exploration, not yet specified**; internal ingestion today takes JSON fixtures only. Individual operators authenticate via OIDC (planned: Auth0 device authorization flow) before reaching a non-local PS Service instance | Policy System | External client application (command-line interface) | Enable operators to check PS Service status, trigger EU regulation ingestion via Cellar/ELI, and enable bulk ingestion of business regulation/policy documents into the governance layer |
+| PS-Cli | A distributed client, installed independently of PS Service (like `gh`/`az`), that checks PS Service's health and readiness via its REST API and selects EU regulations for Cellar/ELI-sourced ingestion (UC-1). Also drives a PDF ingestion pipeline (single file or folder) for business regulations/policies producing proposed Policy/Standard/Control content and suggested edge links to existing Capabilities — **pipeline design is under exploration, not yet specified**; internal ingestion today takes JSON fixtures only. Individual operators authenticate via OIDC (planned: Auth0 device authorization flow) before reaching a non-local PS Service instance | Policy System | External client application (command-line interface) | Enable operators to check PS Service health and readiness, trigger EU regulation ingestion via Cellar/ELI, and enable bulk ingestion of business regulation/policy documents into the governance layer |
 | PS Question Skill | Sends Cypher queries to PS Service's MCP Interface and receives results, used to articulate answers to user questions | Policy System | External client application (Claude Desktop / VS Code skill) | Enable users in their agentic coding/chat environment to ask natural-language questions about regulations and policies, answered against the compliance knowledge graph |
 | Policy Editor | Enables a user to author a Policy/Standard/Control from scratch and link it via an edge to an existing Capability — **client and interaction design are under exploration, not yet specified** | Policy System | External client application (not yet designed) | Enable manual authoring of governance-layer content as an alternative to PDF-based ingestion |
 
@@ -160,7 +160,7 @@ graph TB
         PSService -->|"Cypher: read/write knowledge graph"| FalkorDB
     end
 
-    PSCli -->|"REST: status/health; regulation ingestion (Cellar/ELI selection; internal JSON fixtures; PDF pipeline under exploration)"| PSService
+    PSCli -->|"REST: health/readiness; regulation ingestion (Cellar/ELI selection; internal JSON fixtures; PDF pipeline under exploration)"| PSService
     PSSkill -->|"MCP: submit query"| PSService
     PSService -->|"Query results"| PSSkill
     PolicyEditor -.->|"REST: author policy/standard/control (under exploration)"| PSService
@@ -204,7 +204,7 @@ graph TB
 | Software Engineers | PS Service via PS Question Skill (read-only query) |
 | Security Engineers | PS Service via PS Question Skill (read-only query) |
 | Engineering Managers | PS Service via PS Question Skill (read-only query) |
-| System Admin | PS Service via PS-Cli (status/health, regulation ingestion; PDF ingestion pipeline — under exploration) |
+| System Admin | PS Service via PS-Cli (health/readiness, regulation ingestion; PDF ingestion pipeline — under exploration) |
 
 **Purpose:** Maps user roles to the containers/services they can access, clarifying access control boundaries.
 
