@@ -2,6 +2,7 @@ appendonly
 buildx
 claude
 companymerge
+devx
 falkor
 falkordb
 FOSS
@@ -19,3 +20,5 @@ TakT
 unmodeled
 uvicorn
 venv
+workon
+wrapup

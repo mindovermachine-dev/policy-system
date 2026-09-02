@@ -6,15 +6,56 @@ Note: We are in the transition from prototype to full implementation and the ins
 
 ## Getting Started
 
-1. Fork the repository.
-2. Create a feature branch:
-   git checkout -b feature/my-change
-3. Make your changes.
-4. Run tests.
-5. Commit your changes.
-6. Open a Pull Request.
+Contributions go through `devx-cafe/gh-tt`'s issue-branch workflow: pick up an
+issue on a dedicated branch, then hand off to CI, which merges to `main` once
+checks pass. No fork and no manual Pull Request in the common case.
 
-After cloning, run these once:
+1. Install the extension once:
+
+   ```bash
+   gh extension install devx-cafe/gh-tt
+   ```
+
+   On macOS, `gh tt` runs under whichever `python3` is first on `PATH`. The
+   system interpreter at `/usr/bin/python3` is 3.9 and the extension needs
+   3.10 or newer, so it fails with `TypeError: unsupported operand type(s)
+for |`. Point it at a modern interpreter in your shell profile:
+
+   ```bash
+   export PYTHON=/opt/homebrew/bin/python3
+   ```
+
+2. Start work on an issue -- this creates and checks out an issue branch:
+
+   ```bash
+   gh tt workon -i <issue-number>
+   # or, to create a new issue and start on it in one step:
+   gh tt workon -t "<issue title>"
+   ```
+
+3. Make your changes. Run tests (see [Testing](#testing) below).
+
+4. Commit and push your progress to the issue branch as you go:
+
+   ```bash
+   gh tt wrapup "<commit message>"
+   ```
+
+   Repeat steps 3-4 as many times as needed.
+
+5. When the issue is done, squash the issue branch onto a `ready/*` branch
+   and push it:
+
+   ```bash
+   gh tt deliver
+   ```
+
+   Pushing a `ready/*` branch triggers `on_ready.yml`: it runs the
+   `trunk-worthy` check suite, then auto-merges to `main` -- no manual Pull
+   Request needed for this path. See [Releasing](#releasing) below for how
+   `gh tt` is also used to cut `ps-service` and `ps-cli` releases.
+
+After cloning, also run these once:
 
 ```bash
 git config blame.ignoreRevsFile .git-blame-ignore-revs
@@ -506,18 +547,9 @@ current version is always whatever `git tag` says.
 
 ### One-time setup
 
-```bash
-gh extension install devx-cafe/gh-tt
-```
-
-On macOS, `gh tt` runs under whichever `python3` is first on `PATH`. The system
-interpreter at `/usr/bin/python3` is 3.9 and the extension needs 3.10 or newer, so
-it fails with `TypeError: unsupported operand type(s) for |`. Point it at a modern
-interpreter in your shell profile:
-
-```bash
-export PYTHON=/opt/homebrew/bin/python3
-```
+Same `gh-tt` extension used for day-to-day contribution (see
+[Getting Started](#getting-started) above) — nothing extra to install for
+releasing.
 
 ### Cutting a release
 
@@ -615,12 +647,13 @@ uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commi
 
 A commit SHA cannot be silently re-pointed the way a tag can.
 
-## Pull Request Process
+## Delivery Process
 
-- Keep PRs focused on a single change.
-- Provide a clear description.
-- Link related issues if applicable.
-- Ensure all checks pass.
+- Keep each issue branch focused on a single change.
+- Give the issue a clear title/description — `gh tt workon` uses it, and
+  `gh tt deliver` carries it through to the squashed `ready/*` commit.
+- Ensure all checks pass before running `gh tt deliver` (see
+  [Getting Started](#getting-started) above).
 
 ## Reporting Issues
 
