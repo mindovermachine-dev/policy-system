@@ -23,11 +23,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from falkordb import FalkorDB
+
+# Connection defaults, env-driven. In the dev container FalkorDB is a separate
+# container reachable as `falkordb`, not localhost, so a hardcoded default would
+# force a --host flag on every invocation. PS_FALKORDB_HOST/PS_FALKORDB_PORT are
+# the same variables ps-service reads (see .env.example): one name repo-wide.
+DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
+DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
+
 
 if TYPE_CHECKING:
     # falkordb ships no py.typed; these Protocols pin the slice of its surface
@@ -98,8 +107,8 @@ def rewire_and_delete(graph: _Graph, keep_id: str, drop_id: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="localhost")
-    parser.add_argument("--port", type=int, default=6379)
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--graph-name", default="policy_system")
     parser.add_argument(
         "--decisions",

@@ -423,10 +423,10 @@ def _start_service(
 ) -> _RunningService:
     """Start the image under test on `network`, publishing its port on a free localhost port.
 
-    `PS_FALKORDB_HOST` is always passed explicitly. The source default (`127.0.0.1`) only
-    happens to reach FalkorDB inside the devcontainer, which shares a network namespace; on a
-    CI runner each container has its own, so a test relying on the default would pass locally
-    and fail in CI.
+    `PS_FALKORDB_HOST` is always passed explicitly rather than relying on the source default
+    (`127.0.0.1`), which reaches FalkorDB from no container that has its own network namespace
+    -- neither a CI runner's nor the devcontainer's, which sets `PS_FALKORDB_HOST=falkordb`
+    for exactly this reason.
     """
     port = _free_host_port()
     result = _run_container_cli(

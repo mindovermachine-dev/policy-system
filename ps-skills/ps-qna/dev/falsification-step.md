@@ -84,7 +84,8 @@ State which cap applies, and why, before running attempt 1.
    tools/graph-query/ps.py cypher "<QUERY>"
    ```
 
-   (read-only guarded, `localhost:6379`, graph `policy_system`). Show every
+   (read-only guarded, graph `policy_system`; host/port default to
+   `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`, else `localhost:6379`). Show every
    query run, not just the ones that land.
 
 3. **Judge each attempt** against the answer's actual claim, not a

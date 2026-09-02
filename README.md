@@ -127,7 +127,7 @@ tag rather than tracking `latest` when you want a local test you can reproduce l
 LLM provider credentials, when you need them, are supplied as chart values backed by a
 Kubernetes secret, never baked into the image.
 
-> ❌ **Not yet implemented.** No chart exists ([#59](https://github.com/mindovermachine-dev/policy-system/issues/59)), and nothing has reached the registry yet: the release pipeline builds and pushes the image, but no release tag has been pushed, and the GHCR package must be made public by hand once after the first push before an unauthenticated pull can succeed ([#60](https://github.com/mindovermachine-dev/policy-system/issues/60)). Today PS Service runs as a container built from the repo's `Dockerfile`, or as a process from a virtualenv — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+> ❌ **Not yet implemented.** No chart exists ([#59](https://github.com/mindovermachine-dev/policy-system/issues/59)), and while the image itself is published — the release pipeline built and pushed `0.1.0` and `latest` as multi-arch manifest lists — the GHCR package is still private, so an unauthenticated pull fails until it is made public by hand, a one-time manual step ([#60](https://github.com/mindovermachine-dev/policy-system/issues/60)). Today PS Service runs as a container built from the repo's `Dockerfile`, or as a process from a virtualenv — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ### 5. Load regulations into the graph
 
@@ -150,7 +150,7 @@ error rather than an empty result.
 
 > ❌ **Not yet implemented.** No curated-restore path exists — today's only seeding route
 > (`tools/graph-ingestion/load_all.sh`) is a repo-local script connecting straight to
-> `localhost:6379`, requiring a checkout, a virtualenv, and test fixtures. The curated
+> FalkorDB, requiring a checkout, a virtualenv, and test fixtures. The curated
 > catalog, export format, restore commands, and unseeded-graph error are all [#66](https://github.com/mindovermachine-dev/policy-system/issues/66).
 
 ### 6. Install the Policy System plugin

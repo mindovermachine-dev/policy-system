@@ -4,18 +4,28 @@ services:
     volumes:
       - ../..:/workspaces:cached
     command: sleep infinity
-    ports:
-      - "6379:6379"
-      - "3000:3000"
+    environment:
+      # FalkorDB runs as its own container on the compose network and is
+      # resolved by service name. This is the same shape as the deployed
+      # topology -- see CONTRIBUTING.md's `podman run` example and
+      # ps-service/tests/test_container_image.py, both of which put ps-service
+      # and FalkorDB on one network and pass PS_FALKORDB_HOST explicitly.
+      - PS_FALKORDB_HOST=falkordb
+      - PS_FALKORDB_PORT=6379
 
   falkordb:
     image: falkordb/falkordb:latest
-    # Shares the app container's network namespace so FalkorDB is reachable
-    # at localhost:6379 from inside the dev container, matching every
-    # tool's default host (see tools/graph-ingestion, tools/graph-query).
-    network_mode: service:app
+    # Deliberately its own network namespace. `network_mode: service:app` made
+    # this container a podman-level dependent of the dev container, and VS Code's
+    # "Rebuild Container" removes the dev container with a bare `podman rm -f`,
+    # which podman refuses while a dependent exists -- every rebuild failed.
+    #
+    # Ports are published here rather than on `app` for the same reason: they
+    # belong to the namespace that actually serves them. 6379 is FalkorDB, 3000
+    # is the FalkorDB Browser at http://localhost:3000.
+    ports:
+      - "6379:6379"
+      - "3000:3000"
     volumes:
       - ../.falkordb-data:/var/lib/falkordb/data
-    depends_on:
-      - app
     restart: unless-stopped

@@ -17,11 +17,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from falkordb import FalkorDB
+
+# Connection defaults, env-driven. In the dev container FalkorDB is a separate
+# container reachable as `falkordb`, not localhost, so a hardcoded default would
+# force a --host flag on every invocation. PS_FALKORDB_HOST/PS_FALKORDB_PORT are
+# the same variables ps-service reads (see .env.example): one name repo-wide.
+DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
+DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
+
 
 if TYPE_CHECKING:
     # falkordb ships no py.typed; these Protocols pin the slice of its surface
@@ -112,10 +121,13 @@ def _common_flags() -> argparse.ArgumentParser:
     # mutates the default for all of them.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
-        "--host", default=argparse.SUPPRESS, help="FalkorDB host (default: localhost)"
+        "--host", default=argparse.SUPPRESS, help=f"FalkorDB host (default: {DEFAULT_HOST})"
     )
     common.add_argument(
-        "--port", type=int, default=argparse.SUPPRESS, help="FalkorDB port (default: 6379)"
+        "--port",
+        type=int,
+        default=argparse.SUPPRESS,
+        help=f"FalkorDB port (default: {DEFAULT_PORT})",
     )
     common.add_argument(
         "--graph", default=argparse.SUPPRESS, help="Graph name (default: policy_system)"
@@ -135,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="PS CLI -- read-only Cypher access to the policy_system graph.",
         parents=[_common_flags()],
     )
-    parser.set_defaults(host="localhost", port=6379, graph="policy_system", format="text")
+    parser.set_defaults(host=DEFAULT_HOST, port=DEFAULT_PORT, graph="policy_system", format="text")
 
     sub = parser.add_subparsers(dest="command", required=True)
 

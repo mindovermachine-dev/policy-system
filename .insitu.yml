@@ -65,7 +65,7 @@ inventory:
 
   - id: markdownlint
     name: Run markdownlint
-    command: markdownlint-cli2 "**/*.md" "!**/.venv/**"
+    command: markdownlint-cli2 "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
 
   - id: prettier
     name: Run prettier
@@ -104,6 +104,23 @@ inventory:
     command: |
       npm install -g prettier markdownlint-cli2 cspell @cspell/dict-da-dk
 
+  - id: "install-workspace-npm-deps"
+    name: "Install workspace npm dependencies for editor tooling"
+    # The cSpell VSCode extension resolves .cspell.jsonc's "import" entries
+    # (e.g. @cspell/dict-da-dk) via Node module resolution from the workspace
+    # root, not the global npm install above. Keep both in sync.
+    command: |
+      npm install
+
+  - id: verify-uv
+    name: Verify uv is available at the pinned version
+    # Provisioned by the ghcr.io/va-h/devcontainers-features/uv devcontainer feature,
+    # pinned to the same version as .github/actions/prep-runner (astral-sh/setup-uv).
+    # Bump both together.
+    command: |
+      command -v uv
+      uv --version | grep -q '0\.12\.4'
+
   - id: verify-lint-tools
     name: Verify linting tools are available
     command: |
@@ -119,7 +136,7 @@ inventory:
   - id: "fix-markdown"
     name: "Fix all fixable markdown issues"
     command: |
-      markdownlint-cli2 --fix "**/*.md" "!**/.venv/**"
+      markdownlint-cli2 --fix "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
 
   - id: "fix-prettier"
     name: "Fix all fixable prettier issues"
@@ -139,7 +156,9 @@ waves:
       - safe-repo
       - repo-gitconfig
       - install-actionlint
+      - install-workspace-npm-deps
       - verify-lint-tools
+      - verify-uv
 
   - id: "prep-runner"
     name: "Run to prepare GitHub runner"

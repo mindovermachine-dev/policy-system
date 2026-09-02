@@ -126,7 +126,8 @@ and a falsification report (attempts made, landed or missed, per
    tools/graph-query/ps.py cypher "<QUERY>"
    ```
 
-   (read-only guarded, `localhost:6379`, graph `policy_system` — reuses
+   (read-only guarded, graph `policy_system`; host/port default to
+   `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`, else `localhost:6379` — reuses
    `ps.py`'s connection pattern and read-only guard directly, per
    spikes/pipeline2/README.md's Setup step 3; does not route through
    `ps query template` or `ps query catalog`). Show the query before or

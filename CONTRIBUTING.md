@@ -43,13 +43,22 @@ services:
 Reopen the repo in the container (VS Code: "Reopen in Container") and both
 services start together — no manual `podman run`/`docker run` step needed.
 
-- `falkordb` uses `network_mode: service:app`, i.e. it shares the `app`
-  container's network namespace, so it's reachable at `localhost:6379` from
-  inside the dev container — matching every tool's default host (see
-  `tools/graph-ingestion`, `tools/graph-query`). Ports `6379` (FalkorDB) and
-  `3000` (FalkorDB Browser, at http://localhost:3000) are published on the
-  `app` service in `.devcontainer/docker-compose.yml`.
-- `.devcontainer/.falkordb-data` (bind-mounted to
+- `falkordb` has its own network namespace and is reachable from inside the
+  dev container as **`falkordb:6379`**, not `localhost:6379`. The `app` service
+  sets `PS_FALKORDB_HOST=falkordb` / `PS_FALKORDB_PORT=6379`, and every tool
+  reads those variables (`tools/graph-ingestion`, `tools/graph-query`,
+  `ps-service`), so no `--host` flag is needed in normal use. This matches the
+  deployed topology, where ps-service resolves FalkorDB by hostname on a shared
+  network — see ["Run PS Service as a container"](#run-ps-service-as-a-container).
+  Ports `6379` (FalkorDB) and `3000` (FalkorDB Browser, at
+  http://localhost:3000) are published on the `falkordb` service, so both stay
+  reachable from your host machine as before.
+- `falkordb` deliberately does **not** share `app`'s network namespace. It used
+  to (`network_mode: service:app`), which made it a podman-level dependent of
+  the dev container; VS Code's "Rebuild Container" removes that container with a
+  bare `podman rm -f`, and podman refuses while a dependent exists, so every
+  rebuild failed with `has dependent containers which must be removed before it`.
+- `.falkordb-data/` at the repo root (bind-mounted to
   `/var/lib/falkordb/data`) persists the graph to disk, so recreating the
   containers doesn't lose data. `.falkordb-data/` is git-ignored; don't
   commit it.
@@ -58,14 +67,6 @@ services start together — no manual `podman run`/`docker run` step needed.
   durable, not an extra flag. AOF (`appendonly`) is off by default; turn it on
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `docker compose -f .devcontainer/docker-compose.yml exec falkordb redis-cli config set appendonly yes`.
-
-An alternative compose file, `.devcontainer/docker-compose.hostname.yml`,
-gives `falkordb` its own network namespace/hostname instead of sharing
-`app`'s — reachable as `falkordb:6379` rather than `localhost:6379`. Swap it
-in via `devcontainer.json`'s `dockerComposeFile` if you want to experiment
-with that topology; it requires passing `--host falkordb` (or
-`FALKORDB_HOST=falkordb`) to the tools below, since their defaults are
-`localhost`.
 
 Once the container is running, skip ahead to
 ["Create a virtual environment"](#create-a-virtual-environment-and-install-dependencies) below.

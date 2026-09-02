@@ -9,8 +9,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DATA_DIR="${REPO_ROOT}/test-data"
 
 GRAPH_NAME="${GRAPH_NAME:-policy_system}"
-HOST="${FALKORDB_HOST:-localhost}"
-PORT="${FALKORDB_PORT:-6379}"
+# PS_FALKORDB_HOST/PS_FALKORDB_PORT are the same variables ps-service and the
+# graph tools read, so one setting covers every path to FalkorDB. The dev
+# container sets them to falkordb:6379 (.devcontainer/docker-compose.yml).
+HOST="${PS_FALKORDB_HOST:-localhost}"
+PORT="${PS_FALKORDB_PORT:-6379}"
 
 load() {
   local file="$1"

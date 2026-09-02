@@ -5,9 +5,8 @@ repos:
     rev: v0.16.4 # keep in lockstep with the dev-group ruff pin
     hooks:
       - id: ruff-check
-        args: [--force-exclude]
       - id: ruff-format
-        args: [--check, --force-exclude]
+        args: [--check]
   - repo: local
     hooks:
       - id: basedpyright
