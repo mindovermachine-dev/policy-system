@@ -1,9 +1,12 @@
 [project]
 name = "ps-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Policy System CLI: thin operator client driving PS Service's REST API for regulation ingestion (UC-1/UC-2)"
 requires-python = ">=3.14"
 dependencies = ["httpx==0.28.1"]
+
+[project.scripts]
+ps-cli = "ps_cli.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -254,9 +254,50 @@ podman rm -f ps-service falkordb && podman network rm ps-net
 
 `ps-cli` is a thin operator client for PS Service's REST API — this is the
 primary way to drive the system by hand (ingest a regulation, list the
-catalog) without writing `curl`/Python against the API directly. It has no
-`[project.scripts]` entry point yet, so invoke it as a module, from the repo
-root, with PS Service already running (previous section):
+catalog) without writing `curl`/Python against the API directly.
+
+#### Install `ps-cli`
+
+`ps-cli` is a distributed client, installable independently of this repo like
+`gh`/`az` — no clone/checkout needed:
+
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@ps-cli-v0.1.1#subdirectory=ps-cli"
+```
+
+`uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via
+its tool-install shims. Verify:
+
+```bash
+ps-cli --version
+```
+
+Replace `ps-cli-v0.1.1` with the latest `ps-cli-v*` tag (`git ls-remote --tags
+https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'`). Tags on
+this repository are **not currently protected** against force-move/re-pointing
+(no tag-protection ruleset is configured — verified live via `gh api
+repos/mindovermachine-dev/policy-system/rulesets`, which returns `[]`). An
+operator who needs install-time integrity beyond "trust the tag" should pin
+the exact commit SHA the tag points at instead of the tag name:
+
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
+```
+
+which cannot be silently re-pointed the way a tag can. See
+[Releasing ps-cli](#releasing-ps-cli) below for the tagging convention.
+
+Still-planned, not yet implemented: per-target config (e.g. dev/test/prod side
+by side) instead of a single `service_url`, and Auth0-based OIDC login (OAuth
+2.0 Device Authorization Grant) for individual-operator identity once
+targeting a non-local PS Service instance.
+
+#### Run from a repo checkout (local development)
+
+For repo-local development, or before a `ps-cli-v*` tag exists to install
+from, invoke it as a module, from the repo root, with PS Service already
+running (previous section) — this path stays fully supported alongside the
+installed one above:
 
 ```bash
 uv run python -m ps_cli --version
@@ -274,13 +315,15 @@ below) — check `/ready` first if a command fails unexpectedly.
 By default `ps-cli` targets `http://127.0.0.1:8000`, matching PS Service's
 own default. Point it elsewhere with the `PS_CLI_SERVICE_URL` env var, or a
 `ps-cli.toml` (`service_url = "..."`) in your current directory — the env
-var wins over the file, which wins over the packaged default.
+var wins over the file, which wins over the packaged default. This applies
+the same way whether `ps-cli` was installed via `uv tool install` or invoked
+as a module from a checkout:
 
 ```bash
+PS_CLI_SERVICE_URL=http://127.0.0.1:9000 ps-cli regulations list
+# or, from a checkout:
 PS_CLI_SERVICE_URL=http://127.0.0.1:9000 uv run python -m ps_cli regulations list
 ```
-
-**Planned (not yet implemented):** `ps-cli` is meant to be a distributed client, installed independently of this repo like `gh`/`az` — not a workspace-only script. The direction decided so far: `uv tool install git+https://github.com/<org>/policy-system@<tag>` (internal-only for now, no public PyPI publish), per-target config (e.g. dev/test/prod side by side) instead of a single `service_url`, and Auth0-based OIDC login (OAuth 2.0 Device Authorization Grant) for individual-operator identity once targeting a non-local PS Service instance. None of this exists yet — the invocation and config above are the only implemented path today.
 
 ### Configure the LLM Interface
 
@@ -522,6 +565,55 @@ and they are expected.
 `1.2.4-pre.1`. That form matches neither trigger pattern in `on_semver.yml`, so
 pushing it publishes nothing and reports no error. Prereleases are not supported
 by the release pipeline today.
+
+### Releasing ps-cli
+
+`ps-cli` has its own release story, separate from the `ps-service` container
+release above — it is not built or published by `on_semver.yml`, and the two
+must not be confused.
+
+**Tag format**: `ps-cli-v<major>.<minor>.<patch>` (e.g. `ps-cli-v0.1.1`) —
+deliberately prefixed, not bare semver, so it cannot collide with or
+accidentally fire `on_semver.yml`'s tag triggers, which are `ps-service`-only.
+Like the `ps-service` convention, a `ps-cli-v*` tag should be cut from a
+commit that is an ancestor of `main`. Unlike `ps-service`, this discipline is
+**not CI-enforced today** — `on_semver.yml` doesn't watch the `ps-cli-v*`
+tag namespace at all, so there is no automated ancestry gate for it. This is
+a known gap, not an oversight to be silently worked around.
+
+**Before tagging**: bump `ps-cli/pyproject.toml`'s `[project] version` field
+to match the tag you're about to cut, in the same commit/PR. Unlike
+`ps-service` (which has no version file and treats the git tag as
+authoritative), `ps-cli`'s `pyproject.toml` version is what `hatchling` bakes
+into the built wheel's distribution metadata — it's what
+`importlib.metadata.version("ps-cli")` reports after `uv tool install`, and
+what `ps-cli --version` prints. If the tag and `pyproject.toml` drift apart,
+the installed CLI reports the wrong version.
+
+**Cutting the tag**:
+
+```bash
+git tag -a ps-cli-v<X.Y.Z> -m "ps-cli <X.Y.Z>"
+git push origin ps-cli-v<X.Y.Z>
+```
+
+**Force-move protection: tags are not protected today.** Verified live:
+`gh api repos/mindovermachine-dev/policy-system/rulesets` returns `[]`, and
+`gh api repos/mindovermachine-dev/policy-system/tags/protection` returns
+`404 Not Found`. Any tag on this repository, `ps-cli-v*` included, can
+currently be force-moved by anyone with push access — there is no ruleset
+stopping a bare `git tag -f` + `git push -f --tags` from re-pointing an
+existing tag afterward.
+
+**Commit-SHA-pin alternative**: because tags aren't protected, an operator
+who needs install-time integrity beyond "trust the tag" should install
+against the exact commit SHA the tag points at instead of the tag name:
+
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
+```
+
+A commit SHA cannot be silently re-pointed the way a tag can.
 
 ## Pull Request Process
 
