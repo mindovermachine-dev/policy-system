@@ -114,6 +114,7 @@ and a falsification report (attempts made, landed or missed, per
    asked about in step 2 (per the bullet above) rather than defaulted or
    omitted. This is a checklist item to verify, not a judgment call about
    whether the ambiguity "feels" significant enough to raise.
+
 4. **Approval gate.** Ask the user to approve the question verbatim. If not
    approved, continue the loop on the specific part that's wrong — don't
    restart from scratch. Only continue to step 5 once approved.
@@ -121,7 +122,7 @@ and a falsification report (attempts made, landed or missed, per
    the approved question — genuinely freehand, not assembled from a
    template library. Execute it via:
 
-   ```
+   ```bash
    tools/graph-query/ps.py cypher "<QUERY>"
    ```
 
@@ -145,6 +146,7 @@ and a falsification report (attempts made, landed or missed, per
    merging them, and flag the ambiguity in the constructed answer — the
    approval gate already passed, so this can't be sent back to the user;
    the answer itself has to carry the caveat.
+
 6. **Construct the answer.** Build a plain-English answer directly from the
    retrieved rows. State only what the data supports; do not round up,
    extrapolate, or fill gaps with assumed domain knowledge.
@@ -158,7 +160,7 @@ and a falsification report (attempts made, landed or missed, per
    the answer.
 8. **Output**, in this shape:
 
-   ```
+   ```text
    Question: <refined question text>
 
    Answer: <constructed answer>

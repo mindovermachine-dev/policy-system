@@ -2,7 +2,7 @@
 # core.hooksPath = .githooks, so this runs via `pre-commit run`, not an installed hook script).
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.4              # keep in lockstep with the dev-group ruff pin
+    rev: v0.16.4 # keep in lockstep with the dev-group ruff pin
     hooks:
       - id: ruff-check
         args: [--force-exclude]
@@ -15,4 +15,4 @@ repos:
         entry: uv run basedpyright
         language: system
         types: [python]
-        pass_filenames: false     # project-wide check, not per-file
+        pass_filenames: false # project-wide check, not per-file

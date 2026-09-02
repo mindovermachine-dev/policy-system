@@ -79,11 +79,14 @@ State which cap applies, and why, before running attempt 1.
    step exists to avoid.
 2. **Execute each query** via the same guarded surface the invoking skill
    already uses:
-   ```
+
+   ```bash
    tools/graph-query/ps.py cypher "<QUERY>"
    ```
+
    (read-only guarded, `localhost:6379`, graph `policy_system`). Show every
    query run, not just the ones that land.
+
 3. **Judge each attempt** against the answer's actual claim, not a
    restated version of it:
    - **Landed** — the query returned data that contradicts the answer.
@@ -99,7 +102,7 @@ State which cap applies, and why, before running attempt 1.
 Append this section to the invoking skill's output, after its own
 Answer/Status block:
 
-```
+```text
 Falsification: <N> attempt(s), <landed | none landed>
   1. <query intent, one line> — <landed: what it contradicts | missed>
   2. ...

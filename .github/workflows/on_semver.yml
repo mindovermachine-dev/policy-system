@@ -46,13 +46,12 @@ jobs:
         env:
           TAG_NAME: ${{ steps.resolve-tag.outputs.git-tag }}
         run: |
-          tag_commit=$(git rev-list -n 1 $TAG_NAME)
-          main_commit=$(git rev-list -n 1 origin/main)
-          if ! git merge-base --is-ancestor $tag_commit origin/main; then
-            echo "Tag $TAG_NAME is not on the main branch!" >> $GITHUB_STEP_SUMMARY
+          tag_commit=$(git rev-list -n 1 "$TAG_NAME")
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Tag $TAG_NAME is not on the main branch!" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "Tag $TAG_NAME verified on main branch" >> $GITHUB_STEP_SUMMARY
+          echo "Tag $TAG_NAME verified on main branch" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build and smoke-test (${{ matrix.arch }})
@@ -86,7 +85,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.12.4"
       - name: Install the dev dependency group

@@ -3,9 +3,9 @@
 Ingest EU regulations and internal business policies into a unified compliance
 knowledge graph, and answer questions against it in natural language.
 
-- *"What approved policies do we have in place that cover the Cyber Resilience Act's obligations for manufacturers?"*
-- *"What do I need to consider if I use library XYZ in the code base I'm working on?"*
-- *"Which governed capabilities have no working control yet?"*
+- _"What approved policies do we have in place that cover the Cyber Resilience Act's obligations for manufacturers?"_
+- _"What do I need to consider if I use library XYZ in the code base I'm working on?"_
+- _"Which governed capabilities have no working control yet?"_
 
 Answers are grounded in the graph — every claim traces to regulation text and
 policy content that was actually retrieved, not to model recall.
@@ -14,10 +14,10 @@ policy content that was actually retrieved, not to model recall.
 
 Two deployable containers:
 
-| Container | Responsibility |
-| --- | --- |
+| Container      | Responsibility                                                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **PS Service** | EU regulation meta-model, ingestion pipeline, guarded read-only Cypher query engine, MCP interface, REST API, and a LiteLLM interface to 100+ models via Ollama, Azure Foundry, AWS Bedrock, Anthropic, or OpenAI |
-| **FalkorDB** | The graph database holding the compliance knowledge graph — a separate container so it can be patched independently without rebuilding or redeploying PS Service |
+| **FalkorDB**   | The graph database holding the compliance knowledge graph — a separate container so it can be patched independently without rebuilding or redeploying PS Service                                                  |
 
 PS Service's image is `ghcr.io/mindovermachine-dev/ps-service`. Each release publishes
 it under the release's semver tag and `latest`, as a multi-arch manifest list covering
@@ -49,25 +49,25 @@ Users never talk to PS Service directly. They use a client:
 
 ### Status of this path
 
-| Step | Status | Tracking |
-| --- | --- | --- |
-| 1. Install Claude Desktop | ✅ Works | — |
-| 2. Install Podman | ✅ Works | — |
-| 3. Create the local cluster | ❌ No `kind` config exists | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59) |
-| 4. Deploy Policy System | ❌ No Helm chart; no release tag pushed, so the registry is empty | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59), [#60](https://github.com/mindovermachine-dev/policy-system/issues/60) |
-| 5. Load regulations | ❌ No curated-restore path into a deployed cluster | [#66](https://github.com/mindovermachine-dev/policy-system/issues/66) |
-| 6. Install the plugin | ❌ Plugin does not exist; needs a remote MCP endpoint | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
-| 7. Ask a question | ❌ Depends on 3–6 | — |
+| Step                        | Status                                                            | Tracking                                                                                                                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Install Claude Desktop   | ✅ Works                                                          | —                                                                                                                                                                                                                     |
+| 2. Install Podman           | ✅ Works                                                          | —                                                                                                                                                                                                                     |
+| 3. Create the local cluster | ❌ No `kind` config exists                                        | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59)                                                                                                                                                 |
+| 4. Deploy Policy System     | ❌ No Helm chart; no release tag pushed, so the registry is empty | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59), [#60](https://github.com/mindovermachine-dev/policy-system/issues/60)                                                                          |
+| 5. Load regulations         | ❌ No curated-restore path into a deployed cluster                | [#66](https://github.com/mindovermachine-dev/policy-system/issues/66)                                                                                                                                                 |
+| 6. Install the plugin       | ❌ Plugin does not exist; needs a remote MCP endpoint             | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
+| 7. Ask a question           | ❌ Depends on 3–6                                                 | —                                                                                                                                                                                                                     |
 
 ### Prerequisites
 
-| Tool | Why | Install |
-| --- | --- | --- |
-| [Claude Desktop](https://claude.com/download) | Hosts the Policy System plugin | Download for macOS or Windows |
-| [Podman](https://podman.io/docs/installation) | Container runtime backing the local cluster | `brew install podman` (macOS) |
-| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman | `brew install kind` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the cluster | `brew install kubectl` |
-| [Helm](https://helm.sh/docs/intro/install/) | Installs the Policy System chart | `brew install helm` |
+| Tool                                                                 | Why                                         | Install                       |
+| -------------------------------------------------------------------- | ------------------------------------------- | ----------------------------- |
+| [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System plugin              | Download for macOS or Windows |
+| [Podman](https://podman.io/docs/installation)                        | Container runtime backing the local cluster | `brew install podman` (macOS) |
+| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         | `brew install kind`           |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        | `brew install kubectl`        |
+| [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            | `brew install helm`           |
 
 No LLM provider is required to evaluate the system. Restoring curated content and asking
 questions both work without one. You only need provider credentials to ingest a regulation
@@ -164,7 +164,7 @@ credential pasting.
 
 Point the connector at your local deployment when prompted for the endpoint URL:
 
-```
+```text
 http://localhost:8000/mcp
 ```
 
@@ -176,7 +176,7 @@ is for evaluation only.
 
 ### 7. Ask a question
 
-```
+```text
 What obligations does the Cyber Resilience Act place on manufacturers,
 and which of our policies cover them?
 ```
@@ -185,17 +185,17 @@ The skill grounds itself against the domain model, writes read-only Cypher, retr
 from the graph, and constructs an answer that cites what it retrieved. If the graph
 cannot answer, it says so rather than filling the gap from model recall.
 
-If the skill does not engage on its own, ask for it by name: *"Use the ps-qna skill."*
+If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
 
 ### Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| Service unreachable | `ps health` — reports health, readiness, and which dependency is failing ([#68](https://github.com/mindovermachine-dev/policy-system/issues/68)) |
-| Pods stuck `Pending` | `podman machine` sizing — the control plane plus both containers need ~8 GB |
-| `/ready` returns unhealthy | `kubectl logs deploy/ps-service` — usually FalkorDB or an LLM provider is unreachable |
-| Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps regulations list` |
-| Plugin installed but no cypher tool | The MCP connector's endpoint URL, and whether `/ready` is green |
+| Symptom                                | Check                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Service unreachable                    | `ps health` — reports health, readiness, and which dependency is failing ([#68](https://github.com/mindovermachine-dev/policy-system/issues/68)) |
+| Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
+| `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — usually FalkorDB or an LLM provider is unreachable                                                            |
+| Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps regulations list`                                                                                  |
+| Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
 
 ---
 
@@ -203,19 +203,19 @@ If the skill does not engage on its own, ask for it by name: *"Use the ps-qna sk
 
 These roles consume the Policy System through a client, never directly:
 
-| Role | Primary use case |
-| --- | --- |
-| **Compliance Officers** | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps; select and ingest external regulations |
-| **Policy Managers** | Create, edit, and approve business policies and standards; manage content lifecycle |
-| **Legal Counsel** | Review regulatory requirements and organizational responses; evaluate coverage gaps |
-| **Security Architects** | See technical controls mapped to the obligations they fulfil; design compliant solutions |
-| **Risk Managers** | Compliance scores with drill-down by obligation, policy, standard, and control |
-| **DevOps/Engineering** | Query compliance status of solutions; integrate automated checks into CI/CD |
-| **Auditors** | Review governance decisions and approval logs; trace obligations to controls with full provenance |
-| **Software Engineers** | Check what a Standard or Control requires before shipping; "is my service compliant?" |
-| **Security Engineers** | Find coverage gaps below the Policy level; reason about blast radius if a control fails |
-| **Engineering Managers** | Whole-team posture summaries and prioritised punch lists — open-ended synthesis, not single-entity lookups |
-| **System Admins** | Check service health and readiness; configure which instance ps-cli targets; trigger ingestion |
+| Role                     | Primary use case                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Officers**  | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps; select and ingest external regulations |
+| **Policy Managers**      | Create, edit, and approve business policies and standards; manage content lifecycle                                                                        |
+| **Legal Counsel**        | Review regulatory requirements and organizational responses; evaluate coverage gaps                                                                        |
+| **Security Architects**  | See technical controls mapped to the obligations they fulfil; design compliant solutions                                                                   |
+| **Risk Managers**        | Compliance scores with drill-down by obligation, policy, standard, and control                                                                             |
+| **DevOps/Engineering**   | Query compliance status of solutions; integrate automated checks into CI/CD                                                                                |
+| **Auditors**             | Review governance decisions and approval logs; trace obligations to controls with full provenance                                                          |
+| **Software Engineers**   | Check what a Standard or Control requires before shipping; "is my service compliant?"                                                                      |
+| **Security Engineers**   | Find coverage gaps below the Policy level; reason about blast radius if a control fails                                                                    |
+| **Engineering Managers** | Whole-team posture summaries and prioritised punch lists — open-ended synthesis, not single-entity lookups                                                 |
+| **System Admins**        | Check service health and readiness; configure which instance ps-cli targets; trigger ingestion                                                             |
 
 ## Development
 

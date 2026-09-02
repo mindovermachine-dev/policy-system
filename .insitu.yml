@@ -44,9 +44,28 @@ inventory:
     name: Run cspell
     command: cspell "**/*.md"
 
+  - id: install-actionlint
+    name: Install actionlint
+    command: |
+      if ! command -v actionlint >/dev/null 2>&1; then
+        dir=/usr/local/bin
+        [ -w "$dir" ] || dir="$HOME/.local/bin"
+        mkdir -p "$dir"
+        curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+          | bash -s -- 1.7.12 "$dir"
+      fi
+
+  - id: actionlint
+    name: Run actionlint
+    command: actionlint
+
+  - id: action-refs
+    name: Verify GitHub action refs resolve
+    command: ./.github/scripts/verify-action-refs.sh
+
   - id: markdownlint
     name: Run markdownlint
-    command: markdownlint-cli2 "**/*.md"
+    command: markdownlint-cli2 "**/*.md" "!**/.venv/**"
 
   - id: prettier
     name: Run prettier
@@ -100,7 +119,7 @@ inventory:
   - id: "fix-markdown"
     name: "Fix all fixable markdown issues"
     command: |
-      markdownlint-cli2 --fix
+      markdownlint-cli2 --fix "**/*.md" "!**/.venv/**"
 
   - id: "fix-prettier"
     name: "Fix all fixable prettier issues"
@@ -119,6 +138,7 @@ waves:
       - install-takt-shortcuts
       - safe-repo
       - repo-gitconfig
+      - install-actionlint
       - verify-lint-tools
 
   - id: "prep-runner"
@@ -129,6 +149,7 @@ waves:
       - install-gh-insitu
       - repo-gitconfig
       - install-lint-tools
+      - install-actionlint
       - sync-dev-group
       - version-txt
 
@@ -139,6 +160,8 @@ waves:
       - cspell
       - markdownlint
       - prettier
+      - actionlint
+      - action-refs
       - ruff-check
       - ruff-format
       - basedpyright

@@ -449,6 +449,79 @@ uv run ruff check . && uv run ruff format --check . && uv run basedpyright && \
 
 (or `uv run pre-commit run --all-files`).
 
+## Releasing
+
+A release is cut by pushing a semver git tag to `main`. That tag push — nothing
+else — triggers `.github/workflows/on_semver.yml`, which builds the `ps-service`
+image on native amd64 and arm64 runners, smoke-tests both, and publishes a
+multi-arch manifest list to `ghcr.io/mindovermachine-dev/ps-service` under the
+release tag and `latest`. Merging to `main` does not publish anything.
+
+Versions are stored as git tags. There is no version file to keep in sync, so the
+current version is always whatever `git tag` says.
+
+### One-time setup
+
+```bash
+gh extension install devx-cafe/gh-tt
+```
+
+On macOS, `gh tt` runs under whichever `python3` is first on `PATH`. The system
+interpreter at `/usr/bin/python3` is 3.9 and the extension needs 3.10 or newer, so
+it fails with `TypeError: unsupported operand type(s) for |`. Point it at a modern
+interpreter in your shell profile:
+
+```bash
+export PYTHON=/opt/homebrew/bin/python3
+```
+
+### Cutting a release
+
+```bash
+git checkout main
+git pull --tags                     # tags are the state; a stale checkout bumps from the wrong base
+gh tt semver                        # the current version
+gh tt semver bump --minor --no-run  # preview: prints the git tag command, changes nothing
+gh tt semver bump --minor           # creates the annotated tag locally
+git push origin <new-tag>           # publishes
+```
+
+Use `--major` for breaking changes, `--minor` for new features, `--patch` for
+fixes. The bump size is a deliberate choice, not derived from commit messages.
+
+Until it is pushed, the tag is local and can be removed with `git tag -d <tag>`.
+Pushing is the irreversible step.
+
+The tag must point at a commit that is an ancestor of `main`. The `verify-tag-on-main`
+job checks this and fails the release if it does not hold, so a tag cut from a
+feature branch never publishes.
+
+### The first release in a fresh repository
+
+`bump` needs a preceding tag to work from. Seed one:
+
+```bash
+gh tt semver init --tag 0.1.0
+```
+
+### Verifying a release
+
+```bash
+docker buildx imagetools inspect ghcr.io/mindovermachine-dev/ps-service:<tag>
+```
+
+Each published tag must resolve to a manifest list containing both `linux/amd64`
+and `linux/arm64`. The package also carries `build-amd64` and `build-arm64`
+staging tags — these are the per-architecture images the manifest list points at,
+and they are expected.
+
+### Prereleases
+
+`gh tt semver bump --pre` produces a semver 2.0 prerelease tag such as
+`1.2.4-pre.1`. That form matches neither trigger pattern in `on_semver.yml`, so
+pushing it publishes nothing and reports no error. Prereleases are not supported
+by the release pipeline today.
+
 ## Pull Request Process
 
 - Keep PRs focused on a single change.

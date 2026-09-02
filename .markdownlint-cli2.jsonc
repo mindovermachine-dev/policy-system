@@ -11,6 +11,7 @@
     "!**/docs/**",
     "!**/tools/**",
     "!**/test-data/**",
+    "!**/.venv/**",
   ],
   "config": {
     "MD004": { "style": "dash" },
