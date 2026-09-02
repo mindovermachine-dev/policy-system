@@ -137,7 +137,6 @@ at all -- `uv run` resolves the repo-root `.venv` on its own.
 
 1. Load test data into graph
 
-
 ### Start PS Service (process harness)
 
 `ps-service` currently exposes only a minimal process harness: a FastAPI app
@@ -191,6 +190,64 @@ To stop it, press Ctrl-C in the terminal it's running in, or send it
 built-in graceful shutdown handles it: no forced kill needed. If you started
 it via `scripts/ps-service.sh start`, use `scripts/ps-service.sh stop`
 instead — it already tracks the PID for you.
+
+### Run PS Service as a container
+
+The repo's `Dockerfile` builds the same runtime image the release pipeline
+publishes to `ghcr.io/mindovermachine-dev/ps-service`. Each release publishes two
+tags — the release semver (e.g. `1.2.3`) and `latest`. Both are multi-arch
+manifest lists built on native amd64 and arm64 runners, so one reference works on
+Apple Silicon and on x86; `docker buildx imagetools inspect` on either tag shows
+both platforms.
+
+```bash
+podman pull ghcr.io/mindovermachine-dev/ps-service:1.2.3
+```
+
+Pulling without credentials only works once the GHCR package has been made
+public. That is a one-time manual step: the release workflow's `GITHUB_TOKEN`
+cannot change package visibility, so until a human flips it at
+`https://github.com/orgs/mindovermachine-dev/packages/container/ps-service/settings`
+(Danger Zone → Change visibility → Public), an anonymous pull fails with
+`unauthorized`.
+
+To build the image yourself, run this from the repo root — the build context is
+the whole workspace, because `uv.lock` and the workspace manifests live there,
+and `.dockerignore` trims it to the paths the build actually reads:
+
+```bash
+podman build -t ps-service:local-test .
+```
+
+Run it against FalkorDB on an explicit network, so the service resolves FalkorDB
+by hostname, and publish the port so the host can reach the service:
+
+```bash
+podman network create ps-net
+podman run -d --name falkordb --network ps-net falkordb/falkordb:latest
+podman run -d --name ps-service --network ps-net -p 18000:8000 \
+  -e PS_FALKORDB_HOST=falkordb \
+  ps-service:local-test
+
+curl http://127.0.0.1:18000/health
+```
+
+The image sets `PS_SERVICE_HOST=0.0.0.0`, which is what makes the published port
+reachable; the source default stays loopback-only, and the container is the only
+place that binding is widened. Structured logs land in
+`/var/log/ps-service/ps-service.jsonl` inside the container.
+
+`/ready` reports `not_ready` in this setup, for the same reasons as the process
+harness above: it answers `not_ready` without LLM configuration and without
+Cellar/ELI reachability. Pass the LLM Interface and Company Merge settings in
+with `--env-file .env`, and give the container outbound network access, before
+expecting `ready`.
+
+Clean up with:
+
+```bash
+podman rm -f ps-service falkordb && podman network rm ps-net
+```
 
 ### Use ps-cli
 
@@ -365,6 +422,22 @@ hook; a violation blocks the commit and fails CI.
 ## Testing
 
 When implementing code use TDD as the default way to ensure appropriate test coverage.
+
+Run the default suite — everything except the slow, environment-dependent marker
+groups, which are opt-out on the command line:
+
+```bash
+uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not container_image"
+```
+
+Every excluded group is registered in the root `pyproject.toml` with the reason it
+is slow, and each is run explicitly when you need it. `container_image` builds and
+runs the runtime image, so it needs `docker` or `podman` and several minutes on a
+cold build:
+
+```bash
+uv run pytest ps-service/tests/test_container_image.py -m container_image
+```
 
 Run the full local gate exactly as CI does:
 

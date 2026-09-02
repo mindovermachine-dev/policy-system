@@ -19,6 +19,10 @@ Two deployable containers:
 | **PS Service** | EU regulation meta-model, ingestion pipeline, guarded read-only Cypher query engine, MCP interface, REST API, and a LiteLLM interface to 100+ models via Ollama, Azure Foundry, AWS Bedrock, Anthropic, or OpenAI |
 | **FalkorDB** | The graph database holding the compliance knowledge graph — a separate container so it can be patched independently without rebuilding or redeploying PS Service |
 
+PS Service's image is `ghcr.io/mindovermachine-dev/ps-service`. Each release publishes
+it under the release's semver tag and `latest`, as a multi-arch manifest list covering
+`linux/amd64` and `linux/arm64`.
+
 Users never talk to PS Service directly. They use a client:
 
 - **Policy System plugin** — a Claude plugin bundling the `ps-qna` skill and its MCP
@@ -50,7 +54,7 @@ Users never talk to PS Service directly. They use a client:
 | 1. Install Claude Desktop | ✅ Works | — |
 | 2. Install Podman | ✅ Works | — |
 | 3. Create the local cluster | ❌ No `kind` config exists | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59) |
-| 4. Deploy Policy System | ❌ No Helm chart, and no container image to deploy | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59), [#60](https://github.com/mindovermachine-dev/policy-system/issues/60) |
+| 4. Deploy Policy System | ❌ No Helm chart; no release tag pushed, so the registry is empty | [#59](https://github.com/mindovermachine-dev/policy-system/issues/59), [#60](https://github.com/mindovermachine-dev/policy-system/issues/60) |
 | 5. Load regulations | ❌ No curated-restore path into a deployed cluster | [#66](https://github.com/mindovermachine-dev/policy-system/issues/66) |
 | 6. Install the plugin | ❌ Plugin does not exist; needs a remote MCP endpoint | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
 | 7. Ask a question | ❌ Depends on 3–6 | — |
@@ -117,10 +121,13 @@ curl http://localhost:8000/ready
 — FalkorDB, the configured LLM provider — is currently reachable. Wait for `/ready`
 before continuing.
 
+The chart pulls PS Service from `ghcr.io/mindovermachine-dev/ps-service`; pin a release
+tag rather than tracking `latest` when you want a local test you can reproduce later.
+
 LLM provider credentials, when you need them, are supplied as chart values backed by a
 Kubernetes secret, never baked into the image.
 
-> ❌ **Not yet implemented.** No chart exists ([#59](https://github.com/mindovermachine-dev/policy-system/issues/59)), and there is no PS Service container image to deploy — the repo has no Dockerfile ([#60](https://github.com/mindovermachine-dev/policy-system/issues/60)). Today PS Service runs as a process from a virtualenv, not as a container.
+> ❌ **Not yet implemented.** No chart exists ([#59](https://github.com/mindovermachine-dev/policy-system/issues/59)), and nothing has reached the registry yet: the release pipeline builds and pushes the image, but no release tag has been pushed, and the GHCR package must be made public by hand once after the first push before an unauthenticated pull can succeed ([#60](https://github.com/mindovermachine-dev/policy-system/issues/60)). Today PS Service runs as a container built from the repo's `Dockerfile`, or as a process from a virtualenv — see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ### 5. Load regulations into the graph
 

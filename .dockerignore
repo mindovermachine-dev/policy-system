@@ -1,0 +1,18 @@
+# Exclude everything, then re-include exactly what the build needs.
+# Rationale: a deny-list silently grows stale as the repo grows (docs/, logs/,
+# .falkordb-data/, ps-skills/, spikes/, test-data/, tools/ all exist today and all
+# must stay out); an allow-list can only ever be wrong in the loud direction --
+# a missing entry fails the build instead of silently fattening the image.
+*
+
+!pyproject.toml
+!uv.lock
+!ps-service/pyproject.toml
+!ps-service/src
+!ps-cli/pyproject.toml
+
+# Belt and braces: never let a re-included tree drag these back in.
+**/__pycache__
+**/*.py[codz]
+**/.venv
+**/tests
