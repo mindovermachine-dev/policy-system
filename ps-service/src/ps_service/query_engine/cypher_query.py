@@ -62,6 +62,7 @@ def execute_cypher_query(
     *,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
+    principal: str | None = None,
 ) -> QueryResult:
     """ExecuteCypherQuery: execute a read-only Cypher query against `graph`.
 
@@ -76,37 +77,59 @@ def execute_cypher_query(
     entry per call, `outcome="succeeded"`/`"rejected"`/`"failed"`, carrying
     the bound `run_id` (AC-004). Never logs the raw query text -- see the
     module docstring.
+
+    `principal` is an opaque caller identity string (issue #67), attached to
+    the log entry when given (on every branch, not only success) and omitted
+    entirely when `None` (the default) -- groundwork for AC-BI-008; this
+    layer never decides who the principal is, it only threads what it's
+    given.
     """
     started = time.perf_counter()
     if is_write_clause(query):
-        _log(outcome="rejected", started=started, emitter=emitter)
+        _log(outcome="rejected", started=started, emitter=emitter, principal=principal)
         raise WriteClauseRejectedError(_WRITE_CLAUSE_REJECTION_MESSAGE)
 
     try:
         result = graph.query(query)
     except Exception as exc:
-        _log(outcome="failed", started=started, emitter=emitter)
+        _log(outcome="failed", started=started, emitter=emitter, principal=principal)
         raise QueryEngineExecutionError(str(exc)) from exc
 
     columns = [cast("str", c[1]) for c in result.header] if result.header else []
     rows = [list(r) for r in cast("list[list[object]]", result.result_set)]
-    _log(outcome="succeeded", started=started, emitter=emitter, row_count=len(rows))
+    _log(
+        outcome="succeeded",
+        started=started,
+        emitter=emitter,
+        row_count=len(rows),
+        principal=principal,
+    )
     return QueryResult(columns=columns, rows=rows, row_count=len(rows))
 
 
 def _log(
-    *, outcome: str, started: float, emitter: LogEmitter | None, row_count: int | None = None
+    *,
+    outcome: str,
+    started: float,
+    emitter: LogEmitter | None,
+    row_count: int | None = None,
+    principal: str | None = None,
 ) -> None:
     """Emit one `LogEntry` for a completed `execute_cypher_query` call.
 
-    Never logs the query text -- `extra` carries only `row_count`, and only
-    on success (S1/§0.5 PII-safety deviation from `route_completion`'s own
+    Never logs the query text -- `extra` carries only `row_count` (success
+    only) and `principal` (issue #67, any branch), each added only when not
+    `None` (S1/§0.5 PII-safety deviation from `route_completion`'s own
     `extra={"model": ...}` precedent). `run_id` is never passed explicitly,
     so `emit_log_entry` auto-bakes the currently bound run context -- the
     mechanism AC-004 relies on.
     """
     duration_ms = (time.perf_counter() - started) * 1000
-    extra: dict[str, object] = {} if row_count is None else {"row_count": row_count}
+    extra: dict[str, object] = {}
+    if row_count is not None:
+        extra["row_count"] = row_count
+    if principal is not None:
+        extra["principal"] = principal
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,

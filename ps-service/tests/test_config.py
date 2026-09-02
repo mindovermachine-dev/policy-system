@@ -405,3 +405,71 @@ def test_missing_ingestion_config_fields_names_only_the_unset_ones() -> None:
         "llm_interface_embed_model",
         "company_merge_similarity_threshold",
     ]
+
+
+def test_load_config_local_test_bypass_unset_is_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_SERVICE_LOCAL_TEST_BYPASS` set -> inactive, never defaults to
+    enabled (AC-BI-001, issue #67).
+    """
+    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
+
+    assert load_config().is_local_test_bypass_active is False
+
+
+def test_load_config_local_test_bypass_empty_string_is_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_SERVICE_LOCAL_TEST_BYPASS=""` -> inactive (AC-BI-001, issue #67)."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "")
+
+    assert load_config().is_local_test_bypass_active is False
+
+
+def test_load_config_local_test_bypass_whitespace_only_is_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace-only `PS_SERVICE_LOCAL_TEST_BYPASS` -> inactive (AC-BI-001, issue #67)."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "   ")
+
+    assert load_config().is_local_test_bypass_active is False
+
+
+@pytest.mark.parametrize("true_value", ["true", "True", "TRUE"])
+def test_load_config_honors_local_test_bypass_true(
+    true_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Case-insensitive `"true"` activates the bypass (issue #67)."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", true_value)
+
+    assert load_config().is_local_test_bypass_active is True
+
+
+@pytest.mark.parametrize("false_value", ["false", "False"])
+def test_load_config_honors_local_test_bypass_false(
+    false_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Case-insensitive `"false"` keeps the bypass inactive (issue #67)."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", false_value)
+
+    assert load_config().is_local_test_bypass_active is False
+
+
+@pytest.mark.parametrize("invalid_value", ["1", "yes", "on", "enabled", "nope"])
+def test_load_config_raises_for_unrecognized_local_test_bypass_value(
+    invalid_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A value that is neither a recognized on/off token nor empty fails config
+    loading closed rather than silently defaulting (AC-BI-006, issue #67).
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", invalid_value)
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "PS_SERVICE_LOCAL_TEST_BYPASS" in str(excinfo.value)
+    assert invalid_value in str(excinfo.value)

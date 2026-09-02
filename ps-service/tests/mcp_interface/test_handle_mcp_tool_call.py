@@ -27,8 +27,11 @@ from ps_service.query_engine.cypher_query import (
 from ps_service.query_engine.models import QueryResult
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
+
+    type MakeEmitter = Callable[..., tuple[LogEmitter, Path]]
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 
 @pytest.fixture
@@ -94,8 +97,10 @@ def test_delegates_to_execute_cypher_query(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def spy(query: str, *, graph: object, emitter: object = None) -> QueryResult:
-        calls.append({"query": query, "graph": graph, "emitter": emitter})
+    def spy(
+        query: str, *, graph: object, emitter: object = None, principal: object = None
+    ) -> QueryResult:
+        calls.append({"query": query, "graph": graph, "emitter": emitter, "principal": principal})
         return QueryResult(columns=["x"], rows=[[1]], row_count=1)
 
     monkeypatch.setattr(mcp_server, "execute_cypher_query", spy)
@@ -107,6 +112,49 @@ def test_delegates_to_execute_cypher_query(
     assert calls[0]["graph"] is fake
     assert calls[0]["query"] == "MATCH (n) RETURN n"
     assert result == {"columns": ["x"], "rows": [[1]], "row_count": 1}
+
+
+def test_principal_given_attaches_principal_to_query_engine_log_entry(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """Slice 4 (issue #67, AC-BI-008): `principal` passed into
+    `handle_mcp_tool_call` reaches the `query_engine`/`execute_cypher_query`
+    log entry end to end (not an `mcp_interface` entry -- this layer emits
+    none of its own).
+    """
+    emitter, log_path = make_emitter()
+    fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
+
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, principal="local-test-bypass"
+    )
+    emitter.flush()
+
+    lines = read_lines(log_path)
+    assert lines, "no entries were written -- wiring bug"
+    entry = lines[-1]
+    assert entry["component"] == "query_engine"
+    assert entry["action"] == "execute_cypher_query"
+    assert entry["principal"] == "local-test-bypass"
+
+
+def test_no_principal_given_omits_principal_key_end_to_end(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """Slice 4 (issue #67, AC-BI-008): omitting `principal=` (as every
+    pre-existing caller does) leaves the key absent end to end, matching
+    Slice 3's default behavior.
+    """
+    emitter, log_path = make_emitter()
+    fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
+
+    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    emitter.flush()
+
+    lines = read_lines(log_path)
+    assert lines, "no entries were written -- wiring bug"
+    entry = lines[-1]
+    assert "principal" not in entry
 
 
 def test_module_has_no_subprocess_or_sys() -> None:

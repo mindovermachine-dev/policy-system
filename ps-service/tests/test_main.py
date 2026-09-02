@@ -434,6 +434,27 @@ def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
     assert call_kwargs[kwarg] == expected
 
 
+def test_main_does_not_call_uvicorn_run_when_bypass_refuses_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-002 (issue #67): `main()`'s refusal happens strictly before `uvicorn.run`.
+
+    Mirrors `test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout`,
+    but with the bypass active and a non-loopback host: `main()` must raise
+    `LocalTestBypassBindRefusedError` and never reach `uvicorn.run` at all.
+    """
+    _delenv_all_ps_service_vars(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_SERVICE_HOST", "0.0.0.0")
+    mock_run = Mock()
+    monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
+
+    with pytest.raises(main_module.LocalTestBypassBindRefusedError):
+        main_module.main()
+
+    mock_run.assert_not_called()
+
+
 def test_main_module_has_zero_os_environ_references() -> None:
     """AC-BI-012 (main.py half): `main.py` never references `os.environ`, not even via `.get(...)`.
 
@@ -697,6 +718,145 @@ def test_lifespan_emits_no_warning_log_entry_for_loopback_host(tmp_path: Path) -
 
     assert len(warning_entries) == 0
     assert len(success_entries) == 1
+
+
+def test_lifespan_refuses_when_bypass_active_and_host_not_loopback() -> None:
+    """AC-BI-002/AC-BI-003 (issue #67): bypass active + non-loopback host refuses to bind.
+
+    `lifespan()` startup must raise `LocalTestBypassBindRefusedError` before
+    any port is bound, and the message must name both facts an operator needs
+    to fix this immediately: the bypass being active, and the configured host
+    not being loopback (AC-BI-003).
+    """
+    config = _complete_config(host="0.0.0.0", is_local_test_bypass_active=True)
+    app = create_app(config)
+
+    with (
+        pytest.raises(main_module.LocalTestBypassBindRefusedError) as excinfo,
+        TestClient(app),
+    ):
+        pass
+
+    message = str(excinfo.value)
+    assert "local-test bypass" in message
+    assert "active" in message
+    assert "0.0.0.0" in message
+    assert "loopback" in message
+
+
+def test_lifespan_does_not_refuse_when_bypass_active_and_host_is_loopback() -> None:
+    """AC-BI-002 (negative case, issue #67): bypass active + loopback host starts normally."""
+    config = _complete_config(is_local_test_bypass_active=True)
+    app = create_app(config)
+
+    with TestClient(app):
+        pass
+
+
+def test_lifespan_still_only_warns_when_bypass_inactive_and_host_not_loopback(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-004 (regression, issue #67): bypass inactive (default) + non-loopback host
+    is still warning-only, never a refusal.
+
+    Reuses `test_lifespan_emits_warning_log_entry_for_non_loopback_host`'s
+    read-log-lines technique to prove that test's assertions still hold after
+    this slice's refusal check was added — not merely that they held before
+    it.
+    """
+    config = _complete_config(host="0.0.0.0")
+    non_loopback_app = create_app(config)
+
+    with TestClient(non_loopback_app):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
+
+    assert len(warning_entries) == 1
+    assert warning_entries[0].get("host") == "0.0.0.0"
+
+
+def test_lifespan_emits_bypass_warning_entry_when_active(tmp_path: Path) -> None:
+    """AC-BI-007 (issue #67): bypass active (+ loopback host) emits exactly one
+    startup warning entry stating both facts an operator needs — the bypass is
+    active, and the guarantee is loopback-only — additive to (not replacing)
+    the unconditional `outcome="success"` entry.
+    """
+    config = _complete_config(is_local_test_bypass_active=True)
+    app = create_app(config)
+
+    with TestClient(app):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    bypass_warning_entries = [line for line in lines if "local_test_bypass_active" in line]
+    success_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "success"
+    ]
+
+    assert len(bypass_warning_entries) == 1
+    entry = bypass_warning_entries[0]
+    assert entry.get("action") == "startup"
+    assert entry.get("outcome") == "warning"
+    assert entry.get("local_test_bypass_active") is True
+    assert entry.get("bind_scope") == "loopback-only"
+    assert len(success_entries) == 1
+
+
+def test_lifespan_emits_no_bypass_warning_entry_when_inactive(tmp_path: Path) -> None:
+    """AC-BI-007 (negative case, issue #67): bypass inactive (the default) emits
+    zero bypass-warning entries — the warning is conditional on the bypass
+    actually being active, not unconditional startup noise.
+    """
+    config = _complete_config()
+    app = create_app(config)
+
+    with TestClient(app):
+        pass
+
+    reset_for_tests()
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    bypass_warning_entries = [line for line in lines if "local_test_bypass_active" in line]
+
+    assert len(bypass_warning_entries) == 0
+
+
+def test_lifespan_emits_bypass_warning_on_every_start_not_only_first(tmp_path: Path) -> None:
+    """AC-BI-007 (issue #67): every start, not only the first, gets its own warning.
+
+    Two separate process starts (two independent `create_app` + `TestClient`
+    entries, sharing this test's `tmp_path`-backed log sink) each emit their
+    own bypass-warning entry; nothing dedups or gates on prior-warning state.
+    """
+    config = _complete_config(is_local_test_bypass_active=True)
+
+    with TestClient(create_app(config)):
+        pass
+    with TestClient(create_app(config)):
+        pass
+
+    reset_for_tests()
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    bypass_warning_entries = [line for line in lines if "local_test_bypass_active" in line]
+
+    assert len(bypass_warning_entries) == 2
 
 
 # --- Dependency-gated readiness (issue #22) --------------------------------

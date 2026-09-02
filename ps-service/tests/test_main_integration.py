@@ -62,9 +62,18 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+
+import ps_service.main as main_module
+from ps_service.config import ServiceConfig
+from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
+from ps_service.main import create_app
+from ps_service.mcp_interface import mcp_server
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 if sys.platform == "win32":  # pragma: no cover - documented platform caveat, not exercised here
     pytest.skip("subprocess signal semantics differ on Windows", allow_module_level=True)
@@ -419,3 +428,121 @@ def test_invalid_ps_service_port_env_exits_nonzero_without_binding(tmp_path: Pat
         assert "ServiceConfigurationError" in stderr_text
     finally:
         _terminate(proc)
+
+
+class _FakeQueryResult:
+    """Satisfies `GraphQueryResult` structurally with scripted values (mirrors
+    `mcp_interface/test_cypher_tool.py`'s fake, not imported across files to
+    keep this file's test doubles self-contained).
+    """
+
+    def __init__(self, *, header: list[list[object]], result_set: list[object]) -> None:
+        self.header = header
+        self.result_set = result_set
+
+
+class _FakeGraphHandle:
+    """Satisfies `GraphHandle` structurally: `query()` always returns the
+    scripted `_FakeQueryResult`.
+    """
+
+    def __init__(self, *, result: _FakeQueryResult) -> None:
+        self._result = result
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        return self._result
+
+
+class _FakeFalkorDB:
+    """Stands in for the eager `falkordb.FalkorDB` client."""
+
+    def __init__(self, handle: _FakeGraphHandle) -> None:
+        self._handle = handle
+
+    def select_graph(self, name: str) -> _FakeGraphHandle:
+        return self._handle
+
+
+def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """AC-BI-005 / AC-BI-008 (issue #67): with the bypass active on a
+    loopback-bound instance, the process starts successfully AND answers a
+    query with no credential of any kind supplied -- composed in one test,
+    not two disconnected unit-level facts (FLAWS.md finding 3 / CHANGES.md
+    row 3).
+
+    "Starts successfully" is proven by the `with TestClient(app):` block
+    completing without raising: a `LocalTestBypassBindRefusedError` (the
+    only thing that could stop a loopback-bound bypass-active instance from
+    starting) would surface right there. "Answers a query with no
+    credential" is proven by calling the real `mcp_server.cypher` tool
+    in-process, straight after startup, passing nothing but the query text
+    itself -- no header, token, or credential of any kind exists on this
+    call path to omit. Reading the `query_engine` log entry's `principal`
+    back out ties this same execution to AC-BI-008: the composition is real,
+    not two disconnected facts.
+
+    Dependency connectivity checks (FalkorDB/LLM Interface/Cellar-ELI) are
+    stubbed to succeed instantly -- real reachability is out of scope for
+    AC-BI-005/AC-BI-008 (covered elsewhere) and `_check_dependencies_at_startup`
+    never raises regardless, so stubbing only removes real-network flakiness/
+    latency from this test, it does not change what is being proven.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=tmp_path,
+        is_local_test_bypass_active=True,
+    )
+
+    def stub_connect_from_config(_config: ServiceConfig) -> object:
+        return object()
+
+    def stub_check_falkordb_connectivity(db: object, host: str, port: int) -> None:
+        return None
+
+    def stub_check_llm_interface_connectivity(_config: ServiceConfig) -> None:
+        return None
+
+    def stub_check_cellar_eli_connectivity() -> None:
+        return None
+
+    monkeypatch.setattr(main_module, "connect_from_config", stub_connect_from_config)
+    monkeypatch.setattr(
+        main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
+    )
+    monkeypatch.setattr(
+        main_module, "check_llm_interface_connectivity", stub_check_llm_interface_connectivity
+    )
+    monkeypatch.setattr(
+        main_module, "check_cellar_eli_connectivity", stub_check_cellar_eli_connectivity
+    )
+
+    fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
+
+    def stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
+        return _FakeFalkorDB(fake_graph)
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", stub_mcp_connect_from_config)
+
+    app = create_app(config)
+
+    # No exception raised during TestClient entry IS the starts-successfully
+    # proof (a refused bind would raise here); no credential/header/token of
+    # any kind is passed to `cypher` below.
+    with TestClient(app):
+        result = mcp_server.cypher("MATCH (n) RETURN n.id")
+
+    assert not (isinstance(result, str) and result.startswith("error:"))
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    lines = read_lines(resolve_default_log_path())
+    entry = next(
+        line
+        for line in lines
+        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
+    )
+    assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID

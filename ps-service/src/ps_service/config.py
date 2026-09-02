@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
@@ -19,6 +20,11 @@ _MIN_PORT = 1
 _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
+
+# The fixed caller identity attached to every query answered while the
+# local-test bypass (issue #67, AC-BI-008) is active. Colocated with the
+# bypass flag since it is a fact *about* the bypass concept, not a variable.
+LOCAL_TEST_PRINCIPAL_ID: Final = "local-test-bypass"
 
 
 class ServiceConfigurationError(Exception):
@@ -65,6 +71,7 @@ class ServiceConfig:
     falkordb_host: str = _DEFAULT_FALKORDB_HOST
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
     company_merge_similarity_threshold: float | None = None
+    is_local_test_bypass_active: bool = False
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -191,6 +198,26 @@ def _parse_similarity_threshold(raw: str) -> float:
     return threshold
 
 
+def _parse_local_test_bypass(raw: str | None) -> bool:
+    """Parse `PS_SERVICE_LOCAL_TEST_BYPASS`, failing closed on any unrecognized value.
+
+    Unset or empty/whitespace-only (AC-BI-001) resolves to inactive (`False`)
+    rather than raising — an operator who never set the var, or set it to
+    `""`, gets silence, not a crash. Only `"true"`/`"false"` (case-insensitive)
+    are recognized; anything else fails config loading closed (AC-BI-006)
+    rather than silently defaulting, mirroring `_parse_port`'s message shape.
+    """
+    if raw is None or not raw.strip():
+        return False
+    normalized = raw.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    message = f"PS_SERVICE_LOCAL_TEST_BYPASS must be 'true' or 'false', got {raw!r}"
+    raise ServiceConfigurationError(message)
+
+
 def _parse_model_string(raw: str, *, env_var_name: str) -> str:
     """Validate a `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` value.
 
@@ -257,6 +284,10 @@ def load_config() -> ServiceConfig:
         else None
     )
 
+    is_local_test_bypass_active = _parse_local_test_bypass(
+        os.environ.get("PS_SERVICE_LOCAL_TEST_BYPASS")
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -267,4 +298,5 @@ def load_config() -> ServiceConfig:
         falkordb_host=falkordb_host,
         falkordb_port=falkordb_port,
         company_merge_similarity_threshold=company_merge_similarity_threshold,
+        is_local_test_bypass_active=is_local_test_bypass_active,
     )

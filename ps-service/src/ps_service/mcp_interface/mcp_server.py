@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from mcp.server import MCPServer
 
-from ps_service.config import load_config
+from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.logging import bind_run_context, configure, emit_log_entry
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
@@ -36,6 +36,7 @@ from ps_service.query_engine.falkordb_client import (
 )
 
 if TYPE_CHECKING:
+    from ps_service.config import ServiceConfig
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
@@ -84,33 +85,47 @@ server = MCPServer(
 
 
 def handle_mcp_tool_call(
-    query: str, *, graph: GraphHandle, emitter: LogEmitter | None = None
+    query: str,
+    *,
+    graph: GraphHandle,
+    emitter: LogEmitter | None = None,
+    principal: str | None = None,
 ) -> dict[str, object] | str:
     """HandleMcpToolCall: run `query` through Query Engine in-process.
 
     Binds a fresh run_id, then returns `{columns, rows, row_count}` on
     success or an `error: <message>` string verbatim on a rejected or
     failed query.
+
+    `principal` is an opaque caller identity string (issue #67), threaded
+    straight through to `execute_cypher_query` so it lands on the
+    `query_engine` log entry; omitted entirely when `None` (the default),
+    matching Slice 3's silent-by-default behavior end to end. This layer
+    never decides who the principal is -- see Slice 5 for where it's set.
     """
     with bind_run_context():
         try:
-            result: QueryResult = execute_cypher_query(query, graph=graph, emitter=emitter)
+            result: QueryResult = execute_cypher_query(
+                query, graph=graph, emitter=emitter, principal=principal
+            )
         except (WriteClauseRejectedError, QueryEngineExecutionError) as exc:
             return f"error: {exc}"
     return {"columns": result.columns, "rows": result.rows, "row_count": result.row_count}
 
 
-def _resolve_graph() -> GraphHandle:
-    """Acquire a GraphHandle for one tool call.
+def _resolve_graph(config: ServiceConfig) -> GraphHandle:
+    """Acquire a GraphHandle for one tool call, given an already-resolved config.
 
-    ANY failure here -- bad PS_FALKORDB_* config, DB unreachable/refused,
-    driver I/O in the eager FalkorDB constructor or in select_graph -- is
-    sanitised to a fixed generic McpGraphUnavailableError. Host, port,
-    driver, and env-var text must not cross the MCP boundary (L2 MCP
-    Interface Patterns; PLAN_REVIEWED §2 Q6 / F-01 / F-17).
+    ANY failure here -- DB unreachable/refused, driver I/O in the eager
+    FalkorDB constructor or in select_graph -- is sanitised to a fixed
+    generic McpGraphUnavailableError. Host, port, driver, and env-var text
+    must not cross the MCP boundary (L2 MCP Interface Patterns; PLAN_REVIEWED
+    §2 Q6 / F-01 / F-17). `config` is resolved by the caller (`cypher()`), not
+    here, so a `ServiceConfigurationError` from `load_config()` is sanitised
+    by the caller's own try/except rather than this function's.
     """
     try:
-        return select_graph(connect_from_config(load_config()), _graph_name())
+        return select_graph(connect_from_config(config), _graph_name())
     except McpGraphUnavailableError:
         raise
     # broad by design: every failure here is sanitised to a fixed message
@@ -129,11 +144,13 @@ def cypher(query: str) -> dict[str, object] | str:
     when FalkorDB rejects the query, or when the graph database cannot be reached.
     """
     try:
-        graph = _resolve_graph()
-    except McpGraphUnavailableError:
+        config = load_config()
+        graph = _resolve_graph(config)
+    except McpGraphUnavailableError, ServiceConfigurationError:
         emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
         return _GRAPH_UNAVAILABLE_MESSAGE
-    return handle_mcp_tool_call(query, graph=graph)
+    principal = LOCAL_TEST_PRINCIPAL_ID if config.is_local_test_bypass_active else None
+    return handle_mcp_tool_call(query, graph=graph, principal=principal)
 
 
 @server.resource(

@@ -50,6 +50,10 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI)
 
 
+class LocalTestBypassBindRefusedError(Exception):
+    """The local-test bypass is active but `config.host` is not loopback (AC-BI-002)."""
+
+
 def _is_loopback(host: str) -> bool:
     """Return whether `host` is one of the recognized loopback spellings.
 
@@ -60,6 +64,31 @@ def _is_loopback(host: str) -> bool:
     marginal benefit no AC asks for.
     """
     return host in _LOOPBACK_HOSTS
+
+
+def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
+    """Raise `LocalTestBypassBindRefusedError` if the bypass is active on a non-loopback host.
+
+    AC-BI-002: the local-test bypass is unauthenticated, so it must never be
+    reachable from beyond this machine. AC-BI-003: the message states both
+    facts (bypass active, host not loopback) so the operator can identify the
+    fix immediately. AC-BI-004: when the bypass is inactive (the default),
+    this check short-circuits and does nothing, leaving the existing
+    warning-only non-loopback handling in `lifespan()` completely unchanged.
+
+    Called at two defense-in-depth points (L1's security-critical-sink
+    carve-out): `main()`, before `create_app`/`uvicorn.run` are ever reached,
+    and `lifespan()`'s first statement, so any caller that builds
+    `create_app(config)` directly (as every unit test in `test_main.py` does)
+    is covered too.
+    """
+    if config.is_local_test_bypass_active and not _is_loopback(config.host):
+        message = (
+            f"local-test bypass is active AND configured host {config.host!r} "
+            "is not loopback -- refusing to start (would expose the unauthenticated "
+            "bypass beyond this machine)"
+        )
+        raise LocalTestBypassBindRefusedError(message)
 
 
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
@@ -147,8 +176,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
         not from `Logging`'s own environment-derived fallback. If
         `config.host` resolves non-loopback, an additional
         `outcome="warning"` entry is emitted before the unconditional
-        `outcome="success"` entry (AC-BI-011) — the warning is additive, it
-        never replaces the success entry. Any exception raised by
+        `outcome="success"` entry (AC-BI-011); if the local-test bypass is
+        active, a further `outcome="warning"` entry is emitted stating both
+        facts an operator needs (`local_test_bypass_active=True`,
+        `bind_scope="loopback-only"`) — every process start, not only the
+        first, since nothing here gates on prior-warning state (AC-BI-007) —
+        before the unconditional `outcome="success"` entry. Both warnings are
+        additive, never replacing the success entry. Any exception raised by
         `configure()` (e.g. `LoggingConfigurationError`) is deliberately left
         to propagate — fail-fast (L1) — rather than swallowed. Uvicorn's own
         startup-failure path reports it to stderr.
@@ -169,6 +203,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         recover, or need re-probing for the life of this process — a
         one-time startup check is the whole story.
         """
+        _refuse_non_loopback_bypass_bind(config)
         log_path = (config.logging_dir / _LOG_FILENAME) if config.logging_dir is not None else None
         configure(log_path=log_path)
         if not _is_loopback(config.host):
@@ -177,6 +212,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 action="startup",
                 outcome="warning",
                 extra={"host": config.host},
+            )
+        if config.is_local_test_bypass_active:
+            emit_log_entry(
+                component="entrypoint",
+                action="startup",
+                outcome="warning",
+                extra={"local_test_bypass_active": True, "bind_scope": "loopback-only"},
             )
         emit_log_entry(component="entrypoint", action="startup", outcome="success")
         missing_config = missing_ingestion_config_fields(config)
@@ -242,6 +284,7 @@ def main() -> None:
     Lifecycle Patterns section.
     """
     config = load_config()
+    _refuse_non_loopback_bypass_bind(config)
     app = create_app(config)
     uvicorn.run(
         app,

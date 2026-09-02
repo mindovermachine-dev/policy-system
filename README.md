@@ -169,10 +169,10 @@ http://localhost:8000/mcp
 ```
 
 A local-test deployment runs with authentication disabled, so there is nothing to log into.
-That mode is opt-in, refuses to bind anything but loopback, and warns on every startup — it
-is for evaluation only.
+That mode is opt-in via `PS_SERVICE_LOCAL_TEST_BYPASS=true`, refuses to bind anything but
+loopback, and warns on every startup — it is for evaluation only.
 
-> ❌ **Not yet implemented.** The plugin does not exist ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)). It requires a remote MCP transport with per-user authentication ([#39](https://github.com/mindovermachine-dev/policy-system/issues/39)), and the local-test authentication bypass it runs under ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)). Full per-user authentication is deferred, not dropped — it remains required before any non-local deployment ([#65](https://github.com/mindovermachine-dev/policy-system/issues/65)).
+> ❌ **Not yet implemented.** The plugin itself does not exist yet ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)), and needs a remote MCP transport with per-user authentication ([#39](https://github.com/mindovermachine-dev/policy-system/issues/39)). The local-test bypass mode described above is implemented ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)) — set `PS_SERVICE_LOCAL_TEST_BYPASS=true` on a loopback-bound instance to run under it. Full per-user authentication remains required for any non-local deployment; it is deferred, not dropped, and stays tracked on [#39](https://github.com/mindovermachine-dev/policy-system/issues/39)/[#58](https://github.com/mindovermachine-dev/policy-system/issues/58) (not [#65](https://github.com/mindovermachine-dev/policy-system/issues/65), which is only the now-deprioritized credential-flow spike).
 
 ### 7. Ask a question
 
