@@ -1,0 +1,36 @@
+suite: ps-service service
+templates:
+  - ps-service-service.yaml
+tests:
+  - it: default values render a NodePort Service with a named http port
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 8000
+      - equal:
+          path: spec.ports[0].nodePort
+          value: 30800
+
+  - it: psService.service.type=ClusterIP renders the same named port with no nodePort field
+    set:
+      psService.service.type: ClusterIP
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 8000
+      - notExists:
+          path: spec.ports[0].nodePort

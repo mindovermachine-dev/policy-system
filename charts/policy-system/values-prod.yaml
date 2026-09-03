@@ -1,0 +1,25 @@
+# Production profile — passed via `-f values-prod.yaml`. Overrides only what
+# differs from values.yaml's local-test/kind defaults (PLAN.md §5 S11,
+# AC-BI-009 off-half, AC-BI-010). Nothing here is kind-specific.
+
+falkordb:
+  persistence:
+    enabled: true
+    # Empty string = let the cluster pick its own default StorageClass
+    # (PLAN.md §3.4) — never hardcode kind's default StorageClass name here.
+    storageClassName: ""
+  browser:
+    # Browser UI is a local-test convenience only — off in prod (AC-BI-009).
+    enabled: false
+
+psService:
+  service:
+    # No kind-specific NodePort mechanism in prod — ingress path is out of
+    # scope for this issue (PLAN.md §3.2). ClusterIP only.
+    type: ClusterIP
+
+llm:
+  # Prod doesn't inherit values.yaml's `ollama` default — a real cluster has
+  # no local Podman gateway to reach (CHANGES.md B2). Credentials are
+  # supplied at install time via --set/existingSecret, never committed here.
+  provider: azure

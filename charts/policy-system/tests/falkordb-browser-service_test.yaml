@@ -1,0 +1,25 @@
+suite: falkordb browser service
+templates:
+  - falkordb-browser-service.yaml
+tests:
+  - it: default values render a NodePort Service on 3000/30300
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[0].port
+          value: 3000
+      - equal:
+          path: spec.ports[0].nodePort
+          value: 30300
+  - it: browser.enabled=false renders no document
+    set:
+      falkordb.browser.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

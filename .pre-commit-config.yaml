@@ -15,3 +15,30 @@ repos:
         language: system
         types: [python]
         pass_filenames: false # project-wide check, not per-file
+      - id: markdownlint
+        name: markdownlint-cli2
+        entry: markdownlint-cli2 --no-globs
+        language: system
+        files: \.md$
+        exclude: (^|/)(node_modules|\.venv|tmp|background|dist|spikes|docs|tools|test-data|\.orchestrator)/|^CLAUDE\.md$|^\.github/agents/
+      - id: prettier
+        name: prettier --check
+        entry: prettier --check
+        language: system
+        files: \.(json|jsonc|ya?ml|md|mdx|js|jsx|ts|tsx|css|scss|html)$
+      - id: cspell
+        name: cspell
+        entry: cspell --no-must-find-files
+        language: system
+        files: \.md$
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        files: ^\.github/workflows/.*\.ya?ml$
+      - id: pip-audit
+        name: pip-audit (locked dependencies)
+        entry: bash -c 'uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off'
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false # triggered by lockfile changes, but audits the whole resolved set

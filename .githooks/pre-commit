@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Python quality gates (issue #48) — fail the commit on any violation.
-# Scoped to staged files (no --all-files): ruff-check/ruff-format only touch
-# what's staged; basedpyright stays project-wide regardless (pass_filenames:
-# false in .pre-commit-config.yaml — strict mode needs whole-project context).
-# `gh insitu run trunk-worthy` duplicated this same ruff/basedpyright pass
-# plus markdownlint/prettier/cspell/actionlint/pip-audit on every commit; it
-# already runs in CI on push/PR (on_dev.yml, on_ready.yml), so it's dropped
-# here rather than paid for twice.
+# Quality gates — fail the commit on any violation.
+# Scoped to staged files (no --all-files): ruff-check/ruff-format/markdownlint/
+# prettier/cspell/actionlint only touch what's staged; basedpyright stays
+# project-wide regardless (pass_filenames: false in .pre-commit-config.yaml —
+# strict mode needs whole-project context). pip-audit only runs when
+# pyproject.toml or uv.lock is staged, since it audits the whole resolved
+# dependency set rather than individual files.
+# `gh insitu run trunk-worthy` runs the same tools unscoped (whole repo) in CI
+# on push/PR (on_dev.yml, on_ready.yml) as a backstop against anything this
+# staged-file scoping misses.
 uv run pre-commit run

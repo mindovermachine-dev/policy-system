@@ -1,0 +1,129 @@
+suite: ps-service deployment
+templates:
+  - ps-service-deployment.yaml
+tests:
+  # --- S7: FalkorDB DNS + LLM env wiring (AC-BI-007, AC-BI-003) ---
+
+  - it: PS_FALKORDB_HOST is the exact FalkorDB Service name, never an IP
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_FALKORDB_HOST")].value
+          pattern: "^[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*$"
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_FALKORDB_HOST")].value
+          value: RELEASE-NAME-policy-system-falkordb
+
+  - it: PS_FALKORDB_PORT is 6379
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_FALKORDB_PORT")].value
+          value: "6379"
+
+  - it: PS_COMPANYMERGE_SIMILARITY_THRESHOLD comes from values, default 0.85
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_SIMILARITY_THRESHOLD")].value
+          value: "0.85"
+
+  - it: default (ollama) render has no envFrom
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+
+  - it: default (ollama) render sets the Ollama model pair
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: ollama/phi3:mini
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: ollama/nomic-embed-text
+
+  - it: azure provider renders exactly one envFrom secretRef and the Azure model pair
+    set:
+      llm.provider: azure
+      llm.azure.apiKey: x
+      llm.azure.apiBase: y
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: RELEASE-NAME-policy-system-llm-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: azure/gpt-5.4-mini
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: azure/text-embedding-3-large
+
+  - it: azure provider with existingSecret references that secret name instead
+    set:
+      llm.provider: azure
+      llm.existingSecret: my-existing-secret
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: my-existing-secret
+
+  # --- B2 (CHANGES.md): OLLAMA_API_BASE + hostAliases ---
+
+  - it: default values set OLLAMA_API_BASE and render no hostAliases
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="OLLAMA_API_BASE")].value
+          value: http://host.containers.internal:11434
+      - notExists:
+          path: spec.template.spec.hostAliases
+
+  - it: azure provider never sets OLLAMA_API_BASE
+    set:
+      llm.provider: azure
+      llm.azure.apiKey: x
+      llm.azure.apiBase: y
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="OLLAMA_API_BASE")]
+
+  - it: ollamaHostGatewayIP set (with default ollama provider) renders the exact hostAliases entry
+    set:
+      psService.ollamaHostGatewayIP: 10.88.0.1
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases
+          value:
+            - ip: "10.88.0.1"
+              hostnames: ["host.containers.internal"]
+
+  # --- S8: ports, probes, security context ---
+
+  - it: container port is 8000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8000
+
+  - it: readiness probe targets /ready
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /ready
+
+  - it: liveness probe targets /health, never /ready
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+
+  - it: runs as the non-root uid 10001 baked into the image
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true

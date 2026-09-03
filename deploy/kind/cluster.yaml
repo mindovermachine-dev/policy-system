@@ -1,0 +1,20 @@
+# kind cluster config for local-test Policy System deployment (Podman).
+# Cross-referenced with charts/policy-system/values.yaml:
+#   - hostPort 8000 -> containerPort 30800 matches psService.service.nodePort
+#   - hostPort 3000 -> containerPort 30300 matches falkordb.browser.nodePort
+# FalkorDB's own Redis port is intentionally never mapped here — it stays
+# ClusterIP-only in every environment (AC-BI-002).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: policy-system
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30800
+        hostPort: 8000
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30300
+        hostPort: 3000
+        listenAddress: "127.0.0.1"
+        protocol: TCP

@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "policy-system.fullname" . }}-ps-service
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ps-service
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ps-service
+    spec:
+      {{- if and (eq .Values.llm.provider "ollama") .Values.psService.ollamaHostGatewayIP }}
+      # Podman injects host.containers.internal into the kind node container's
+      # own /etc/hosts, but a Pod's netns does not inherit it — hostAliases is
+      # Kubernetes' documented fix (CHANGES.md B2).
+      hostAliases:
+        - ip: {{ .Values.psService.ollamaHostGatewayIP | quote }}
+          hostnames: ["host.containers.internal"]
+      {{- end }}
+      containers:
+        - name: ps-service
+          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag }}"
+          securityContext:
+            # Matches the non-root `ps` user (uid/gid 10001) Dockerfile:46-47
+            # creates specifically for this Kubernetes runAsUser.
+            runAsUser: 10001
+            runAsNonRoot: true
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          {{- if eq .Values.llm.provider "azure" }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.llm.existingSecret | default (printf "%s-llm-credentials" (include "policy-system.fullname" .)) }}
+          {{- end }}
+          env:
+            # FalkorDB is reached via its Service DNS name — never a pod IP
+            # (AC-BI-007). Same name templates/falkordb-service.yaml renders,
+            # both derived from the shared _helpers.tpl fullname.
+            - name: PS_FALKORDB_HOST
+              value: {{ printf "%s-falkordb" (include "policy-system.fullname" .) }}
+            - name: PS_FALKORDB_PORT
+              value: "6379"
+            - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
+              value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
+            - name: PS_SERVICE_LOCAL_TEST_BYPASS
+              value: {{ .Values.psService.localTestBypass.enabled | quote }}
+            {{- if eq .Values.llm.provider "azure" }}
+            - name: PS_LLMINTERFACE_MODEL
+              value: "azure/gpt-5.4-mini"
+            - name: PS_LLMINTERFACE_EMBED_MODEL
+              value: "azure/text-embedding-3-large"
+            {{- else }}
+            - name: PS_LLMINTERFACE_MODEL
+              value: "ollama/phi3:mini"
+            - name: PS_LLMINTERFACE_EMBED_MODEL
+              value: "ollama/nomic-embed-text"
+            {{- if .Values.llm.ollama.apiBase }}
+            - name: OLLAMA_API_BASE
+              value: {{ .Values.llm.ollama.apiBase | quote }}
+            {{- end }}
+            {{- end }}

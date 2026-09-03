@@ -4,6 +4,35 @@ Thank you for considering contributing to this project!
 
 Note: We are in the transition from prototype to full implementation and the instructions here are a mix of both. As the actual implementation progresses, prototype instructions will be removed.
 
+## Table of Contents
+
+- [Getting Started](#getting-started)
+- [Development Setup](#development-setup)
+  - [Option A: Dev Container (recommended)](#option-a-dev-container-recommended)
+  - [Option B: Local setup (no dev container)](#option-b-local-setup-no-dev-container)
+  - [Create a virtual environment and install dependencies](#create-a-virtual-environment-and-install-dependencies)
+  - [Start PS Service (process harness)](#start-ps-service-process-harness)
+  - [Run PS Service as a container](#run-ps-service-as-a-container)
+  - [Use ps-cli](#use-ps-cli)
+    - [Run from a repo checkout (local development)](#run-from-a-repo-checkout-local-development)
+  - [Configure the LLM Interface](#configure-the-llm-interface)
+    - [Azure](#azure)
+    - [Ollama (local, no cloud credentials/cost)](#ollama-local-no-cloud-credentialscost)
+  - [Configure Company Merge](#configure-company-merge)
+  - [Claude Desktop (alternative to Claude Code)](#claude-desktop-alternative-to-claude-code)
+- [Coding Standards](#coding-standards)
+- [Testing](#testing)
+- [Releasing](#releasing)
+  - [One-time setup](#one-time-setup)
+  - [Cutting a release](#cutting-a-release)
+  - [The first release in a fresh repository](#the-first-release-in-a-fresh-repository)
+  - [Verifying a release](#verifying-a-release)
+  - [Prereleases](#prereleases)
+  - [Releasing ps-cli](#releasing-ps-cli)
+- [Delivery Process](#delivery-process)
+- [Reporting Issues](#reporting-issues)
+- [Discussions](#discussions)
+
 ## Getting Started
 
 Contributions go through `devx-cafe/gh-tt`'s issue-branch workflow: pick up an
@@ -148,15 +177,6 @@ get dir`), so `podman stop`/`start`, or even removing and recreating the
   durable, not an extra flag. AOF (`appendonly`) is off by default; turn it on
   only if you need tighter durability than periodic RDB snapshots for local
   work, e.g. `podman exec falkordb redis-cli config set appendonly yes`.
-
-### Option C: Helm chart on a local kind cluster (planned, not yet implemented)
-
-The target local-dev deployment path is a Helm chart deploying both PS
-Service and FalkorDB onto a local [`kind`](https://kind.sigs.k8s.io/) cluster
-running under Podman — mirroring the eventual Azure/AWS/on-prem Kubernetes
-production target more closely than Options A/B above. No chart exists yet;
-this section is a placeholder for that work. Options A/B remain how to
-actually develop today.
 
 ### Create a virtual environment and install dependencies
 

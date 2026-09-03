@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "policy-system.fullname" . }}-ps-service
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-service
+spec:
+  type: {{ .Values.psService.service.type }}
+  selector:
+    {{- include "policy-system.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-service
+  ports:
+    # "http" — first-class port serving both the REST API and, once built,
+    # the Streamable HTTP MCP endpoint under the same host:port (PLAN.md §3.3).
+    - name: http
+      port: 8000
+      targetPort: http
+      {{- if eq .Values.psService.service.type "NodePort" }}
+      nodePort: {{ .Values.psService.service.nodePort }}
+      {{- end }}

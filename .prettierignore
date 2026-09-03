@@ -3,3 +3,4 @@ docs/**
 test-data/**
 spikes/**
 tools/**
+charts/**/templates/**

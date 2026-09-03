@@ -1,0 +1,51 @@
+# Local-test profile — THE DEFAULT (no -f flag needed).
+# Final key set per PLAN.md §5 S10 (finalized in batch 3).
+
+nameOverride: ""
+fullnameOverride: ""
+
+falkordb:
+  image:
+    repository: falkordb/falkordb
+    tag: latest
+  persistence:
+    enabled: false
+    storageClassName: ""
+  browser:
+    enabled: true
+    nodePort: 30300
+
+psService:
+  image:
+    repository: ghcr.io/mindovermachine-dev/ps-service
+    tag: "0.2.0"
+  service:
+    # NodePort (local-test/kind default) vs ClusterIP (prod, no kind-specific
+    # mechanism — see values-prod.yaml). Port is named "http" and serves both
+    # the REST API and, once built, the Streamable HTTP MCP endpoint under
+    # the same host:port — see PLAN.md §3.3.
+    type: NodePort
+    nodePort: 30800
+  companyMerge:
+    similarityThreshold: 0.85
+  localTestBypass:
+    # Opt-in only — even under the local-test profile this stays off by
+    # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
+    enabled: false
+  # IP of the Podman network gateway (e.g. `podman network inspect podman
+  # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
+  # entry so pods can resolve host.containers.internal when llm.provider is
+  # ollama. Empty by default — the chart can't know this statically.
+  ollamaHostGatewayIP: ""
+
+llm:
+  # ollama | azure
+  provider: ollama
+  # Set to reuse an operator-managed Secret name instead of llm.azure.* below.
+  existingSecret: ""
+  azure:
+    # Never set a real value here — use --set or existingSecret.
+    apiKey: ""
+    apiBase: ""
+  ollama:
+    apiBase: "http://host.containers.internal:11434"

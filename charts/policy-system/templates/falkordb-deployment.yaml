@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "policy-system.fullname" . }}-falkordb
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: falkordb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: falkordb
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: falkordb
+    spec:
+      containers:
+        - name: falkordb
+          image: "{{ .Values.falkordb.image.repository }}:{{ .Values.falkordb.image.tag }}"
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: falkordb-data
+              mountPath: /var/lib/falkordb/data
+      volumes:
+        - name: falkordb-data
+          {{- if .Values.falkordb.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "policy-system.fullname" . }}-falkordb-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

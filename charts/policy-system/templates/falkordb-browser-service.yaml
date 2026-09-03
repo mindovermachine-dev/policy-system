@@ -1,0 +1,19 @@
+{{- if .Values.falkordb.browser.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "policy-system.fullname" . }}-falkordb-browser
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: falkordb
+spec:
+  type: NodePort
+  selector:
+    {{- include "policy-system.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: falkordb
+  ports:
+    - name: browser
+      port: 3000
+      targetPort: 3000
+      nodePort: {{ .Values.falkordb.browser.nodePort }}
+{{- end }}

@@ -1,0 +1,42 @@
+suite: prod profile
+values:
+  - ../values-prod.yaml
+set:
+  llm.provider: azure
+  llm.azure.apiKey: test-azure-key
+  llm.azure.apiBase: https://example-test.openai.azure.com/
+templates: [falkordb-browser-service.yaml, ps-service-service.yaml, secret.yaml]
+tests:
+  - it: falkordb browser service does not render under prod values
+    template: falkordb-browser-service.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ps-service Service is ClusterIP with no nodePort field
+    template: ps-service-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - notExists:
+          path: spec.ports[0].nodePort
+
+  - it: azure llm credentials Secret renders from the suite-level set values
+    template: secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+      - equal:
+          path: stringData.AZURE_API_KEY
+          value: test-azure-key
+      - equal:
+          path: stringData.AZURE_API_BASE
+          value: https://example-test.openai.azure.com/

@@ -1,0 +1,23 @@
+suite: falkordb service
+templates:
+  - falkordb-service.yaml
+tests:
+  - it: renders a ClusterIP Service
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+  - it: exposes exactly port 6379 named redis
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: redis
+              port: 6379
+              targetPort: 6379
+  - it: never sets a nodePort
+    asserts:
+      - notExists:
+          path: spec.ports[0].nodePort

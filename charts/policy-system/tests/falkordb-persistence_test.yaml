@@ -1,0 +1,42 @@
+suite: falkordb persistence toggle
+templates:
+  - falkordb-deployment.yaml
+  - falkordb-pvc.yaml
+tests:
+  - it: default values use emptyDir and render no PVC
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+        template: falkordb-deployment.yaml
+      - notExists:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim
+        template: falkordb-deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: falkordb-pvc.yaml
+  - it: persistence.enabled=true renders a PVC and switches the volume source
+    set:
+      falkordb.persistence.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: RELEASE-NAME-policy-system-falkordb-data
+        template: falkordb-deployment.yaml
+      - notExists:
+          path: spec.template.spec.volumes[0].emptyDir
+        template: falkordb-deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: falkordb-pvc.yaml
+      - isKind:
+          of: PersistentVolumeClaim
+        template: falkordb-pvc.yaml
+      - equal:
+          path: spec.accessModes
+          value:
+            - ReadWriteOnce
+        template: falkordb-pvc.yaml
+      - notExists:
+          path: spec.storageClassName
+        template: falkordb-pvc.yaml

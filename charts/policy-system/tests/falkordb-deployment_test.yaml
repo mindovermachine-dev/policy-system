@@ -1,0 +1,32 @@
+suite: falkordb deployment
+templates:
+  - falkordb-deployment.yaml
+tests:
+  - it: renders a Deployment
+    asserts:
+      - isKind:
+          of: Deployment
+  - it: uses the falkordb/falkordb:latest image
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: falkordb/falkordb:latest
+  - it: runs exactly one replica
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+  - it: mounts an emptyDir volume at /var/lib/falkordb/data by default
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: falkordb-data
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /var/lib/falkordb/data
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: falkordb-data
