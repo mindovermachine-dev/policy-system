@@ -47,6 +47,16 @@ echo "Checking out main and syncing tags..."
 git checkout main
 git pull --tags
 
+local_main="$(git rev-parse main)"
+remote_main="$(git rev-parse origin/main)"
+if [[ "${local_main}" != "${remote_main}" ]]; then
+  echo "main (${local_main}) is not in sync with origin/main (${remote_main})." >&2
+  echo "The release tag would point at a commit origin doesn't have yet, which fails the" >&2
+  echo "'Verify tag is on main branch' check in on_semver.yml. Push main first:" >&2
+  echo "  git push origin main" >&2
+  exit 1
+fi
+
 echo "Current ps-service version: $(gh tt semver)"
 
 if (( DRY_RUN )); then
