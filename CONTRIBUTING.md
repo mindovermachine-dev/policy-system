@@ -297,48 +297,21 @@ podman rm -f ps-service falkordb && podman network rm ps-net
 primary way to drive the system by hand (ingest a regulation, list the
 catalog) without writing `curl`/Python against the API directly.
 
-#### Install `ps-cli`
+For installing `ps-cli` and everyday usage (configuring which PS Service
+instance it targets, named contexts, credential storage), see
+the [user guide](./docs/artifacts/user-guide.md#ps-cli). The rest of this section covers the
+contributor-only path: running `ps-cli` straight from a repo checkout.
 
-`ps-cli` is a distributed client, installable independently of this repo like
-`gh`/`az` — no clone/checkout needed:
-
-```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@ps-cli-v0.1.1#subdirectory=ps-cli"
-```
-
-`uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via
-its tool-install shims. Verify:
-
-```bash
-ps-cli --version
-```
-
-Replace `ps-cli-v0.1.1` with the latest `ps-cli-v*` tag (`git ls-remote --tags
-https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'`). Tags on
-this repository are **not currently protected** against force-move/re-pointing
-(no tag-protection ruleset is configured — verified live via `gh api
-repos/mindovermachine-dev/policy-system/rulesets`, which returns `[]`). An
-operator who needs install-time integrity beyond "trust the tag" should pin
-the exact commit SHA the tag points at instead of the tag name:
-
-```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
-```
-
-which cannot be silently re-pointed the way a tag can. See
-[Releasing ps-cli](#releasing-ps-cli) below for the tagging convention.
-
-Still-planned, not yet implemented: per-target config (e.g. dev/test/prod side
-by side) instead of a single `service_url`, and Auth0-based OIDC login (OAuth
-2.0 Device Authorization Grant) for individual-operator identity once
-targeting a non-local PS Service instance.
+Auth0-based OIDC login (OAuth 2.0 Device Authorization Grant) for
+individual-operator identity, once targeting a non-local PS Service instance,
+is still planned, not yet implemented.
 
 #### Run from a repo checkout (local development)
 
 For repo-local development, or before a `ps-cli-v*` tag exists to install
 from, invoke it as a module, from the repo root, with PS Service already
 running (previous section) — this path stays fully supported alongside the
-installed one above:
+installed one described in the [user guide](./docs/artifacts/user-guide.md#ps-cli):
 
 ```bash
 uv run python -m ps_cli --version
@@ -353,16 +326,12 @@ dependency. `internal ingest` and real ingestion runs exercise the full
 pipeline, so PS Service needs FalkorDB and the LLM Interface configured (see
 below) — check `/ready` first if a command fails unexpectedly.
 
-By default `ps-cli` targets `http://127.0.0.1:8000`, matching PS Service's
-own default. Point it elsewhere with the `PS_CLI_SERVICE_URL` env var, or a
-`ps-cli.toml` (`service_url = "..."`) in your current directory — the env
-var wins over the file, which wins over the packaged default. This applies
+Target resolution (`PS_CLI_SERVICE_URL`, `ps-cli.toml`, named contexts) works
 the same way whether `ps-cli` was installed via `uv tool install` or invoked
-as a module from a checkout:
+as a module from a checkout — see the [user guide](./docs/artifacts/user-guide.md#ps-cli) for the
+full precedence order:
 
 ```bash
-PS_CLI_SERVICE_URL=http://127.0.0.1:9000 ps-cli regulations list
-# or, from a checkout:
 PS_CLI_SERVICE_URL=http://127.0.0.1:9000 uv run python -m ps_cli regulations list
 ```
 

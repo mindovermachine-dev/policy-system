@@ -28,13 +28,31 @@ from typing import TYPE_CHECKING, cast
 from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import PsServiceClient
+from ps_cli.modules.config_handlers import CONFIG_DISPATCH
 from ps_cli.modules.handlers import DISPATCH
 from ps_cli.modules.parser import build_parser
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Sequence
 
     from ps_cli.http_client import PsServiceClientProtocol
+
+
+def _resolve_client(
+    args: argparse.Namespace, client: PsServiceClientProtocol | None
+) -> PsServiceClientProtocol:
+    """Return `client` unchanged if injected, else build a real `PsServiceClient`.
+
+    Only reached for non-`config` commands (PLAN.md issue #56 §1 D8) -- `load_config()` is
+    never called otherwise. `args.context` (the `--context` flag's resolved value for this
+    invocation, absent via `SUPPRESS` when never given) feeds `load_config()`'s `context`
+    param, PLAN.md D3's case 2.
+    """
+    if client is not None:
+        return client
+    context = getattr(args, "context", None)
+    return PsServiceClient(load_config(context=context).service_url)
 
 
 def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -> int:
@@ -71,9 +89,19 @@ def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -
     command = cast("str", args.command)
 
     try:
-        active_client = client if client is not None else PsServiceClient(load_config().service_url)
-        handler = DISPATCH[command]
-        handler(args, active_client)
+        if command in CONFIG_DISPATCH:
+            # `config` subcommands (`set-context`/`use-context`/`list-contexts`) manage
+            # targets.toml/credentials.toml only -- they must never construct a
+            # PsServiceClient or call load_config() (PLAN.md issue #56 §1 D8, critical):
+            # load_config() can legitimately raise on a broken targets.toml, which must not
+            # block the very commands an operator would use to fix it, and PsServiceClient's
+            # constructor has an "insecure URL" stderr side effect that makes no sense for a
+            # command that never contacts PS Service.
+            CONFIG_DISPATCH[command](args)
+        else:
+            active_client = _resolve_client(args, client)
+            handler = DISPATCH[command]
+            handler(args, active_client)
     except PsCliError as error:
         print(str(error), file=sys.stderr)
         # `getattr(..., False)`, not `args.verbose`: the shared `-v` action uses

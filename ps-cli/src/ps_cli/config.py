@@ -1,11 +1,14 @@
 """ps-cli configuration: `CliConfig` and `load_config()`.
 
 Resolution precedence (highest wins): the `PS_CLI_SERVICE_URL` environment
-variable, then a project-root override file (`./ps-cli.toml`, resolved
-relative to the current working directory), then the packaged default
-config file shipped inside `ps_cli` (`default_config.toml`). See PLAN.md
-§1 D3 for the full rationale, including the "fail closed on an explicit
-but invalid value" convention this mirrors from `ps_service.config`.
+variable; the `context` param (`--context` flag), validated against
+`targets.toml`'s `[contexts]`; `targets.toml`'s `current_context` pointer,
+if set; otherwise a project-root override file (`./ps-cli.toml`, resolved
+relative to the current working directory) deep-merged over the packaged
+default config file shipped inside `ps_cli` (`default_config.toml`). See
+PLAN.md (issue #56) §1 D3 for the full rationale, including the "fail
+closed on an explicit but invalid value" convention this mirrors from
+`ps_service.config`.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from ps_cli.errors import assert_contract
+from ps_cli.targets import load_targets, resolve_config_dir
 
 _OVERRIDE_FILE_NAME = "ps-cli.toml"
 _ENV_VAR_NAME = "PS_CLI_SERVICE_URL"
@@ -80,6 +84,18 @@ def _deep_merge(base: dict[str, object], override: dict[str, object]) -> dict[st
     return merged
 
 
+def is_valid_service_url(url: str) -> bool:
+    """Return whether `url` is an http(s) URL with a non-empty hostname.
+
+    A pure, shared format check, extracted out of `_validate_service_url` so it
+    can be reused elsewhere (e.g. the `config set-context --url` argparse
+    `type=` callback) without duplicating the same `urlparse` logic. See
+    PLAN.md D5.
+    """
+    parsed = urlparse(url)
+    return parsed.scheme in _VALID_URL_SCHEMES and bool(parsed.hostname)
+
+
 def _validate_service_url(url: str, *, source: str) -> None:
     """Raise `PsCliError` if `url` is not an http(s) URL with a non-empty hostname.
 
@@ -87,15 +103,19 @@ def _validate_service_url(url: str, *, source: str) -> None:
     default) produced `url`, so the raised error points an operator at the
     layer to fix rather than just the bad value. See PLAN.md D5.
     """
-    parsed = urlparse(url)
     assert_contract(
-        contract=parsed.scheme in _VALID_URL_SCHEMES and bool(parsed.hostname),
+        contract=is_valid_service_url(url),
         msg=f"PS Service URL '{url}' is not a valid http(s) URL",
         hint=f"this value came from {source}",
     )
 
 
-def load_config(*, cwd: Path | None = None) -> CliConfig:
+def load_config(
+    *,
+    cwd: Path | None = None,
+    context: str | None = None,
+    config_dir: Path | None = None,
+) -> CliConfig:
     """Resolve ps-cli configuration.
 
     Precedence (highest wins): the `PS_CLI_SERVICE_URL` environment
@@ -104,14 +124,47 @@ def load_config(*, cwd: Path | None = None) -> CliConfig:
     working directory; overriding it is the constructor-injection seam
     tests use to avoid touching the real filesystem's actual cwd.
 
+    `context` (the `--context` CLI flag's resolved value for this
+    invocation) and `config_dir` (defaulting to `resolve_config_dir()`) are
+    the seam for `targets.toml`-driven named-context resolution. Resolution
+    precedence, highest wins (PLAN.md D3):
+
+    1. `PS_CLI_SERVICE_URL` env var (AC-BI-002).
+    2. `context` param, if given — validated against `targets.contexts`
+       *unconditionally* whenever given, even when the env var will end up
+       winning (AC-BI-009; CHANGES.md F5 closes a gap where an invalid
+       `--context` name would otherwise go silently unvalidated whenever
+       the env var was also set).
+    3. `targets.current_context`, if `targets.toml` exists and sets it
+       (AC-BI-001); raises if it names a context missing from `[contexts]`
+       (AC-BI-008).
+    4. Otherwise, falls through unchanged to today's project-override-file/
+       packaged-default chain (AC-BI-004) — no `targets.toml`, or one with
+       no `current_context` set and no `--context` given.
+
     Fails closed (raises `PsCliError`) on an explicitly empty
-    `PS_CLI_SERVICE_URL`, or on a resolved URL that is not a valid http(s)
-    URL, from whichever layer produced it — never silently substitutes a
-    different value. See PLAN.md D3.
+    `PS_CLI_SERVICE_URL`, an invalid/missing context name, or a resolved
+    URL that is not a valid http(s) URL, from whichever layer produced it —
+    never silently substitutes a different value. See PLAN.md D3.
     """
-    resolved_cwd = cwd if cwd is not None else Path.cwd()
-    override = _read_project_override(resolved_cwd)
-    merged = _deep_merge(_read_packaged_default(), override)
+    resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
+    targets = load_targets(resolved_config_dir)
+    contexts = targets.contexts if targets is not None else {}
+
+    # Case 2's validation happens unconditionally, ahead of the env-var check
+    # below, so an invalid `--context` name always errors — even when
+    # PS_CLI_SERVICE_URL is also set and would otherwise supply the
+    # resolved URL (CHANGES.md F5 / AC-BI-009's unconditional wording).
+    if context is not None:
+        assert_contract(
+            contract=context in contexts,
+            msg=f"context '{context}' is not defined in targets.toml",
+            hint=(
+                f"valid contexts: {', '.join(sorted(contexts))}"
+                if contexts
+                else "no contexts are defined in targets.toml"
+            ),
+        )
 
     env_value = os.environ.get(_ENV_VAR_NAME)
     if env_value is not None:
@@ -123,7 +176,30 @@ def load_config(*, cwd: Path | None = None) -> CliConfig:
         )
         service_url = env_value
         source = f"the {_ENV_VAR_NAME} environment variable"
+    elif context is not None:
+        # Already validated as a member of `contexts` above.
+        service_url = contexts[context]
+        source = f"the '{context}' context (targets.toml, via --context)"
+    elif targets is not None and targets.current_context is not None:
+        current_context = targets.current_context
+        assert_contract(
+            contract=current_context in contexts,
+            msg=(
+                f"current_context '{current_context}' (targets.toml) is not defined in [contexts]"
+            ),
+            hint=(
+                f"valid contexts: {', '.join(sorted(contexts))}"
+                if contexts
+                else "no contexts are defined in targets.toml"
+            ),
+        )
+        service_url = contexts[current_context]
+        source = f"the current context '{current_context}' (targets.toml)"
     else:
+        resolved_cwd = cwd if cwd is not None else Path.cwd()
+        override = _read_project_override(resolved_cwd)
+        merged = _deep_merge(_read_packaged_default(), override)
+
         # `merged` already deep-merged the override over the default, so
         # this same lookup returns the right value either way — only the
         # `source` label (for the error message below) depends on which

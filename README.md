@@ -28,7 +28,8 @@ Users never talk to PS Service directly. They use a client:
 - **Policy System plugin** — a Claude plugin bundling the `ps-qna` skill and its MCP
   connector. Read-only: ask compliance questions, get graph-grounded answers.
 - **ps-cli** — a command-line client driving PS Service's REST API: select and ingest
-  EU regulations from Cellar/ELI, ingest internal policies, check service health and readiness.
+  EU regulations from Cellar/ELI, ingest internal policies, check service health and
+  readiness. See the [user guide](./docs/artifacts/user-guide.md#ps-cli).
 - **Policy Editor** — authoring Policies, Standards, and Controls and linking them to
   Capabilities. Under exploration; not yet designed.
 

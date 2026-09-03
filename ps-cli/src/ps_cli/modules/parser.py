@@ -9,11 +9,19 @@ from __future__ import annotations
 import argparse
 import re
 
+from ps_cli.config import is_valid_service_url
+
 # Mirrors ps_service/api/models.py's CatalogIngestionRequest.celex
 # Field(pattern=r"^3\d{4}[A-Z]\d{4}$") verbatim -- vendored per L2 Project
 # Structure's "fully decoupled... vendors its own copy" rule, NOT imported.
 # Must be updated in lockstep if the server's pattern ever changes.
 _CELEX_PATTERN = re.compile(r"^3\d{4}[A-Z]\d{4}$")
+
+# A context name is always a safe bare TOML key by construction (alnum start,
+# alnum/`_`/`-` body, 1-64 chars) -- no quoting logic needed by `toml_writer`.
+# Not derived from any cited doc; a documented assumption, see PLAN.md (issue
+# #56) §1 D6 / §5 Risk 2.
+_CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
 def _celex_type(value: str) -> str:
@@ -34,6 +42,36 @@ def _celex_type(value: str) -> str:
         )
         raise argparse.ArgumentTypeError(msg)
     return trimmed_value
+
+
+def _context_name_type(value: str) -> str:
+    """`type=` callback for a context-name positional (`set-context`/`use-context`).
+
+    Format-validates against PLAN.md (issue #56) §1 D6's charset: alnum start,
+    alnum/`_`/`-` body, 1-64 characters total. Same `type=`-callback convention
+    as `_celex_type` -- raises `argparse.ArgumentTypeError` (exit 2), never a
+    post-parse `assert_contract`/`PsCliError` check.
+    """
+    if not _CONTEXT_NAME_PATTERN.fullmatch(value):
+        msg = (
+            f"'{value}' is not a valid context name (expected: 1-64 characters, "
+            "starting with a letter or digit, followed by letters, digits, '_', or '-')"
+        )
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+def _service_url_type(value: str) -> str:
+    """`type=` callback for `--url` (`config set-context`): format-validate at parse time.
+
+    Reuses `ps_cli.config.is_valid_service_url()` (PLAN.md (issue #56) §1 D5)
+    rather than a second `urlparse` check of its own, per L1 DRY (`level1-
+    coding-principles.md:55-58`).
+    """
+    if not is_valid_service_url(value):
+        msg = f"'{value}' is not a valid http(s) URL"
+        raise argparse.ArgumentTypeError(msg)
+    return value
 
 
 def _fixture_path_type(value: str) -> str:
@@ -60,18 +98,18 @@ def build_parser() -> argparse.ArgumentParser:
     operator can run `ps-cli` bare, or `ps-cli --version`, with no subcommand
     at all -- `run()` handles both before dispatch).
 
-    `-v`/`--verbose` is a shared flag (L2 `## ps-cli` "parent parsers for
-    flags shared across subcommands") available before or after any
-    subcommand, mirroring gh-tt's `parent_parser` reuse. `default=SUPPRESS`
-    on the shared action is deliberate, not incidental: `argparse`'s
-    subparser dispatch parses each subcommand into a *fresh* namespace and
-    then unconditionally copies every one of its attributes onto the parent
-    namespace (see `argparse.py::_SubParsersAction.__call__`) -- without
-    `SUPPRESS`, a leaf subparser's own unset `-v` (default `False`) would
-    silently clobber a `-v` already given before the subcommand name. `run()`
-    reads this via `getattr(args, "verbose", False)`, never `args.verbose`
-    directly, since no level of the parser setting it leaves the attribute
-    absent rather than `False`.
+    `-v`/`--verbose` and `--context <name>` (issue #56, PLAN.md §1 D7) are shared flags
+    (L2 `## ps-cli` "parent parsers for flags shared across subcommands") available
+    before or after any subcommand, mirroring gh-tt's `parent_parser` reuse.
+    `default=SUPPRESS` on both shared actions is deliberate, not incidental: `argparse`'s
+    subparser dispatch parses each subcommand into a *fresh* namespace and then
+    unconditionally copies every one of its attributes onto the parent namespace (see
+    `argparse.py::_SubParsersAction.__call__`) -- without `SUPPRESS`, a leaf subparser's
+    own unset `-v`/`--context` (default `False`/`None`) would silently clobber a value
+    already given before the subcommand name. `run()` reads these via
+    `getattr(args, "verbose", False)`/`getattr(args, "context", None)`, never
+    `args.verbose`/`args.context` directly, since no level of the parser setting them
+    leaves the attribute absent rather than its default.
     """
     verbose_parent_parser = argparse.ArgumentParser(add_help=False)
     verbose_parent_parser.add_argument(
@@ -80,6 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=argparse.SUPPRESS,
         help="Print the failure site on error.",
+    )
+    verbose_parent_parser.add_argument(
+        "--context",
+        default=argparse.SUPPRESS,
+        type=_context_name_type,
+        help=(
+            "Use this named context's PS Service URL for this invocation only "
+            "(overrides targets.toml's current_context; never persisted). "
+            "See PLAN.md (issue #56) §1 D3/D7."
+        ),
     )
 
     parser = argparse.ArgumentParser(
@@ -139,5 +187,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the fixture .json file, relative to PS Service's fixtures root.",
     )
     internal_ingest_parser.set_defaults(command="internal_ingest")
+
+    # `config` subcommand group (issue #56, PLAN.md §1 D7): manages named
+    # PS Service targets (contexts) in `targets.toml`. `set-context` (Slice 14),
+    # `use-context` (Slice 25), and `list-contexts` (Slice 28) are all wired here.
+    config_parser = top_level_subparsers.add_parser(
+        "config",
+        parents=[verbose_parent_parser],
+        help="Commands for managing named PS Service targets (contexts).",
+    )
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+
+    set_context_parser = config_subparsers.add_parser(
+        "set-context",
+        parents=[verbose_parent_parser],
+        help="Create or update a named context's PS Service URL.",
+    )
+    set_context_parser.add_argument(
+        "name",
+        type=_context_name_type,
+        help="The context name.",
+    )
+    set_context_parser.add_argument(
+        "--url",
+        required=True,
+        type=_service_url_type,
+        help="The PS Service URL for this context.",
+    )
+    set_context_parser.set_defaults(command="config_set_context")
+
+    use_context_parser = config_subparsers.add_parser(
+        "use-context",
+        parents=[verbose_parent_parser],
+        help="Select the named context used by every subsequent command.",
+    )
+    use_context_parser.add_argument(
+        "name",
+        type=_context_name_type,
+        help="The context name to select.",
+    )
+    use_context_parser.set_defaults(command="config_use_context")
+
+    list_contexts_parser = config_subparsers.add_parser(
+        "list-contexts",
+        parents=[verbose_parent_parser],
+        help="List every named context, marking the currently-selected one.",
+    )
+    list_contexts_parser.set_defaults(command="config_list_contexts")
 
     return parser

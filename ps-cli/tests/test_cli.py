@@ -10,11 +10,15 @@ import ast
 import socket
 from pathlib import Path
 
+import keyring.errors
 import pytest
 
 from ps_cli.cli import run
+from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.models import IngestionResult, RegulationsResult
+from ps_cli.modules.parser import build_parser
+from ps_cli.targets import load_targets
 
 _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / "__main__.py"
 
@@ -401,3 +405,197 @@ def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
     assert "internal_ingestion_not_implemented" in captured.err
     assert _INTERNAL_NOT_IMPLEMENTED_MESSAGE in captured.err
     assert "Traceback" not in captured.err
+
+
+# --- issue #56 Slice 24: CONFIG_DISPATCH split (PLAN.md §1 D8, critical) ------------------
+
+
+def test_run_config_set_context_never_constructs_ps_service_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`config set-context` never calls `load_config()` -- the critical D8 property.
+
+    `targets.toml`'s `current_context` names a context absent from `[contexts]` -- a
+    broken value that `load_config()` would raise `PsCliError` on (AC-BI-008). This test
+    succeeds anyway (exit 0) with a client fake whose every method raises if called, proving
+    both that `load_config()` was never reached (it would have raised) and that
+    `PsServiceClient`/the injected client were never touched -- `command in CONFIG_DISPATCH`
+    routed straight to `handle_config_set_context`, never the `else` branch (PLAN.md §4
+    Slice 24).
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "targets.toml").write_text(
+        'current_context = "missing"\n\n[contexts]\ndev = "http://127.0.0.1:8000"\n'
+    )
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"],
+        client=uncallable_client,
+    )
+
+    assert exit_code == 0
+    targets = load_targets(tmp_path)
+    assert targets is not None
+    assert targets.contexts["prod"] == "https://ps.example.com"
+
+
+def _raise_no_keyring_error(*args: object, **kwargs: object) -> None:
+    """Unconditionally raise `NoKeyringError` -- a stand-in for `keyring`'s module-level
+    `get_password`/`set_password`/`delete_password` functions when no OS backend exists.
+    """
+    del args, kwargs
+    raise keyring.errors.NoKeyringError("no backend")
+
+
+def test_run_config_set_context_prints_fallback_warning_on_stderr_via_real_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-011's CLI-level proof (CHANGES.md F4): the real dispatch chain, not just the
+    `CredentialStore` unit level, ends up warning on stderr.
+
+    Exercises `run()` -> `CONFIG_DISPATCH` -> `handle_config_set_context` ->
+    `build_credential_store` -> `KeyringCredentialStore` -> `FileCredentialStore` end to
+    end -- a wiring bug anywhere in that chain would fail this test even though every
+    narrower slice (15-23.5) still passes on its own. `set-context` is the only one of this
+    issue's three new commands that ever touches `CredentialStore` (D13's unconditional
+    `delete_credential`) -- `use-context`/`list-contexts` have no `credential_store` param
+    by design, so this single command's proof fully covers AC-BI-011's "every command that
+    reads or writes it" wording for this issue's scope.
+
+    **Deviation from CHANGES.md F4's literal mechanism text**, flagged here (see
+    `IMPL_SLICE_22-24.md` for the full writeup): F4 says to
+    `monkeypatch.setattr("ps_cli.credentials.keyring", _AlwaysNoKeyringErrorBackend())` --
+    replacing the whole `keyring` module-level symbol `credentials.py` imports. That
+    literal mechanism was tried first and found to break `KeyringCredentialStore`'s own
+    `except keyring.errors.PasswordDeleteError`/`except keyring.errors.KeyringError`
+    clauses: both `import keyring` and `import keyring.errors` in `credentials.py` bind the
+    *same* module-level name `keyring`, so replacing it with a fake object that has no
+    `.errors` attribute makes exception-type evaluation itself raise `AttributeError` the
+    first time `delete_credential()` runs -- confirmed by running the literal mechanism and
+    observing exactly this crash. The fix used here monkeypatches only the three
+    module-level *functions* `build_credential_store()`'s default `keyring_backend=keyring`
+    actually calls (`keyring.get_password`/`set_password`/`delete_password`) to raise
+    `NoKeyringError`, leaving the `keyring`/`keyring.errors` symbols themselves untouched --
+    same portable, no-real-environment-dependency intent F4 describes, without the crash.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"],
+        client=uncallable_client,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "no OS keyring backend available" in captured.err
+    assert str(tmp_path / "credentials.toml") in captured.err
+
+
+# --- issue #56 Slice 26: --context flag wiring + AC-BI-005 end-to-end proof --------------
+
+
+def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-BI-005's literal scenario: `set-context` then `use-context` drives resolution.
+
+    CHANGES.md F3: the only assertion mechanism used is a direct, independent
+    `load_config()` check -- deterministic, no network, no `PsServiceClient`
+    mocking/capture -- exactly what every real command's own `load_config()` call would
+    resolve to next. The two `run()` calls use an uncallable client fake (this is `config
+    set-context`/`use-context`, neither of which ever touches `PsServiceClient` -- D8).
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    set_exit_code = run(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"],
+        client=uncallable_client,
+    )
+    use_exit_code = run(["config", "use-context", "prod"], client=uncallable_client)
+
+    assert set_exit_code == 0
+    assert use_exit_code == 0
+    assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
+
+
+# --- issue #56 Slice 27: --context single-invocation override, AC-BI-006 end-to-end ------
+
+
+def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--context`'s resolved value overrides `current_context` for one call only.
+
+    Continues Slice 26's fixture: two contexts (`dev`, `prod`), `current_context="prod"`.
+    `load_config(context="dev", ...)` resolves to `dev`'s URL for that one call; a second,
+    independent `load_config()` call with no `context` param (simulating the next
+    invocation with no `--context` given) still resolves to `prod`'s URL -- proving the
+    override is per-invocation only, never persisted back into `targets.toml`.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    uncallable_client = _UnusedPsServiceClientMethods()
+    run(
+        ["config", "set-context", "dev", "--url", "http://ctx-dev:9000"],
+        client=uncallable_client,
+    )
+    run(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"],
+        client=uncallable_client,
+    )
+    run(["config", "use-context", "prod"], client=uncallable_client)
+
+    overridden = load_config(context="dev", config_dir=tmp_path)
+    unoverridden = load_config(config_dir=tmp_path)
+
+    assert overridden.service_url == "http://ctx-dev:9000"
+    assert unoverridden.service_url == "https://ps.example.com"
+
+
+def test_parser_context_flag_before_subcommand_parses_correctly() -> None:
+    """`ps-cli --context dev regulations list` (flag before subcommand) parses `args.context`.
+
+    The issue's own literal example (PLAN.md §1 D7's shared-parent-parser `SUPPRESS`
+    mechanism, §0.4) -- proves the flag survives the subparser dispatch's namespace copy
+    when given before the subcommand name, not only after it.
+    """
+    args = build_parser().parse_args(["--context", "dev", "regulations", "list"])
+
+    assert args.context == "dev"
+
+
+# --- issue #56 Slice 28: list-contexts, real dispatch (AC-BI-007 end-to-end proof) -------
+
+
+def test_run_config_list_contexts_never_constructs_ps_service_client_and_prints_contexts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`config list-contexts` reaches `handle_config_list_contexts()` via the real
+    `run()` -> `CONFIG_DISPATCH` chain (AC-BI-007), never constructing a `PsServiceClient`
+    -- mirroring Slice 24's `set-context` proof (D8). A broken `current_context` (naming a
+    context absent from `[contexts]`, which `load_config()` would raise on -- AC-BI-008)
+    is deliberately present, proving `list-contexts` stays usable exactly when it is most
+    needed: diagnosing a broken `targets.toml`.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "targets.toml").write_text(
+        'current_context = "missing"\n\n'
+        '[contexts]\ndev = "http://ctx-dev:9000"\nprod = "https://ps.example.com"\n'
+    )
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(["config", "list-contexts"], client=uncallable_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "dev" in captured.out
+    assert "http://ctx-dev:9000" in captured.out
+    assert "prod" in captured.out
+    assert "https://ps.example.com" in captured.out
