@@ -2,6 +2,11 @@
 set -euo pipefail
 
 # Python quality gates (issue #48) — fail the commit on any violation.
-uv run pre-commit run --all-files
-
-gh insitu run trunk-worthy
+# Scoped to staged files (no --all-files): ruff-check/ruff-format only touch
+# what's staged; basedpyright stays project-wide regardless (pass_filenames:
+# false in .pre-commit-config.yaml — strict mode needs whole-project context).
+# `gh insitu run trunk-worthy` duplicated this same ruff/basedpyright pass
+# plus markdownlint/prettier/cspell/actionlint/pip-audit on every commit; it
+# already runs in CI on push/PR (on_dev.yml, on_ready.yml), so it's dropped
+# here rather than paid for twice.
+uv run pre-commit run
