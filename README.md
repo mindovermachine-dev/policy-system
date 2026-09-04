@@ -40,9 +40,11 @@ Users never talk to PS Service directly. They use a client:
 Deploying Policy System to try it out on your own laptop — prerequisites, the
 step-by-step walkthrough, current implementation status of each step, and
 troubleshooting — is documented in the user guide's
-[Local Test](./docs/artifacts/user-guide.md#local-test) section. Most of it does
-not work yet; it is tracked as
-[#59](https://github.com/mindovermachine-dev/policy-system/issues/59).
+[Local Test](./docs/artifacts/user-guide.md#local-test) section. Steps 1–5 (cluster,
+chart install, and seeding the graph from the curated catalog) work today; steps 6–7
+(the Policy System plugin) do not yet — see the section's own
+[Status of this path](./docs/artifacts/user-guide.md#status-of-this-path) table, tracked
+as [#53](https://github.com/mindovermachine-dev/policy-system/issues/53).
 
 **To actually run the system today**, follow [CONTRIBUTING.md](./CONTRIBUTING.md)
 Option A or B — a devcontainer or local venv, with FalkorDB in a Podman container and

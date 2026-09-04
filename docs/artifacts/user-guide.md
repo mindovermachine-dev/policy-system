@@ -44,6 +44,7 @@ role-oriented view.
   - [Troubleshooting](#troubleshooting)
 - [Policy Editor](#policy-editor)
 - [Configuration reference](#configuration-reference)
+- [Operations: Backup & Restore](#operations-backup--restore)
 - [Troubleshooting / FAQ](#troubleshooting--faq)
 - [Glossary](#glossary)
 
@@ -78,7 +79,7 @@ does not exist yet.
 | 2. Install Podman           | ✅ Works                                                          | —                                                                                                                                                                                                                     |
 | 3. Create the local cluster | ✅ Works                                                          | —                                                                                                                                                                                                                     |
 | 4. Deploy Policy System     | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 5. Load regulations         | ❌ No curated-restore path into a deployed cluster                | [#66](https://github.com/mindovermachine-dev/policy-system/issues/66)                                                                                                                                                 |
+| 5. Load regulations         | ✅ Works                                                          | —                                                                                                                                                                                                                     |
 | 6. Install the plugin       | ❌ Plugin does not exist; needs a remote MCP endpoint             | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
 | 7. Ask a question           | ❌ Depends on 3–6                                                 | —                                                                                                                                                                                                                     |
 
@@ -195,23 +196,27 @@ Every operator-facing key in `charts/policy-system/values.yaml` (local-test defa
 | **`llm.azure.apiKey`** | `""` | **(AC-BI-003)** Azure API key. Never set a real value here in a committed file — pass via `--set` or use `llm.existingSecret`. Rendered into a Kubernetes `Secret` (`templates/secret.yaml`), never a ConfigMap or plaintext env var. |
 | **`llm.azure.apiBase`** | `""` | **(AC-BI-003)** Azure API base URL. Same secret-backed handling as `apiKey`. |
 | `llm.ollama.apiBase` | `"http://host.containers.internal:11434"` | `OLLAMA_API_BASE` — set only when `llm.provider=ollama` and non-empty. |
-| **`falkordb.persistence.enabled`** | `false` (`true` in prod) | **(AC-BI-008)** Toggles FalkorDB storage between an `emptyDir` (default, ephemeral) and a `PersistentVolumeClaim`. No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
+| **`falkordb.persistence.enabled`** | `true` (both profiles) | **(AC-BI-008)** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral — data lost on pod restart). No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
 | `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
 | `falkordb.browser.enabled` | `true` (`false` in prod) | **(AC-BI-009)** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
 | `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3000` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
 | `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `latest` | FalkorDB image. |
 
-Immediately after installing, `falkordb.persistence.enabled` (data survives a pod
-restart) and the `llm.*` keys (which provider, and how its credentials reach the pod)
-are the two settings worth double-checking against your intended setup.
+Immediately after installing, `falkordb.persistence.enabled` (on by default — data
+survives a pod restart) and the `llm.*` keys (which provider, and how its credentials
+reach the pod) are the two settings worth double-checking against your intended setup.
+Persistent storage means the PVC needs a StorageClass available in your cluster; a
+default `kind` cluster provisions one automatically, so this works out of the box locally
+too. See [Operations: Backup & Restore](#operations-backup--restore) for backing up that
+volume once persistence is on.
 
 #### Example: `helm upgrade`
 
 ```bash
-# Example: turn on persistent storage for FalkorDB after initial install
+# Example: disable persistent storage for a disposable evaluation run
 helm upgrade policy-system ./charts/policy-system \
   --set llm.provider=ollama \
-  --set falkordb.persistence.enabled=true \
+  --set falkordb.persistence.enabled=false \
   --wait
 ```
 
@@ -224,24 +229,36 @@ you changed a FalkorDB-only value.
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
 ```bash
-ps catalog list                              # curated instruments available to restore
-ps catalog restore --instrument cra          # Cyber Resilience Act
-ps catalog restore --instrument baseline     # baseline engineering practices
-ps regulations list                          # confirm what landed
+ps-cli catalog list                    # curated instruments available to restore (id, title, source_type/jurisdiction)
+ps-cli catalog restore <instrument_id> # e.g. `ps-cli catalog restore CRA-1.0` — the id `catalog list` just printed
+ps-cli regulations list                # confirm what landed (CELEX + title)
 ```
 
-Curated instruments are pre-ingested graphs published in a git repository and restored as a
-data load — no LLM provider needed, and seconds rather than minutes. Regulations outside the
-curated set are still ingested live with `ps regulations ingest --celex ...`, which does
-require a configured LLM provider.
+`catalog restore` takes the instrument's id as a positional argument, not a `--instrument`
+flag. Curated instruments are pre-ingested graphs published in the `curated-content` git
+folder and restored as a data load, seconds rather than minutes, with no LLM provider or
+extraction run. Regulations outside the curated set are still ingested live with
+`ps-cli regulations ingest <celex>`, which does require a configured LLM provider.
+
+If `ps-cli` was installed via `uv tool install` with no local checkout, fetch
+`curated-content/` before running `catalog list`/`catalog restore` — e.g.
+`git clone --depth 1 --filter=blob:none --sparse https://github.com/mindovermachine-dev/policy-system && cd policy-system && git sparse-checkout set curated-content`,
+then either run `ps-cli` from inside that clone or set `PS_CLI_CURATED_REPO_PATH` to its
+`curated-content` path.
 
 Until something is seeded, the system answers questions with an explicit "graph is unseeded"
 error rather than an empty result.
 
-> ❌ **Not yet implemented.** No curated-restore path exists — today's only seeding route
-> (`tools/graph-ingestion/load_all.sh`) is a repo-local script connecting straight to
-> FalkorDB, requiring a checkout, a virtualenv, and test fixtures. The curated
-> catalog, export format, restore commands, and unseeded-graph error are all [#66](https://github.com/mindovermachine-dev/policy-system/issues/66).
+> ℹ️ **Curated content ships as an empty scaffold today.** The `curated-content/` folder,
+> its export/restore mechanism, `ps-cli`'s `catalog list`/`catalog restore` commands, and
+> the unseeded-graph error above are all implemented ([#66](https://github.com/mindovermachine-dev/policy-system/issues/66)) — verified end to end against a real PS Service/FalkorDB with no LLM
+> provider configured, including a real question answered correctly over the MCP transport
+> against restored content. What is **not** yet done is populating `curated-content/` with
+> real per-instrument artifacts for CRA/GDPR/NIS2 and the internal Engineering Practices
+> baseline — a one-time project-maintainer step, run once per instrument via
+> `tools/curated-export/export_instrument.py` against an already-ingested source, tracked
+> separately from this issue. Until that lands, `catalog list` returns no instruments on a
+> plain checkout of this repository.
 
 ### 6. Install the Policy System plugin
 
@@ -284,7 +301,7 @@ If the skill does not engage on its own, ask for it by name: _"Use the ps-qna sk
 | Service unreachable                    | `ps health` — reports health, readiness, and which dependency is failing ([#68](https://github.com/mindovermachine-dev/policy-system/issues/68)) |
 | Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
 | `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — usually FalkorDB or an LLM provider is unreachable                                                            |
-| Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps regulations list`                                                                                  |
+| Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
 | Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
 
 ---
@@ -431,6 +448,8 @@ Global flags, usable before or after any subcommand:
 | `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). No FalkorDB/LLM dependency. |
 | `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli internal ingest <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
+| `ps-cli catalog list` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
+| `ps-cli catalog restore <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
 | `ps-cli config list-contexts` | — | List every named context, marking the current one. |
@@ -519,6 +538,31 @@ Authoring Policies, Standards, and Controls, and linking them to Capabilities.
 
 This table covers `ps-cli` only — a row for the Policy System plugin's MCP endpoint
 configuration will be added once it exists ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)).
+
+---
+
+## Operations: Backup & Restore
+
+FalkorDB persists to a `PersistentVolumeClaim` when `falkordb.persistence.enabled=true`
+(the default in both the local-test and production profiles — see
+[Chart values reference](#chart-values-reference)). With persistence on, back up and
+restore the whole deployment using standard, unmodified tooling — no Policy System-specific
+backup feature exists or is planned:
+
+- **Volume snapshot (recommended for production):** snapshot the FalkorDB PVC using your
+  cluster's `VolumeSnapshot` API, a cloud provider's disk-snapshot mechanism, or a tool like
+  [Velero](https://velero.io/). Restore by provisioning a new PVC from that snapshot before
+  FalkorDB starts.
+- **Redis-native (`BGSAVE`):** trigger a snapshot (`redis-cli -h <falkordb-host> BGSAVE`, or
+  rely on FalkorDB's automatic RDB snapshotting) and copy the resulting `dump.rdb` out of the
+  volume. Restore by placing that file into a fresh PVC before FalkorDB's first start — Redis
+  loads an existing RDB file on startup.
+
+This backs up **everything** in the graph — every ingested regulation, internal policy, and
+company-graph merge state. It is a different concern from
+[#66](https://github.com/mindovermachine-dev/policy-system/issues/66)'s curated-catalog
+restore, which seeds public reference content into any deployment (fresh or established)
+without needing this backup/restore machinery at all.
 
 ---
 

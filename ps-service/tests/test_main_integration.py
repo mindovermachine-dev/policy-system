@@ -70,6 +70,9 @@ from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -443,7 +446,8 @@ class _FakeQueryResult:
 
 
 class _FakeGraphHandle:
-    """Satisfies `GraphHandle` structurally: `query()` always returns the
+    """Satisfies `GraphHandle` structurally: `query()` reports itself as
+    seeded (D11) for `_SEED_CHECK_QUERY`, and otherwise always returns the
     scripted `_FakeQueryResult`.
     """
 
@@ -451,6 +455,8 @@ class _FakeGraphHandle:
         self._result = result
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        if q == _SEED_CHECK_QUERY:
+            return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         return self._result
 
 

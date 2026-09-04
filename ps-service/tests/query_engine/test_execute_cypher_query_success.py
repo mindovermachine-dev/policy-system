@@ -20,7 +20,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
-from ps_service.query_engine.cypher_query import execute_cypher_query
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+    execute_cypher_query,
+)
 from ps_service.query_engine.models import QueryResult
 
 if TYPE_CHECKING:
@@ -46,14 +49,21 @@ class _ScriptedQueryResult:
 
 
 class _ScriptedGraphHandle:
-    """Satisfies `GraphHandle` structurally -- always returns the one
-    scripted `_ScriptedQueryResult` regardless of the query text.
+    """Satisfies `GraphHandle` structurally -- reports itself as seeded
+    (D11) for `_SEED_CHECK_QUERY`, and returns the one scripted
+    `_ScriptedQueryResult` for the caller's own query. This module tests the
+    success-path shape mapping, not the unseeded-graph guard (see
+    `test_execute_cypher_query_unseeded.py`), so the graph here must always
+    look seeded regardless of what the scripted result itself contains
+    (including the empty-result-set/falsy-header edge cases below).
     """
 
     def __init__(self, result: _ScriptedQueryResult) -> None:
         self._result = result
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
+        if q == _SEED_CHECK_QUERY:
+            return _ScriptedQueryResult(header=[[0, "c"]], result_set=[[1]])
         return self._result
 
 

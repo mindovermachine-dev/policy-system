@@ -1,0 +1,29 @@
+[
+  {
+    "instrument_id": "CRA-1.0",
+    "celex": "32024R2847",
+    "title": "Cyber Resilience Act",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "short_name": "CRA",
+    "version": "1.0"
+  },
+  {
+    "instrument_id": "GDPR-1.0",
+    "celex": "32016R0679",
+    "title": "General Data Protection Regulation",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "short_name": "GDPR",
+    "version": "1.0"
+  },
+  {
+    "instrument_id": "NIS2-1.0",
+    "celex": "32022L2555",
+    "title": "NIS2 Directive",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "short_name": "NIS2",
+    "version": "1.0"
+  }
+]

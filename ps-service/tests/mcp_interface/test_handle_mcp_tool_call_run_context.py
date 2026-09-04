@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING
 
 from ps_service.logging.run_context import current_run_id
 from ps_service.mcp_interface import mcp_server
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,7 +42,10 @@ class _FakeQueryResult:
 
 class _RunIdRecordingGraphHandle:
     """Satisfies `GraphHandle` structurally. Records the `run_id` bound in
-    the calling context every time `query()` is invoked.
+    the calling context every time `query()` is invoked -- now twice per
+    `handle_mcp_tool_call` call (D11's seed check, then the caller's own
+    query), both under the same bound context. Reports itself as seeded
+    for `_SEED_CHECK_QUERY` so the caller's own query still runs.
     """
 
     def __init__(self) -> None:
@@ -47,6 +53,8 @@ class _RunIdRecordingGraphHandle:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.seen_run_ids.append(current_run_id())
+        if q == _SEED_CHECK_QUERY:
+            return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         return _FakeQueryResult(header=[[0, "n"]], result_set=[["x"]])
 
 
@@ -57,10 +65,11 @@ def test_run_id_bound_and_visible_to_delegate(make_emitter: MakeEmitter) -> None
     mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
     emitter.flush()
 
-    assert len(fake.seen_run_ids) == 1
+    assert len(fake.seen_run_ids) == 2
     run_id = fake.seen_run_ids[0]
     assert isinstance(run_id, str)
     assert run_id != ""
+    assert fake.seen_run_ids[1] == run_id
 
 
 def test_two_calls_get_distinct_run_ids(make_emitter: MakeEmitter) -> None:
@@ -71,8 +80,11 @@ def test_two_calls_get_distinct_run_ids(make_emitter: MakeEmitter) -> None:
     mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
     emitter.flush()
 
-    assert len(fake.seen_run_ids) == 2
-    assert fake.seen_run_ids[0] != fake.seen_run_ids[1]
+    assert len(fake.seen_run_ids) == 4
+    first_call_run_id, second_call_run_id = fake.seen_run_ids[0], fake.seen_run_ids[2]
+    assert fake.seen_run_ids[1] == first_call_run_id
+    assert fake.seen_run_ids[3] == second_call_run_id
+    assert first_call_run_id != second_call_run_id
 
 
 def test_emitted_log_entry_carries_bound_run_id(

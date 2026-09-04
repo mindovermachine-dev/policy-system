@@ -27,6 +27,9 @@ from ps_service.api.errors import (
     InternalIngestionNotImplementedError,
     InternalSeedValidationError,
     PipelineStageError,
+    RequestBodyTooLargeError,
+    RestoreArtifactRejectedError,
+    RestoreStageFailedError,
 )
 
 if TYPE_CHECKING:
@@ -84,6 +87,8 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     InternalSeedValidationError,
     InternalIngestionNotImplementedError,
     IngestionConfigIncompleteError,
+    RequestBodyTooLargeError,
+    RestoreArtifactRejectedError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -182,6 +187,16 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "ingestion_config_incomplete",
         status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
+    (
+        RestoreArtifactRejectedError,
+        "restore_artifact_rejected",
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+    ),
+    (
+        RequestBodyTooLargeError,
+        "request_body_too_large",
+        status.HTTP_413_CONTENT_TOO_LARGE,
+    ),
 )
 
 
@@ -219,6 +234,25 @@ async def _handle_pipeline_stage_error(request: Request, exc: Exception) -> JSON
     )
 
 
+async def _handle_restore_stage_failed_error(request: Request, exc: Exception) -> JSONResponse:
+    """Shape a ``RestoreStageFailedError`` body: HTTP 502, naming the failing stage (AC-BI-008)."""
+    run_id = _bound_run_id(request)
+    if not isinstance(exc, RestoreStageFailedError):  # defensive — registered for this type only
+        return _json(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            _error_body(code=_GENERIC_500_CODE, message=_GENERIC_500_MESSAGE, run_id=run_id),
+        )
+    return _json(
+        status.HTTP_502_BAD_GATEWAY,
+        _error_body(
+            code="restore_stage_failed",
+            message=_scrub_text(exc.reason)[:_REASON_MAX_LEN],
+            run_id=run_id,
+            failing_stage=exc.stage,
+        ),
+    )
+
+
 async def _handle_request_validation_error(request: Request, exc: Exception) -> JSONResponse:
     """Shape a ``RequestValidationError`` body: HTTP 422, generic message, no field detail."""
     del exc  # the raw errors can echo submitted values / paths — never surfaced
@@ -246,11 +280,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     Called from ``ps_service.main.create_app``. Registers one handler per
     whitelisted ``ApiError`` subclass, one for ``PipelineStageError`` (502), one
-    for ``RequestValidationError`` (422), and a catch-all ``Exception`` handler
-    (generic 500). Status map: ``CatalogIdentifierNotFoundError`` 404,
-    ``FixturePathError`` 400, ``InternalSeedValidationError`` 422,
+    for ``RestoreStageFailedError`` (502), one for ``RequestValidationError``
+    (422), and a catch-all ``Exception`` handler (generic 500). Status map:
+    ``CatalogIdentifierNotFoundError`` 404, ``FixturePathError`` 400,
+    ``InternalSeedValidationError`` 422,
     ``InternalIngestionNotImplementedError`` 501,
-    ``IngestionConfigIncompleteError`` 503, ``PipelineStageError`` 502,
+    ``IngestionConfigIncompleteError`` 503,
+    ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
+    ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
     ``RequestValidationError`` 422, everything else 500.
 
     Args:
@@ -259,5 +296,6 @@ def register_exception_handlers(app: FastAPI) -> None:
     for exc_type, code, status_code in _API_ERROR_SPECS:
         app.add_exception_handler(exc_type, _make_verbatim_handler(code, status_code))
     app.add_exception_handler(PipelineStageError, _handle_pipeline_stage_error)
+    app.add_exception_handler(RestoreStageFailedError, _handle_restore_stage_failed_error)
     app.add_exception_handler(RequestValidationError, _handle_request_validation_error)
     app.add_exception_handler(Exception, _handle_unexpected_exception)

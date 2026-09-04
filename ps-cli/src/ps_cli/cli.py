@@ -29,7 +29,7 @@ from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import PsServiceClient
 from ps_cli.modules.config_handlers import CONFIG_DISPATCH
-from ps_cli.modules.handlers import DISPATCH
+from ps_cli.modules.handlers import DISPATCH, NO_CLIENT_DISPATCH
 from ps_cli.modules.parser import build_parser
 
 if TYPE_CHECKING:
@@ -53,6 +53,37 @@ def _resolve_client(
         return client
     context = getattr(args, "context", None)
     return PsServiceClient(load_config(context=context).service_url)
+
+
+def _dispatch_command(
+    command: str, args: argparse.Namespace, client: PsServiceClientProtocol | None
+) -> None:
+    """Route `command` to the matching dispatch table, resolving a client only if needed.
+
+    Three mutually exclusive routes, in priority order: `CONFIG_DISPATCH`
+    (`config` subcommands manage `targets.toml`/`credentials.toml` only --
+    they must never construct a `PsServiceClient` or call `load_config()`,
+    PLAN.md issue #56 §1 D8, critical: `load_config()` can legitimately raise
+    on a broken `targets.toml`, which must not block the very commands an
+    operator would use to fix it, and `PsServiceClient`'s constructor has an
+    "insecure URL" stderr side effect that makes no sense for a command that
+    never contacts PS Service); `NO_CLIENT_DISPATCH` (`catalog_list`, issue
+    #66 D13, reads the local curated-content repo only -- like `config_*`
+    above it must never construct a `PsServiceClient`, but unlike `config_*`
+    its own dispatch adapter still resolves `curated_repo_path` via
+    `load_config()` internally; `.service_url` is simply never touched);
+    otherwise `DISPATCH`, resolving `client` via `_resolve_client` first.
+    Extracted out of `run()` to keep its own cyclomatic complexity under
+    `level1-coding-principles.md`'s cap of 8.
+    """
+    if command in CONFIG_DISPATCH:
+        CONFIG_DISPATCH[command](args)
+    elif command in NO_CLIENT_DISPATCH:
+        NO_CLIENT_DISPATCH[command](args)
+    else:
+        active_client = _resolve_client(args, client)
+        handler = DISPATCH[command]
+        handler(args, active_client)
 
 
 def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -> int:
@@ -89,19 +120,7 @@ def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -
     command = cast("str", args.command)
 
     try:
-        if command in CONFIG_DISPATCH:
-            # `config` subcommands (`set-context`/`use-context`/`list-contexts`) manage
-            # targets.toml/credentials.toml only -- they must never construct a
-            # PsServiceClient or call load_config() (PLAN.md issue #56 §1 D8, critical):
-            # load_config() can legitimately raise on a broken targets.toml, which must not
-            # block the very commands an operator would use to fix it, and PsServiceClient's
-            # constructor has an "insecure URL" stderr side effect that makes no sense for a
-            # command that never contacts PS Service.
-            CONFIG_DISPATCH[command](args)
-        else:
-            active_client = _resolve_client(args, client)
-            handler = DISPATCH[command]
-            handler(args, active_client)
+        _dispatch_command(command, args, client)
     except PsCliError as error:
         print(str(error), file=sys.stderr)
         # `getattr(..., False)`, not `args.verbose`: the shared `-v` action uses

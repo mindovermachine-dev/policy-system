@@ -613,6 +613,94 @@ def test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable(
     )
 
 
+def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
+    """Poll `/catalog` through the published port until it answers 200, then return it.
+
+    New Slice 6.8 (CHANGES.md MA3): `GET /catalog` needs no FalkorDB/LLM
+    dependency (AC-BI-011), so this polls the same way `_wait_for_liveness`
+    polls `/health`, just against `/catalog` instead.
+    """
+    deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
+    last_failure = "no response"
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(f"{service.base_url}/catalog", timeout=_HTTP_TIMEOUT_SECONDS)
+        except httpx.HTTPError as exc:
+            last_failure = repr(exc)
+        else:
+            if response.status_code == _HTTP_OK:
+                return response
+            last_failure = f"HTTP {response.status_code}: {response.text}"
+        time.sleep(_POLL_INTERVAL_SECONDS)
+    pytest.fail(
+        f"{service.base_url}/catalog never answered {_HTTP_OK} within "
+        f"{_LIVENESS_DEADLINE_SECONDS}s (last: {last_failure}):\n"
+        f"{_container_logs(cli, service.name)}"
+    )
+
+
+@pytest.fixture(scope="module")
+def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_RunningService]:
+    """Start the image under test standalone -- no FalkorDB network at all.
+
+    New Slice 6.8: `GET /catalog` (AC-BI-011) is provably FalkorDB/LLM-free,
+    so this deliberately does *not* reuse `smoke_service` (which wires a
+    FalkorDB container) -- a bare, single-container start is the whole point
+    of the proof: the route answers with real content with no dependency
+    stack running at all.
+    """
+    name = _unique("ps-smoke-catalog")
+    port = _free_host_port()
+    result = _run_container_cli(
+        container_cli,
+        [
+            "run",
+            "--detach",
+            "--name",
+            name,
+            "--publish",
+            f"127.0.0.1:{port}:{_SERVICE_CONTAINER_PORT}",
+            image_ref,
+        ],
+        timeout=_RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"starting {image_ref} as {name} failed (exit {result.returncode}):\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    service = _RunningService(name=name, base_url=f"http://127.0.0.1:{port}")
+    try:
+        _wait_for_liveness(container_cli, service)
+        yield service
+    finally:
+        _remove_container(container_cli, name)
+
+
+def test_get_catalog_serves_real_packaged_content_from_inside_the_built_image(
+    container_cli: str, catalog_only_service: _RunningService
+) -> None:
+    """New Slice 6.8 (CHANGES.md MA3): `GET /catalog` serves real, non-empty content
+    from *inside a built container image* -- not a `tmp_path` fixture.
+
+    This is the exact proof FLAWS.md's MA3 verdict required: `catalog.json`'s
+    packaged copy lives at `ps_service/api/curated_content/catalog.json`,
+    already inside the Dockerfile's allow-listed build context
+    (`ps-service/src`) -- unlike the repo-root `curated-content/` tree, which
+    `.dockerignore`'s deny-all-then-allow-list excludes entirely. Without
+    MA3's fix, this route would 500/serve an empty listing inside a real
+    deployed image even though every fast, in-process test (`tests/api/
+    test_routes_catalog.py`) would still pass, since those never touch a
+    built image at all.
+    """
+    response = _wait_for_catalog(container_cli, catalog_only_service)
+
+    body = response.json()
+    assert body["instruments"], "GET /catalog returned an empty listing from inside the image"
+    instrument_ids = {item["instrument_id"] for item in body["instruments"]}
+    assert instrument_ids == {"CRA-1.0", "GDPR-1.0", "NIS2-1.0"}
+
+
 def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_unreachable(
     container_cli: str, image_ref: str, smoke_network: str
 ) -> None:

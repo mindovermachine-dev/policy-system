@@ -23,6 +23,19 @@ _CELEX_PATTERN = re.compile(r"^3\d{4}[A-Z]\d{4}$")
 # #56) §1 D6 / §5 Risk 2.
 _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
+# A curated instrument id (e.g. "CRA-1.0", `curated-content/catalog.json`'s real entries,
+# D1) is not constrained by any existing server-side pattern -- `RestorationManifestPayload
+# .instrument_id`/`CatalogInstrumentEntry.instrument_id` (ps_service/api/models.py) are both
+# bare `Field(min_length=1)`, no `pattern=`. This charset is instead this module's own
+# documented assumption, chosen because `catalog restore <instrument_id>` later uses the
+# value to build a local filesystem path (`catalog_repo.read_artifact`, Slice 7.1) -- alnum
+# start, alnum/`_`/`-`/`.` body, no `/`, matching every real `catalog.json` entry
+# (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal payload at parse
+# time (L1 "Fail Fast at Boundaries" -- the first of two defense-in-depth layers for this
+# security-critical filesystem-path sink; `read_artifact`'s own `instrument_dir.is_dir()`
+# check is the second).
+_INSTRUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
 
 def _celex_type(value: str) -> str:
     """`type=` callback for the `celex` positional: format-validate at parse time.
@@ -70,6 +83,26 @@ def _service_url_type(value: str) -> str:
     """
     if not is_valid_service_url(value):
         msg = f"'{value}' is not a valid http(s) URL"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+def _instrument_id_type(value: str) -> str:
+    """`type=` callback for the `instrument_id` positional (`catalog restore`).
+
+    Format-validates at parse time -- same `type=`-callback convention as
+    `_celex_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
+    charset (which already excludes `/`); the redundant explicit `..`
+    substring check below is defense-in-depth documentation, not load-
+    bearing on its own -- see `_INSTRUMENT_ID_PATTERN`'s own comment for why
+    this matters (the value later builds a local filesystem path).
+    """
+    if not _INSTRUMENT_ID_PATTERN.fullmatch(value) or ".." in value:
+        msg = (
+            f"'{value}' is not a valid instrument id (expected: alphanumeric, "
+            "starting with a letter or digit, followed by letters, digits, "
+            "'_', '-', or '.', e.g. 'CRA-1.0')"
+        )
         raise argparse.ArgumentTypeError(msg)
     return value
 
@@ -234,5 +267,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="List every named context, marking the currently-selected one.",
     )
     list_contexts_parser.set_defaults(command="config_list_contexts")
+
+    # `catalog` subcommand group (issue #66, D13): the curated-content repo's
+    # local catalog. `list` reads `curated_repo_path`'s on-disk `catalog.json`
+    # directly and never contacts PS Service at all (like `config`'s commands,
+    # it skips `_resolve_client`/`load_config().service_url` in `cli.run()`);
+    # `restore` does call PS Service (`POST /restorations`), reusing
+    # `_resolve_client` exactly like `regulations ingest`.
+    catalog_parser = top_level_subparsers.add_parser(
+        "catalog",
+        parents=[verbose_parent_parser],
+        help="Commands for the curated instrument catalog.",
+    )
+    catalog_subparsers = catalog_parser.add_subparsers(dest="catalog_command", required=True)
+
+    catalog_list_parser = catalog_subparsers.add_parser(
+        "list",
+        parents=[verbose_parent_parser],
+        help=(
+            "List every curated instrument in the local curated-content repo "
+            "(no PS Service connection needed)."
+        ),
+    )
+    catalog_list_parser.set_defaults(command="catalog_list")
+
+    catalog_restore_parser = catalog_subparsers.add_parser(
+        "restore",
+        parents=[verbose_parent_parser],
+        help="Restore one curated instrument's artifact into PS Service.",
+    )
+    catalog_restore_parser.add_argument(
+        "instrument_id",
+        type=_instrument_id_type,
+        help="The curated instrument's id, e.g. 'CRA-1.0'.",
+    )
+    catalog_restore_parser.set_defaults(command="catalog_restore")
 
     return parser

@@ -14,6 +14,16 @@ Mirrors `ps_service/llm_interface/completion.py`'s `route_completion` shape
 caller-supplied Cypher query can embed values that may carry PII (L1:
 "never log secrets, tokens, or personally identifiable information").
 `_log`'s `extra` therefore carries only `row_count`, and only on success.
+
+Batch 8 (PLAN.md D11, AC-BI-013/AC-BI-014/AC-BI-015): `_is_graph_seeded`
+issues one cheap, generic, label-agnostic `count(n)` read -- ordered after
+the (cheap, no-I/O) write-clause guard above and before the caller's own
+query is ever sent to FalkorDB -- so a totally unseeded graph raises
+`GraphUnseededError` (a new `outcome="unseeded"` log branch) instead of
+running the caller's query at all. A seeded graph's own legitimate
+zero-row answer is unaffected: it still reaches the normal
+`{columns, rows: [], row_count: 0}` shape via the existing success path
+below.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from typing import TYPE_CHECKING, cast
 
 from ps_service.logging.facade import emit_log_entry
 from ps_service.query_engine.errors import (
+    GraphUnseededError,
     QueryEngineExecutionError,
     WriteClauseRejectedError,
 )
@@ -45,6 +56,16 @@ _WRITE_CLAUSE_REJECTION_MESSAGE = (
     "(CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH). Not executed."
 )  # returned to the caller verbatim, prefixed with "error: "
 
+# D11: one cheap, generic, label-agnostic read -- no label appears in this
+# query at all, so L2 Query Safety's label-interpolation allow-list rule
+# does not apply here.
+_SEED_CHECK_QUERY = "MATCH (n) RETURN count(n) AS c LIMIT 1"
+
+_GRAPH_UNSEEDED_DETAIL = "the policy graph has no seeded content yet"
+# returned to the caller verbatim, prefixed with "error: " -- a fixed,
+# sanitized string carrying no host/port/path detail (AC-BI-015), mirroring
+# mcp_interface.mcp_server._GRAPH_UNAVAILABLE_DETAIL's convention.
+
 
 def is_write_clause(query: str) -> bool:
     """Return True if `query` contains a write clause.
@@ -55,6 +76,23 @@ def is_write_clause(query: str) -> bool:
     exported, not duplicated as a second regex.
     """
     return bool(_WRITE_CLAUSE.search(query))
+
+
+def _is_graph_seeded(graph: GraphHandle) -> bool:
+    """Return True if `graph` has at least one node.
+
+    Issues `_SEED_CHECK_QUERY` -- one cheap, generic, label-agnostic read --
+    so `execute_cypher_query` can raise `GraphUnseededError` before the
+    caller's own query is ever sent to FalkorDB (D11). An empty result set
+    is treated as unseeded defensively; a real `count(n)` aggregate always
+    returns exactly one row.
+    """
+    result = graph.query(_SEED_CHECK_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return False
+    count = cast("int", rows[0][0])
+    return count > 0
 
 
 def execute_cypher_query(
@@ -70,13 +108,21 @@ def execute_cypher_query(
     `WriteClauseRejectedError` BEFORE `graph.query` is ever called (AC-002),
     via the shared `is_write_clause` helper.
 
-    Any exception from `graph.query` itself is caught and re-raised as
-    `QueryEngineExecutionError`, preserving the original message verbatim.
+    Otherwise, checks `_is_graph_seeded(graph)` -- one cheap `count(n)` read
+    -- and raises `GraphUnseededError` if the graph has no content at all,
+    BEFORE the caller's own query is ever sent (D11, AC-BI-013/AC-BI-014).
+    This makes a totally unseeded graph distinguishable from a seeded
+    graph's own legitimate zero-row answer, which still reaches the normal
+    success shape below unaffected.
+
+    Any exception from the seed check or from `graph.query` itself is
+    caught and re-raised as `QueryEngineExecutionError`, preserving the
+    original message verbatim.
 
     With a `run_id` bound via `bind_run_context`, emits one structured log
-    entry per call, `outcome="succeeded"`/`"rejected"`/`"failed"`, carrying
-    the bound `run_id` (AC-004). Never logs the raw query text -- see the
-    module docstring.
+    entry per call, `outcome="succeeded"`/`"rejected"`/`"unseeded"`/
+    `"failed"`, carrying the bound `run_id` (AC-004). Never logs the raw
+    query text -- see the module docstring.
 
     `principal` is an opaque caller identity string (issue #67), attached to
     the log entry when given (on every branch, not only success) and omitted
@@ -88,6 +134,16 @@ def execute_cypher_query(
     if is_write_clause(query):
         _log(outcome="rejected", started=started, emitter=emitter, principal=principal)
         raise WriteClauseRejectedError(_WRITE_CLAUSE_REJECTION_MESSAGE)
+
+    try:
+        seeded = _is_graph_seeded(graph)
+    except Exception as exc:
+        _log(outcome="failed", started=started, emitter=emitter, principal=principal)
+        raise QueryEngineExecutionError(str(exc)) from exc
+
+    if not seeded:
+        _log(outcome="unseeded", started=started, emitter=emitter, principal=principal)
+        raise GraphUnseededError(_GRAPH_UNSEEDED_DETAIL)
 
     try:
         result = graph.query(query)

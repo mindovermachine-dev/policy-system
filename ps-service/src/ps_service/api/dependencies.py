@@ -23,6 +23,10 @@ from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     build_default_pipeline_dependencies,
 )
+from ps_service.api.restore_orchestration import (
+    RestoreDependencies,
+    build_default_restore_dependencies,
+)
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
@@ -75,3 +79,21 @@ def provide_pipeline_dependencies() -> PipelineDependencies:
         The production :class:`PipelineDependencies` bundle.
     """
     return build_default_pipeline_dependencies()
+
+
+def provide_restore_dependencies() -> RestoreDependencies:
+    """Return the production ``RestoreDependencies`` for the restore orchestration.
+
+    Mirrors :func:`provide_pipeline_dependencies` exactly: a plain provider
+    (not a generator) so tests can swap it wholesale via
+    ``app.dependency_overrides`` with a fake bundle. The real bundle wires the
+    shipped restore entry point and FalkorDB connection/graph-name helpers
+    through ``build_default_restore_dependencies``, whose
+    ``ps_service.restore``/``ps_service.company_merge`` imports are all
+    function-local (M6 -- ``ps_service.main`` never transitively loads those
+    components at module load).
+
+    Returns:
+        The production :class:`RestoreDependencies` bundle.
+    """
+    return build_default_restore_dependencies()

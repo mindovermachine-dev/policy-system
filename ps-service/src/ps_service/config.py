@@ -20,6 +20,7 @@ _MIN_PORT = 1
 _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
+_DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 
 # The fixed caller identity attached to every query answered while the
 # local-test bypass (issue #67, AC-BI-008) is active. Colocated with the
@@ -72,6 +73,7 @@ class ServiceConfig:
     falkordb_port: int = _DEFAULT_FALKORDB_PORT
     company_merge_similarity_threshold: float | None = None
     is_local_test_bypass_active: bool = False
+    max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -198,6 +200,25 @@ def _parse_similarity_threshold(raw: str) -> float:
     return threshold
 
 
+def _parse_max_request_body_bytes(raw: str) -> int:
+    """Parse and range-check `PS_SERVICE_MAX_REQUEST_BODY_BYTES`, failing closed on any bad value.
+
+    CHANGES.md OQ7: enforced by `_MaxBodySizeMiddleware` (`main.py`) against
+    the request's `Content-Length` header, before Starlette reads any body
+    bytes. Mirrors `_parse_port`'s exact validation shape (parse, then
+    range-check), but the message names this env var.
+    """
+    try:
+        max_bytes = int(raw)
+    except ValueError as exc:
+        message = f"PS_SERVICE_MAX_REQUEST_BODY_BYTES must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if max_bytes <= 0:
+        message = f"PS_SERVICE_MAX_REQUEST_BODY_BYTES must be positive, got {max_bytes}"
+        raise ServiceConfigurationError(message)
+    return max_bytes
+
+
 def _parse_local_test_bypass(raw: str | None) -> bool:
     """Parse `PS_SERVICE_LOCAL_TEST_BYPASS`, failing closed on any unrecognized value.
 
@@ -288,6 +309,10 @@ def load_config() -> ServiceConfig:
         os.environ.get("PS_SERVICE_LOCAL_TEST_BYPASS")
     )
 
+    max_request_body_bytes = _parse_max_request_body_bytes(
+        os.environ.get("PS_SERVICE_MAX_REQUEST_BODY_BYTES", str(_DEFAULT_MAX_REQUEST_BODY_BYTES))
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -299,4 +324,5 @@ def load_config() -> ServiceConfig:
         falkordb_port=falkordb_port,
         company_merge_similarity_threshold=company_merge_similarity_threshold,
         is_local_test_bypass_active=is_local_test_bypass_active,
+        max_request_body_bytes=max_request_body_bytes,
     )

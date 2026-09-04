@@ -3,21 +3,7 @@ templates:
   - falkordb-deployment.yaml
   - falkordb-pvc.yaml
 tests:
-  - it: default values use emptyDir and render no PVC
-    asserts:
-      - equal:
-          path: spec.template.spec.volumes[0].emptyDir
-          value: {}
-        template: falkordb-deployment.yaml
-      - notExists:
-          path: spec.template.spec.volumes[0].persistentVolumeClaim
-        template: falkordb-deployment.yaml
-      - hasDocuments:
-          count: 0
-        template: falkordb-pvc.yaml
-  - it: persistence.enabled=true renders a PVC and switches the volume source
-    set:
-      falkordb.persistence.enabled: true
+  - it: default values render a PVC and use it as the volume source
     asserts:
       - equal:
           path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
@@ -39,4 +25,18 @@ tests:
         template: falkordb-pvc.yaml
       - notExists:
           path: spec.storageClassName
+        template: falkordb-pvc.yaml
+  - it: persistence.enabled=false uses emptyDir and renders no PVC
+    set:
+      falkordb.persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+        template: falkordb-deployment.yaml
+      - notExists:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim
+        template: falkordb-deployment.yaml
+      - hasDocuments:
+          count: 0
         template: falkordb-pvc.yaml

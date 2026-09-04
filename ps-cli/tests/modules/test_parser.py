@@ -17,6 +17,7 @@ import pytest
 from ps_cli.modules.parser import (
     _celex_type,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 1: unit-tested directly per its own AC
     _context_name_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _celex_type
+    _instrument_id_type,  # pyright: ignore[reportPrivateUsage]  # issue #66 Slice 7.4: unit-tested directly per its own AC, mirrors _celex_type
     _service_url_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _celex_type
     build_parser,
 )
@@ -121,3 +122,55 @@ def test_build_parser_config_set_context_with_leading_hyphen_name_exits_two(
 
     assert excinfo.value.code == 2
     assert "name" in capsys.readouterr().err
+
+
+def test_instrument_id_type_accepts_alnum_hyphen_dot() -> None:
+    """A well-formed instrument id like 'CRA-1.0' is accepted unchanged (D13/D17)."""
+    assert _instrument_id_type("CRA-1.0") == "CRA-1.0"
+
+
+def test_instrument_id_type_rejects_leading_hyphen() -> None:
+    """An instrument id starting with '-' is rejected (alnum-start requirement)."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _instrument_id_type("-CRA-1.0")
+
+
+def test_instrument_id_type_rejects_path_traversal_segment() -> None:
+    """An instrument id containing '..' is rejected -- it is later used to build a
+    local filesystem path (`catalog_repo.read_artifact`), so this is the first of two
+    defense-in-depth validation layers against a path-traversal payload.
+    """
+    with pytest.raises(argparse.ArgumentTypeError):
+        _instrument_id_type("../../etc")
+
+
+def test_instrument_id_type_rejects_forward_slash() -> None:
+    """An instrument id containing '/' is rejected -- it must be a single path segment."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _instrument_id_type("CRA/1.0")
+
+
+def test_build_parser_parses_catalog_list() -> None:
+    """`ps-cli catalog list` (no arguments) parses correctly (D13)."""
+    args = build_parser().parse_args(["catalog", "list"])
+
+    assert args.command == "catalog_list"
+
+
+def test_build_parser_parses_catalog_restore_with_instrument_id() -> None:
+    """`ps-cli catalog restore CRA-1.0` parses the positional instrument_id (D13/D17)."""
+    args = build_parser().parse_args(["catalog", "restore", "CRA-1.0"])
+
+    assert args.command == "catalog_restore"
+    assert args.instrument_id == "CRA-1.0"
+
+
+def test_build_parser_catalog_restore_with_malformed_instrument_id_exits_two(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed instrument_id is rejected by argparse's `type=` callback, exit code 2."""
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(["catalog", "restore", "../etc"])
+
+    assert excinfo.value.code == 2
+    assert "not a valid instrument id" in capsys.readouterr().err

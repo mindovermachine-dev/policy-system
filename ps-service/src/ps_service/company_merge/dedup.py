@@ -2,7 +2,14 @@
 
 Also the existing-canonical-index reader, exact-match resolution,
 semantic-match resolution, and the combined whole-collection resolution
-algorithm (PLAN_REVIEWED.md §5.1/§5.2/§5.3/§5.4, Increments 6-9).
+algorithm (PLAN_REVIEWED.md §5.1/§5.2/§5.3/§5.4, Increments 6-9) --
+`dedupe_canonical_nodes`, the LIVE path (calls `route_embedding` for any
+embedding it lacks). `resolve_capability_convergence_offline` (PLAN.md D6,
+Slices 5.3/5.4) is the OFFLINE counterpart a restore's baseline merge uses
+instead: structurally the same working-index-growth mechanism, but every
+embedding is either artifact-supplied or already cached -- never fetched
+via `route_embedding`/`EmbeddingCaller` (enforced by an AST scan,
+`tests/company_merge/test_dedup_offline_no_route_embedding_import.py`).
 
 Since issue #42, Company Merge dedupes **Capability only** on the regulatory
 spine (Obligation is Role-scoped and passed through). Company Merge's
@@ -39,12 +46,14 @@ from ps_service.llm_interface.embedding import route_embedding
 from ps_service.logging.emitter import (
     LogEmitter,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
 )
+from ps_service.logging.facade import emit_log_entry
 
 __all__ = [
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
     "read_existing_canonical_index",
+    "resolve_capability_convergence_offline",
     "resolve_exact_match",
 ]
 
@@ -302,4 +311,125 @@ def dedupe_canonical_nodes(
         resolutions=tuple(resolutions),
         near_misses=tuple(near_misses),
         embedding_backfills=embedding_backfills,
+    )
+
+
+def _best_offline_match(
+    own_embedding: tuple[float, ...] | None,
+    working_index: dict[str, ExistingCanonicalNode],
+) -> tuple[ExistingCanonicalNode | None, float]:
+    """Score `node`'s own (artifact-supplied) embedding against every scorable candidate.
+
+    A candidate is scorable only if it already carries a cached embedding
+    (D6's "skip, don't fetch" -- a candidate with no cached embedding is
+    excluded, never fetched). Returns `(None, 0.0)` when `own_embedding` is
+    `None` or no candidate is scorable -- the caller mints a new canonical
+    node in that case, exactly as an empty `working_index` would.
+    """
+    scorable: list[tuple[ExistingCanonicalNode, tuple[float, ...]]] = [
+        (candidate, candidate.embedding)
+        for candidate in working_index.values()
+        if candidate.embedding is not None
+    ]
+    if own_embedding is None or not scorable:
+        return None, 0.0
+    best, best_embedding = max(scorable, key=lambda pair: cosine_similarity(own_embedding, pair[1]))
+    return best, cosine_similarity(own_embedding, best_embedding)
+
+
+def resolve_capability_convergence_offline(
+    incoming_nodes: tuple[BaselineNode, ...],
+    *,
+    incoming_embeddings: dict[str, tuple[float, ...]],
+    single_tenant_graph: GraphHandle,
+    threshold: float,
+    emitter: LogEmitter | None = None,
+) -> DedupResult:
+    """D6's offline counterpart to `dedupe_canonical_nodes`, for a restore's baseline merge.
+
+    Structurally mirrors `dedupe_canonical_nodes`'s own working-index growth
+    (CHANGES.md MA1): processes the WHOLE `incoming_nodes` batch in one
+    call, exact-match first (via `resolve_exact_match`, reused verbatim),
+    then a semantic match scored via `cosine_similarity` alone against
+    `incoming_embeddings`'s artifact-supplied vectors and the existing
+    index's own cached embeddings -- never `route_embedding`, never an
+    `EmbeddingCaller` (a restore has no live LLM provider to call; every
+    embedding it can ever use was already computed at export time). An
+    existing candidate with no cached embedding is excluded from scoring
+    entirely, not fetched; a newly-minted node is folded into the working
+    index immediately, so a later incoming node in this same batch
+    converges onto it instead of minting a separate node (the same in-run
+    convergence mechanism `dedupe_canonical_nodes` already has,
+    `dedup.py:222`/`:278`). When one or more existing candidates were
+    skipped for lacking a cached embedding, one aggregate
+    `outcome="warning"` log entry records the total count (OQ4).
+    """
+    existing_index = read_existing_canonical_index(single_tenant_graph, "Capability")
+    working_index: dict[str, ExistingCanonicalNode] = {node.id: node for node in existing_index}
+    resolutions: list[CanonicalResolution] = []
+    near_misses: list[NearMissPair] = []
+    skipped_count = 0
+
+    for node in incoming_nodes:
+        node_text = _incoming_name(node)
+        if resolve_exact_match(node.id, frozenset(working_index)):
+            resolutions.append(
+                CanonicalResolution(
+                    incoming_id=node.id, canonical_id=node.id, match_kind="exact", embedding=None
+                )
+            )
+            continue
+
+        own_embedding = incoming_embeddings.get(node.id)
+        skipped_count += sum(
+            1 for candidate in working_index.values() if candidate.embedding is None
+        )
+        best, best_score = _best_offline_match(own_embedding, working_index)
+
+        if best is None or best_score < threshold:
+            resolutions.append(
+                CanonicalResolution(
+                    incoming_id=node.id,
+                    canonical_id=node.id,
+                    match_kind="new",
+                    embedding=own_embedding,
+                )
+            )
+            if best is not None:
+                near_misses.append(
+                    NearMissPair(
+                        incoming_id=node.id,
+                        incoming_text=node_text,
+                        nearest_existing_id=best.id,
+                        nearest_existing_text=best.text,
+                        similarity=best_score,
+                    )
+                )
+            # MA1's fix: fold the mint into working_index immediately
+            # (mirrors dedup.py:278) so a LATER node in this SAME artifact
+            # converges onto it.
+            working_index[node.id] = ExistingCanonicalNode(
+                id=node.id, text=node_text, embedding=own_embedding
+            )
+        else:
+            resolutions.append(
+                CanonicalResolution(
+                    incoming_id=node.id,
+                    canonical_id=best.id,
+                    match_kind="semantic",
+                    embedding=None,
+                )
+            )
+
+    if skipped_count:
+        emit_log_entry(
+            component="company_merge",
+            action="resolve_capability_convergence_offline",
+            outcome="warning",
+            extra={"skipped_missing_embedding_count": skipped_count},
+            emitter=emitter,
+        )
+
+    return DedupResult(
+        resolutions=tuple(resolutions), near_misses=tuple(near_misses), embedding_backfills={}
     )

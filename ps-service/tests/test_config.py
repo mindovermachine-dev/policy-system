@@ -48,6 +48,13 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_SERVICE_HOST", raising=False)
     monkeypatch.delenv("PS_SERVICE_PORT", raising=False)
     monkeypatch.delenv("PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("PS_LLMINTERFACE_MODEL", raising=False)
+    monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("PS_FALKORDB_HOST", raising=False)
+    monkeypatch.delenv("PS_FALKORDB_PORT", raising=False)
+    monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
+    monkeypatch.delenv("PS_SERVICE_MAX_REQUEST_BODY_BYTES", raising=False)
 
     result = load_config()
 

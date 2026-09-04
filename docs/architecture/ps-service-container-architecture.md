@@ -24,6 +24,8 @@
    - [Ingestion](#ingestion)
    - [Domain Mapper](#domain-mapper)
    - [Company Merge](#company-merge)
+   - [Export](#export)
+   - [Restore](#restore)
    - [Query Engine](#query-engine)
    - [MCP Interface](#mcp-interface)
    - [Regulatory Change Monitor](#regulatory-change-monitor)
@@ -82,6 +84,11 @@ graph TB
             CompanyMerge[Company Merge]
         end
 
+        subgraph Curation["Curation"]
+            Export[Export]
+            Restore[Restore]
+        end
+
         subgraph QuerySurface["Query Surface"]
             QueryEngine[Query Engine]
             MCPInterface[MCP Interface]
@@ -105,8 +112,13 @@ graph TB
     CompanyMerge -->|"read per-regulation baseline graph"| FalkorDB
     CompanyMerge -->|"write company graph"| FalkorDB
 
+    Export -->|"read {short}_baseline / {short}_native"| FalkorDB
+    Export -->|"backfill Capability/Policy embeddings onto {short}_baseline"| FalkorDB
+    Restore -->|"write {short}_native / {short}_baseline / policy_system"| FalkorDB
+
     DomainMapper -->|"extraction calls"| LLMInterface
     CompanyMerge -->|"semantic convergence calls (embeddings)"| LLMInterface
+    Export -->|"RouteEmbedding calls"| LLMInterface
     LLMInterface -->|"chat/embedding"| LLMProvider
 
     QueryEngine -->|"read"| FalkorDB
@@ -116,6 +128,8 @@ graph TB
     Ingestion -->|"log entries"| Logging
     DomainMapper -->|"log entries"| Logging
     CompanyMerge -->|"log entries"| Logging
+    Export -->|"log entries"| Logging
+    Restore -->|"log entries"| Logging
     QueryEngine -->|"log entries"| Logging
     MCPInterface -->|"log entries"| Logging
     ChangeMonitor -->|"log entries"| Logging
@@ -131,6 +145,8 @@ graph TB
     style Ingestion fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style DomainMapper fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style CompanyMerge fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Export fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Restore fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style QueryEngine fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style MCPInterface fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style ChangeMonitor fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
@@ -152,6 +168,8 @@ graph TB
 | Ingestion | `ps.service.ingestion` | Fetch regulation structure/text via a pluggable Ingestion Adapter (Cellar/ELI first); register RegulatoryInstrument bibliographic metadata; persist the source's native structural graph to FalkorDB |
 | Domain Mapper | `ps.service.domainmapper` | Read a source's native structural graph via a paired Domain Mapping Adapter; LLM-driven extraction of Role/Requirement; derive Obligation/Capability |
 | Company Merge | `ps.service.companymerge` | Merge per-regulation baseline graphs into the single-tenant graph; dedupe canonical nodes |
+| Export | `ps.service.export` | Serialize an already-ingested instrument's `{short}_baseline`/`{short}_native` graphs into a curated, checksummed, schema-versioned artifact for `curated-content/`; backfill Capability/Policy embeddings onto the source baseline graph so restore never needs a live LLM call |
+| Restore | `ps.service.restore` | Verify a curated artifact's checksum and `schema_version`, then load it into a target deployment: baseline via an offline replay of Company Merge's own dedup/convergence, native as a straight load, both atomically |
 | Query Engine | `ps.service.queryengine` | Execute read-only Cypher queries against the graph |
 | MCP Interface | `ps.service.mcpinterface` | Expose Query Engine to PS Question Skill via MCP |
 | Regulatory Change Monitor | `ps.service.changemonitor` | Poll Cellar/ELI for amendments; trigger re-ingestion |
@@ -495,6 +513,89 @@ Company Merge resolves cross-regulation convergence for **Capability** (always) 
 |---|---|---|---|---|---|---|---|---|---|---|
 | MergeBaselineGraph | Read a regulation's baseline graph from its per-regulation graph space and merge it into the company's single-tenant graph | No (deferred) | n/a (deferred) | DeriveObligationsAndCapabilities completed AND (`RegulatoryInstrument.source_type == external` OR DeriveGovernanceArtifacts completed) | All baseline nodes/edges exist in the company graph; existing canonical nodes' properties untouched | Reads + writes FalkorDB | FalkorDB | Not yet set — bounded by DedupeCanonicalNodes's semantic-match latency (no longer a fixed target now that convergence isn't identity-only) | Yes | Abort with no partial write only when the semantic-match step can't confidently decide whether an incoming node is the same canonical concept as an existing one; surface for manual resolution. A confirmed match (exact identity, or a confident semantic match) never aborts |
 | DedupeCanonicalNodes | Resolve Capability/Policy convergence — merge onto an existing canonical node instead of duplicating, whether matched by exact canonical identity or by semantic equivalence (Policy applies only to internal-SoP-derived instances; human-authored Policy is out of this container's scope). Obligation is not deduped — Role-scoped, passed through | No (deferred) | n/a (deferred) | Runs as part of MergeBaselineGraph | No duplicate Capability/Policy for the same canonical concept; incoming edges rewired to the canonical node; canonical node's own properties unchanged | Writes to FalkorDB (edge rewiring); calls LLM Interface's `RouteEmbedding` action for semantic-match candidates | LLM Interface, FalkorDB | Bounded by LLM latency for semantic-match calls; canonical-identity lookups remain fast | Yes (embedding computation is deterministic for a fixed model/input, unlike Domain Mapper's chat-driven decisions; a fixed candidate set re-run against the same canonical set yields the same match/no-match outcome) | Same as MergeBaselineGraph — a low-confidence semantic-match candidate is surfaced, not silently merged or silently dropped |
+
+---
+
+### Export
+
+#### Domain Concepts
+
+None — reads the existing baseline/native graph shapes Domain Mapper already defines and introduces no new domain concept of its own. The Capability/Policy `embedding` property it backfills onto the source `{short}_baseline` graph is the same attribute Company Merge already lazily backfills during cross-regulation convergence (see [Company Merge](#company-merge)), not a new one.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/export/` | `ps_service.export` |
+
+**Implementation Guidance:**
+- Maintainer-only, never exposed via REST or `ps-cli` — a project maintainer runs the thin CLI shim `tools/curated-export/export_instrument.py` against an already-ingested source (direct FalkorDB + LLM Interface access), not a customer-facing action.
+- Fixed orchestration order: backfill Capability/Policy embeddings onto the live `{short}_baseline` graph first (one `RouteEmbedding` call per node lacking one), then serialize both graphs, then write the manifest, then regenerate `catalog.json` from every manifest now on disk — never just the instrument just exported, so a re-export never drops another instrument's catalog entry.
+- Serializes generically: enumerates the source graph's own labels/relationship types (`CALL db.labels()`/`CALL db.relationshipTypes()`) rather than hardcoding Role/Requirement/Obligation/Capability, so one function is correct for both the baseline graph and the native structural graph, and for `external`- and `internal`-sourced instruments alike (source_type-agnostic, per AC-BI-003). A node carrying zero or more than one label is an export error, never silently coerced.
+- Backfilling embeddings onto the *source* FalkorDB instance is a deliberate, documented side effect — the one point where curation is not purely "dump what's there" — so that restore, downstream, never needs a live LLM provider.
+- Licensing of curated content is confirmed once, project-wide, before the first artifact is committed — see [`curated-content/LICENSING.md`](../../curated-content/LICENSING.md).
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/export/__init__.py` | Package front door, re-exports `InstrumentManifest` | — |
+| `ps-service/src/ps_service/export/models.py` | `InstrumentManifest`, `SerializedNode`, `SerializedEdge`, `SerializedGraph` — plain frozen dataclasses | — |
+| `ps-service/src/ps_service/export/errors.py` | `ExportSourceGraphError` | — |
+| `ps-service/src/ps_service/export/falkordb_connection.py` | `_RawGraphConnection`, `_GraphCopyHandle`, `_GraphQueryHandle`, `_WatchablePipeline` Protocols + their one-conversion-site accessors, shared with `ps_service.restore` | — |
+| `ps-service/src/ps_service/export/embeddings.py` | `backfill_capability_embeddings` — writes embeddings onto the source `{short}_baseline` graph's Capability (and, for internal sources, Policy) nodes before serialization | — |
+| `ps-service/src/ps_service/export/serialize.py` | `serialize_graph`, `to_json_bytes`, `parse_serialized_graph_json`, `checksum_bytes` — the generic graph/JSON codec and SHA-256 checksum | — |
+| `ps-service/src/ps_service/export/catalog_writer.py` | `write_manifest`, `read_manifest`, `write_catalog_json` — `manifest.json`/`catalog.json` I/O, including the packaged copy under `ps_service.api.curated_content` | — |
+| `ps-service/src/ps_service/export/export_instrument.py` | `export_instrument` — the top-level orchestration (embed → serialize → checksum → manifest → catalog.json) | ExportInstrument |
+| `tools/curated-export/export_instrument.py` | Thin maintainer CLI shim over `ps_service.export.export_instrument` | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ExportInstrument | Serialize one already-ingested instrument's `{short}_baseline`/`{short}_native` graphs into a checksummed, schema-versioned curated artifact under `curated-content/{instrument_id}/`, and regenerate `catalog.json` | No (maintainer-invoked local tooling, not network-reachable) | n/a (maintainer-invoked) | Instrument already ingested (MergeBaselineGraph and, for external sources, DeriveObligationsAndCapabilities have run); LLM Interface configured for the embedding backfill | `manifest.json`/`baseline.json`/`native.json` written for the instrument; `catalog.json` regenerated from every manifest on disk; source `{short}_baseline` graph gains `embedding` on its Capability/Policy nodes | Writes embeddings onto the source FalkorDB `{short}_baseline` graph; writes files under `curated-content/` and the packaged `ps_service.api.curated_content` copy | FalkorDB, LLM Interface (`RouteEmbedding`), local filesystem | Bounded by one `RouteEmbedding` call per Capability/Policy node lacking an embedding; paid once, at curation time | No (re-running recomputes embeddings only for nodes still lacking one, and rewrites the artifact) | A node with zero or more than one label raises `ExportSourceGraphError` before any file is written |
+
+---
+
+### Restore
+
+#### Domain Concepts
+
+None — writes into the existing baseline/native/single-tenant graph shapes Domain Mapper and Company Merge already define; introduces no new domain concept of its own.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (no LLM Interface call) | Python 3.14 | `ps-service/src/ps_service/restore/` | `ps_service.restore` |
+
+**Implementation Guidance:**
+- Verifies before touching FalkorDB: checksum (SHA-256 over each blob) first, then `schema_version` equality against `ps_service.domain_mapper.DOMAIN_SCHEMA_VERSION` — a mismatch on either refuses outright, no migrate/warn path, before any FalkorDB call has happened.
+- Every write happens against a freshly-created, uniquely-tokened staged key; the target's real `{short}_native`, `{short}_baseline`, and `policy_system` keys are touched only inside one final `RENAME`-based finalize step, so an interruption at any earlier point leaves the target byte-for-byte unchanged — never a partially-seeded baseline-only or native-only state.
+- The `policy_system` leg (the only one a concurrent live ingestion could also be writing) finalizes under a `WATCH`/`MULTI`/`EXEC` optimistic-concurrency retry loop, not a bare rename — a concurrent writer aborts and retries the snapshot+merge computation, bounded, rather than silently losing either side's update.
+- Native leg: a straight, parameterized `UNWIND`+`CREATE` load, no dedup step at all, since native graphs are already isolated per instrument and never shared. Baseline leg: replays Company Merge's own dedup/convergence (exact-identity match, then semantic-match) unchanged, substituting the artifact's own pre-computed Capability embeddings for a live `RouteEmbedding` call — this is why restore needs no LLM provider.
+- Label/relationship-type strings parsed from an artifact are allow-listed (`schema_allowlist.py`) before being interpolated into any Cypher — an artifact is untrusted content once it has left this project's own export tooling (e.g. read from a git repo or a REST upload), unlike a live FalkorDB read.
+- Exposed via `POST /restorations` (REST), never called directly by `ps-cli` — `ps-cli catalog restore` reads the artifact locally from the configured curated-repo location and uploads it; PS Service does the actual FalkorDB work, keeping `ps-cli` decoupled from `falkordb`/`redis` entirely.
+- Every restore is logged with actor, instrument id, and the artifact's `schema_version`, at `started`/`succeeded`/`failed`, matching ingestion's own audit traceability.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/restore/__init__.py` | Package front door, re-exports `RestoreArtifact`, `RestoreOutcome` | — |
+| `ps-service/src/ps_service/restore/models.py` | `RestoreArtifact`, `RestoreOutcome` — plain frozen dataclasses | — |
+| `ps-service/src/ps_service/restore/errors.py` | `ArtifactIntegrityError`, `ArtifactSchemaVersionMismatchError`, `ArtifactContentRejectedError`, `RestoreConcurrencyConflictError` | — |
+| `ps-service/src/ps_service/restore/schema_allowlist.py` | `BASELINE_ALLOWED_LABELS`/`_RELATIONSHIP_TYPES`, `NATIVE_ALLOWED_LABELS`/`_RELATIONSHIP_TYPES`, `validate_serialized_graph` | — |
+| `ps-service/src/ps_service/restore/populate.py` | `populate_graph` — batched, parameterized `UNWIND`+`CREATE`/`MERGE` writer building a staged graph from a parsed artifact | — |
+| `ps-service/src/ps_service/restore/staging.py` | `stage_graph`, `snapshot_single_tenant`, `finalize_atomic_swap`, `discard_staged_keys`, `stage_and_finalize_policy_system_leg` — the staged-key lifecycle, including the `policy_system` leg's WATCH-guarded retry loop | — |
+| `ps-service/src/ps_service/restore/restore_instrument.py` | `restore_instrument` — the top-level orchestration (verify → stage → merge-or-load → finalize/discard) | RestoreInstrument |
+| `ps-service/src/ps_service/api/restore_orchestration.py` | REST-boundary glue for `POST /restorations`, mirroring `ingestion_orchestration.py`'s injection-seam shape | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RestoreInstrument | Load one curated instrument's artifact into the target deployment: baseline merged into the single-tenant graph via an offline dedup replay, native loaded straight into its own per-instrument graph space | No (deferred — REST-layer concern, same posture as ingestion) | n/a (deferred) | Artifact's checksum and `schema_version` both verified | `{short}_native`, `{short}_baseline`, and `policy_system` all reflect the instrument, or (on any failure) none of them do | Reads/writes FalkorDB (staged keys, then one atomic multi-key rename) | FalkorDB | Not yet set — bounded by the offline dedup step's candidate-scoring cost, no LLM latency | Yes (re-restoring an instrument overwrites its own `{short}_native`/`{short}_baseline` via the same rename-based finalize) | A checksum or `schema_version` mismatch refuses before any FalkorDB call; any failure after staging discards every staged key and re-raises, leaving the target unchanged; exhausting the `policy_system` leg's concurrency retries raises `RestoreConcurrencyConflictError` with the same no-partial-write guarantee |
 
 ---
 

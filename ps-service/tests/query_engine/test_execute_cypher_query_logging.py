@@ -23,7 +23,10 @@ from typing import TYPE_CHECKING, NoReturn
 import pytest
 
 from ps_service.logging import bind_run_context
-from ps_service.query_engine.cypher_query import execute_cypher_query
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+    execute_cypher_query,
+)
 from ps_service.query_engine.errors import (
     QueryEngineExecutionError,
     WriteClauseRejectedError,
@@ -50,11 +53,14 @@ class _ScriptedQueryResult:
 
 
 class _FakeSuccessGraphHandle:
-    """Satisfies `GraphHandle` structurally -- always succeeds with a
+    """Satisfies `GraphHandle` structurally -- reports itself as seeded
+    (D11) for `_SEED_CHECK_QUERY`, and otherwise always succeeds with a
     scripted two-row result.
     """
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
+        if q == _SEED_CHECK_QUERY:
+            return _ScriptedQueryResult(header=[[0, "c"]], result_set=[[1]])
         return _ScriptedQueryResult(
             header=[[0, "id"], [0, "name"]],
             result_set=[["a", "Alice"], ["b", "Bob"]],

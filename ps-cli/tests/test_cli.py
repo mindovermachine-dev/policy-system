@@ -7,8 +7,10 @@ PLAN.md §3 Increments 10, 12, 13.
 from __future__ import annotations
 
 import ast
+import json
 import socket
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import keyring.errors
 import pytest
@@ -16,9 +18,17 @@ import pytest
 from ps_cli.cli import run
 from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
-from ps_cli.models import IngestionResult, RegulationsResult
+from ps_cli.models import (
+    IngestionResult,
+    RegulationsResult,
+    RestorationResult,
+    RestorationStageOutcome,
+)
 from ps_cli.modules.parser import build_parser
 from ps_cli.targets import load_targets
+
+if TYPE_CHECKING:
+    from ps_cli.catalog_repo import CuratedArtifact
 
 _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / "__main__.py"
 
@@ -51,6 +61,11 @@ class _UnusedPsServiceClientMethods:
     def poll_ingestion_status(self, run_id: str) -> str | None:
         """Fail: this test's fake does not expect `poll_ingestion_status()` to be called."""
         msg = f"poll_ingestion_status must not be called in this test (run_id={run_id!r})"
+        raise AssertionError(msg)
+
+    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
+        """Fail: this test's fake does not expect `restore_instrument()` to be called."""
+        msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
         raise AssertionError(msg)
 
 
@@ -599,3 +614,108 @@ def test_run_config_list_contexts_never_constructs_ps_service_client_and_prints_
     assert "http://ctx-dev:9000" in captured.out
     assert "prod" in captured.out
     assert "https://ps.example.com" in captured.out
+
+
+def _write_catalog_fixture(repo_path: Path) -> None:
+    (repo_path / "catalog.json").write_text(
+        json.dumps(
+            [
+                {
+                    "instrument_id": "CRA-1.0",
+                    "title": "Cyber Resilience Act",
+                    "source_type": "external",
+                    "jurisdiction": "EU",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_instrument_fixture(repo_path: Path, instrument_id: str) -> None:
+    instrument_dir = repo_path / instrument_id
+    instrument_dir.mkdir(parents=True)
+    manifest = {
+        "instrument_id": instrument_id,
+        "celex": "32024R2847",
+        "title": "Cyber Resilience Act",
+        "short_name": "CRA",
+        "version": "1.0",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "schema_version": "1.0.0",
+        "exported_at": "2026-09-04T00:00:00Z",
+        "baseline_sha256": "a" * 64,
+        "native_sha256": "b" * 64,
+    }
+    (instrument_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (instrument_dir / "baseline.json").write_bytes(b'{"nodes": [], "edges": []}')
+    (instrument_dir / "native.json").write_bytes(b'{"nodes": [], "edges": []}')
+
+
+def test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`catalog list` reads `curated_repo_path` via `load_config()` but never touches
+    `PsServiceClient` at all (D13) -- proven via an uncallable client fake, mirroring
+    `test_run_config_set_context_never_constructs_ps_service_client`'s own proof shape:
+    if `run()` ever called a method on `uncallable_client`, this test would fail with an
+    uncaught `AssertionError`, not a graceful exit code.
+    """
+    curated_repo_path = tmp_path / "curated-content"
+    curated_repo_path.mkdir()
+    _write_catalog_fixture(curated_repo_path)
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(["catalog", "list"], client=uncallable_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
+
+
+class _FakeRestoreSuccessClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose restore_instrument() succeeds."""
+
+    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
+        """Return a fixed RestorationResult, echoing the artifact's own instrument id."""
+        return RestorationResult(
+            instrument_id=artifact.manifest.instrument_id,
+            stages=[RestorationStageOutcome(stage="verified", status="succeeded")],
+        )
+
+
+def test_run_catalog_restore_prints_instrument_id_on_mocked_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The full parser -> dispatch -> handler -> client wiring for `catalog restore`."""
+    curated_repo_path = tmp_path / "curated-content"
+    curated_repo_path.mkdir()
+    _write_instrument_fixture(curated_repo_path, "CRA-1.0")
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
+    fake_client = _FakeRestoreSuccessClient()
+
+    exit_code = run(["catalog", "restore", "CRA-1.0"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "instrument_id: CRA-1.0" in captured.out
+    assert "verified: succeeded" in captured.out
+
+
+def test_run_catalog_restore_missing_local_artifact_exits_one_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing local instrument directory surfaces as a clean PsCliError, exit 1."""
+    curated_repo_path = tmp_path / "curated-content"
+    curated_repo_path.mkdir()
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(["catalog", "restore", "MISSING-1.0"], client=uncallable_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "curated instrument directory not found" in captured.err
+    assert "Traceback" not in captured.err

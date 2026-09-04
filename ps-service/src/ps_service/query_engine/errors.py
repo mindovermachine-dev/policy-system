@@ -27,3 +27,18 @@ class QueryEngineExecutionError(Exception):
     no added prefix/wrapping text beyond what the original exception
     already said. Chained via `raise ... from exc`.
     """
+
+
+class GraphUnseededError(Exception):
+    """Raised by `execute_cypher_query` when the target graph has no content at all.
+
+    D11/AC-BI-013/AC-BI-014: `_is_graph_seeded` (`cypher_query.py`) issues
+    one cheap `count(n)` read before the caller's own query is ever sent;
+    a `count(n) = 0` result raises this error instead of running that
+    query, so a totally unseeded graph is distinguishable from a seeded
+    graph's legitimate zero-row answer (which still returns the normal
+    `QueryResult` shape). The message is
+    `cypher_query._GRAPH_UNSEEDED_DETAIL` verbatim -- a fixed, sanitized
+    string carrying no host/port/path detail (AC-BI-015), mirroring
+    `mcp_interface.mcp_server._GRAPH_UNAVAILABLE_DETAIL`'s convention.
+    """

@@ -30,6 +30,7 @@ from ps_service.mcp_interface.errors import (
     McpResourceUnavailableError,
 )
 from ps_service.query_engine import (
+    GraphUnseededError,
     QueryEngineExecutionError,
     QueryResult,
     WriteClauseRejectedError,
@@ -101,8 +102,8 @@ def handle_mcp_tool_call(
     """HandleMcpToolCall: run `query` through Query Engine in-process.
 
     Binds a fresh run_id, then returns `{columns, rows, row_count}` on
-    success or an `error: <message>` string verbatim on a rejected or
-    failed query.
+    success or an `error: <message>` string verbatim on a rejected,
+    unseeded-graph, or failed query.
 
     `principal` is an opaque caller identity string (issue #67), threaded
     straight through to `execute_cypher_query` so it lands on the
@@ -115,7 +116,7 @@ def handle_mcp_tool_call(
             result: QueryResult = execute_cypher_query(
                 query, graph=graph, emitter=emitter, principal=principal
             )
-        except (WriteClauseRejectedError, QueryEngineExecutionError) as exc:
+        except (WriteClauseRejectedError, QueryEngineExecutionError, GraphUnseededError) as exc:
             return f"error: {exc}"
     return {"columns": result.columns, "rows": result.rows, "row_count": result.row_count}
 
@@ -148,6 +149,8 @@ def cypher(query: str) -> dict[str, object] | str:
     On success returns an object with `columns`, `rows`, and `row_count`. Returns a
     string beginning `error: ` when the query contains a write clause
     (CREATE, MERGE, DELETE, SET, REMOVE, DROP, FOREACH -- rejected before execution),
+    when the graph has no seeded content at all yet (distinct from a query that
+    legitimately matches nothing, which still returns the normal empty-result shape),
     when FalkorDB rejects the query, or when the graph database cannot be reached.
     """
     try:

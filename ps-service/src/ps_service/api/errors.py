@@ -67,6 +67,51 @@ class IngestionConfigIncompleteError(ApiError):
     """
 
 
+class RestoreArtifactRejectedError(ApiError):
+    """A ``POST /restorations`` artifact failed integrity/schema-version verification.
+
+    The API-boundary translation of ``ps_service.restore.errors.
+    ArtifactIntegrityError`` (a checksum mismatch, D9) or ``ps_service.restore.
+    errors.ArtifactSchemaVersionMismatchError`` (D10) -- both raised by
+    ``ps_service.restore.restore_instrument`` before any FalkorDB call, so a
+    rejected artifact never causes even a staged-key write. Raised by
+    ``api.restore_orchestration.run_restoration`` before any pipeline stage
+    runs. Handled as HTTP 422; ``str(exc)`` is domain-level and surfaced
+    verbatim.
+    """
+
+
+class RestoreStageFailedError(ApiError):
+    """A restore stage raised; the restore did not complete (AC-BI-008).
+
+    Carries the failing stage name and an already-sanitised reason, mirroring
+    ``PipelineStageError``'s exact shape (one exception type per distinct
+    failure boundary, L2 Error Handling). Handled as HTTP 502.
+    """
+
+    def __init__(self, *, stage: str, reason: str) -> None:
+        """Record the failing stage and its sanitised reason.
+
+        Args:
+            stage: The restore stage that raised (e.g. ``"staging"``).
+            reason: A caller-safe, already path/host-scrubbed reason string.
+        """
+        super().__init__(f"{stage} stage failed: {reason}")
+        self.stage: str = stage
+        self.reason: str = reason
+
+
+class RequestBodyTooLargeError(ApiError):
+    """A request body's ``Content-Length`` exceeds ``ServiceConfig.max_request_body_bytes``.
+
+    Raised by ``main._MaxBodySizeMiddleware`` (a pure ASGI middleware, added
+    directly on ``app`` -- not ``BaseHTTPMiddleware``, which buffers the
+    whole body) before Starlette reads any request body bytes (CHANGES.md
+    OQ7). Handled as HTTP 413; ``str(exc)`` is domain-level and surfaced
+    verbatim.
+    """
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

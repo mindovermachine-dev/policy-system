@@ -4,12 +4,14 @@ and list_regulations().
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
+from ps_cli.catalog_repo import CuratedArtifact, CuratedInstrumentManifest
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
     PsServiceClient,
@@ -632,3 +634,144 @@ class TestPollIngestionStatus:
         client.poll_ingestion_status("run-poll-001")
 
         assert captured_timeouts == [{"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}]
+
+
+_RESTORATION_MANIFEST = CuratedInstrumentManifest(
+    instrument_id="CRA-1.0",
+    celex="32024R2847",
+    title="Cyber Resilience Act",
+    short_name="CRA",
+    version="1.0",
+    source_type="external",
+    jurisdiction="EU",
+    schema_version="1.0.0",
+    exported_at="2026-09-04T00:00:00Z",
+    baseline_sha256="a" * 64,
+    native_sha256="b" * 64,
+)
+
+_RESTORATION_ARTIFACT = CuratedArtifact(
+    manifest=_RESTORATION_MANIFEST,
+    baseline_blob=b'{"nodes": [], "edges": []}',
+    native_blob=b'{"nodes": [], "edges": []}',
+)
+
+_RESTORATION_SUCCESS_BODY = {
+    "instrument_id": "CRA-1.0",
+    "stages": [
+        {"stage": "verified", "status": "succeeded"},
+        {"stage": "staged", "status": "succeeded"},
+        {"stage": "merged_and_finalized", "status": "succeeded"},
+    ],
+}
+
+
+def _restoration_success_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/restorations"
+    assert request.method == "POST"
+    return httpx.Response(200, json=_RESTORATION_SUCCESS_BODY)
+
+
+class TestRestoreInstrument:
+    """Slice 7.2: PsServiceClient.restore_instrument(artifact)."""
+
+    def test_parses_a_200_success_response(self) -> None:
+        """A 200 POST /restorations body parses into a RestorationResult."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_restoration_success_handler)
+        )
+
+        result = client.restore_instrument(_RESTORATION_ARTIFACT)
+
+        assert result.instrument_id == "CRA-1.0"
+        assert len(result.stages) == 3
+        assert result.stages[0].stage == "verified"
+        assert result.stages[0].status == "succeeded"
+        assert result.stages[2].stage == "merged_and_finalized"
+
+    def test_posts_the_manifest_fields_and_base64_blobs(self) -> None:
+        """The request body carries instrument_id, every manifest field, and base64 blobs."""
+        captured_bodies: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json=_RESTORATION_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.restore_instrument(_RESTORATION_ARTIFACT)
+
+        assert captured_bodies == [
+            {
+                "instrument_id": "CRA-1.0",
+                "manifest": {
+                    "instrument_id": "CRA-1.0",
+                    "celex": "32024R2847",
+                    "title": "Cyber Resilience Act",
+                    "short_name": "CRA",
+                    "version": "1.0",
+                    "source_type": "external",
+                    "jurisdiction": "EU",
+                    "schema_version": "1.0.0",
+                    "exported_at": "2026-09-04T00:00:00Z",
+                    "baseline_sha256": "a" * 64,
+                    "native_sha256": "b" * 64,
+                },
+                "baseline_blob_base64": base64.b64encode(b'{"nodes": [], "edges": []}').decode(
+                    "ascii"
+                ),
+                "native_blob_base64": base64.b64encode(b'{"nodes": [], "edges": []}').decode(
+                    "ascii"
+                ),
+            }
+        ]
+
+    def test_422_restore_artifact_rejected_raises_ps_cli_error(self) -> None:
+        """A 422 restore_artifact_rejected body maps to PsCliError per D5's error-body mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=422,
+                    code="restore_artifact_rejected",
+                    message="baseline blob checksum mismatch for instrument 'CRA-1.0'",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.restore_instrument(_RESTORATION_ARTIFACT)
+
+        assert "restore_artifact_rejected" in excinfo.value.msg
+        assert "checksum mismatch" in excinfo.value.msg
+
+    def test_502_restore_stage_failed_surfaces_failing_stage(self) -> None:
+        """A 502 restore_stage_failed body's failing_stage surfaces in the raised error."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=502,
+                    code="restore_stage_failed",
+                    message="the concurrency stage failed",
+                    failing_stage="concurrency",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.restore_instrument(_RESTORATION_ARTIFACT)
+
+        assert "restore_stage_failed" in excinfo.value.msg
+        assert "concurrency" in excinfo.value.msg
+
+    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.restore_instrument(_RESTORATION_ARTIFACT)
+
+        assert "Could not reach PS Service" in excinfo.value.msg

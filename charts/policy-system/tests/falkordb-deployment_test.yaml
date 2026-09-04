@@ -16,14 +16,14 @@ tests:
       - equal:
           path: spec.replicas
           value: 1
-  - it: mounts an emptyDir volume at /var/lib/falkordb/data by default
+  - it: mounts the falkordb-data volume at /var/lib/falkordb/data by default (PVC-backed)
     asserts:
       - equal:
           path: spec.template.spec.volumes[0].name
           value: falkordb-data
       - equal:
-          path: spec.template.spec.volumes[0].emptyDir
-          value: {}
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: RELEASE-NAME-policy-system-falkordb-data
       - equal:
           path: spec.template.spec.containers[0].volumeMounts[0].mountPath
           value: /var/lib/falkordb/data

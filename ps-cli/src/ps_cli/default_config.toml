@@ -1,1 +1,2 @@
 service_url = "http://127.0.0.1:8000"
+curated_repo_path = "./curated-content"

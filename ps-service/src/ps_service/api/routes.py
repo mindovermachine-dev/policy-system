@@ -12,10 +12,11 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 
-from ps_service.api.catalog import REGULATION_CATALOG, find_by_celex
+from ps_service.api.catalog import CATALOG, REGULATION_CATALOG, find_by_celex
 from ps_service.api.dependencies import (
     get_service_config,
     provide_pipeline_dependencies,
+    provide_restore_dependencies,
     provide_run_id,
 )
 from ps_service.api.errors import InternalIngestionNotImplementedError
@@ -25,13 +26,18 @@ from ps_service.api.ingestion_orchestration import (
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.models import (
+    CatalogInstrumentEntry,
+    CuratedCatalogResponse,
     IngestionAcceptedResponse,
     IngestionRequest,
     IngestionStatusResponse,
     RegulationCatalogEntry,
     RegulationCatalogResponse,
+    RestorationAcceptedResponse,
+    RestorationRequest,
     StageOutcome,
 )
+from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
 from ps_service.api.run_status import get_stage
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
@@ -140,6 +146,59 @@ async def create_ingestion(
     return _to_accepted_response(effective_run_id, outcome)
 
 
+async def list_curated_catalog() -> CuratedCatalogResponse:
+    """Return every curated instrument (external and internal), AC-BI-011.
+
+    Unlike ``list_regulations``, this is **not** CELEX-filtered -- it reads
+    the full ``catalog.json`` listing (D12's ``load_regulation_catalog()``
+    result, unfiltered) so ``ps-cli catalog list`` sees internal-source
+    instruments too. Depends on no FalkorDB/LLM fixture at all -- a
+    ``TestClient`` call against an app with neither wired still succeeds
+    (AC-BI-011's "no LLM provider configured").
+
+    Returns:
+        A :class:`CuratedCatalogResponse` listing every curated entry.
+    """
+    return CuratedCatalogResponse(
+        instruments=[
+            CatalogInstrumentEntry(
+                instrument_id=entry.instrument_id,
+                title=entry.title,
+                source_type=entry.source_type,
+                jurisdiction=entry.jurisdiction,
+            )
+            for entry in CATALOG
+        ]
+    )
+
+
+async def create_restoration(
+    request_body: RestorationRequest,
+    http_request: Request,
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[RestoreDependencies, Depends(provide_restore_dependencies)],
+) -> RestorationAcceptedResponse:
+    """Restore one curated instrument's artifact (D5, ``POST /restorations``).
+
+    Thin route wiring over ``restore_orchestration.run_restoration`` -- a
+    checksum/schema_version rejection surfaces as 422
+    (``RestoreArtifactRejectedError``), any other restore failure as 502
+    naming the failing stage (``RestoreStageFailedError``).
+
+    Args:
+        request_body: The artifact plus its manifest (base64-encoded blobs).
+        http_request: The raw request, for the caller host (mirrors
+            ``create_ingestion``'s own ``caller`` derivation).
+        config: The resolved service configuration (injected).
+        dependencies: The restore dependency bundle (injected; overridden in tests).
+
+    Returns:
+        A :class:`RestorationAcceptedResponse` naming the completed stages.
+    """
+    caller = http_request.client.host if http_request.client else "unknown"
+    return run_restoration(request_body, config=config, actor=caller, dependencies=dependencies)
+
+
 async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
     """Return ``run_id``'s currently-executing pipeline stage, best-effort.
 
@@ -168,6 +227,7 @@ def build_api_router() -> APIRouter:
     """
     router = APIRouter()
     router.add_api_route("/regulations", list_regulations, methods=["GET"])
+    router.add_api_route("/catalog", list_curated_catalog, methods=["GET"])
     router.add_api_route(
         "/ingestions",
         create_ingestion,
@@ -175,4 +235,10 @@ def build_api_router() -> APIRouter:
         status_code=status.HTTP_200_OK,
     )
     router.add_api_route("/ingestions/{run_id}", get_ingestion_status, methods=["GET"])
+    router.add_api_route(
+        "/restorations",
+        create_restoration,
+        methods=["POST"],
+        status_code=status.HTTP_200_OK,
+    )
     return router

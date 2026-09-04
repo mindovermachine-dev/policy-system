@@ -6,7 +6,7 @@ Increment 6: env var precedence + URL validation. See PLAN.md §1 D3 / §3.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -17,9 +17,6 @@ from ps_cli.config import (
     load_config,
 )
 from ps_cli.errors import PsCliError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_load_config_with_no_override_file_and_no_env_var_returns_packaged_default(
@@ -332,3 +329,87 @@ def test_load_config_uses_ps_cli_config_dir_env_var_when_config_dir_omitted(
     config = load_config(cwd=tmp_path)
 
     assert config == CliConfig(service_url="http://ctx-dev-env:9000")
+
+
+def test_load_config_with_no_override_file_and_no_env_var_returns_packaged_curated_repo_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `ps-cli.toml`, no `PS_CLI_CURATED_REPO_PATH` -> the packaged default wins.
+
+    PLAN.md §4 Slice 4.1 / CHANGES.md MI2.
+    """
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    monkeypatch.delenv("PS_CLI_CURATED_REPO_PATH", raising=False)
+
+    config = load_config()
+
+    assert config == CliConfig(
+        service_url="http://127.0.0.1:8000",
+        curated_repo_path=Path("./curated-content"),
+    )
+
+
+def test_load_config_with_override_file_curated_repo_path_wins_over_packaged_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `ps-cli.toml` `curated_repo_path` overrides the packaged default via `_deep_merge`.
+
+    PLAN.md §4 Slice 4.2 / CHANGES.md MI2 — no new merge code, `_deep_merge` already
+    handles the added key generically.
+    """
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    monkeypatch.delenv("PS_CLI_CURATED_REPO_PATH", raising=False)
+    (tmp_path / "ps-cli.toml").write_text('curated_repo_path = "./project-curated"\n')
+
+    config = load_config(cwd=tmp_path)
+
+    assert config == CliConfig(
+        service_url="http://127.0.0.1:8000",
+        curated_repo_path=Path("./project-curated"),
+    )
+
+
+def test_load_config_curated_repo_path_env_var_wins_over_override_file_and_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`PS_CLI_CURATED_REPO_PATH` outranks both the override file and the packaged default.
+
+    PLAN.md §4 Slice 4.3 / CHANGES.md MI2.
+    """
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    (tmp_path / "ps-cli.toml").write_text('curated_repo_path = "./project-curated"\n')
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", "/env/curated-content")
+
+    config = load_config(cwd=tmp_path)
+
+    assert config == CliConfig(
+        service_url="http://127.0.0.1:8000",
+        curated_repo_path=Path("/env/curated-content"),
+    )
+
+
+def test_load_config_curated_repo_path_resolves_independently_of_current_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`curated_repo_path` resolves the same regardless of which `service_url` case fires.
+
+    PLAN.md §4 Slice 4.4 / CHANGES.md MI2: a `targets.toml` with `current_context` set
+    (case 3 of `load_config`'s branching) must not prevent `curated_repo_path` from
+    resolving via the env-var/override/packaged-default chain — this is the test that
+    structurally proves MI2's fix was necessary; with the old inline-branch approach,
+    cases 1-3 never reached `_read_project_override`/`_deep_merge` at all.
+    """
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", "/env/curated-content")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "targets.toml").write_text(
+        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev:9000"\n'
+    )
+
+    config = load_config(cwd=tmp_path, config_dir=config_dir)
+
+    assert config == CliConfig(
+        service_url="http://ctx-dev:9000",
+        curated_repo_path=Path("/env/curated-content"),
+    )

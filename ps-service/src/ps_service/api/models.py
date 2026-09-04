@@ -5,7 +5,8 @@ Per L2 Data Modeling every REST request/response body is a Pydantic model with
 filesystem path, or an LLM call. This module holds the ``GET /regulations``
 response shapes and the ``POST /ingestions`` request/response models (a
 ``source``-discriminated union of a catalog request and an internal-document
-request, the accepted-response body, and the structured error body).
+request, the accepted-response body, and the structured error body), plus the
+``POST /restorations`` request/response models (D5, PLAN.md Batch 6).
 """
 
 from __future__ import annotations
@@ -31,6 +32,33 @@ class RegulationCatalogResponse(BaseModel):
 
     regulations: list[RegulationCatalogEntry]
     run_id: str = Field(min_length=1)
+
+
+class CatalogInstrumentEntry(BaseModel):
+    """One curated instrument as returned by ``GET /catalog`` (AC-BI-011).
+
+    Unlike :class:`RegulationCatalogEntry` (``GET /regulations``'s narrower,
+    CELEX-only contract, D12), this carries every curated instrument --
+    external and internal -- with no ``celex`` field at all: an internal
+    source (D15) has none, and a client driving ``ps-cli catalog list``
+    never needs it (the CELEX-specific fast path is ``POST /ingestions``'s
+    concern, not this listing's).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    instrument_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    source_type: Literal["external", "internal"]
+    jurisdiction: str | None = None
+
+
+class CuratedCatalogResponse(BaseModel):
+    """Response body for ``GET /catalog``: every curated instrument, unfiltered."""
+
+    model_config = ConfigDict(frozen=True)
+
+    instruments: list[CatalogInstrumentEntry]
 
 
 class CatalogIngestionRequest(BaseModel):
@@ -136,6 +164,70 @@ class IngestionStatusResponse(BaseModel):
 
     run_id: str = Field(min_length=1)
     stage: str | None = None
+
+
+class RestorationManifestPayload(BaseModel):
+    """The ``manifest.json`` fields carried inline in a ``POST /restorations`` body.
+
+    Field-for-field mirror of ``ps_service.export.models.InstrumentManifest``
+    (PLAN.md D1/D12) -- a plain dataclass, never itself a Pydantic model, since
+    it is internal pipeline plumbing shared by Export and Restore. The REST
+    boundary re-declares it here as a nested Pydantic model (L2 Data Modeling:
+    every REST request body is Pydantic) and ``api.restore_orchestration``
+    converts it to an ``InstrumentManifest`` before calling
+    ``ps_service.restore.restore_instrument``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument_id: str = Field(min_length=1)
+    celex: str | None = Field(default=None, min_length=10, max_length=10)
+    title: str = Field(min_length=1)
+    short_name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    source_type: Literal["external", "internal"]
+    jurisdiction: str | None = None
+    schema_version: str = Field(min_length=1)
+    exported_at: str = Field(min_length=1)
+    baseline_sha256: str = Field(min_length=64, max_length=64)
+    native_sha256: str = Field(min_length=64, max_length=64)
+
+
+class RestorationRequest(BaseModel):
+    """``POST /restorations`` body: one curated instrument's artifact (D5).
+
+    ``baseline_blob_base64``/``native_blob_base64`` are the artifact's two
+    UTF-8 JSON blobs (``export.serialize.to_json_bytes`` output, CHANGES2.md
+    §2.1), base64-encoded for JSON transport -- ``ps-cli`` reads them off
+    disk locally and uploads the bytes verbatim; PS Service never re-encodes
+    what it decodes here (D5's client-driven-trigger, server-side-pipeline
+    shape).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    instrument_id: str = Field(min_length=1)
+    manifest: RestorationManifestPayload
+    baseline_blob_base64: str = Field(min_length=1)
+    native_blob_base64: str = Field(min_length=1)
+
+
+class RestorationStageOutcome(BaseModel):
+    """One completed restore stage as reported in the accepted response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage: str = Field(min_length=1)
+    status: Literal["succeeded"]
+
+
+class RestorationAcceptedResponse(BaseModel):
+    """Success body for ``POST /restorations``: the instrument id and per-stage outcomes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    instrument_id: str = Field(min_length=1)
+    stages: list[RestorationStageOutcome]
 
 
 class ErrorDetail(BaseModel):

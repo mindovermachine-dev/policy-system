@@ -44,6 +44,9 @@ from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
 )
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -62,7 +65,11 @@ class _FakeQueryResult:
 
 
 class _FakeGraphHandle:
-    """Satisfies `GraphHandle` structurally, returning a scripted result."""
+    """Satisfies `GraphHandle` structurally, returning a scripted result.
+    Reports itself as seeded (D11) for `_SEED_CHECK_QUERY` so the mounted
+    transport's success-path tests still reach the caller's own scripted
+    result.
+    """
 
     def __init__(self, *, result: _FakeQueryResult) -> None:
         self._result = result
@@ -70,6 +77,8 @@ class _FakeGraphHandle:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
+        if q == _SEED_CHECK_QUERY:
+            return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         return self._result
 
 

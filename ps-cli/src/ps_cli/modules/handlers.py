@@ -15,10 +15,15 @@ import threading
 import uuid
 from typing import TYPE_CHECKING, cast
 
+from ps_cli import catalog_repo
+from ps_cli.config import load_config
+
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
+    from pathlib import Path
 
+    from ps_cli.config import CliConfig
     from ps_cli.http_client import PsServiceClientProtocol
 
 # How often the background poller (`_poll_ingestion_progress`) checks PS Service for the
@@ -148,6 +153,79 @@ def handle_internal_ingest(fixture_path: str, client: PsServiceClientProtocol) -
         print(f"{stage.stage}: {stage.status}")
 
 
+def handle_catalog_list(config: CliConfig) -> None:
+    """Print the local curated-content catalog, one line per instrument.
+
+    Reads `config.curated_repo_path`'s on-disk `catalog.json` directly via
+    `catalog_repo.read_catalog()` -- no `PsServiceClient` is ever constructed
+    (D13: `catalog list` needs no PS Service connection at all, unlike every
+    other command in this module). This is the only handler here that takes
+    a `CliConfig` instead of a client, by design -- see `ps_cli.cli.run()`'s
+    `NO_CLIENT_DISPATCH` branch, which never calls `_resolve_client` for it.
+    Format: ``"{instrument_id}  {title} ({source_type}, {jurisdiction})"``,
+    with ``jurisdiction`` printed as ``"n/a"`` when `None` (an internal
+    source, D15).
+    """
+    entries = catalog_repo.read_catalog(config.curated_repo_path)
+    for entry in entries:
+        jurisdiction = entry.jurisdiction if entry.jurisdiction is not None else "n/a"
+        print(f"{entry.instrument_id}  {entry.title} ({entry.source_type}, {jurisdiction})")
+
+
+def handle_catalog_restore(
+    instrument_id: str,
+    client: PsServiceClientProtocol,
+    *,
+    curated_repo_path: Path,
+) -> None:
+    """Restore one curated instrument's artifact into PS Service.
+
+    `instrument_id`'s format is already validated by argparse's
+    `type=_instrument_id_type` callback (`ps_cli.modules.parser`) before this
+    handler ever runs (L1 "Fail Fast at Boundaries"). Reads the artifact
+    locally via `catalog_repo.read_artifact` (D5: `ps-cli` reads the artifact
+    off `curated_repo_path`, PS Service does the FalkorDB work), then uploads
+    it via `client.restore_instrument()`. On success, prints the restored
+    instrument id and each completed stage's name and status, mirroring
+    `handle_regulations_ingest`'s summary-line shape. A `PsCliError` raised
+    by `catalog_repo.read_artifact` (missing local instrument directory) or
+    by the client (a structured PS Service rejection) propagates uncaught --
+    only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
+    """
+    artifact = catalog_repo.read_artifact(curated_repo_path, instrument_id)
+    result = client.restore_instrument(artifact)
+    print(f"instrument_id: {result.instrument_id}")
+    for stage in result.stages:
+        print(f"{stage.stage}: {stage.status}")
+
+
+def _dispatch_catalog_list(args: argparse.Namespace) -> None:
+    """Adapt `handle_catalog_list`'s signature to the `NO_CLIENT_DISPATCH` shape.
+
+    Calls `load_config()` directly -- never `ps_cli.cli._resolve_client` --
+    so no `PsServiceClient` is ever constructed for this command (D13).
+    Reads only `.curated_repo_path` off the result; `.service_url` is never
+    touched, per D13's "skip `_resolve_client`/`load_config().service_url`
+    entirely" requirement.
+    """
+    context = getattr(args, "context", None)
+    handle_catalog_list(load_config(context=context))
+
+
+def _dispatch_catalog_restore(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_catalog_restore`'s signature to the `DISPATCH` shape.
+
+    Unlike `catalog_list`, `catalog restore` does contact PS Service (D5), so
+    `client` here is the real `_resolve_client`-built one -- only the extra
+    `curated_repo_path` value is resolved locally via `load_config()`.
+    """
+    context = getattr(args, "context", None)
+    curated_repo_path = load_config(context=context).curated_repo_path
+    handle_catalog_restore(
+        cast("str", args.instrument_id), client, curated_repo_path=curated_repo_path
+    )
+
+
 def _dispatch_regulations_list(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_regulations_list`'s single-argument signature to the dispatch shape."""
     del args
@@ -168,4 +246,12 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None
     "regulations_list": _dispatch_regulations_list,
     "regulations_ingest": _dispatch_regulations_ingest,
     "internal_ingest": _dispatch_internal_ingest,
+    "catalog_restore": _dispatch_catalog_restore,
+}
+
+# Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must
+# never construct a `PsServiceClient` or resolve `.service_url` at all (D13). `ps_cli.
+# cli.run()` checks this dict before falling through to `DISPATCH` + `_resolve_client`.
+NO_CLIENT_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
+    "catalog_list": _dispatch_catalog_list,
 }

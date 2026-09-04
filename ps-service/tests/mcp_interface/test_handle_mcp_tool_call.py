@@ -22,6 +22,7 @@ import ps_service.query_engine
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.mcp_interface import mcp_server
 from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
     _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
 )
 from ps_service.query_engine.models import QueryResult
@@ -52,7 +53,10 @@ class _FakeQueryResult:
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. `query()` records every call
     and either returns a scripted `_FakeQueryResult` or raises a scripted
-    exception.
+    exception. Reports itself as seeded (D11) for `_SEED_CHECK_QUERY` --
+    this module tests the pre-existing success/error/write-guard shapes,
+    not the unseeded-graph guard (see `test_unseeded_error.py`), so a read
+    query here must still reach the caller's own scripted result/error.
     """
 
     def __init__(
@@ -69,6 +73,8 @@ class _FakeGraphHandle:
         self.calls.append(q)
         if self._error is not None:
             raise self._error
+        if q == _SEED_CHECK_QUERY:
+            return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         assert self._result is not None
         return self._result
 

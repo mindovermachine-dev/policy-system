@@ -9,7 +9,7 @@ falkordb:
     repository: falkordb/falkordb
     tag: latest
   persistence:
-    enabled: false
+    enabled: true
     storageClassName: ""
   browser:
     enabled: true

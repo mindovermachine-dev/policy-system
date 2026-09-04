@@ -15,9 +15,15 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, status
+from starlette.datastructures import Headers
+from starlette.requests import Request
 
-from ps_service.api.error_handlers import register_exception_handlers
+from ps_service.api.error_handlers import (
+    _make_verbatim_handler,  # pyright: ignore[reportPrivateUsage]  # shared body-shaping helper; reused so the 413 body matches every other ApiError's shape exactly
+    register_exception_handlers,
+)
+from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.routes import build_api_router
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
@@ -42,11 +48,61 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_s
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
 # in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
 # imported) so this fix stays within main.py, without touching the already-shipped, already-reviewed
 # Logging component's private API surface.
 _LOG_FILENAME = "ps-service.jsonl"
+
+_REQUEST_BODY_TOO_LARGE_HANDLER = _make_verbatim_handler(
+    "request_body_too_large", status.HTTP_413_CONTENT_TOO_LARGE
+)
+"""The exact same body-shaping handler `register_exception_handlers` would wire up for
+`RequestBodyTooLargeError` (`error_handlers._API_ERROR_SPECS`) -- reused directly by
+`_MaxBodySizeMiddleware` below, since a pure ASGI middleware added via `app.add_middleware`
+sits OUTSIDE Starlette's `ExceptionMiddleware` (confirmed empirically against this repo's
+installed `starlette`/`fastapi`: an exception raised from a middleware never reaches a
+type-specific `add_exception_handler` registration -- it is caught by the outer
+`ServerErrorMiddleware` and collapses to this app's generic catch-all `Exception` handler
+instead, a 500 with no `request_body_too_large` code). CHANGES.md OQ7's own sketch has the
+middleware simply `raise RequestBodyTooLargeError(...)`; that raise alone would NOT
+actually reach the 413 mapping in this codebase's app (which registers a catch-all
+`Exception` handler) -- calling this handler function directly and sending its response
+ourselves is the fix that makes OQ7's stated intent (413, not 500) real."""
+
+
+class _MaxBodySizeMiddleware:
+    """Pure ASGI middleware rejecting an oversized request body (CHANGES.md OQ7).
+
+    Deliberately not `BaseHTTPMiddleware`, which buffers the whole body before
+    a route ever sees it -- this inspects the `Content-Length` header alone,
+    before Starlette reads any body bytes at all. Checks `Content-Length`
+    only, not a streamed byte count: correct for `ps-cli`'s `httpx`-based
+    `POST /restorations` call (a fixed-length JSON body, never
+    chunked-transfer-encoded); a client that omits `Content-Length` and
+    streams indefinitely is a residual, explicitly accepted gap (OQ7).
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int) -> None:
+        """Wrap `app`, rejecting any HTTP request whose `Content-Length` exceeds `max_bytes`."""
+        self._app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Reject an oversized request with a 413 before `self._app` ever runs."""
+        if scope["type"] == "http":
+            content_length = Headers(scope=scope).get("content-length")
+            if content_length is not None and int(content_length) > self._max_bytes:
+                exc = RequestBodyTooLargeError(
+                    f"request body exceeds the {self._max_bytes}-byte limit"
+                )
+                response = await _REQUEST_BODY_TOO_LARGE_HANDLER(Request(scope, receive), exc)
+                await response(scope, receive, send)
+                return
+        await self._app(scope, receive, send)
+
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -252,6 +308,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(_MaxBodySizeMiddleware, max_bytes=config.max_request_body_bytes)
     app.state.ready = False
     app.state.config = config
     register_exception_handlers(app)

@@ -25,7 +25,11 @@ import pytest
 
 from ps_service.logging.emitter import EmitterConfig, LogEmitter
 from ps_service.query_engine import cypher_query
-from ps_service.query_engine.cypher_query import execute_cypher_query, is_write_clause
+from ps_service.query_engine.cypher_query import (
+    _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
+    execute_cypher_query,
+    is_write_clause,
+)
 from ps_service.query_engine.errors import WriteClauseRejectedError
 
 if TYPE_CHECKING:
@@ -46,15 +50,20 @@ class _FakeQueryResult:
     valid return type if it were ever (wrongly) called.
     """
 
-    def __init__(self) -> None:
-        self.header: list[list[object]] = []
-        self.result_set: list[object] = []
+    def __init__(
+        self, *, header: list[list[object]] | None = None, result_set: list[object] | None = None
+    ) -> None:
+        self.header: list[list[object]] = header if header is not None else []
+        self.result_set: list[object] = result_set if result_set is not None else []
 
 
 class _FakeGraphHandle:
     """Satisfies `GraphHandle` structurally. Records every `.query()`
     invocation in `calls` so tests can assert the guard short-circuited
-    before FalkorDB was ever touched.
+    before FalkorDB was ever touched. Reports itself as seeded (D11) for
+    `_SEED_CHECK_QUERY` -- this module tests the write-clause guard, not the
+    unseeded-graph guard (see `test_execute_cypher_query_unseeded.py`), so a
+    read query here must still reach the real success path.
     """
 
     def __init__(self) -> None:
@@ -62,6 +71,8 @@ class _FakeGraphHandle:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
+        if q == _SEED_CHECK_QUERY:
+            return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         return _FakeQueryResult()
 
 
@@ -114,7 +125,7 @@ def test_word_boundary_does_not_false_positive_on_identifier_substring(emitter: 
         "MATCH (n:CreateEvent) RETURN n", graph=fake_graph, emitter=emitter
     )
 
-    assert fake_graph.calls == ["MATCH (n:CreateEvent) RETURN n"]
+    assert fake_graph.calls == [_SEED_CHECK_QUERY, "MATCH (n:CreateEvent) RETURN n"]
     assert result.row_count == 0
 
 
