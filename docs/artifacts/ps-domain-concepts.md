@@ -34,10 +34,12 @@ This document models the Policy System domain as a **property graph**; a semanti
 **A fact belongs on the node or the edge, whichever it's actually about.** Properties that describe one specific relationship instance (a provenance reference for example) live on the edge, not on the node — otherwise a reused/canonical node ends up with a single property value that can't be true for all of its relationships at once.
 
 The model has two layers:
+
 - A **compliance spine** (`RegulatoryInstrument → Role/Requirement → Obligation → Capability → Policy → Standard → Control`) that carries regulatory provenance and implementation traceability.
 - A **classification layer** (`PracticeArea`, `RiskPath`) that organizes and analyzes the spine without changing its compliance semantics.
 
 **Orthogonal to that layering is a second axis: where a node's data actually originates.**
+
 - **Regulatory** (`RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`) — every property on these nodes is either lifted directly from regulatory text or derived transitively from it (see [Provenance Placement Rule](#provenance-placement-rule)). Nothing here is authored by a consumer of the model.
 - **Governance** (`Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath`) — authored by the organization consuming the compliance spine: policy managers, engineering teams, risk owners, via Policy Editor. None of these nodes carries a `source_ref`; their provenance is organizational (`owner_id`, `status`, `evidence_ref`), not regulatory.
 
@@ -99,6 +101,7 @@ graph LR
 ```
 
 **Legend:**
+
 - Rounded nodes are labeled `(:Label)`, matching Cypher node syntax.
 - Edge labels are relationship types in `SCREAMING_SNAKE_CASE`, matching Cypher relationship syntax.
 - `{property}` under an edge label denotes an edge property — a fact about that specific relationship instance, not about either endpoint node.
@@ -164,8 +167,8 @@ full cross-model shape and provenance rationale at once.
 | `SUPERSEDED_BY` | RegulatoryInstrument → RegulatoryInstrument | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
 | `TRANSPOSES` | RegulatoryInstrument → RegulatoryInstrument | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
 | `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved. The `1` (exactly one Role per Obligation) holds structurally, via Obligation's Role-scoped identity — not as a rule extraction must be trusted to honour. See [Obligation](#obligation). |
-| `SATISFIED_BY` | Requirement → Obligation | 1..* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
-| `REQUIRES` | Obligation → Capability | 1..* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
+| `SATISFIED_BY` | Requirement → Obligation | 1..\* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
+| `REQUIRES` | Obligation → Capability | 1..\* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
 | `COVERS` | PracticeArea → Capability | 1 : 0..* | — | 3 — classification layer |
 | `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
 | `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
@@ -181,12 +184,14 @@ full cross-model shape and provenance rationale at once.
 ### Regulatory instrument
 
 **Description:** A regulation source, identified by an official identifier, title, effective date, version, and status. RegulatoryInstrument is the root of the domain model: it is the authoritative source Role and Requirement are derived from, and the point every other concept's provenance ultimately traces back to. `source_type` distinguishes two kinds of source that both fit this shape:
+
 - **`external`** — EU legislation (GDPR, CRA, NIS2), an international standard, or national law, ingested from an official regulatory source.
 - **`internal`** — an organizationally-authored "Business Regulation," e.g. an Engineering Practices standard, governed through normal internal engineering governance rather than official-source ingestion.
 
 Both source types flow through the same `DEFINES` / `EXPRESSES` / Role / Requirement chain unchanged, so an internal standard's Requirements converge onto the same canonical `Capability` nodes as external regulations — e.g. an internal "Security Logging Practice" can land on the same `Capability` node that CRA and GDPR already converge on (see [Capability](#capability)). Convergence is at `Capability`, not `Obligation`: an internal source's duties get their own regulation-scoped `Role` and `Obligation` nodes, the same as any external source.
 
 Within `external`, a second axis — `instrument_type` — records what kind of legal instrument the source is, because it changes both how the source is ingested and how its obligations are scoped to a company:
+
 - **`regulation`** — a directly-applicable instrument binding entities EU-wide from one authoritative text, with no national implementation step (EU Regulations such as GDPR and CRA; also an international standard adopted as-is).
 - **`directive`** — an EU instrument that binds *member states* to a result but leaves the form to national law: each member state transposes it into its own statute, with real discretion over scope thresholds, sanctions, and sector coverage (NIS2). A `directive` node holds the framework-level extraction from the Directive text itself; the checkable national obligations live in separate `national_transposition` nodes linked to it by [`TRANSPOSES`](#edge-catalog).
 - **`national_transposition`** — one member state's statute transposing a specific `directive`. Its `jurisdiction` is a single country, its `source_ref`s point into that country's law, and it carries an outbound `TRANSPOSES` edge to the `directive` it implements.
@@ -279,7 +284,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `EXPRESSES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → EXPRESSES](#regulatory-instrument). `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge. |
-| `SATISFIED_BY` | Obligation | 1..* : 0..* | — | Bridges this regulation-specific condition to one or more Obligations. Many-to-many within a single source: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies several Requirements borne by the same Role (one Role's duties often recur across articles). Obligations are not shared across regulations — cross-source convergence is at [Capability](#capability). |
+| `SATISFIED_BY` | Obligation | 1..\* : 0..* | — | Bridges this regulation-specific condition to one or more Obligations. Many-to-many within a single source: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies several Requirements borne by the same Role (one Role's duties often recur across articles). Obligations are not shared across regulations — cross-source convergence is at [Capability](#capability). |
 
 ---
 
@@ -306,8 +311,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `HAS` (inbound) | Role | 0..* : 1 | — | See [Role → HAS](#role). Each Obligation is borne by exactly one Role — structurally, via the Role-scoped identity above, not merely by convention. |
-| `SATISFIED_BY` (inbound) | Requirement | 0..* : 1..* | — | See [Requirement → SATISFIED_BY](#requirement). |
-| `REQUIRES` (outbound) | Capability | 1..* : 0..* | — | See [Capability](#capability). |
+| `SATISFIED_BY` (inbound) | Requirement | 0..\* : 1..* | — | See [Requirement → SATISFIED_BY](#requirement). |
+| `REQUIRES` (outbound) | Capability | 1..\* : 0..* | — | See [Capability](#capability). |
 
 ---
 
@@ -390,9 +395,9 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `REQUIRES` (inbound) | Obligation | 0..* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
-| `COVERS` (inbound) | PracticeArea | 0..* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
-| `MITIGATED_BY` (inbound) | RiskPath | 0..* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
+| `REQUIRES` (inbound) | Obligation | 0..\* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
+| `COVERS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
+| `MITIGATED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
 | `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). |
 
 ---
@@ -489,7 +494,7 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter once
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `IMPLEMENTED_BY` (inbound) | Standard | 0..* : 1 | — | See [Standard → IMPLEMENTED_BY](#standard). Each Control verifies exactly one Standard. |
-| `VERIFIED_BY` (inbound) | RiskPath | 0..* : 1..* | — | See [RiskPath → VERIFIED_BY](#riskpath). Enables completeness checks that each active RiskPath has concrete verification evidence. |
+| `VERIFIED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → VERIFIED_BY](#riskpath). Enables completeness checks that each active RiskPath has concrete verification evidence. |
 
 ---
 

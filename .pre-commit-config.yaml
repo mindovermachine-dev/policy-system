@@ -20,7 +20,7 @@ repos:
         entry: markdownlint-cli2 --no-globs
         language: system
         files: \.md$
-        exclude: (^|/)(node_modules|\.venv|tmp|background|dist|spikes|docs|tools|test-data|\.orchestrator)/|^CLAUDE\.md$|^\.github/agents/
+        exclude: (^|/)(node_modules|\.venv|tmp|background|dist|spikes|docs|tools|test-data|\.orchestrator)/|^CLAUDE\.md$|^\.github/agents/|^ps-service/src/ps_service/mcp_interface/ps-domain-concepts\.md$
       - id: prettier
         name: prettier --check
         entry: prettier --check

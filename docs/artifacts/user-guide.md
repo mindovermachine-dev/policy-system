@@ -368,7 +368,7 @@ enforced.
 
 | Symptom                                | Check                                                                                                                                            |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Service unreachable                    | `ps health` — reports health, readiness, and which dependency is failing ([#68](https://github.com/mindovermachine-dev/policy-system/issues/68)) |
+| Service unreachable                    | `ps-cli health` — reports reachability, health, readiness, and which dependency (if any) is unhealthy                                            |
 | Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
 | `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — usually FalkorDB or an LLM provider is unreachable                                                            |
 | Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
@@ -522,6 +522,7 @@ Global flags, usable before or after any subcommand:
 
 | Command | Arguments | Description |
 | --- | --- | --- |
+| `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency. |
 | `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). No FalkorDB/LLM dependency. |
 | `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli internal ingest <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
@@ -588,10 +589,20 @@ Beyond that, PS Service's own health is what to check next — see
 [Configuration reference](#configuration-reference) and
 [Troubleshooting / FAQ](#troubleshooting--faq) below for `/health` vs `/ready`.
 
-> ❌ **`ps-cli health` doesn't exist yet.** There's no single command that reports
-> reachability/health/readiness for your current target — until it ships
-> ([#68](https://github.com/mindovermachine-dev/policy-system/issues/68)), check
-> `/health` and `/ready` directly (below).
+`ps-cli health` reports all three — reachability, health, and readiness — in one call:
+
+```
+$ ps-cli health
+reachable: yes
+health: alive
+ready: ready
+```
+
+```
+$ ps-cli health
+❌ PS Service is reachable but not ready (health='alive', ready='not_ready').
+💡 unhealthy dependencies: falkordb
+```
 
 ---
 
@@ -648,9 +659,8 @@ without needing this backup/restore machinery at all.
 | Symptom | Check |
 | --- | --- |
 | `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config list-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
-| A command fails right after connecting | `curl <target>/ready` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `/health` (liveness only) succeeding while `/ready` fails means the process is up but a dependency, or required config, isn't. |
+| A command fails right after connecting | `ps-cli health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but a dependency, or required config, isn't. |
 | `regulations ingest` / `internal ingest` fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [CONTRIBUTING.md](../../CONTRIBUTING.md#configure-the-llm-interface). |
-| I want a single command instead of curling `/health`/`/ready` | Not available yet — [#68](https://github.com/mindovermachine-dev/policy-system/issues/68). |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [ps-cli Troubleshooting](#troubleshooting). |
 
 ## Glossary

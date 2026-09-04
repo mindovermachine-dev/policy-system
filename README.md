@@ -46,6 +46,9 @@ chart install, and seeding the graph from the curated catalog) work today; steps
 [Status of this path](./docs/artifacts/user-guide.md#status-of-this-path) table, tracked
 as [#53](https://github.com/mindovermachine-dev/policy-system/issues/53).
 
+If something doesn't come up, run `ps-cli health` first — it reports whether PS Service
+is reachable, alive, and ready, naming any unhealthy dependency.
+
 **To actually run the system today**, follow [CONTRIBUTING.md](./CONTRIBUTING.md)
 Option A or B — a devcontainer or local venv, with FalkorDB in a Podman container and
 Claude Desktop wired to a locally-spawned MCP server. That path works now.

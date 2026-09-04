@@ -144,7 +144,7 @@ def test_ready_returns_200_and_not_ready_status_before_lifespan_runs(app: FastAP
     response = TestClient(app).get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "not_ready"}
+    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
 
 
 def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> None:
@@ -155,7 +155,7 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
         response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
 
 
 def test_lifespan_calls_configure_before_emit_log_entry(
@@ -261,21 +261,29 @@ def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
 
 
 @pytest.mark.parametrize(
-    "make_response",
-    [_get_bare_health, _get_bare_ready, _get_ready_after_lifespan_startup],
+    ("make_response", "expected_keys"),
+    [
+        (_get_bare_health, {"status"}),
+        (_get_bare_ready, {"status", "unhealthy_dependencies"}),
+        (_get_ready_after_lifespan_startup, {"status", "unhealthy_dependencies"}),
+    ],
 )
 def test_200_response_body_contains_only_a_status_key(
-    make_response: Callable[[FastAPI], httpx.Response], app: FastAPI
+    make_response: Callable[[FastAPI], httpx.Response],
+    expected_keys: set[str],
+    app: FastAPI,
 ) -> None:
-    """AC-BI-009 (final): every 200-response body's key set is exactly `{"status"}`.
+    """AC-BI-009 (final): every 200-response body's key set is exactly the documented shape.
 
     Covers every 200-response state reached by increments 1-4's tests: bare
-    `/health`, bare `/ready`, and `/ready` after `lifespan` startup completes.
+    `/health` (`{"status"}`), and bare/post-`lifespan`-startup `/ready`
+    (`{"status", "unhealthy_dependencies"}` since issue #68) — no undocumented
+    key ever leaks into either response.
     """
     response = make_response(app)
 
     assert response.status_code == 200
-    assert response.json().keys() == {"status"}
+    assert response.json().keys() == expected_keys
 
 
 @pytest.mark.parametrize("path", ["/health", "/ready"])
@@ -967,7 +975,13 @@ def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "not_ready"}
+    # `failing_connect` raises inside `connect_from_config`, before
+    # `check_falkordb_connectivity` (the call that would `mark_unhealthy`) is
+    # ever reached — so the live registry never records FalkorDB as unhealthy,
+    # even though `app.state.ready` correctly stays False. An empty list here
+    # is the textually correct response (AC-BI-001 says "currently recorded"
+    # unhealthy), not a bug.
+    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
 
 
 def test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency(
@@ -1026,27 +1040,67 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(
     app: FastAPI,
 ) -> None:
-    """The live gate (`dependency_health.all_healthy`), not just the one-time
-    startup gate: a call site elsewhere (e.g. `graph_writer`'s write path)
-    marking FalkorDB unhealthy mid-run must be reflected on the next
-    `/ready` poll, without needing a restart.
+    """The live gate (`dependency_health`'s registry, read via `is_healthy`),
+    not just the one-time startup gate: a call site elsewhere (e.g.
+    `graph_writer`'s write path) marking FalkorDB unhealthy mid-run must be
+    reflected on the next `/ready` poll, without needing a restart.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {"status": "ready"}
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
 
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
-        assert client.get("/ready").json() == {"status": "not_ready"}
+        assert client.get("/ready").json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": ["falkordb"],
+        }
 
 
 def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -> None:
     with TestClient(app) as client:
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
-        assert client.get("/ready").json() == {"status": "not_ready"}
+        assert client.get("/ready").json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": ["falkordb"],
+        }
 
         dependency_health.mark_healthy(dependency_health.FALKORDB)
 
-        assert client.get("/ready").json() == {"status": "ready"}
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+
+def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
+    """AC-BI-002: a fully healthy `/ready` response names zero unhealthy dependencies."""
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
+
+
+def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: FastAPI) -> None:
+    """AC-BI-001: an unhealthy dependency's name appears in `/ready`'s response."""
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
+
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": ["falkordb"]}
+
+
+def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: FastAPI) -> None:
+    """AC-BI-003: `mark_unhealthy`'s raw error string never leaks into `/ready`'s
+    response — only the dependency's name does.
+    """
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(
+            dependency_health.FALKORDB,
+            error=RuntimeError("super-secret-connection-string-should-never-leak"),
+        )
+
+        response = client.get("/ready")
+
+    assert "super-secret-connection-string-should-never-leak" not in response.text
+    assert response.json()["unhealthy_dependencies"] == ["falkordb"]
 
 
 # --- Config-completeness-gated readiness (issue #16 follow-up) -------------
@@ -1063,7 +1117,7 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
     with TestClient(incomplete_app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "not_ready"}
+    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
 
 
 def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
@@ -1076,7 +1130,7 @@ def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     with TestClient(complete_app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "ready"}
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
 
 
 def test_startup_config_incompleteness_emits_a_warning_log_entry_naming_missing_fields(
@@ -1114,8 +1168,8 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
     incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        assert client.get("/ready").json() == {"status": "not_ready"}
-        assert client.get("/ready").json() == {"status": "not_ready"}
+        assert client.get("/ready").json() == {"status": "not_ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {"status": "not_ready", "unhealthy_dependencies": []}
 
 
 # --- MCP Streamable HTTP transport mounted at the composition root (issue #39) ---

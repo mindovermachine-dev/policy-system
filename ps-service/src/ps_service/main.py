@@ -30,7 +30,7 @@ from ps_service.dependency_health import (
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
-    all_healthy,
+    is_healthy,
 )
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
@@ -325,23 +325,37 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """
         return {"status": "alive"}
 
-    async def ready() -> dict[str, str]:
+    async def ready() -> dict[str, str | list[str]]:
         """Report "ready" only once startup succeeded AND every dependency is currently healthy.
 
         Two independent gates (issue #22): `app.state.ready` (the one-time
         startup probe from `lifespan` — which itself folds in both the three
         dependency probes AND ingestion config completeness, issue #16
-        follow-up) AND `dependency_health.all_healthy(...)` (the live signal,
-        updated by real FalkorDB/LLM Interface/Cellar-ELI traffic as it
-        happens) both have to hold. The live gate is what lets `/ready` flip
-        back to `not_ready` if a dependency fails mid-run, and self-heal on
-        its next success, without waiting for a restart — config
-        completeness has no equivalent live gate because it cannot change
-        mid-run (see `lifespan`'s docstring), so `app.state.ready` alone is
-        the whole story for that half.
+        follow-up) AND the live `dependency_health` registry (updated by real
+        FalkorDB/LLM Interface/Cellar-ELI traffic as it happens) both have to
+        hold. The live gate is what lets `/ready` flip back to `not_ready` if
+        a dependency fails mid-run, and self-heal on its next success,
+        without waiting for a restart — config completeness has no
+        equivalent live gate because it cannot change mid-run (see
+        `lifespan`'s docstring), so `app.state.ready` alone is the whole
+        story for that half.
+
+        `unhealthy_dependencies` (issue #68) names every currently-unhealthy
+        member of `_READY_DEPENDENCIES` by its `dependency_health` constant
+        string, read directly off the live registry via `is_healthy` — never
+        the raw error text `mark_unhealthy` stores, which stays private to
+        `dependency_health`. Always present, empty when every dependency is
+        healthy, so callers get one predictable shape rather than two
+        distinguished by key presence.
         """
-        is_ready = app.state.ready and all_healthy(_READY_DEPENDENCIES)
-        return {"status": "ready" if is_ready else "not_ready"}
+        unhealthy_dependencies = [
+            dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
+        ]
+        is_ready = app.state.ready and not unhealthy_dependencies
+        return {
+            "status": "ready" if is_ready else "not_ready",
+            "unhealthy_dependencies": unhealthy_dependencies,
+        }
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/ready", ready, methods=["GET"])

@@ -14,9 +14,11 @@ import pytest
 from ps_cli.catalog_repo import CuratedArtifact, CuratedInstrumentManifest
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
+    _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per list_regulations()'s existing precedent
     PsServiceClient,
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
 )
+from ps_cli.models import ReadinessResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -775,3 +777,142 @@ class TestRestoreInstrument:
             client.restore_instrument(_RESTORATION_ARTIFACT)
 
         assert "Could not reach PS Service" in excinfo.value.msg
+
+
+def _health_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/health"
+    assert request.method == "GET"
+    return httpx.Response(200, json={"status": "alive"})
+
+
+class TestCheckHealth:
+    """Slice 4: PsServiceClient.check_health()."""
+
+    def test_check_health_returns_status_string_on_success(self) -> None:
+        """A 200 GET /health body's `status` field is returned as-is."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_health_handler)
+        )
+
+        status = client.check_health()
+
+        assert status == "alive"
+
+    def test_check_health_raises_ps_cli_error_on_connect_failure(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_health()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert "http://127.0.0.1:8000" in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            ["not", "a", "dict"],
+            {"status": 123},
+            {"no_status_key": "alive"},
+        ],
+    )
+    def test_check_health_raises_generic_error_on_malformed_body(self, body: object) -> None:
+        """A malformed /health body raises the generic PsCliError, not a new exception type."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_health()
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
+
+
+_READY_BODY_HEALTHY: dict[str, object] = {"status": "ready", "unhealthy_dependencies": []}
+_READY_BODY_NOT_READY: dict[str, object] = {
+    "status": "not_ready",
+    "unhealthy_dependencies": ["falkordb", "cellar_eli"],
+}
+
+
+def _make_ready_handler(body: object) -> Callable[[httpx.Request], httpx.Response]:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/ready"
+        assert request.method == "GET"
+        return httpx.Response(200, json=body)
+
+    return _handler
+
+
+class TestCheckReadiness:
+    """Slice 5: PsServiceClient.check_readiness()."""
+
+    def test_check_readiness_returns_readiness_result_when_ready(self) -> None:
+        """A ready /ready body parses into a ReadinessResult with an empty list."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_HEALTHY)),
+        )
+
+        result = client.check_readiness()
+
+        assert result == ReadinessResult(status="ready", unhealthy_dependencies=[])
+
+    def test_check_readiness_returns_readiness_result_when_not_ready_with_unhealthy_names(
+        self,
+    ) -> None:
+        """A not-ready /ready body's unhealthy_dependencies names surface verbatim."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_make_ready_handler(_READY_BODY_NOT_READY)),
+        )
+
+        result = client.check_readiness()
+
+        assert result == ReadinessResult(
+            status="not_ready", unhealthy_dependencies=["falkordb", "cellar_eli"]
+        )
+
+    def test_check_readiness_raises_ps_cli_error_on_connect_failure(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_readiness()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            ["not", "a", "dict"],
+            {"status": 123, "unhealthy_dependencies": []},
+            {"status": "ready"},
+            {"status": "ready", "unhealthy_dependencies": "not-a-list"},
+            {"status": "ready", "unhealthy_dependencies": ["falkordb", 123]},
+        ],
+    )
+    def test_check_readiness_raises_generic_error_on_malformed_body(self, body: object) -> None:
+        """Every malformed /ready body shape raises the generic PsCliError.
+
+        Covers: non-dict body, status not a string, missing unhealthy_dependencies
+        key, unhealthy_dependencies not a list, and a non-string list item.
+        """
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.check_readiness()
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG

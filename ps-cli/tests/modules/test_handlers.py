@@ -22,6 +22,7 @@ from ps_cli.config import CliConfig
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     IngestionResult,
+    ReadinessResult,
     RegulationEntry,
     RegulationsResult,
     RestorationResult,
@@ -31,6 +32,7 @@ from ps_cli.models import (
 from ps_cli.modules.handlers import (
     handle_catalog_list,
     handle_catalog_restore,
+    handle_health,
     handle_regulations_ingest,
     handle_regulations_list,
 )
@@ -55,6 +57,14 @@ class _UnusedPsServiceClientMethods:
     def list_regulations(self) -> RegulationsResult:
         """Fail: this test's fake does not expect `list_regulations()` to be called."""
         raise AssertionError("list_regulations must not be called in this test")
+
+    def check_health(self) -> str:
+        """Fail: this test's fake does not expect `check_health()` to be called."""
+        raise AssertionError("check_health must not be called in this test")
+
+    def check_readiness(self) -> ReadinessResult:
+        """Fail: this test's fake does not expect `check_readiness()` to be called."""
+        raise AssertionError("check_readiness must not be called in this test")
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
@@ -450,3 +460,83 @@ def test_handle_catalog_restore_propagates_ps_cli_error_when_local_artifact_miss
         handle_catalog_restore("MISSING-1.0", fake, curated_repo_path=tmp_path)
 
     assert fake.called_with_artifact is None
+
+
+class _FakeHealthClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake implementing `check_health()`/`check_readiness()`'s signatures."""
+
+    def __init__(self, *, health_status: str, readiness: ReadinessResult) -> None:
+        """Script this fake's `check_health()`/`check_readiness()` return values."""
+        self._health_status = health_status
+        self._readiness = readiness
+
+    def check_health(self) -> str:
+        """Return the scripted health status."""
+        return self._health_status
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return the scripted readiness result."""
+        return self._readiness
+
+
+def test_handle_health_prints_reachable_alive_ready_on_happy_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A fully healthy, fully ready target prints exactly the three summary lines (D10/D11)."""
+    fake = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
+    )
+
+    handle_health(fake)
+
+    captured = capsys.readouterr()
+    assert captured.out == "reachable: yes\nhealth: alive\nready: ready\n"
+    assert captured.err == ""
+
+
+def test_handle_health_raises_ps_cli_error_naming_unhealthy_dependencies_when_not_ready() -> None:
+    """A not-ready target with a named unhealthy dependency raises PsCliError with that name
+    in the hint (AC-BI-001 handler half, AC-BI-007).
+    """
+    fake = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=["falkordb"]),
+    )
+
+    with pytest.raises(PsCliError) as excinfo:
+        handle_health(fake)
+
+    assert "not ready" in excinfo.value.msg
+    assert excinfo.value.hint is not None
+    assert "falkordb" in excinfo.value.hint
+
+
+def test_handle_health_raises_ps_cli_error_with_no_hint_when_no_dependency_named() -> None:
+    """A not-ready target with no unhealthy dependency named (§0.3's line-970 nuance) still
+    raises, but with no hint -- proving the hint is genuinely conditional, not always-present.
+    """
+    fake = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=[]),
+    )
+
+    with pytest.raises(PsCliError) as excinfo:
+        handle_health(fake)
+
+    assert excinfo.value.hint is None
+
+
+def test_handle_health_not_ready_message_never_says_could_not_reach() -> None:
+    """The not-ready error's rendered text is textually distinct from the unreachable-target
+    error's wording (AC-BI-008), proven by an executed assertion, not just inspection.
+    """
+    fake = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=["falkordb"]),
+    )
+
+    with pytest.raises(PsCliError) as excinfo:
+        handle_health(fake)
+
+    assert "Could not reach" not in str(excinfo.value)

@@ -17,6 +17,7 @@ import httpx
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     IngestionResult,
+    ReadinessResult,
     RegulationEntry,
     RegulationsResult,
     RestorationResult,
@@ -46,6 +47,8 @@ _READ_TIMEOUT_MSG = "PS Service at {base_url} did not respond in time."
 
 _INGESTIONS_PATH = "/ingestions"
 _RESTORATIONS_PATH = "/restorations"
+_HEALTH_PATH = "/health"
+_READY_PATH = "/ready"
 
 # `POST /ingestions` blocks synchronously for the entire real pipeline (Ingestion ->
 # Domain Mapper -> Company Merge, no async job queue, by #51's own design) -- a real CRA
@@ -132,6 +135,39 @@ def _parse_regulations_body(payload: object) -> RegulationsResult:
     regulation_items = cast("list[object]", regulations_raw)
     regulations = [_parse_regulation_entry(item) for item in regulation_items]
     return RegulationsResult(regulations=regulations, run_id=run_id)
+
+
+def _parse_health_body(payload: object) -> str:
+    """Parse a `GET /health` 200 response body into its `status` string.
+
+    Raises `PsCliError` (generic, defensive — D7) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    status = body.get("status")
+    if not isinstance(status, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return status
+
+
+def _parse_readiness_body(payload: object) -> ReadinessResult:
+    """Parse a `GET /ready` 200 response body into a `ReadinessResult`.
+
+    Raises `PsCliError` (generic, defensive — D7) if the body does not match the
+    expected `ReadyResponseBody` shape.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    status = body.get("status")
+    unhealthy_raw = body.get("unhealthy_dependencies")
+    if not isinstance(status, str) or not isinstance(unhealthy_raw, list):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    unhealthy_items = cast("list[object]", unhealthy_raw)
+    if not all(isinstance(item, str) for item in unhealthy_items):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return ReadinessResult(status=status, unhealthy_dependencies=cast("list[str]", unhealthy_items))
 
 
 def _parse_stage_outcome(payload: object) -> StageOutcome:
@@ -296,6 +332,14 @@ class PsServiceClientProtocol(Protocol):
         """`GET /regulations`: the curated catalog of ingestible regulations."""
         ...
 
+    def check_health(self) -> str:
+        """`GET /health`: whether the ASGI server is accepting connections."""
+        ...
+
+    def check_readiness(self) -> ReadinessResult:
+        """`GET /ready`: readiness plus any currently-unhealthy dependency names."""
+        ...
+
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """`POST /ingestions` with `{"source": "catalog", "celex": celex}`."""
         ...
@@ -346,6 +390,40 @@ class PsServiceClient:
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
         return _parse_regulations_body(response.json())
+
+    def check_health(self) -> str:
+        """`GET /health`: whether the ASGI server is accepting connections.
+
+        Raises `PsCliError` if PS Service cannot be reached (connection refused
+        or a connect timeout) or if the response body does not match the
+        expected shape. Never checks external dependencies (D6) — a healthy
+        result here does not imply `check_readiness()` will also succeed.
+        """
+        try:
+            response = self._client.get(_HEALTH_PATH)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        return _parse_health_body(response.json())
+
+    def check_readiness(self) -> ReadinessResult:
+        """`GET /ready`: readiness plus any currently-unhealthy dependency names.
+
+        Reports whether PS Service's startup checks completed, and which
+        dependencies (if any) are currently recorded unhealthy.
+
+        Raises `PsCliError` if PS Service cannot be reached (connection refused
+        or a connect timeout) or if the response body does not match the
+        expected shape.
+        """
+        try:
+            response = self._client.get(_READY_PATH)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        return _parse_readiness_body(response.json())
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """`POST /ingestions` with `{"source": "catalog", "celex": celex}`.

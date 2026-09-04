@@ -26,12 +26,44 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
 
+from ps_service.logging import facade
+
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from types import ModuleType
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[3] / "tools" / "curated-export" / "export_instrument.py"
 )
+
+
+@pytest.fixture(autouse=True)
+def _preserve_atexit_registered_guard() -> (  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    Iterator[None]
+):
+    """Every test here drives `cli_module.main()`, which calls the real
+    `Logging.configure()` (see `export_instrument.py`'s own `configure_logging()`
+    call). `configure()` registers an `atexit` drain hook exactly once per
+    *process* (D9) via the module-global `_atexit_registered` guard, and the
+    root `tests/conftest.py`'s autouse `reset_for_tests()` deliberately does
+    not clear that guard (it only nulls the default emitter).
+
+    Without saving/restoring it here, a real `configure()` call in this file
+    would permanently flip the guard for the rest of the pytest process and
+    poison `tests/logging/test_facade_emit_log_entry.py`'s
+    `test_atexit_drain_hook_registered_once_when_configure_called_multiple_times`,
+    which asserts `atexit.register` runs exactly once from a clean start --
+    exactly the same risk `tests/api/conftest.py`'s `configured_logging`
+    fixture already guards against for `tests/api`.
+    """
+    saved_atexit_registered = facade._atexit_registered  # pyright: ignore[reportPrivateUsage]
+    try:
+        yield
+    finally:
+        facade.reset_for_tests()
+        facade._atexit_registered = (  # pyright: ignore[reportPrivateUsage]
+            saved_atexit_registered
+        )
 
 
 def _load_cli_module() -> ModuleType:

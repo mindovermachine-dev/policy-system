@@ -4,3 +4,6 @@ test-data/**
 spikes/**
 tools/**
 charts/**/templates/**
+# Packaged mirror of docs/artifacts/ps-domain-concepts.md (already excluded above);
+# must stay byte-identical to its source, so it can't be independently formatted.
+ps-service/src/ps_service/mcp_interface/ps-domain-concepts.md

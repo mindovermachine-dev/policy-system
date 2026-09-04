@@ -174,3 +174,20 @@ def test_build_parser_catalog_restore_with_malformed_instrument_id_exits_two(
 
     assert excinfo.value.code == 2
     assert "not a valid instrument id" in capsys.readouterr().err
+
+
+def test_build_parser_parses_health() -> None:
+    """`ps-cli health` (no arguments) parses correctly (D8): a top-level, subgroup-less leaf."""
+    args = build_parser().parse_args(["health"])
+
+    assert args.command == "health"
+    assert args.group == "health"
+
+
+def test_build_parser_health_accepts_context_flag_before_and_after() -> None:
+    """`--context` works both before and after `health`, via the shared parent parser (D8)."""
+    args_before = build_parser().parse_args(["--context", "prod", "health"])
+    args_after = build_parser().parse_args(["health", "--context", "prod"])
+
+    assert args_before.context == "prod"
+    assert args_after.context == "prod"

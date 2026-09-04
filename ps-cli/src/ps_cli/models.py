@@ -123,3 +123,24 @@ class RestorationResult:
 
     instrument_id: str
     stages: list[RestorationStageOutcome]
+
+
+class HealthResponseBody(TypedDict):
+    """Raw JSON shape of a `GET /health` 200 response body."""
+
+    status: str
+
+
+class ReadyResponseBody(TypedDict):
+    """Raw JSON shape of a `GET /ready` 200 response body."""
+
+    status: str
+    unhealthy_dependencies: list[str]
+
+
+@dataclass(frozen=True)
+class ReadinessResult:
+    """Parsed result of `PsServiceClient.check_readiness()`."""
+
+    status: str
+    unhealthy_dependencies: list[str]

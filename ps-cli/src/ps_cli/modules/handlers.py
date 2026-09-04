@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 
 from ps_cli import catalog_repo
 from ps_cli.config import load_config
+from ps_cli.errors import assert_contract
 
 if TYPE_CHECKING:
     import argparse
@@ -199,6 +200,43 @@ def handle_catalog_restore(
         print(f"{stage.stage}: {stage.status}")
 
 
+def handle_health(client: PsServiceClientProtocol) -> None:
+    """Report PS Service's reachability, health (`/health`), and readiness (`/ready`).
+
+    An unreachable target (AC-BI-009) or an unexpected response shape
+    (AC-BI-010) is already, unconditionally, a `PsCliError` raised from
+    inside `check_health()`/`check_readiness()` themselves, before this
+    handler's own body runs. "Reachable but not ready" is reported here via
+    `assert_contract` (CHANGES.md M3, matching
+    `config_handlers.handle_config_use_context`'s precedent) rather than a
+    bare `if ... raise PsCliError(...)` -- a smaller, more consistent diff
+    with no behavioral difference. `hint` is computed first and is `None`
+    when no dependency is currently named unhealthy (§0.3's line-970
+    nuance: a not-ready state is not always attributable to a specific
+    dependency). On success (the contract holds), `assert_contract` no-ops
+    and the three summary lines below print unconditionally (D11) --
+    nothing prints before a call that might still fail (AC-BI-004).
+    """
+    health_status = client.check_health()
+    readiness = client.check_readiness()
+    hint = (
+        f"unhealthy dependencies: {', '.join(sorted(readiness.unhealthy_dependencies))}"
+        if readiness.unhealthy_dependencies
+        else None
+    )
+    assert_contract(
+        contract=health_status == "alive" and readiness.status == "ready",
+        msg=(
+            f"PS Service is reachable but not ready "
+            f"(health={health_status!r}, ready={readiness.status!r})."
+        ),
+        hint=hint,
+    )
+    print("reachable: yes")
+    print(f"health: {health_status}")
+    print(f"ready: {readiness.status}")
+
+
 def _dispatch_catalog_list(args: argparse.Namespace) -> None:
     """Adapt `handle_catalog_list`'s signature to the `NO_CLIENT_DISPATCH` shape.
 
@@ -242,11 +280,18 @@ def _dispatch_internal_ingest(args: argparse.Namespace, client: PsServiceClientP
     handle_internal_ingest(cast("str", args.fixture_path), client)
 
 
+def _dispatch_health(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_health`'s single-argument signature to the dispatch shape."""
+    del args
+    handle_health(client)
+
+
 DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None]] = {
     "regulations_list": _dispatch_regulations_list,
     "regulations_ingest": _dispatch_regulations_ingest,
     "internal_ingest": _dispatch_internal_ingest,
     "catalog_restore": _dispatch_catalog_restore,
+    "health": _dispatch_health,
 }
 
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must

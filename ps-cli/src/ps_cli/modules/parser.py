@@ -303,4 +303,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     catalog_restore_parser.set_defaults(command="catalog_restore")
 
+    # `health` (issue #68, PLAN.md §1 D8): a top-level, subgroup-less leaf --
+    # unlike `regulations`/`config`/`catalog`, it has no `add_subparsers()`
+    # call of its own. Needs a resolved `PsServiceClient` and `--context`
+    # support (D9), which `verbose_parent_parser` already provides -- no
+    # parser-level `--context` change needed beyond adding this leaf.
+    health_parser = top_level_subparsers.add_parser(
+        "health",
+        parents=[verbose_parent_parser],
+        help="Report PS Service's reachability, health (`/health`), and readiness (`/ready`).",
+    )
+    health_parser.set_defaults(command="health")
+
     return parser

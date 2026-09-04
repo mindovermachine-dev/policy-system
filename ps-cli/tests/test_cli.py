@@ -20,6 +20,7 @@ from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     IngestionResult,
+    ReadinessResult,
     RegulationsResult,
     RestorationResult,
     RestorationStageOutcome,
@@ -47,6 +48,14 @@ class _UnusedPsServiceClientMethods:
     def list_regulations(self) -> RegulationsResult:
         """Fail: this test's fake does not expect `list_regulations()` to be called."""
         raise AssertionError("list_regulations must not be called in this test")
+
+    def check_health(self) -> str:
+        """Fail: this test's fake does not expect `check_health()` to be called."""
+        raise AssertionError("check_health must not be called in this test")
+
+    def check_readiness(self) -> ReadinessResult:
+        """Fail: this test's fake does not expect `check_readiness()` to be called."""
+        raise AssertionError("check_readiness must not be called in this test")
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
@@ -719,3 +728,126 @@ def test_run_catalog_restore_missing_local_artifact_exits_one_without_crashing(
     assert exit_code == 1
     assert "curated instrument directory not found" in captured.err
     assert "Traceback" not in captured.err
+
+
+# --- issue #68 Slice 10: `ps-cli health` end to end, through cli.run() -------------------
+
+
+class _FakeHealthClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in with scripted check_health()/check_readiness().
+
+    Mirrors `ps-cli/tests/modules/test_handlers.py::_FakeHealthClient` (Slices 8-9) at the
+    `cli.run()` layer instead of calling `handle_health()` directly -- this file exercises
+    the full parser -> dispatch -> handler -> client wire-up, not just the handler in
+    isolation.
+    """
+
+    def __init__(self, *, health_status: str, readiness: ReadinessResult) -> None:
+        """Script this fake's `check_health()`/`check_readiness()` return values."""
+        self._health_status = health_status
+        self._readiness = readiness
+
+    def check_health(self) -> str:
+        """Return the scripted health status."""
+        return self._health_status
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return the scripted readiness result."""
+        return self._readiness
+
+
+def test_run_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str]) -> None:
+    """`run(["health"], client=<fully healthy fake>)` returns 0 and prints the three summary
+    lines to stdout (AC-BI-004 end-to-end, D11).
+    """
+    fake_client = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
+    )
+
+    exit_code = run(["health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "reachable: yes" in captured.out
+    assert "health: alive" in captured.out
+    assert "ready: ready" in captured.out
+
+
+def test_run_health_returns_one_with_distinct_message_when_not_ready(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`run(["health"], client=<not-ready fake>)` returns 1; stderr names the unhealthy
+    dependency and is textually distinct from the unreachable-target wording (AC-BI-001,
+    AC-BI-007, AC-BI-008 end-to-end).
+    """
+    fake_client = _FakeHealthClient(
+        health_status="alive",
+        readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=["falkordb"]),
+    )
+
+    exit_code = run(["health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "not ready" in captured.err
+    assert "falkordb" in captured.err
+    assert "Could not reach" not in captured.err
+
+
+def test_run_health_with_unreachable_real_service_returns_one_without_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-009's real-network proof for `health`, mirroring `test_run_with_unreachable_
+    real_service_returns_one_without_crashing`'s exact pattern (PLAN.md §4 Slice 10):
+    `run(["health"])` with `client=None` builds a real `PsServiceClient` from
+    `PS_CLI_SERVICE_URL`, pointed at a definitely-closed local port (bind a socket, close it,
+    reuse the freed port number -- a small accepted TOCTOU flake risk per PLAN.md, not
+    engineered away). Asserts an actionable message on stderr, exit code 1, and -- by simply
+    not wrapping the call in `pytest.raises` -- that no exception escapes `run()`.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
+
+    exit_code = run(["health"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Could not reach PS Service at" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_run_health_with_context_flag_resolves_named_targets_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-BI-005/AC-BI-006 end-to-end for `health`, per CHANGES.md M2 (the only valid proof
+    mechanism for this slice): an independent `load_config(context=..., config_dir=...)`
+    check performed after `config set-context`/`config use-context` calls against an
+    isolated `PS_CLI_CONFIG_DIR`, mirroring `test_ac_bi_005_set_context_then_use_context_
+    drives_subsequent_resolution`'s exact pattern (issue #56 Slice 26).
+
+    Deliberately does **not** call `run(["health", "--context", <name>], client=<fake>)`:
+    `_resolve_client()` (`cli.py:42-55`) returns an injected `client` unchanged before
+    `load_config(context=...)` is ever reached, so a fake client's presence would make such a
+    test pass regardless of whether `--context` resolution actually worked -- it would prove
+    nothing about `--context`. `_resolve_client()`'s own `load_config(context=context).
+    service_url` call is exactly what this test proves resolves correctly; `health`'s
+    `DISPATCH` entry reaches that same generic code path as every other client-backed
+    command (D9), so this proof transfers to `health` without needing to invoke it at all.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    set_exit_code = run(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"],
+        client=uncallable_client,
+    )
+    use_exit_code = run(["config", "use-context", "prod"], client=uncallable_client)
+
+    assert set_exit_code == 0
+    assert use_exit_code == 0
+    assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
