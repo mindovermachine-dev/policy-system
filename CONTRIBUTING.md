@@ -190,13 +190,17 @@ uv sync
 ```
 
 Keep `.venv` activated (or otherwise on `PATH`) whenever you run
-`tools/graph-query/ps.py` or use the `policy-question`/`falsification-step`
-skills — `ps.py` resolves `python3` from `PATH` rather than a hardcoded
-interpreter (deliberately: this keeps `ps.py` itself, not a generic
-`python3`, as the thing the harness allowlists), so it uses whichever
-environment is currently active. Scripts invoked via `uv run` (e.g.
-`tools/graph-ingestion/load_all.sh`, `ps-ingestion`) don't need activation
-at all -- `uv run` resolves the repo-root `.venv` on its own.
+`tools/graph-query/ps.py` directly (a local-dev-only fallback — see the
+deprecation note at the top of that file) — `ps.py` resolves `python3` from
+`PATH` rather than a hardcoded interpreter (deliberately: this keeps
+`ps.py` itself, not a generic `python3`, as the thing the harness
+allowlists), so it uses whichever environment is currently active. The
+`ps-qna` skill shipped in the `policy-system` plugin
+(`ps-skills/policy-system/skills/ps-qna/`) queries PS Service over its own
+MCP connector instead, and needs no local `.venv` activation. Scripts
+invoked via `uv run` (e.g. `tools/graph-ingestion/load_all.sh`,
+`ps-ingestion`) don't need activation at all -- `uv run` resolves the
+repo-root `.venv` on its own.
 
 1. Load test data into graph
 
@@ -507,7 +511,10 @@ purely local dev prototype (talks directly to a local FalkorDB) — not the
    Non-default host/port/graph: set `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`/`PS_FALKORDB_GRAPH` in an `"env"` block.
 
 2. Restart Claude Desktop.
-3. Upload `tools/graph-query/policy-question.zip` as a skill in Desktop's settings.
+3. Install the `policy-system` plugin instead of uploading a skill by hand —
+   see [the user guide's Local Test walkthrough, step 6](./docs/artifacts/user-guide.md#6-install-the-policy-system-plugin),
+   which wires up the `ps-qna` skill together with its own MCP connector in
+   one step.
 4. Ask a question (see above). If it doesn't auto-engage, say "Use the Policy Question skill" first.
 
 ## Coding Standards

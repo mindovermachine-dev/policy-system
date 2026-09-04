@@ -1,0 +1,27 @@
+{
+  "name": "policy-system",
+  "displayName": "Policy System",
+  "description": "Ask compliance questions against the Policy System knowledge graph (ps-qna skill) via PS Service's remote MCP connector.",
+  "version": "0.1.0",
+  "author": { "name": "Cartman ApS" },
+  "repository": "https://github.com/mindovermachine-dev/policy-system",
+  "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#policy-system-plugin-ps-qna",
+  "keywords": ["compliance", "policy", "cypher", "mcp"],
+  "userConfig": {
+    "ps_service_url": {
+      "type": "string",
+      "title": "PS Service MCP endpoint URL",
+      "description": "Full URL to PS Service's MCP endpoint, e.g. http://localhost:8000/mcp for a local-test deployment, or https://<host>/mcp for a remote one.",
+      "required": true,
+      "default": "http://localhost:8000/mcp"
+    },
+    "operator_token": {
+      "type": "string",
+      "title": "Operator credential (optional)",
+      "description": "Individual-operator bearer credential for PS Service. Leave blank for a local-test deployment running under PS_SERVICE_LOCAL_TEST_BYPASS=true — PS Service does not yet validate per-user credentials (tracked on issue #39 Group 3 / #58, not #65, which is only the now-deprioritized credential-flow spike). This field exists so the connector is ready to forward one the moment server-side validation lands, without a plugin update.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  }
+}

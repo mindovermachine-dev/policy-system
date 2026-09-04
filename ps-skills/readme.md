@@ -6,8 +6,8 @@ One of the client types users use to access Policy System is Agent Skills. The f
 
 ## Development of Policy System Skills
 
-Agent Skills are structured in subfolders to the ps-skills folder. Each Agent Skill folder has two sub-folders: `dist` is used for distribution of the packaged Agent Skill and `dev` is used to develop and maintain the Agent SKill.
+Agent Skills are shipped as a single git-hosted Claude plugin, not a separate dev/dist split. `ps-skills/policy-system/` is the plugin directory itself — its `skills/` subfolder and `.mcp.json` connector are exactly what gets installed, so there is no packaging or build step between editing the skill and using it.
 
 Policy System Agent Skills should not be part of the Policy System repo skill structure as they are not used across the development team to develop Policy System, rather they are part of the product so they should be installed into the local user Agent Skill structure if needed for testing the skills.
 
-There is a `install-ps-skills.sh` script in the `scripts` folder that can be used gh cli to install the Policy System Agent skills into your preferred agent
+To install: add this repo as a marketplace and run `/plugin install policy-system` (see `docs/artifacts/user-guide.md`).

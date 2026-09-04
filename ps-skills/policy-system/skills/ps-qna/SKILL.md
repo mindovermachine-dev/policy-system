@@ -1,45 +1,56 @@
-# Policy Question Refinement
+---
+name: ps-qna
+description: Ask a compliance question and get an answer grounded in PS Service's live knowledge graph, with a source_ref citation and falsification-verified confidence.
+---
+
+# ps-qna
 
 ## Purpose
 
 Turn an open/global question into a single, scoped, answerable question,
 grounded in the Policy System's actual entities and relationships — not the
-user's assumed vocabulary — then run freehand retrieval against the graph,
-construct a first-pass answer, and attempt to falsify it. This covers step
-1a (narrowing) plus steps 2-3 (freehand retrieval, answer construction) and
-step 5 (falsification) of the Guided Fitness Pipeline
-(spikes/pipeline2/README.md), the latter per spikes/pipeline3/README.md.
-Rubric-gated fitness-function authoring (step 1b) and the independent
-verification loop (step 4) are scoped out of this skill entirely —
-falsification (adversarial querying against the graph's own data) is this
-skill's verification method.
+user's assumed vocabulary — then run freehand retrieval against the graph
+via PS Service's MCP connector, construct a first-pass answer, and attempt
+to falsify it. This covers step 1a (narrowing) plus steps 2-3 (freehand
+retrieval, answer construction) and step 5 (falsification) of the Guided
+Fitness Pipeline (`spikes/pipeline2/README.md`), the latter per
+`spikes/pipeline3/README.md`. Rubric-gated fitness-function authoring
+(step 1b) and the independent verification loop (step 4) are scoped out of
+this skill entirely — falsification (adversarial querying against the
+graph's own data) is this skill's verification method.
 
 **Deliverable:** the refined question text (approved verbatim by the
 user), the entities/edges it routes through, the freehand Cypher query
 used to retrieve data, the retrieved data, a constructed first-pass answer,
 and a falsification report (attempts made, landed or missed, per
-`tools/skills/falsification-step.md`).
+`references/falsification-step.md`).
 
 ## On Load
 
-1. If the user hasn't provided a question, ask for one before doing anything
-   else.
-2. Read `docs/artifacts/ps-domain-concepts.md` in full — the only source of
-   truth for entities, relationships, and vocabulary this refinement grounds
-   against. Do not rely on memory of the schema from a prior turn.
+1. If the user hasn't provided a question, ask for one before doing
+   anything else.
+2. Fetch the `psdomain://concepts` MCP resource via the
+   `policy-system-graph` connector — this is the only source of truth for
+   entities, relationships, and vocabulary this refinement grounds
+   against. **Always refetch it now, this session, this turn** — never
+   rely on a copy remembered from a prior turn or a prior session, and
+   never assume the schema is unchanged since last time. If the resource
+   fetch itself fails, report that distinctly (see the error-state table
+   under Process step 5) before attempting anything else — do not fall
+   back to memorized domain vocabulary.
 
 ## Core Principles
 
 - Socratic method: one targeted question at a time; wait for the answer.
-- Every narrowing move must tie back to a real entity/edge in
-  ps-domain-concepts.md — never invent or assume vocabulary the model doesn't
-  have.
-- Adjust friction to the user: fewer questions when intent is already clear,
-  more when the question is genuinely ambiguous.
-- Narrow until answerable, not until trivial — stop as soon as the mapping to
-  entities/edges is unambiguous.
-- Retrieval is genuinely freehand: write ad hoc Cypher grounded in
-  ps-domain-concepts.md's actual property names and edge directions — never
+- Every narrowing move must tie back to a real entity/edge in the fetched
+  `psdomain://concepts` resource — never invent or assume vocabulary the
+  model doesn't have.
+- Adjust friction to the user: fewer questions when intent is already
+  clear, more when the question is genuinely ambiguous.
+- Narrow until answerable, not until trivial — stop as soon as the mapping
+  to entities/edges is unambiguous.
+- Retrieval is genuinely freehand: write ad hoc Cypher grounded in the
+  fetched resource's actual property names and edge directions — never
   route through `ps query template`/`ps query catalog`, and never invent a
   property or relationship the model doesn't have (mirrors README D10).
 
@@ -89,18 +100,18 @@ and a falsification report (attempts made, landed or missed, per
      theme-filter answer (no traversal) is acceptable, rather than forcing
      a fake edge to something that doesn't exist yet. Before concluding
      there's no anchor at all, check whether the classification layer
-     (PracticeArea, RiskPath — see ps-domain-concepts.md's Document
+     (PracticeArea, RiskPath — see the fetched resource's Document
      Purpose section) has a real matching category (e.g. RiskPath.
      risk_type) that could anchor the question instead of a bare
      keyword filter on Capability/Obligation text.
    - Whether the question implies comparing or matching entities across a
      layer the model deliberately keeps non-convergent (Role, Standard,
-     Control — check the concept's own Identity note in
-     ps-domain-concepts.md). If so, confirm with the user whether
-     relocating the comparison to the nearest convergent layer (typically
-     Obligation or Capability) satisfies their intent — state explicitly
-     that the comparison is being relocated, not answered directly at the
-     layer they named.
+     Control — check the concept's own Identity note in the fetched
+     resource). If so, confirm with the user whether relocating the
+     comparison to the nearest convergent layer (typically Obligation or
+     Capability) satisfies their intent — state explicitly that the
+     comparison is being relocated, not answered directly at the layer
+     they named.
 3. **Propose the refined question** in plain English, together with the
    entities/edges it maps to. If step 2 surfaced a compound question the
    user chose to keep bundled, state each clause explicitly in the
@@ -120,18 +131,11 @@ and a falsification report (attempts made, landed or missed, per
    restart from scratch. Only continue to step 5 once approved.
 5. **Freehand retrieval.** Write ad hoc Cypher against the graph to answer
    the approved question — genuinely freehand, not assembled from a
-   template library. Execute it via:
-
-   ```bash
-   tools/graph-query/ps.py cypher "<QUERY>"
-   ```
-
-   (read-only guarded, graph `policy_system`; host/port default to
-   `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`, else `localhost:6379` — reuses
-   `ps.py`'s connection pattern and read-only guard directly, per
-   spikes/pipeline2/README.md's Setup step 3; does not route through
-   `ps query template` or `ps query catalog`). Show the query before or
-   alongside its results — never hide what was actually run.
+   template library. Execute it by calling the plugin's own `cypher` MCP
+   tool on the `policy-system-graph` connector — **never** a subprocess,
+   a repo-local script, or any other spawned external binary. Show the
+   query before or alongside its results — never hide what was actually
+   run.
 
    More than one query is expected and fine — a discovery query to resolve
    an ambiguous entity name, or a follow-up aggregate query to compute
@@ -148,23 +152,51 @@ and a falsification report (attempts made, landed or missed, per
    approval gate already passed, so this can't be sent back to the user;
    the answer itself has to carry the caveat.
 
+   **Every non-success result from the `cypher` tool call must be
+   distinguished into one of the following named states — never collapsed
+   into a generic "no answer" or "no data":**
+
+   | MCP tool result shape                                                                   | Named state to report                                        | Notes                                                                                                                                                                                                                                                                                                                     |
+   | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or an auth-rejection-shaped error                         | "PS Service is unreachable or the caller is unauthenticated" | Report this distinctly and stop — do not proceed to answer construction.                                                                                                                                                                                                                                                  |
+   | A rate-limit/throttle-shaped error (`429`-equivalent)                                   | "PS Service is throttling requests"                          | PS Service does not yet enforce server-side rate limiting (issue #39 Group 3, deferred) — this state is not exercisable end-to-end today, but the skill must be ready to recognize and report it distinctly the moment the server starts emitting one. Never mistake this for an unreachable endpoint or an empty answer. |
+   | `error:` returned because a write/schema-change clause was rejected by the Query Engine | "the query was rejected by the Query Engine"                 | Report the rejection itself, verbatim where possible — never present a rejected query as "no data."                                                                                                                                                                                                                       |
+   | Successful execution with zero rows, or an explicit "graph is unseeded" signal          | "the graph does not contain this information"                | State plainly that the information is not present — do not fabricate, round up, extrapolate, or fill the gap with assumed domain knowledge.                                                                                                                                                                               |
+   | Successful execution, rows returned                                                     | —                                                            | Proceed to step 6 (construct the answer).                                                                                                                                                                                                                                                                                 |
+
+   This same distinction applies to the On Load resource fetch (step 2 of
+   On Load, above) — an unreachable/unauthenticated or throttled resource
+   fetch is reported the same way, before any narrowing begins.
+
 6. **Construct the answer.** Build a plain-English answer directly from the
    retrieved rows. State only what the data supports; do not round up,
-   extrapolate, or fill gaps with assumed domain knowledge.
-7. **Falsify.** Invoke `tools/skills/falsification-step.md` against the
+   extrapolate, or fill gaps with assumed domain knowledge. Every factual
+   claim in the answer must be traceable to a specific `source_ref` value
+   actually present on the retrieved rows/edges (e.g. "Art. 11(1)", "§ 32
+   Abs. 1 BSIG") — never cite "the graph" generically. If no retrieved
+   row/edge carries a `source_ref` relevant to a claim, that claim cannot
+   be made — say so rather than asserting it uncited.
+7. **Falsify.** Invoke `references/falsification-step.md` against the
    constructed answer — read it fresh, follow its Process exactly
    (including its scope-aware attempt-cap determination — 1 attempt if the
    question's Entities stay within the ingested spine, 5 if `Policy`,
    `Standard`, or `Control` are involved, or the user asked for deeper
    scrutiny), and fold its Output shape into step 8 below. Falsification's
    result (landed vs. none landed) is this skill's verification signal for
-   the answer.
+   the answer. The `psdomain://concepts` resource fetched during On Load
+   is still valid for this step — do not refetch it.
 8. **Output**, in this shape:
 
    ```text
    Question: <refined question text>
 
-   Answer: <constructed answer>
+   Answer: <constructed answer, every factual claim tied to a source_ref
+   from the retrieved rows>
+
+   Live: queried PS Service's MCP connector in this exchange; no vendored
+   or cached copy of the graph or domain-concepts content was used —
+   the psdomain://concepts resource and all retrieval results above were
+   fetched fresh this session.
 
    Status: <Verified — survived falsification | Falsification landed a
    contradiction>. Falsification ran under a max_falsification_attempts
@@ -208,6 +240,11 @@ and a falsification report (attempts made, landed or missed, per
 
    ```
 
+   If retrieval instead landed on one of the named error states from step
+   5's table, skip the sections above that depend on retrieved data and
+   report the named state plainly instead — do not emit an Output block
+   that implies a successful query when none occurred.
+
 ## Guardrails
 
 - Never silently substitute a different entity/edge than what the user's
@@ -218,10 +255,22 @@ and a falsification report (attempts made, landed or missed, per
 - Never execute retrieval before the user has approved the refined question
   verbatim (step 4's gate is not optional).
 - Freehand retrieval only: never route through `ps query template` or
-  `ps query catalog`; only `ps cypher`'s connection pattern and read-only
-  guard are reused.
-- Ground every Cypher clause in `ps-domain-concepts.md`'s actual property
-  names, node labels, and edge directions — never invent one.
+  `ps query catalog`; only the plugin's `cypher` MCP tool is used for
+  execution.
+- The skill reaches PS Service exclusively through the plugin's declared
+  MCP connector (`policy-system-graph`) — never a direct graph connection,
+  a repo-local script, or a spawned external binary, regardless of what
+  might be available in a local checkout.
+- Ground every Cypher clause in the fetched `psdomain://concepts`
+  resource's actual property names, node labels, and edge directions —
+  never invent one.
+- Only read-only Cypher is ever authored. The Query Engine rejects writes
+  and schema changes server-side — if a query is rejected for this reason,
+  state the rejection plainly (per step 5's error-state table) and stop.
+  Never attempt to route a write/schema-modifying clause around a
+  server-side rejection by rewriting or resubmitting it disguised as
+  read-only — a rejection is a stop condition, not a puzzle to route
+  around.
 - Do not author a rubric-gated fitness function or run an independent
   verification/re-query loop (step 1b, step 4) — these are scoped out of
   this skill entirely, not deferred. Falsification is the verification
@@ -230,10 +279,10 @@ and a falsification report (attempts made, landed or missed, per
 - Falsification (step 7) always runs at least once — never skip it
   entirely, and never let it soften into confirmation-seeking. The number
   of attempts beyond the first is scope-conditional (see
-  `falsification-step.md`'s attempt-cap determination), not the step
-  itself. Follow `falsification-step.md`'s own guardrails: vary the attack
-  angle between attempts, terminate at the cap or the first landed
-  disproof, report every attempt.
+  `references/falsification-step.md`'s attempt-cap determination), not the
+  step itself. Follow `references/falsification-step.md`'s own guardrails:
+  vary the attack angle between attempts, terminate at the cap or the
+  first landed disproof, report every attempt.
 - Don't silently collapse a compound question, force a same-node match
   across a non-convergent layer, or invent a status definition for an
   entity that has none — surface each as an explicit choice instead.
@@ -241,3 +290,7 @@ and a falsification report (attempts made, landed or missed, per
   never invisibly — it must always appear in the proposed question and the
   output's Filters line, and it never extends to `Policy`/`Standard`/
   `Control`, which still require an explicit lifecycle question.
+- Never collapse the four error states in step 5's table into each other
+  or into a generic "no answer" — an unreachable endpoint, a throttled
+  request, a rejected query, and a graph that genuinely lacks the
+  information are four different conditions the user needs told apart.

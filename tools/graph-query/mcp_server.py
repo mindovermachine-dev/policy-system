@@ -3,6 +3,14 @@
 
 For clients (e.g. Claude Desktop) that have no shell of their own.
 
+Deprecated for end-user Q&A: this is a local-dev-only fallback, superseded
+by the `policy-system` Claude plugin (`ps-skills/policy-system/`, issue
+#53), which ships its own MCP connector talking to a running PS Service
+instance instead of a locally-spawned stdio subprocess against a local
+FalkorDB. Kept for contributor workflows that want raw local graph access
+without standing up a full PS Service instance -- see the "Claude Desktop"
+section of CONTRIBUTING.md.
+
 Deliberately a thin wrapper around `ps.py cypher`, not a reimplementation:
 every query is executed via subprocess through the exact same script the
 policy-question skill's guardrails already document, so the write-clause

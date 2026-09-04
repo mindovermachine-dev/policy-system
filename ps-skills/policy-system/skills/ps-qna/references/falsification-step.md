@@ -13,9 +13,9 @@ time, never paraphrased from memory.
 Attempt to disprove a constructed answer from the graph's own data, rather
 than looking for confirmation. Falsification attacks the answer's framing:
 it asks whether the graph contains data that contradicts the claim, not
-just whether the claim's own supporting query re-derives it. For
-`policy-question.md`, this is the skill's verification method — there is
-no separate rubric-gated fitness-function check (see that skill's Purpose
+just whether the claim's own supporting query re-derives it. For the
+`ps-qna` skill, this is the skill's verification method — there is no
+separate rubric-gated fitness-function check (see that skill's Purpose
 section for why it's scoped out entirely, not deferred).
 
 An answer that survives falsification (no attempt lands a contradiction,
@@ -34,6 +34,13 @@ The invoking skill must supply, verbatim:
 - The constructed answer
 - The retrieved data / query the answer was built from
 
+The `psdomain://concepts` MCP resource the invoking skill already fetched
+during its own On Load step remains valid here — **do not refetch it for
+this step.** One fetch per session/exchange is sufficient; refetching per
+falsification attempt would add nothing and would muddy the invoking
+skill's "queried live in this exchange" claim with redundant resource
+fetches.
+
 Never invoke this against an answer the user hasn't already seen as a
 first-pass construction — falsification is what turns that first-pass
 answer into a verified one (or surfaces a contradiction), not a
@@ -45,12 +52,13 @@ Before running any attempt, set `max_falsification_attempts`:
 
 - **5** — if the supplied Entities list includes `Policy`, `Standard`, or
   `Control`, or the user explicitly asked for deeper scrutiny on this
-  question. These three are the customer-governed layer:
-  `ps-domain-concepts.md` describes them (unlike `RegulatoryInstrument`/`Requirement`,
-  which are ingested and read-only once created) as "created by policy
-  managers through governance workflows" and actively revised — data this
-  pipeline doesn't control the quality of, so it's where a construction-step
-  error is most plausible.
+  question. These three are the customer-governed layer: the fetched
+  `psdomain://concepts` resource describes them (unlike
+  `RegulatoryInstrument`/`Requirement`, which are ingested and read-only
+  once created) as "created by policy managers through governance
+  workflows" and actively revised — data this pipeline doesn't control
+  the quality of, so it's where a construction-step error is most
+  plausible.
 - **1** — otherwise (the question stays entirely within the ingested
   compliance spine: `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`,
   `Capability`, or the classification layer `PracticeArea`/`RiskPath`).
@@ -77,17 +85,16 @@ State which cap applies, and why, before running attempt 1.
    repeating the same weak angle in different words does not count as a
    new attempt and is exactly the "confirmation theater" failure mode this
    step exists to avoid.
-2. **Execute each query** via the same guarded surface the invoking skill
-   already uses:
-
-   ```bash
-   tools/graph-query/ps.py cypher "<QUERY>"
-   ```
-
-   (read-only guarded, graph `policy_system`; host/port default to
-   `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`, else `localhost:6379`). Show every
-   query run, not just the ones that land.
-
+2. **Execute each query** by calling the plugin's own `cypher` MCP tool on
+   the `policy-system-graph` connector — the same connector the invoking
+   skill's own retrieval step already uses. Never a subprocess, a
+   repo-local script, or any other spawned external binary. Show every
+   query run, not just the ones that land. Apply the invoking skill's same
+   named error-state distinctions (unreachable/unauthenticated,
+   throttled, rejected, or no data) to any non-success result here too —
+   an adversarial query that fails to execute is not evidence either way,
+   and must be reported as the failure it is rather than folded into
+   "missed."
 3. **Judge each attempt** against the answer's actual claim, not a
    restated version of it:
    - **Landed** — the query returned data that contradicts the answer.
@@ -132,6 +139,7 @@ weigh a 1-attempt clean run against a 5-attempt one appropriately.
   this step's own falsification creativity, not evidence the answer is
   correct — flag this pattern back to whoever is reviewing run logs rather
   than treating a clean streak as validation.
-- Ground every Cypher clause in `docs/artifacts/ps-domain-concepts.md`'s
-  actual property names, node labels, and edge directions — never invent
-  one, same discipline as the invoking skill's own retrieval step.
+- Ground every Cypher clause in the fetched `psdomain://concepts`
+  resource's actual property names, node labels, and edge directions —
+  never invent one, same discipline as the invoking skill's own retrieval
+  step.

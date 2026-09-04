@@ -1,0 +1,12 @@
+{
+  "name": "policy-system-marketplace",
+  "owner": { "name": "Cartman ApS" },
+  "plugins": [
+    {
+      "name": "policy-system",
+      "displayName": "Policy System",
+      "description": "ps-qna skill + PS Service MCP connector for compliance Q&A against the knowledge graph.",
+      "source": "./ps-skills/policy-system"
+    }
+  ]
+}

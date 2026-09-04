@@ -14,7 +14,7 @@ role-oriented view.
 | I want to... | Use | Status |
 | --- | --- | --- |
 | Try Policy System on my own laptop | [Local Test](#local-test) | ❌ Not yet available |
-| Ask a compliance question in natural language | [Policy System plugin](#policy-system-plugin-ps-qna) | ❌ Not yet available |
+| Ask a compliance question in natural language | [Policy System plugin](#policy-system-plugin-ps-qna) | ⚠️ Plugin built, structurally verified; end-to-end install unverified |
 | Ingest a regulation or internal policy, check service health, administer an instance | [ps-cli](#ps-cli) | ✅ Available |
 | Author Policies, Standards, and Controls | Policy Editor | ❌ Not yet designed |
 
@@ -80,8 +80,8 @@ does not exist yet.
 | 3. Create the local cluster | ✅ Works                                                          | —                                                                                                                                                                                                                     |
 | 4. Deploy Policy System     | ✅ Works                                                          | —                                                                                                                                                                                                                     |
 | 5. Load regulations         | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 6. Install the plugin       | ❌ Plugin does not exist; needs a remote MCP endpoint             | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
-| 7. Ask a question           | ❌ Depends on 3–6                                                 | —                                                                                                                                                                                                                     |
+| 6. Install the plugin       | ⚠️ Plugin built, structurally verified (JSON-checked, content-reconciled); end-to-end install against a real Claude Desktop/Code instance has **not** been run | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
+| 7. Ask a question           | ⚠️ Runbook below is human-run only — not verified end-to-end in this environment | —                                                                                                                                                                                                                     |
 
 ### Prerequisites
 
@@ -262,14 +262,26 @@ error rather than an empty result.
 
 ### 6. Install the Policy System plugin
 
+The plugin lives in this repo at `ps-skills/policy-system/` — a `ps-qna` skill plus a
+bundled MCP connector (`.mcp.json`), installable via the repo-root marketplace manifest
+`.claude-plugin/marketplace.json`.
+
 In Claude Desktop: **+** next to the prompt box → **Plugins** → **Add plugin**, then add
-this repo as a marketplace and install `policy-system`.
+this repo (`https://github.com/mindovermachine-dev/policy-system`) as a marketplace and
+install `policy-system`.
 
 One install brings both the `ps-qna` skill and its MCP connector — the skill arrives
 already wired to the transport it needs, with no separate connector setup and no
-credential pasting.
+credential pasting. Claude Desktop prompts for the plugin's two `userConfig` fields
+(defined in `ps-skills/policy-system/.claude-plugin/plugin.json`):
 
-Point the connector at your local deployment when prompted for the endpoint URL:
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `ps_service_url` | Yes | Full URL to PS Service's MCP endpoint. Defaults to `http://localhost:8000/mcp` — correct for this walkthrough's local-test deployment unchanged. |
+| `operator_token` | No | Individual-operator bearer credential, forwarded as `Authorization: Bearer <token>`. Leave blank for a local-test deployment. |
+
+Point the connector at your local deployment when prompted for the endpoint URL (or accept
+the default, which already matches):
 
 ```text
 http://localhost:8000/mcp
@@ -279,7 +291,26 @@ A local-test deployment runs with authentication disabled, so there is nothing t
 That mode is opt-in via `PS_SERVICE_LOCAL_TEST_BYPASS=true`, refuses to bind anything but
 loopback, and warns on every startup — it is for evaluation only.
 
-> ❌ **Not yet implemented.** The plugin itself does not exist yet ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)), and needs a remote MCP transport with per-user authentication ([#39](https://github.com/mindovermachine-dev/policy-system/issues/39)). The local-test bypass mode described above is implemented ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)) — set `PS_SERVICE_LOCAL_TEST_BYPASS=true` on a loopback-bound instance to run under it. Full per-user authentication remains required for any non-local deployment; it is deferred, not dropped, and stays tracked on [#39](https://github.com/mindovermachine-dev/policy-system/issues/39)/[#58](https://github.com/mindovermachine-dev/policy-system/issues/58) (not [#65](https://github.com/mindovermachine-dev/policy-system/issues/65), which is only the now-deprioritized credential-flow spike).
+> ⚠️ **Built, not end-to-end verified.** The plugin's files (`plugin.json`, `.mcp.json`,
+> `skills/ps-qna/SKILL.md`, the marketplace manifest) exist and are structurally valid —
+> JSON-checked and content-reconciled against the corrected design in
+> `.orchestrator/tracker/issue-53-ps-qna-plugin/CHANGES.md` — but installing it against a
+> real Claude Desktop/Code instance has **not** been run by any automated process; this
+> development sandbox has no Claude Desktop plugin-install surface to run it against. See
+> [7. Ask a question](#7-ask-a-question) below for the human-run smoke-test runbook. Remote
+> MCP transport with per-user authentication is tracked separately on
+> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39). The local-test
+> bypass mode described above is implemented
+> ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)) — set
+> `PS_SERVICE_LOCAL_TEST_BYPASS=true` on a loopback-bound instance to run under it. Full
+> per-user authentication remains required for any non-local deployment; it is deferred,
+> not dropped, and stays tracked on
+> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39)/[#58](https://github.com/mindovermachine-dev/policy-system/issues/58)
+> (not [#65](https://github.com/mindovermachine-dev/policy-system/issues/65), which is only
+> the now-deprioritized credential-flow spike). **Known limitation relevant to this step:**
+> `operator_token` is accepted and forwarded, but PS Service does not yet validate it — a
+> human running this step should not expect real per-user auth enforcement, only that a
+> local-test-bypass deployment answers questions with the field left blank.
 
 ### 7. Ask a question
 
@@ -293,6 +324,45 @@ from the graph, and constructs an answer that cites what it retrieved. If the gr
 cannot answer, it says so rather than filling the gap from model recall.
 
 If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
+
+#### Smoke-test runbook (human-run)
+
+> ⚠️ **This runbook is human-run, not automated.** It has not been executed end-to-end by
+> a sub-agent or the orchestrator in this development environment — there is no
+> `kind`/`kubectl`/`podman`/live Claude Desktop plugin-install surface in this sandbox
+> (the same constraint already documented for
+> [#59](https://github.com/mindovermachine-dev/policy-system/issues/59)'s Helm chart). This
+> is a deliberate, honest scoping decision, not an oversight: what has been verified is
+> that steps 1-5 above already work (populating a graph is achievable today), and that the
+> plugin's files are structurally valid; what has **not** been verified is a live
+> Claude Desktop turn against a real deployment.
+
+To actually run the smoke test:
+
+1. Complete steps 1-6 above against a real machine: a working Claude Desktop install, a
+   local `kind` cluster with Policy System deployed, and CRA content seeded via
+   `ps-cli catalog restore CRA-1.0` (step 5 — already proven to work).
+2. Install the `policy-system` plugin per step 6, pointing `ps_service_url` at
+   `http://localhost:8000/mcp` (the default) and leaving `operator_token` blank, since the
+   local-test deployment runs under `PS_SERVICE_LOCAL_TEST_BYPASS=true` with no credential
+   validation.
+3. In Claude Desktop, ask exactly the question from step 7 above: _"What obligations does
+   the Cyber Resilience Act place on manufacturers, and which of our policies cover
+   them?"_ — reusing the CRA content step 5 already seeded, no new fixture data needed.
+4. Confirm the `ps-qna` skill engages (automatically, or by asking for it by name), that it
+   issues a Cypher query over the `policy-system-graph` MCP connector rather than answering
+   from model recall, and that the answer cites what it retrieved from the graph (e.g.
+   `source_ref`s pointing at the restored CRA content).
+5. If it fails, check [Troubleshooting (Local Test)](#troubleshooting-local-test) below —
+   in particular "Plugin installed but no cypher tool" for connector/endpoint issues.
+
+**Do not expect real per-user authentication enforcement during this smoke test.**
+`operator_token` exists in `plugin.json` and is forwarded as a bearer header by
+`.mcp.json`, but PS Service does not yet validate it server-side (tracked on
+[#39](https://github.com/mindovermachine-dev/policy-system/issues/39) Group 3 /
+[#58](https://github.com/mindovermachine-dev/policy-system/issues/58)) — a passing smoke
+test here demonstrates the plugin/connector/skill mechanics work, not that per-user auth is
+enforced.
 
 ### Troubleshooting (Local Test)
 
@@ -308,16 +378,23 @@ If the skill does not engage on its own, ask for it by name: _"Use the ps-qna sk
 
 ## Policy System plugin (ps-qna)
 
-> ❌ **Not yet available.** The plugin itself does not exist yet
-> ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)), and needs a
-> remote MCP transport with per-user authentication
-> ([#39](https://github.com/mindovermachine-dev/policy-system/issues/39)). This section
-> will be filled in once those land — see this guide's [Local Test](#local-test) section
-> for the target experience and current status of each step.
+> ⚠️ **Built, structurally verified; end-to-end install unverified in this environment.**
+> The plugin lives at `ps-skills/policy-system/` (skill: `skills/ps-qna/SKILL.md`;
+> connector: `.mcp.json`; metadata and `userConfig`:
+> `.claude-plugin/plugin.json`), installable via the repo-root marketplace manifest
+> `.claude-plugin/marketplace.json` ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)).
+> Its files are JSON-checked and content-reconciled, but no automated process in this
+> development sandbox can install it into a real Claude Desktop/Code instance to confirm
+> it end-to-end — see [6. Install the Policy System plugin](#6-install-the-policy-system-plugin)
+> and its [smoke-test runbook](#smoke-test-runbook-human-run) for the accurate status and
+> the human-run verification steps. Remote MCP transport with per-user authentication
+> remains tracked separately on [#39](https://github.com/mindovermachine-dev/policy-system/issues/39).
 
-When available, this will cover: installing the plugin in Claude Desktop, pointing its
-MCP connector at a Policy System deployment, and asking compliance questions
-grounded in the knowledge graph.
+Installing the plugin in Claude Desktop, pointing its MCP connector (`policy-system-graph`)
+at a Policy System deployment via the `ps_service_url` userConfig field, and asking
+compliance questions grounded in the knowledge graph are all covered in
+[Local Test](#local-test) steps 6-7 above — that is the canonical walkthrough; this section
+just points at it rather than duplicating it.
 
 ---
 

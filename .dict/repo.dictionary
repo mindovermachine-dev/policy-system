@@ -1,4 +1,5 @@
 appendonly
+BSIG
 buildx
 CELEX
 claude
@@ -21,6 +22,7 @@ podman
 psdomain
 sdlc
 TakT
+uncited
 unmodeled
 uvicorn
 venv
