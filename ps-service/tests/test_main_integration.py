@@ -69,6 +69,7 @@ from ps_service.config import ServiceConfig
 from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -461,6 +462,61 @@ class _FakeFalkorDB:
 
     def select_graph(self, name: str) -> _FakeGraphHandle:
         return self._handle
+
+
+_JSON_RPC_ACCEPT = "application/json, text/event-stream"
+
+
+@pytest.mark.integration
+def test_mcp_streamable_http_transport_reachable_over_a_real_socket(tmp_path: Path) -> None:
+    """AC-BI-001/002 (issue #39, PLAN.md Slice 8): the mounted Streamable HTTP
+    transport is reachable over a real TCP socket, not just `TestClient`'s
+    virtual transport.
+
+    Spawns the real `ps_service` process the same way
+    `test_ps_service_port_env_override_serves_health_on_overridden_port`
+    above does (`_spawn_direct`, a real `[sys.executable, "-m", "ps_service"]`
+    subprocess bound to `127.0.0.1:<port>`), polls `/ready` (not `/health`
+    -- readiness is what proves the app's `lifespan`, including the new
+    `async with mcp_asgi_app.router.lifespan_context(...)` this issue added,
+    has actually completed and the MCP session manager has started) until
+    healthy, then issues a real `httpx.post` -- a genuine OS-level HTTP
+    request over a real socket, unlike every other MCP-transport test in
+    this suite, which drives the same JSON-RPC shape through `TestClient`'s
+    in-process ASGI transport -- to `http://127.0.0.1:<port>/mcp/` with a
+    JSON-RPC `initialize` payload matching the exact shape
+    `test_main.py`/`test_http_transport.py` already use for MCP `initialize`
+    requests. This is the strongest available proof, inside a
+    single-machine CI sandbox, that the transport is reachable over a real
+    TCP/HTTP stack -- the closest verifiable proxy for AC-BI-001's "a client
+    on a different machine" claim, matching the exact proxy this file's own
+    AC-BI-004/005 subprocess tests above already rely on.
+    """
+    port = _OVERRIDE_PORT
+    proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(port)})
+    try:
+        ready_response = _wait_until_healthy(url=f"http://{_HOST}:{port}/ready")
+        assert ready_response.status_code == 200
+
+        response = httpx.post(
+            f"http://{_HOST}:{port}{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-main-integration-client", "version": "0.0.1"},
+                },
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT},
+            timeout=5.0,
+        )
+
+        assert response.status_code == 200
+    finally:
+        _terminate(proc)
 
 
 def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential(

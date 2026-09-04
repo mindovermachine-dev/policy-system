@@ -7,6 +7,12 @@ timeout / result-size cap. They inspect `ast.Call` / `ast.keyword` /
 false-fails on the `cypher` docstring's `CREATE/MERGE/...` clause list and on
 the module docstring's "no query timeout / result-size cap" phrasing (F-03,
 Residual risk 6).
+
+These guards describe `mcp_server.py`'s own source only (`inspect.getsource`
+against that one module). Issue #39's Streamable HTTP transport lives in
+the sibling `ps_service.mcp_interface.http_transport` module, out of this
+file's AST entirely, so it neither triggers nor is covered by these
+assertions.
 """
 
 from __future__ import annotations

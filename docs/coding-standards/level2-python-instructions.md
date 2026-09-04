@@ -189,5 +189,5 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 
 Not yet coding patterns — each needs a decision before the area it touches ships, tracked here instead of as asides inside the topic sections above.
 
-- **API authentication/authorization**: For the walking skeleton, `ps_service/api/` ships unauthenticated with a loopback-only bind as the documented interim access control (issue #51). Authentication/authorization/rate-limiting for a network-reachable deployment are deferred to issue #39, together with MCP Interface's remote transport.
+- **API authentication/authorization**: For the walking skeleton, `ps_service/api/` ships unauthenticated with a loopback-only bind as the documented interim access control (issue #51). MCP Interface's remote transport (Streamable HTTP) shipped in issue #39, reusing the #67 local-test bypass as its only auth path; real per-user authentication/authorization/rate-limiting for a network-reachable deployment remains deferred, now tracked as issue #39's Group 3 / issue #65.
 - **PII handling**: ingested content may contain PII (this system explicitly models GDPR). Needs a product/legal decision on retention/logging limits and third-party LLM data-processing terms before ingesting real business data.

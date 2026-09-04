@@ -12,7 +12,8 @@ from __future__ import annotations
 import ast
 import inspect
 import json
-from typing import TYPE_CHECKING
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
@@ -25,22 +26,28 @@ from ps_service.config import ServiceConfig
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
-from ps_service.logging.facade import reset_for_tests
+from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
+from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
     import httpx
+    from starlette.applications import Starlette
+
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 _FORBIDDEN_IMPORT_PREFIXES = (
     "ps_service.domain_mapper",
     "ps_service.company_merge",
     "ps_service.query_engine",
-    "ps_service.mcp_interface",
     "ps_service.change_monitor",
 )
+
+_JSON_RPC_ACCEPT = "application/json, text/event-stream"
 
 _LEAK_SHAPED_KEYS = frozenset({"path", "config", "env", "traceback"})
 
@@ -301,11 +308,15 @@ def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_co
     reopening of it. Issue #51 drops `ps_service.api` for the same reason:
     `create_app` now mounts the `ps_service.api` REST router (a single
     top-level `from ps_service.api.routes import build_api_router`), exactly
-    as #22 admitted `ingestion`/`llm_interface`. Domain Mapper, Company
-    Merge, Query Engine, MCP Interface, and Regulatory Change Monitor stay
-    forbidden — the AST scan is non-transitive (it parses `main.py`'s source
-    only), and the pipeline stage entry points those routes eventually drive
-    are imported lazily, function-local, never at `main.py` module load.
+    as #22 admitted `ingestion`/`llm_interface`. Issue #39 drops
+    `ps_service.mcp_interface` for the same reason: `create_app` mounts the
+    MCP Interface's Streamable HTTP transport
+    (`http_transport.build_streamable_http_app`), exactly as #51 admitted
+    `ps_service.api`. Domain Mapper, Company Merge, Query Engine, and
+    Regulatory Change Monitor stay forbidden — the AST scan is non-transitive
+    (it parses `main.py`'s source only), and the pipeline stage entry points
+    those routes eventually drive are imported lazily, function-local, never
+    at `main.py` module load.
 
     Statically parses `main.py`'s source via `ast` and walks `Import`/
     `ImportFrom` nodes, rather than checking `sys.modules`, so it can't be
@@ -744,6 +755,52 @@ def test_lifespan_refuses_when_bypass_active_and_host_not_loopback() -> None:
     assert "loopback" in message
 
 
+def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_and_host_not_loopback(  # noqa: E501 - name mirrors PLAN.md Slice 5 verbatim
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-004, extended to the new transport (issue #39, PLAN.md Slice 5): the
+    refusal at bypass-active + non-loopback host must fire *before* the MCP
+    Streamable HTTP session manager's `lifespan_context` is ever entered, not just
+    "probably does because it's earlier in the function" (already covered in
+    general by `test_lifespan_refuses_when_bypass_active_and_host_not_loopback`
+    above).
+
+    `mcp_asgi_app` is a local variable inside `create_app`, never returned or
+    exposed on `app.state`. Per PLAN.md Slice 5's test-authoring note, the seam
+    is `main_module.build_streamable_http_app` itself (as imported into
+    `ps_service.main`): this wraps it so the real sub-app it returns has its
+    `router.lifespan_context` replaced with a recording stand-in *before*
+    `create_app` uses it -- mirroring the existing
+    `monkeypatch.setattr(main_module, "connect_from_config", ...)` pattern
+    already used throughout this file. No production code change expected: if
+    this fails, Slice 4's statement order in `main.py` is wrong, not this test.
+    """
+    entered = False
+    real_build_streamable_http_app = main_module.build_streamable_http_app
+
+    def wrapped_build_streamable_http_app(*, host: str) -> Starlette:
+        mcp_asgi_app = real_build_streamable_http_app(host=host)
+
+        @asynccontextmanager
+        async def recording_lifespan_context(app: object) -> AsyncGenerator[None]:
+            nonlocal entered
+            entered = True
+            yield
+
+        mcp_asgi_app.router.lifespan_context = recording_lifespan_context
+        return mcp_asgi_app
+
+    monkeypatch.setattr(main_module, "build_streamable_http_app", wrapped_build_streamable_http_app)
+
+    config = _complete_config(host="0.0.0.0", is_local_test_bypass_active=True)
+    app = create_app(config)
+
+    with pytest.raises(main_module.LocalTestBypassBindRefusedError), TestClient(app):
+        pass
+
+    assert entered is False
+
+
 def test_lifespan_does_not_refuse_when_bypass_active_and_host_is_loopback() -> None:
     """AC-BI-002 (negative case, issue #67): bypass active + loopback host starts normally."""
     config = _complete_config(is_local_test_bypass_active=True)
@@ -851,6 +908,43 @@ def test_lifespan_emits_bypass_warning_on_every_start_not_only_first(tmp_path: P
         pass
 
     reset_for_tests()
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    bypass_warning_entries = [line for line in lines if "local_test_bypass_active" in line]
+
+    assert len(bypass_warning_entries) == 2
+
+
+def test_lifespan_emits_bypass_warning_entry_every_start_with_mcp_transport_mounted(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-005, extended to the new transport (issue #39, PLAN.md Slice 6): the
+    every-start bypass-warning regression guard proven above by
+    `test_lifespan_emits_bypass_warning_on_every_start_not_only_first` (#67) still
+    holds now that `lifespan` wraps its tail in
+    `async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):` (Slice 4) --
+    proving that nesting did not accidentally move the warning emission to only
+    fire once, or suppress it, now that it sits one level deeper relative to
+    `yield`.
+
+    CHANGES.md's F-1 correction applies: this calls `create_app(config)` TWICE,
+    once per `with TestClient(...)` block, producing two independent apps (two
+    distinct `mcp_asgi_app`/`StreamableHTTPSessionManager` instances) -- entering
+    one `app`'s session manager twice via two separate `TestClient` blocks would
+    raise `RuntimeError` (`StreamableHTTPSessionManager.run()` is one-shot per
+    the installed SDK), unrelated to `main.py`'s statement order. This exactly
+    mirrors the #67 precedent test's own two-independent-`create_app()`-calls
+    shape.
+    """
+    config = _complete_config(is_local_test_bypass_active=True)
+
+    with TestClient(create_app(config)):
+        pass
+    with TestClient(create_app(config)):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
 
     log_path = tmp_path / "ps-service.jsonl"
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
@@ -1022,3 +1116,238 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
     with TestClient(incomplete_app) as client:
         assert client.get("/ready").json() == {"status": "not_ready"}
         assert client.get("/ready").json() == {"status": "not_ready"}
+
+
+# --- MCP Streamable HTTP transport mounted at the composition root (issue #39) ---
+
+
+class _FakeQueryResult:
+    """Satisfies `GraphQueryResult` structurally (mirrors
+    `mcp_interface/test_cypher_tool.py`'s fake, not imported across files, per
+    `test_main_integration.py`'s own self-contained-fakes convention).
+    """
+
+    def __init__(self, *, header: list[list[object]], result_set: list[object]) -> None:
+        self.header = header
+        self.result_set = result_set
+
+
+class _FakeGraphHandle:
+    """Satisfies `GraphHandle` structurally: `query()` always returns the scripted result."""
+
+    def __init__(self, *, result: _FakeQueryResult) -> None:
+        self._result = result
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        return self._result
+
+
+class _FakeFalkorDB:
+    """Stands in for the eager `falkordb.FalkorDB` client."""
+
+    def __init__(self, handle: _FakeGraphHandle) -> None:
+        self._handle = handle
+
+    def select_graph(self, name: str) -> _FakeGraphHandle:
+        return self._handle
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    """Narrow an already-`isinstance`-checked JSON value to `dict[str, object]`."""
+    assert isinstance(value, dict)
+    return cast("dict[str, object]", value)
+
+
+def _as_list(value: object) -> list[object]:
+    """Narrow an already-`isinstance`-checked JSON value to `list[object]`."""
+    assert isinstance(value, list)
+    return cast("list[object]", value)
+
+
+def _sse_result(response_text: str) -> dict[str, object]:
+    """Extract the JSON-RPC `result` object from an SSE-formatted response body."""
+    for line in response_text.splitlines():
+        if line.startswith("data:"):
+            payload: object = json.loads(line.removeprefix("data:").strip())
+            payload_dict = _as_dict(payload)
+            return _as_dict(payload_dict["result"])
+    pytest.fail(f"no 'data:' line found in SSE body: {response_text!r}")
+
+
+def _initialize_mcp_session(client: TestClient) -> str:
+    """Drive `initialize` -> `notifications/initialized` against the mounted transport,
+    returning the session id.
+    """
+    response = client.post(
+        f"{MCP_HTTP_MOUNT_PATH}/",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test-main-client", "version": "0.0.1"},
+            },
+        },
+        headers={"Accept": _JSON_RPC_ACCEPT},
+    )
+    assert response.status_code == 200
+    session_id = response.headers["mcp-session-id"]
+
+    notified = client.post(
+        f"{MCP_HTTP_MOUNT_PATH}/",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
+    )
+    assert notified.status_code == 202
+    return session_id
+
+
+def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None:
+    """AC-BI-001/002: `create_app` mounts MCP Interface's Streamable HTTP transport
+    at `MCP_HTTP_MOUNT_PATH`, reachable through the same `app`/`TestClient` that
+    already serves `/health` in this file.
+
+    A real JSON-RPC `initialize` request over the ASGI transport (real HTTP
+    verbs/headers/JSON-RPC, not an in-process function call) succeeding proves
+    the transport is wired through the real composition root, not just the
+    standalone factory already proven by `tests/mcp_interface/test_http_transport.py`
+    (Slice 3).
+    """
+    app = create_app(_complete_config())
+
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        response = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-main-client", "version": "0.0.1"},
+                },
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT},
+        )
+
+    assert response.status_code == 200
+    result = _sse_result(response.text)
+    server_info = _as_dict(result["serverInfo"])
+    assert isinstance(server_info.get("name"), str)
+
+
+def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC-BI-003 (through the real composition root): both the `cypher` tool and
+    the `psdomain://concepts` resource are reachable over the mounted transport
+    in the same session — composing the fact in one test, not two disconnected
+    ones (mirrors #67's own established convention).
+    """
+    fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
+
+    def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
+        return _FakeFalkorDB(fake_graph)
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _stub_mcp_connect_from_config)
+
+    md_file = tmp_path / "ps-domain-concepts.md"
+    md_file.write_text("# PS domain concepts\n\nRegulation -> Obligation\n", encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "_domain_concepts_path", lambda: md_file)
+
+    app = create_app(_complete_config())
+
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        session_id = _initialize_mcp_session(client)
+
+        cypher_response = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
+        )
+        resource_response = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "resources/read",
+                "params": {"uri": "psdomain://concepts"},
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
+        )
+
+    assert cypher_response.status_code == 200
+    cypher_result = _sse_result(cypher_response.text)
+    assert cypher_result["isError"] is False
+
+    assert resource_response.status_code == 200
+    resource_result = _sse_result(resource_response.text)
+    contents = _as_list(resource_result["contents"])
+    first = _as_dict(contents[0])
+    assert first["text"] == md_file.read_text(encoding="utf-8")
+
+
+def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed_local_principal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """AC-BI-006 (issue #39, PLAN.md Slice 7 -- the flagship test of the whole
+    issue): composes AC-BI-001/002/003/006 into one end-to-end scenario.
+
+    Extends `test_main_integration.py`'s own (#67)
+    `test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential`
+    -- which drives `mcp_server.cypher()` in-process, i.e. as the stdio
+    transport would -- to the new mounted Streamable HTTP transport
+    specifically: the *same* fake-FalkorDB shape and the *same* final
+    principal assertion, but the tool call itself now goes through a real
+    JSON-RPC `initialize` -> `notifications/initialized` -> `tools/call`
+    exchange over the ASGI transport (`_initialize_mcp_session`, already
+    used by `test_cypher_and_domain_concepts_both_reachable_via_mounted_transport`
+    above), with no header/token/credential of any kind beyond the mandatory
+    `mcp-session-id` the protocol itself requires.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+
+    fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
+
+    def _stub_mcp_connect_from_config(_config: object) -> _FakeFalkorDB:
+        return _FakeFalkorDB(fake_graph)
+
+    monkeypatch.setattr(mcp_server, "connect_from_config", _stub_mcp_connect_from_config)
+
+    config = _complete_config(is_local_test_bypass_active=True, logging_dir=tmp_path)
+    app = create_app(config)
+
+    with TestClient(app, base_url=f"http://{config.host}:{config.port}") as client:
+        session_id = _initialize_mcp_session(client)
+
+        response = client.post(
+            f"{MCP_HTTP_MOUNT_PATH}/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "cypher", "arguments": {"query": "MATCH (n) RETURN n.id"}},
+            },
+            headers={"Accept": _JSON_RPC_ACCEPT, "mcp-session-id": session_id},
+        )
+
+    assert response.status_code == 200
+    result = _sse_result(response.text)
+    assert result["isError"] is False
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    lines = read_lines(resolve_default_log_path())
+    entry = next(
+        line
+        for line in lines
+        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
+    )
+    assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID

@@ -19,6 +19,7 @@ Note: We are in the transition from prototype to full implementation and the ins
     - [Azure](#azure)
     - [Ollama (local, no cloud credentials/cost)](#ollama-local-no-cloud-credentialscost)
   - [Configure Company Merge](#configure-company-merge)
+  - [MCP Streamable HTTP endpoint](#mcp-streamable-http-endpoint)
   - [Claude Desktop (alternative to Claude Code)](#claude-desktop-alternative-to-claude-code)
 - [Coding Standards](#coding-standards)
 - [Testing](#testing)
@@ -455,12 +456,39 @@ provider choice to make here — just the one value. If it's unset, `/ready`
 reports `not_ready` and `POST /ingestions` (`ps-cli regulations ingest`)
 fails fast with `ingestion_config_incomplete` before doing any I/O.
 
+### MCP Streamable HTTP endpoint
+
+MCP Interface's `server` (the `cypher` tool, the `psdomain://concepts`
+resource) is reachable two ways: MCP's stdio transport (a locally-spawned
+child process, used by the Claude Desktop setup below) and, as of issue #39,
+a Streamable HTTP transport mounted at `/mcp` inside the same FastAPI app
+that already serves `/health`/`/ready`/REST — same process, same port, no
+separate service to start. Once PS Service is running (see above), the
+endpoint is:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+There is no real authentication on this endpoint yet — the only supported
+local, no-credential path is the opt-in local-test bypass from issue #67
+(`PS_SERVICE_LOCAL_TEST_BYPASS=true`, loopback-bind only, warns on every
+start); see the [user guide's local-test walkthrough](./docs/artifacts/user-guide.md#6-install-the-policy-system-plugin)
+for how that bypass is used against this exact endpoint. Real per-user
+authentication/authorization/rate-limiting for a network-reachable
+deployment remains deferred — see the "Authentication is explicitly open,
+not resolved" note in the [PS Service container architecture doc's MCP
+Interface section](./docs/architecture/ps-service-container-architecture.md#mcp-interface),
+tracked as issue #39's Group 3 / issue #65.
+
 ### Claude Desktop (alternative to Claude Code)
 
 Requires the same FalkorDB setup and data load as above. Claude Desktop has
 no shell, so retrieval goes through `tools/graph-query/mcp_server.py` (MCP)
 instead of `ps.py` directly — `uv sync` as above already installs `mcp`,
-part of the repo-root `pyproject.toml`'s dependencies.
+part of the repo-root `pyproject.toml`'s dependencies. This is an unrelated,
+purely local dev prototype (talks directly to a local FalkorDB) — not the
+`/mcp` Streamable HTTP endpoint documented above.
 
 1. Add to `claude_desktop_config.json` (macOS:
    `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`):

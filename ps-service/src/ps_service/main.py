@@ -2,9 +2,11 @@
 
 Owns liveness/readiness (`/health`, `/ready`) and, since issue #51, mounts the
 `ps_service.api` REST router into `create_app` (the one deliberate
-`ps_service.api` import). It still has no module-load import of, and no
-readiness relationship with, Domain Mapper, Company Merge, Query Engine, MCP
-Interface, or Regulatory Change Monitor.
+`ps_service.api` import). Since issue #39, it also mounts MCP Interface's
+Streamable HTTP transport (`ps_service.mcp_interface.http_transport`) into
+the same app -- a second deliberate exception to the same pattern. It still
+has no module-load import of, and no readiness relationship with, Domain
+Mapper, Company Merge, Query Engine, or Regulatory Change Monitor.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from ps_service.llm_interface import (
     check_connectivity as check_llm_interface_connectivity,
 )
 from ps_service.logging.facade import configure, emit_log_entry
+from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_streamable_http_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -155,6 +158,20 @@ def create_app(config: ServiceConfig) -> FastAPI:
     later increments, `POST /ingestions`) is mounted via `app.include_router`.
     `/health` and `/ready` stay on `app.add_api_route` — they predate the
     router and carry no request models.
+
+    Since issue #39, `build_streamable_http_app(host=config.host)` builds MCP
+    Interface's Streamable HTTP ASGI sub-app (wrapping the same
+    `mcp_server.server` singleton the stdio entrypoint uses), mounted
+    unconditionally at `MCP_HTTP_MOUNT_PATH` (`/mcp`) alongside the REST
+    router — the same process/port, never a second service (AC-BI-002).
+    Because Starlette does not propagate a mounted sub-app's own `lifespan`
+    (verified directly against this repo's installed `starlette` version),
+    `lifespan` below explicitly enters
+    `mcp_asgi_app.router.lifespan_context(mcp_asgi_app)` around its existing
+    tail, so the SDK's Streamable HTTP session manager only starts after
+    `_refuse_non_loopback_bypass_bind`, `configure(...)`, and the startup
+    warning entries have already run — preserving AC-BI-004/005's fail-fast
+    ordering.
     """
 
     @asynccontextmanager
@@ -229,15 +246,19 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 outcome="warning",
                 extra={"missing_config": missing_config},
             )
-        app.state.ready = _check_dependencies_at_startup(config) and not missing_config
-        yield
-        app.state.ready = False
+        async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
+            app.state.ready = _check_dependencies_at_startup(config) and not missing_config
+            yield
+            app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
     app.state.ready = False
     app.state.config = config
     register_exception_handlers(app)
     app.include_router(build_api_router())
+
+    mcp_asgi_app = build_streamable_http_app(host=config.host)
+    app.mount(MCP_HTTP_MOUNT_PATH, mcp_asgi_app)
 
     async def health() -> dict[str, str]:
         """Report liveness: "alive" as soon as the ASGI server accepts connections.

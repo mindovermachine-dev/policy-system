@@ -24,7 +24,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import TYPE_CHECKING
+from importlib import resources
+from pathlib import Path
 
 import pytest
 from mcp.server.lowlevel.helper_types import ReadResourceContents
@@ -33,10 +34,8 @@ from mcp.server.mcpserver.exceptions import ResourceNotFoundError
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.errors import McpResourceUnavailableError
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 _KNOWN_MARKDOWN = "# PS domain concepts\n\nRegulation → Obligation -- café ✅\n"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
@@ -68,12 +67,43 @@ def test_read_helper_takes_no_parameters() -> None:
 
 
 def test_domain_concepts_path_is_absolute_and_fixed() -> None:
+    """AC-BI-012: the resource resolves from the installed package, not a repo checkout.
+
+    Asserts the filename and that the resolved location is a descendant of
+    `ps_service.mcp_interface`'s own installed package directory -- never
+    asserting a `docs/artifacts` substring, which is precisely the
+    checkout-relative layout this AC requires removing.
+    """
     mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # test reaches into a module-internal cached helper by design
 
     path = mcp_server._domain_concepts_path()  # pyright: ignore[reportPrivateUsage]  # test invokes the real module-internal path helper
 
-    assert path.is_absolute()
-    assert path.as_posix().endswith("docs/artifacts/ps-domain-concepts.md")
+    assert path.name == "ps-domain-concepts.md"
+    package_root = resources.files("ps_service.mcp_interface")
+    with (
+        resources.as_file(path) as concrete_path,
+        resources.as_file(package_root) as concrete_root,
+    ):
+        assert concrete_path.resolve().is_relative_to(concrete_root.resolve())
+
+
+def test_packaged_copy_matches_docs_artifacts_source() -> None:
+    """AC-BI-012 anti-drift guard: the packaged copy is byte-identical to the source.
+
+    `docs/artifacts/ps-domain-concepts.md` is the checkout-relative canonical
+    source -- safe to reference here since tests always run inside a
+    checkout, unlike the runtime `_domain_concepts_path()` helper.
+    """
+    mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # test reaches into a module-internal cached helper by design
+
+    packaged_content = mcp_server._domain_concepts_path().read_text(  # pyright: ignore[reportPrivateUsage]  # test invokes the real module-internal path helper
+        encoding="utf-8"
+    )
+    source_content = (_REPO_ROOT / "docs" / "artifacts" / "ps-domain-concepts.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert packaged_content == source_content
 
 
 def test_helper_raises_domain_error_on_missing_file(

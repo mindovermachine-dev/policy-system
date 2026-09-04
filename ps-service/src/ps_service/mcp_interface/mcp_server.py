@@ -6,13 +6,19 @@ Desktop) with no shell. Calls ps_service.query_engine.execute_cypher_query
 IN-PROCESS. The write-clause guard and all execution live in Query Engine
 and are never duplicated here. No network transport, no auth, no query
 timeout / result-size cap (issues #38 / #39).
+
+This module's own source stays stdio-only: the Streamable HTTP transport
+(issue #39) lives in the sibling `http_transport.py` module, which calls
+`server.streamable_http_app(...)` on the `server` object defined below
+from outside this file -- see `tests/mcp_interface/test_scope_guard.py`
+for the guards this keeps intact.
 """
 
 from __future__ import annotations
 
 import functools
 import os
-from pathlib import Path
+from importlib import resources
 from typing import TYPE_CHECKING
 
 from mcp.server import MCPServer
@@ -36,6 +42,8 @@ from ps_service.query_engine.falkordb_client import (
 )
 
 if TYPE_CHECKING:
+    from importlib.resources.abc import Traversable
+
     from ps_service.config import ServiceConfig
     from ps_service.logging.emitter import LogEmitter
 
@@ -48,16 +56,15 @@ _GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
 
 
 @functools.cache
-def _domain_concepts_path() -> Path:
-    """Absolute path to docs/artifacts/ps-domain-concepts.md.
+def _domain_concepts_path() -> Traversable:
+    """Packaged location of ps-domain-concepts.md (issue #39, AC-BI-012).
 
-    Resolved from the repo checkout by a fixed parent count (mirrors how
-    CYPHER_CLI was computed with parents[1] today). Lazy + cached: never
-    touched at import, so the module imports outside a checkout / in a
-    wheel. Wheel-packaging docs/ is part of the same remote-deployment
-    migration already flagged for the transport.
+    Resolved via `importlib.resources` against this installed package, not
+    a repo-checkout-relative path -- so the resource serves correctly from
+    a wheel install with no repo checkout present, not only from an
+    editable/dev install. Lazy + cached: never touched at import.
     """
-    return Path(__file__).resolve().parents[4] / "docs" / "artifacts" / "ps-domain-concepts.md"
+    return resources.files("ps_service.mcp_interface").joinpath("ps-domain-concepts.md")
 
 
 def _graph_name() -> str:
