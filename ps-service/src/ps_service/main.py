@@ -36,9 +36,8 @@ from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
 )
 from ps_service.ingestion.falkordb_client import (
-    check_connectivity as check_falkordb_connectivity,
+    check_connectivity_from_config as check_falkordb_connectivity,
 )
-from ps_service.ingestion.falkordb_client import connect_from_config
 from ps_service.llm_interface import (
     check_connectivity as check_llm_interface_connectivity,
 )
@@ -160,19 +159,14 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     of what's down rather than stopping at the first failure.
 
     Each probe also records its outcome in `ps_service.dependency_health`
-    (`falkordb_client.check_connectivity`, `llm_interface.check_connectivity`,
+    (`falkordb_client.check_connectivity_from_config`, `llm_interface.check_connectivity`,
     `cellar_eli.fetch.check_connectivity` all do this themselves) — that
     registry is what lets `/ready` self-heal from a later real-traffic
     success without a restart, beyond this one-time startup snapshot.
     """
     all_succeeded = True
     for dependency, probe in (
-        (
-            FALKORDB,
-            lambda: check_falkordb_connectivity(
-                connect_from_config(config), config.falkordb_host, config.falkordb_port
-            ),
-        ),
+        (FALKORDB, lambda: check_falkordb_connectivity(config)),
         (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
         (CELLAR_ELI, check_cellar_eli_connectivity),
     ):

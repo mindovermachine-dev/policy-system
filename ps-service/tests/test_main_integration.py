@@ -560,10 +560,7 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
         is_local_test_bypass_active=True,
     )
 
-    def stub_connect_from_config(_config: ServiceConfig) -> object:
-        return object()
-
-    def stub_check_falkordb_connectivity(db: object, host: str, port: int) -> None:
+    def stub_check_falkordb_connectivity(_config: ServiceConfig) -> None:
         return None
 
     def stub_check_llm_interface_connectivity(_config: ServiceConfig) -> None:
@@ -572,7 +569,6 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
     def stub_check_cellar_eli_connectivity() -> None:
         return None
 
-    monkeypatch.setattr(main_module, "connect_from_config", stub_connect_from_config)
     monkeypatch.setattr(
         main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
     )

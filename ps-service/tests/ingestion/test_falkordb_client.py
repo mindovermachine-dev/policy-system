@@ -14,6 +14,7 @@ from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.ingestion.falkordb_client import (
     FalkorDBConnectionError,
     check_connectivity,
+    check_connectivity_from_config,
     connect,
     connect_from_config,
     native_graph_name,
@@ -129,6 +130,45 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 
     assert captured == {"host": env_host, "port": env_port}
     assert result is sentinel
+
+
+def test_check_connectivity_from_config_marks_falkordb_unhealthy_when_connect_itself_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the gap `main.py`'s startup probe used to have: `connect()`
+    (via the real `falkordb` client's eager handshake, not the lazy connect its
+    docstring implies) can raise before `check_connectivity`'s own try/except
+    ever runs. `connect_from_config`/`connect` failing must still mark FALKORDB
+    unhealthy, not just a later `list_graphs()` failure.
+    """
+
+    def _raising_connect(host: str, port: int) -> FalkorDB:
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(falkordb_client_module, "connect", _raising_connect)
+    config = load_config()
+
+    with pytest.raises(FalkorDBConnectionError) as exc_info:
+        check_connectivity_from_config(config)
+
+    assert is_healthy(FALKORDB) is False
+    assert isinstance(exc_info.value.__cause__, ConnectionRefusedError)
+
+
+def test_check_connectivity_from_config_marks_healthy_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = _FakeConnectivityProbeThatSucceeds()
+
+    def _fake_connect(host: str, port: int) -> _FakeConnectivityProbeThatSucceeds:
+        return probe
+
+    monkeypatch.setattr(falkordb_client_module, "connect", _fake_connect)
+    config = load_config()
+
+    check_connectivity_from_config(config)
+
+    assert is_healthy(FALKORDB) is True
 
 
 @pytest.mark.falkordb_live
