@@ -66,8 +66,11 @@ def test_restore_instrument_installs_native_leg_with_original_content(
     token = uuid.uuid4().hex[:12]
     short_name = f"RT55{token}"
     single_tenant_graph_name = f"__ac66_slice55_single_tenant_{token}__"
-    native_target = f"{short_name}_native"
-    baseline_target = f"{short_name}_baseline"
+    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
+    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
+    # this test's expected target names match the real, fixed graph keys.
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
     native_graph = _native_graph()
     artifact = build_restore_artifact(
         instrument_id=f"RT55-{token}",

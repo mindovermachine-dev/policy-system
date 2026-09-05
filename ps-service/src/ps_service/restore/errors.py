@@ -28,13 +28,20 @@ class RestoreConcurrencyConflictError(Exception):
 
 
 class ArtifactContentRejectedError(Exception):
-    """A parsed `SerializedGraph`'s content fails the schema allow-list check.
+    """A parsed artifact's content is invalid or does not match its own manifest.
 
-    Raised by `schema_allowlist.validate_serialized_graph` (CHANGES2.md
-    §2.4's Query Safety guard) when a node/edge label or relationship_type
-    falls outside its allow-list, or a node's `properties["id"]` is missing
-    or not a string. Raised before `staging.stage_graph` creates any staged
-    key at all -- a rejected artifact never causes even a staged-key write.
+    Two distinct raise sites:
+
+    - `schema_allowlist.validate_serialized_graph` (CHANGES2.md §2.4's Query
+      Safety guard), when a node/edge label or relationship_type falls
+      outside its allow-list, or a node's `properties["id"]` is missing or
+      not a string. Raised before `staging.stage_graph` creates any staged
+      key at all -- a rejected artifact never causes even a staged-key write.
+    - `restore_instrument._run_baseline_merge`, when the manifest's
+      `instrument_id` does not match any `RegulatoryInstrument.id` actually
+      present in the staged baseline graph -- without this check, the merge
+      would silently persist every RegulatoryInstrument property (celex,
+      title, ...) blanked out instead of failing (confirmed empirically).
     """
 
 

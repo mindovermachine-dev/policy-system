@@ -46,7 +46,11 @@ from ps_service.export.falkordb_connection import raw_connection
 from ps_service.export.serialize import checksum_bytes, parse_serialized_graph_json
 from ps_service.logging.facade import emit_log_entry
 from ps_service.restore import schema_allowlist
-from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
+from ps_service.restore.errors import (
+    ArtifactContentRejectedError,
+    ArtifactIntegrityError,
+    ArtifactSchemaVersionMismatchError,
+)
 from ps_service.restore.models import RestoreOutcome
 from ps_service.restore.staging import (
     StagedLegNames,
@@ -180,6 +184,33 @@ def _run_baseline_merge(
     """
     baseline_staged_graph = select_company_merge_graph(db, baseline_staged_name)
     baseline = graph_reader.read_baseline_graph(baseline_staged_graph, regulatory_instrument_id)
+    if not baseline.regulatory_instrument_properties:
+        # graph_reader._read_regulatory_instrument_properties looks up
+        # `MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id})` and
+        # returns {} rather than raising when nothing matches (that reader's
+        # own documented contract leaves "should a miss abort the merge" to
+        # its caller). A baseline graph with no RegulatoryInstrument node at
+        # all is a legitimate no-op leg (D20 precedent: native-only test
+        # fixtures use a wholly empty baseline) -- only a graph that HAS a
+        # RegulatoryInstrument node, just not under the id the manifest
+        # named, is the real problem. Confirmed empirically: a
+        # manifest.instrument_id that doesn't equal the staged baseline
+        # graph's own RegulatoryInstrument.id (e.g. the raw CELEX instead of
+        # the real "{SHORT}-{VERSION}" id) used to merge silently with every
+        # RegulatoryInstrument property (celex, title, ...) blanked out, with
+        # no error anywhere in the pipeline -- export "succeeds", restore
+        # reports all three stages "succeeded", and the corruption only
+        # surfaces later to whoever queries the data. Fail loud here instead.
+        any_regulatory_instrument = baseline_staged_graph.query(
+            "MATCH (n:RegulatoryInstrument) RETURN count(n) AS c"
+        )
+        rows = cast("list[list[object]]", any_regulatory_instrument.result_set)
+        if rows and cast("int", rows[0][0]) > 0:
+            raise ArtifactContentRejectedError(
+                f"no RegulatoryInstrument node with id {regulatory_instrument_id!r} found in "
+                f"the staged baseline graph -- the manifest's instrument_id must match the "
+                f"source graph's actual RegulatoryInstrument.id"
+            )
 
     snapshot_graph = select_company_merge_graph(db, snapshot_name)
     dedup_result = resolve_capability_convergence_offline(
@@ -246,7 +277,15 @@ def restore_instrument(
 
     manifest = artifact.manifest
     instrument_id = manifest.instrument_id
-    short = manifest.short_name
+    # Lowercased to match ingestion.falkordb_client.native_graph_name/
+    # domain_mapper.falkordb_client.baseline_graph_name's own documented
+    # `{short_name.lower()}_native`/`{short_name.lower()}_baseline` convention.
+    # Confirmed empirically: restoring a manifest with a mixed-case short_name
+    # (e.g. "NIS2", the real value every curated instrument actually carries)
+    # used to create separate `NIS2_native`/`NIS2_baseline` graphs alongside
+    # ingestion's own `nis2_native`/`nis2_baseline` -- two disconnected copies
+    # of the same instrument under different FalkorDB graph keys.
+    short = manifest.short_name.lower()
 
     _emit_restore_log(
         instrument_id=instrument_id,

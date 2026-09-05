@@ -85,8 +85,11 @@ def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
     token = uuid.uuid4().hex[:12]
     short_name = f"RT57{token}"
     single_tenant_graph_name = f"__ac66_slice57_single_tenant_{token}__"
-    native_target = f"{short_name}_native"
-    baseline_target = f"{short_name}_baseline"
+    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
+    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
+    # this test's expected target names match the real, fixed graph keys.
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT57-{token}"
 
     # Pre-seed the single-tenant graph with real content, so "unchanged" is a
