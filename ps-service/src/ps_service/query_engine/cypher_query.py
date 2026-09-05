@@ -32,6 +32,11 @@ import re
 import time
 from typing import TYPE_CHECKING, cast
 
+from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
+    Edge,
+    Node,
+)
+
 from ps_service.logging.facade import emit_log_entry
 from ps_service.query_engine.errors import (
     GraphUnseededError,
@@ -95,6 +100,40 @@ def _is_graph_seeded(graph: GraphHandle) -> bool:
     return count > 0
 
 
+def _to_jsonable(value: object) -> object:
+    """Recursively convert a raw FalkorDB result value into a JSON-serializable shape.
+
+    A freehand `RETURN r`/`RETURN r, rel` (whole node/relationship, not a
+    projected property) is a normal, expected shape for genuinely ad hoc
+    Cypher (see `ps-qna`'s freehand-retrieval design) -- `graph.query` hands
+    those back as raw `falkordb.Node`/`Edge` driver objects, neither of which
+    the MCP SDK's tool-result encoder can serialize. Confirmed empirically:
+    an un-converted `Node` in a returned row raised `ToolError: Unable to
+    serialize unknown type: <class 'falkordb.node.Node'>` all the way out to
+    the caller, bypassing `handle_mcp_tool_call`'s own `error: ...` string
+    contract entirely. Lists (e.g. a returned path's node/edge sequence) are
+    converted element-wise; every other value (str, int, float, bool, None,
+    already-plain dict) passes through unchanged.
+    """
+    if isinstance(value, Node):
+        return {
+            "id": cast("int", value.id),
+            "labels": value.labels,
+            "properties": cast("dict[str, object]", value.properties),
+        }
+    if isinstance(value, Edge):
+        return {
+            "id": cast("int", value.id),
+            "relation": value.relation,
+            "properties": cast("dict[str, object]", value.properties),
+            "src_node": _to_jsonable(cast("object", value.src_node)),
+            "dest_node": _to_jsonable(cast("object", value.dest_node)),
+        }
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in cast("list[object]", value)]
+    return value
+
+
 def execute_cypher_query(
     query: str,
     *,
@@ -152,7 +191,10 @@ def execute_cypher_query(
         raise QueryEngineExecutionError(str(exc)) from exc
 
     columns = [cast("str", c[1]) for c in result.header] if result.header else []
-    rows = [list(r) for r in cast("list[list[object]]", result.result_set)]
+    rows = [
+        [_to_jsonable(cell) for cell in row]
+        for row in cast("list[list[object]]", result.result_set)
+    ]
     _log(
         outcome="succeeded",
         started=started,
