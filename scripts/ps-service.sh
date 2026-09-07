@@ -20,12 +20,26 @@ STDOUT_LOG="${REPO_ROOT}/logs/ps-service-stdout.log"
 STARTUP_TIMEOUT_SECONDS="${PS_SERVICE_STARTUP_TIMEOUT_SECONDS:-30}"
 SHUTDOWN_TIMEOUT_SECONDS="${PS_SERVICE_SHUTDOWN_TIMEOUT_SECONDS:-15}"
 
+pid_is_alive() {
+  # True if $1 names a process that is running and not a zombie. A zombie
+  # (state Z, e.g. an exited `uv run` wrapper its parent never reaped) still
+  # answers `kill -0` successfully even though it is doing no work and holds
+  # no port -- treating that as "alive" made `stop` report a false "did not
+  # exit" and the next `start` refuse with a false "already running".
+  local pid="${1:-}"
+  [[ -n "${pid}" ]] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  local state
+  state="$(ps -o stat= -p "${pid}" 2>/dev/null | tr -d ' ')"
+  [[ -n "${state}" && "${state}" != Z* ]]
+}
+
 running_pid() {
   # Prints the PID if $PID_FILE names a live process, otherwise nothing.
   if [[ -f "${PID_FILE}" ]]; then
     local pid
     pid="$(cat "${PID_FILE}")"
-    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+    if pid_is_alive "${pid}"; then
       echo "${pid}"
       return
     fi
@@ -58,7 +72,7 @@ cmd_start() {
 
   local waited=0
   until curl -sf -m 2 "http://${HOST}:${PORT}/health" >/dev/null 2>&1; do
-    if ! kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then
+    if ! pid_is_alive "$(cat "${PID_FILE}")"; then
       echo "PS Service exited during startup — see ${STDOUT_LOG}" >&2
       rm -f "${PID_FILE}"
       exit 1
@@ -90,7 +104,7 @@ cmd_stop() {
   kill -TERM "${pid}"
 
   local waited=0
-  while kill -0 "${pid}" 2>/dev/null; do
+  while pid_is_alive "${pid}"; do
     if (( waited >= SHUTDOWN_TIMEOUT_SECONDS )); then
       echo "PS Service did not exit within ${SHUTDOWN_TIMEOUT_SECONDS}s after SIGTERM — leaving it running. Investigate before sending SIGKILL yourself." >&2
       exit 1

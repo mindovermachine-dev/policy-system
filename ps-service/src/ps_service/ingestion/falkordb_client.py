@@ -107,9 +107,15 @@ class _ConnectivityProbe(Protocol):
 def connect(host: str, port: int) -> FalkorDB:
     """Construct a FalkorDB client.
 
-    Does not itself verify connectivity — the underlying client connects
-    lazily on first use; call `check_connectivity()` against the result to
-    fail loud early.
+    Despite the underlying client's own lazy-connection intent, the installed
+    `falkordb` package's `FalkorDB.__init__` calls `Is_Sentinel`, which issues
+    a real `INFO` command immediately — confirmed empirically: constructing
+    this against an unreachable host raises `redis.exceptions.ConnectionError`
+    right here, before any caller-visible connectivity check ever runs. Do not
+    call this outside a `dependency_health`-recording boundary (see
+    `check_connectivity_from_config`) — an unguarded call here silently drops
+    the failure from `/ready`'s `unhealthy_dependencies` even though it's
+    real.
     """
     return FalkorDB(host=host, port=port)
 
@@ -149,6 +155,30 @@ def check_connectivity(db: _ConnectivityProbe, host: str, port: int) -> None:
             f"FalkorDB connection failed at {host}:{port}. Is FalkorDB running? Error: {exc}"
         ) from exc
     mark_healthy(FALKORDB)
+
+
+def check_connectivity_from_config(config: ServiceConfig) -> None:
+    """Connect via `connect_from_config` and verify connectivity, as one guarded step.
+
+    `main.py`'s startup probe used to call `connect_from_config(config)` and
+    `check_connectivity(db, ...)` as two separate steps, with only the second
+    wrapped in a `dependency_health`-recording try/except. Since `connect()`
+    actually performs a real round-trip (see its docstring) rather than the
+    lazy connect its API implies, a connection failure raised by `connect()`
+    never got surfaced to `check_connectivity` at all -- it escaped
+    unrecorded, so `/ready`'s `unhealthy_dependencies` stayed empty even
+    while `status` correctly flipped to `not_ready`. This wraps both steps
+    so a failure from either path is recorded.
+    """
+    try:
+        db = connect_from_config(config)
+    except Exception as exc:
+        mark_unhealthy(FALKORDB, error=exc)
+        raise FalkorDBConnectionError(
+            f"FalkorDB connection failed at {config.falkordb_host}:{config.falkordb_port}. "
+            f"Is FalkorDB running? Error: {exc}"
+        ) from exc
+    check_connectivity(db, config.falkordb_host, config.falkordb_port)
 
 
 def select_graph(db: FalkorDB, name: str) -> GraphHandle:

@@ -70,12 +70,8 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     autouse fixture resets it before every test.
     """
 
-    def stub_connect_from_config(config: ServiceConfig) -> object:
-        """No-op FalkorDB connect: return an opaque handle standing in for a live `FalkorDB`."""
-        return object()
-
-    def stub_check_falkordb_connectivity(db: object, host: str, port: int) -> None:
-        """No-op FalkorDB connectivity probe: a healthy dependency by default."""
+    def stub_check_falkordb_connectivity(config: ServiceConfig) -> None:
+        """No-op FalkorDB connect-and-check: a healthy dependency by default."""
 
     def stub_check_llm_interface_connectivity(config: ServiceConfig) -> None:
         """No-op LLM Interface connectivity probe: a healthy dependency by default."""
@@ -83,7 +79,6 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     def stub_check_cellar_eli_connectivity() -> None:
         """No-op Cellar/ELI connectivity probe: a healthy dependency by default."""
 
-    monkeypatch.setattr(main_module, "connect_from_config", stub_connect_from_config)
     monkeypatch.setattr(
         main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
     )
@@ -310,8 +305,9 @@ def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_co
 
     `ps_service.ingestion`/`ps_service.llm_interface` were dropped from
     `_FORBIDDEN_IMPORT_PREFIXES` by issue #22: `main.py` now imports each
-    component's `check_connectivity` (and `ingestion.falkordb_client.
-    connect_from_config`) as `/ready`'s startup dependency probes — a
+    component's `check_connectivity` (`ingestion.falkordb_client.
+    check_connectivity_from_config` for FalkorDB) as `/ready`'s startup
+    dependency probes — a
     deliberate, narrow exception to AC-BI-006's original decoupling, not a
     reopening of it. Issue #51 drops `ps_service.api` for the same reason:
     `create_app` now mounts the `ps_service.api` REST router (a single
@@ -779,8 +775,8 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
     `ps_service.main`): this wraps it so the real sub-app it returns has its
     `router.lifespan_context` replaced with a recording stand-in *before*
     `create_app` uses it -- mirroring the existing
-    `monkeypatch.setattr(main_module, "connect_from_config", ...)` pattern
-    already used throughout this file. No production code change expected: if
+    `monkeypatch.setattr(main_module, "check_falkordb_connectivity", ...)`
+    pattern already used throughout this file. No production code change expected: if
     this fails, Slice 4's statement order in `main.py` is wrong, not this test.
     """
     entered = False
@@ -967,21 +963,23 @@ def test_lifespan_emits_bypass_warning_entry_every_start_with_mcp_transport_moun
 def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
-    def failing_connect(config: ServiceConfig) -> object:
-        raise IngestionConfigurationError("FalkorDB connection failed at 127.0.0.1:6379")
+    def failing_falkordb_check(config: ServiceConfig) -> None:
+        error = IngestionConfigurationError("FalkorDB connection failed at 127.0.0.1:6379")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
 
-    monkeypatch.setattr(main_module, "connect_from_config", failing_connect)
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
 
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    # `failing_connect` raises inside `connect_from_config`, before
-    # `check_falkordb_connectivity` (the call that would `mark_unhealthy`) is
-    # ever reached — so the live registry never records FalkorDB as unhealthy,
-    # even though `app.state.ready` correctly stays False. An empty list here
-    # is the textually correct response (AC-BI-001 says "currently recorded"
-    # unhealthy), not a bug.
-    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
+    # Regression for a real bug found via manual end-to-end testing (issue #68):
+    # `check_connectivity_from_config` wraps both the connect step and the
+    # `list_graphs()` probe in one `dependency_health`-recording try/except, so
+    # a failure anywhere in there now reliably lands FalkorDB in
+    # `unhealthy_dependencies`, not just an empty list alongside a correct but
+    # unhelpful "not_ready" status.
+    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": ["falkordb"]}
 
 
 def test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency(
@@ -1017,7 +1015,7 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
     """
     called: list[str] = []
 
-    def failing_connect(config: ServiceConfig) -> object:
+    def failing_falkordb_check(config: ServiceConfig) -> None:
         called.append("falkordb")
         raise IngestionConfigurationError("boom")
 
@@ -1027,7 +1025,7 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
     def succeeding_cellar_check() -> None:
         called.append("cellar_eli")
 
-    monkeypatch.setattr(main_module, "connect_from_config", failing_connect)
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
     monkeypatch.setattr(main_module, "check_llm_interface_connectivity", succeeding_llm_check)
     monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", succeeding_cellar_check)
 

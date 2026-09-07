@@ -197,8 +197,11 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
     token = uuid.uuid4().hex[:12]
     short_name = f"RT56B{token}"
     single_tenant_graph_name = f"__ac66_slice56b_single_tenant_{token}__"
-    native_target = f"{short_name}_native"
-    baseline_target = f"{short_name}_baseline"
+    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
+    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
+    # this test's expected target names match the real, fixed graph keys.
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT56B-{token}"
 
     live_falkordb.select_graph(single_tenant_graph_name).query("CREATE (:Seed {id: 'seed'})")
@@ -279,8 +282,11 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
     token = uuid.uuid4().hex[:12]
     short_name = f"RT56Bx{token}"
     single_tenant_graph_name = f"__ac66_slice56b_exhausted_{token}__"
-    native_target = f"{short_name}_native"
-    baseline_target = f"{short_name}_baseline"
+    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
+    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
+    # this test's expected target names match the real, fixed graph keys.
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT56Bx-{token}"
 
     live_falkordb.select_graph(single_tenant_graph_name).query("CREATE (:Seed {id: 'seed'})")

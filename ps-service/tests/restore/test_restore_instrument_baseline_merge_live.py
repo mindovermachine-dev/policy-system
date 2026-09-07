@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.restore.errors import ArtifactContentRejectedError
 from ps_service.restore.restore_instrument import restore_instrument
 from restore._fixtures import build_restore_artifact
 
@@ -139,8 +140,11 @@ def test_restore_instrument_merges_new_capability_and_rewires_edges(
     token = uuid.uuid4().hex[:12]
     short_name = f"RT56{token}"
     single_tenant_graph_name = f"__ac66_slice56_single_tenant_{token}__"
-    native_target = f"{short_name}_native"
-    baseline_target = f"{short_name}_baseline"
+    # restore_instrument lowercases short_name to match ingestion/domain_mapper's
+    # own {short_name.lower()}_native/_baseline convention -- mirrored here so
+    # this test's expected target names match the real, fixed graph keys.
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
     instrument_id = f"RT56-{token}"
 
     live_falkordb.select_graph(single_tenant_graph_name).query(
@@ -204,5 +208,49 @@ def test_restore_instrument_merges_new_capability_and_rewires_edges(
             "MATCH (ri:RegulatoryInstrument)-[:DEFINES]->(r:Role) RETURN ri.id, r.id",
         )
         assert defines_rows == [[instrument_id, "role_data_controller"]]
+    finally:
+        live_falkordb.connection.delete(native_target, baseline_target, single_tenant_graph_name)
+
+
+@pytest.mark.falkordb_live
+def test_restore_instrument_rejects_manifest_instrument_id_not_matching_baseline_graph(
+    live_falkordb: FalkorDB,
+    make_emitter: MakeEmitter,
+) -> None:
+    """Regression, found via manual end-to-end testing: a `manifest.instrument_id`
+    that does not equal the staged baseline graph's own `RegulatoryInstrument.id`
+    (e.g. passing the raw CELEX instead of the real `{SHORT}-{VERSION}` id to
+    `export_instrument.py --instrument-id`) used to merge silently, with every
+    RegulatoryInstrument property (celex, title, ...) blanked out -- no error
+    anywhere in the pipeline. `_run_baseline_merge` must now fail loud with
+    `ArtifactContentRejectedError` instead, distinguishing this from a
+    genuinely empty baseline (D20's own native-only test fixtures).
+    """
+    emitter, _log_path = make_emitter()
+    token = uuid.uuid4().hex[:12]
+    short_name = f"RT56C{token}"
+    single_tenant_graph_name = f"__ac66_slice56c_single_tenant_{token}__"
+    native_target = f"{short_name.lower()}_native"
+    baseline_target = f"{short_name.lower()}_baseline"
+    real_instrument_id = f"RT56C-{token}"
+    wrong_instrument_id = f"WRONG-{token}"
+
+    artifact = build_restore_artifact(
+        instrument_id=wrong_instrument_id,
+        short_name=short_name,
+        native_graph=_empty_native_graph(),
+        baseline_graph=_baseline_graph(real_instrument_id),
+    )
+
+    try:
+        with pytest.raises(ArtifactContentRejectedError, match=wrong_instrument_id):
+            restore_instrument(
+                artifact,
+                db=live_falkordb,
+                single_tenant_graph_name=single_tenant_graph_name,
+                similarity_threshold=_SIMILARITY_THRESHOLD,
+                actor=_ACTOR,
+                emitter=emitter,
+            )
     finally:
         live_falkordb.connection.delete(native_target, baseline_target, single_tenant_graph_name)

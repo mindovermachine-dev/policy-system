@@ -105,3 +105,47 @@ def test_falsy_header_yields_empty_columns_list(emitter: LogEmitter) -> None:
     assert result.columns == []
     assert result.rows == []
     assert result.row_count == 0
+
+
+def test_whole_node_and_edge_results_are_converted_to_plain_jsonable_dicts(
+    emitter: LogEmitter,
+) -> None:
+    """Regression: a freehand `RETURN r` (whole node, not a projected property) is a
+    normal shape for ad hoc Cypher (see ps-qna's freehand-retrieval design). Confirmed
+    empirically against a real MCP `call_tool`: an un-converted `falkordb.Node` in a
+    returned row raised `ToolError: Unable to serialize unknown type` all the way out
+    to the MCP caller, bypassing this whole component's `error: ...` string contract.
+    `execute_cypher_query` must hand back plain dicts, not raw driver objects.
+    """
+    from falkordb import Edge, Node
+
+    node = Node(node_id=1, labels="Requirement", properties={"text": "shall comply"})
+    other = Node(node_id=2, labels="Obligation", properties={"text": "comply"})
+    edge = Edge(node, "SATISFIED_BY", other, edge_id=3, properties={})
+    scripted = _ScriptedQueryResult(header=[[0, "r"], [0, "rel"]], result_set=[[node, edge]])
+    fake_graph = _ScriptedGraphHandle(scripted)
+
+    result = execute_cypher_query(
+        "MATCH (r)-[rel]->() RETURN r, rel", graph=fake_graph, emitter=emitter
+    )
+
+    assert result.rows == [
+        [
+            {"id": 1, "labels": ["Requirement"], "properties": {"text": "shall comply"}},
+            {
+                "id": 3,
+                "relation": "SATISFIED_BY",
+                "properties": {},
+                "src_node": {
+                    "id": 1,
+                    "labels": ["Requirement"],
+                    "properties": {"text": "shall comply"},
+                },
+                "dest_node": {
+                    "id": 2,
+                    "labels": ["Obligation"],
+                    "properties": {"text": "comply"},
+                },
+            },
+        ]
+    ]
