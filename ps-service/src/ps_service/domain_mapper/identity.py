@@ -74,3 +74,36 @@ def capability_id(name: str) -> str:
     capability names converge onto one node across Obligations/regulations.
     """
     return f"cap_{_slug(name)}_{_hash(name.lower())}"
+
+
+def policy_id(title: str) -> str:
+    """`pol_{slug}_{hash}` — content-derived from the Policy's own `title` alone.
+
+    Deliberately NOT derived from any governing Capability (`ps-domain-
+    concepts.md`'s Policy identity note: a single Policy commonly governs
+    several Capabilities at once, so deriving from any one of them would be
+    incoherent). Mirrors `capability_id`'s own "identity comes from what the
+    node itself is" shape.
+    """
+    return f"pol_{_slug(title)}_{_hash(title.lower())}"
+
+
+def standard_id(policy_node_id: str, version: str) -> str:
+    """`std_{POLICY}_v{VERSION}` — derived from the Policy it supports plus version.
+
+    A weak-entity id (like `requirement_id`/`obligation_id`'s own owning-
+    parent composition), not a canonical hash: a Standard exists only in the
+    context of exactly one Policy, so there is no cross-Policy reuse to
+    protect against by opacity.
+    """
+    return f"std_{policy_node_id}_v{version}"
+
+
+def control_id(standard_node_id: str, control_type: str) -> str:
+    """`ctrl_{STANDARD}_{TYPE}` — derived from the Standard it verifies plus control type.
+
+    Same weak-entity pattern as `standard_id`: a Control exists only to
+    verify exactly one Standard, so there is no cross-Standard reuse to
+    protect against.
+    """
+    return f"ctrl_{standard_node_id}_{control_type}"

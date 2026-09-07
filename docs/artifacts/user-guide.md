@@ -260,6 +260,14 @@ error rather than an empty result.
 > separately from this issue. Until that lands, `catalog list` returns no instruments on a
 > plain checkout of this repository.
 
+> ℹ️ **Loading an internal policy/standard (Policy Managers, pending [#54](https://github.com/mindovermachine-dev/policy-system/issues/54)).**
+> `ps-cli internal ingest <file>` will take a JSON file you (or your own AI assistant)
+> prepared from your organization's internal policies/SoPs — see the
+> [Internal-Regulation Intake Format](./internal-regulation-intake-format.md) for exactly
+> what to produce. Point `ps-cli` at the right context first (see
+> [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
+> below) — this command is not yet implemented.
+
 ### 6. Install the Policy System plugin
 
 The plugin lives in this repo at `ps-skills/policy-system/` — a `ps-qna` skill plus a

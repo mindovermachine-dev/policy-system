@@ -57,9 +57,31 @@ NATIVE_ALLOWED_LABELS: frozenset[str] = frozenset(
         "PARAGRAPH",
         "ANNEX",
         "RECITAL",
+        # Internal-source native shape (issue #54, B5): the internal-seed
+        # adapter's `{short}_native` graph carries the customer's own
+        # submission verbatim, using the intake format's five spine labels
+        # -- a differently-shaped native leg than Cellar/ELI's structural
+        # element vocabulary above. Not previously allow-listed (#66's own
+        # allow-list only anticipated the baseline leg's Policy/Standard/
+        # Control, not this differently-shaped native leg) -- closed here so
+        # an internal instrument's native graph can be exported (#71) and
+        # restored (B6) once it exists.
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability",
     }
 )  # mirrors ingestion/graph_writer.py::_KNOWN_ELEMENT_TYPES + RegulatoryInstrument
-NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset({"HAS"})
+NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
+    {
+        "HAS",
+        # Internal-source native shape (issue #54, B5) -- see NATIVE_ALLOWED_LABELS.
+        "DEFINES",
+        "EXPRESSES",
+        "SATISFIED_BY",
+        "REQUIRES",
+    }
+)
 
 
 def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None:

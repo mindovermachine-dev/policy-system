@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://policy-system.internal/schemas/internal-regulation-intake.v1.schema.json",
+  "title": "Internal Regulation Intake Format v1",
+  "description": "Structural allow-list schema for docs/artifacts/internal-regulation-intake-format.md (issue #54, D7). Validates node label / edge type enums, per-label required properties and their JSON types, and additionalProperties:false at every level -- including the top level, so a submitted 'graph_name' or any other unrecognized field is rejected outright (D2). Node shape is dispatched per-label via if/then (not oneOf) deliberately: oneOf's 5 parallel branches would each fail similarly-shallowly on a wrong-shaped node, giving validators no unambiguous 'best' error to surface; if/then instead evaluates exactly the one branch matching the node's own 'label', so a violation's reported path/message stays specific (AC-BI-019). Does NOT validate cross-node referential integrity (dangling edges) or cardinality rules (e.g. exactly one HAS per Obligation) -- those are the internal-seed adapter's own semantic-validation job at persist time, not a JSON document shape concern.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["nodes", "edges"],
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Optional on every node; defaults to 1.0 when omitted (not enforced by this schema, an adapter-side default)."
+    },
+    "nodeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "id"],
+      "properties": {
+        "label": { "$ref": "#/$defs/nodeLabel" },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "nodeLabel": {
+      "enum": [
+        "RegulatoryInstrument",
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability"
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "id", "properties"],
+      "properties": {
+        "label": { "$ref": "#/$defs/nodeLabel" },
+        "id": { "type": "string", "minLength": 1 },
+        "properties": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "label": { "const": "RegulatoryInstrument" } }
+          },
+          "then": {
+            "properties": {
+              "properties": { "$ref": "#/$defs/regulatoryInstrumentProperties" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Role" } } },
+          "then": {
+            "properties": { "properties": { "$ref": "#/$defs/roleProperties" } }
+          }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Requirement" } } },
+          "then": {
+            "properties": {
+              "properties": { "$ref": "#/$defs/requirementProperties" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Obligation" } } },
+          "then": {
+            "properties": {
+              "properties": { "$ref": "#/$defs/obligationProperties" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Capability" } } },
+          "then": {
+            "properties": {
+              "properties": { "$ref": "#/$defs/capabilityProperties" }
+            }
+          }
+        }
+      ]
+    },
+    "regulatoryInstrumentProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "source_type",
+        "effective_date",
+        "version",
+        "status"
+      ],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "source_type": { "const": "internal" },
+        "effective_date": { "type": "string", "format": "date" },
+        "version": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["active", "superseded", "vacated"] },
+        "jurisdiction": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "roleProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "requirementProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "type"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["requirement", "prohibition", "recommendation"] },
+        "status": { "enum": ["active", "deprecated"] },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "obligationProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "capabilityProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "type": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/$defs/confidence" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "from", "to"],
+      "properties": {
+        "type": {
+          "enum": ["DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES"]
+        },
+        "from": { "$ref": "#/$defs/nodeRef" },
+        "to": { "$ref": "#/$defs/nodeRef" },
+        "properties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source_ref": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -38,7 +38,7 @@ from ps_service.company_merge.models import (
     SemanticMatchResult,
 )
 from ps_service.company_merge.similarity import cosine_similarity
-from ps_service.domain_mapper.identity import capability_id
+from ps_service.domain_mapper.identity import capability_id, policy_id
 from ps_service.llm_interface.client import (
     EmbeddingCaller,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
 )
@@ -52,24 +52,37 @@ __all__ = [
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
+    "policy_id",
     "read_existing_canonical_index",
     "resolve_capability_convergence_offline",
     "resolve_exact_match",
 ]
 
+# label -> the property holding this canonical kind's own text (issue #54,
+# S4): Capability's own text property is `name`, Policy's is `title` (per
+# `ps-domain-concepts.md`'s attribute list for each). Never adapter/
+# LLM-sourced -- a fixed lookup table keyed by this module's own Literal
+# values.
+_TEXT_PROPERTY_BY_LABEL: dict[Literal["Capability", "Policy"], str] = {
+    "Capability": "name",
+    "Policy": "title",
+}
+
 
 def read_existing_canonical_index(
-    single_tenant_graph: GraphHandle, label: Literal["Capability"]
+    single_tenant_graph: GraphHandle, label: Literal["Capability", "Policy"]
 ) -> tuple[ExistingCanonicalNode, ...]:
     """Read every existing `label` node in the single-tenant graph (PLAN_REVIEWED.md §5.2).
 
     Returned as an `ExistingCanonicalNode` tuple. `label` is this module's
-    own fixed literal (`"Capability"`), passed only by `dedupe_canonical_nodes`
-    -- never sourced from an adapter/LLM/external input -- so it is
-    interpolated directly into the query string, mirroring `graph_reader.py`'s
-    own "fixed literal, no allow-list needed" precedent for its own
-    per-relationship-type queries. The parameter is also the scope hook for a
-    future internal-SoP Policy pass.
+    own fixed literal (`"Capability"` or, since issue #54's S4, `"Policy"`),
+    passed only by `dedupe_canonical_nodes` -- never sourced from an
+    adapter/LLM/external input -- so it is interpolated directly into the
+    query string, mirroring `graph_reader.py`'s own "fixed literal, no
+    allow-list needed" precedent for its own per-relationship-type queries.
+    The text property read back onto `ExistingCanonicalNode.text` is
+    `label`-dependent (`_TEXT_PROPERTY_BY_LABEL`): `n.name` for Capability,
+    `n.title` for Policy.
 
     `n.embedding` is a cached `list[float]` property once computed
     (PLAN_REVIEWED.md §5.5) -- `None`/absent for a canonical node whose
@@ -78,7 +91,10 @@ def read_existing_canonical_index(
     empty graph (no nodes of this label) returns an empty tuple, no
     exception.
     """
-    result = single_tenant_graph.query(f"MATCH (n:{label}) RETURN n.id, n.name, n.embedding")
+    text_property = _TEXT_PROPERTY_BY_LABEL[label]
+    result = single_tenant_graph.query(
+        f"MATCH (n:{label}) RETURN n.id, n.{text_property}, n.embedding"
+    )
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[ExistingCanonicalNode] = []
     for row in rows:
@@ -177,19 +193,24 @@ def find_best_semantic_match(
     )
 
 
-def _incoming_name(node: BaselineNode) -> str:
-    """Return an incoming Capability's name from `properties["name"]`.
+def _incoming_text(node: BaselineNode, kind: Literal["Capability", "Policy"]) -> str:
+    """Return an incoming node's own text, dispatched on `kind` (issue #54, S4).
 
-    Mirrors `graph_reader.read_baseline_graph`'s own property-key convention
-    (see `test_graph_reader.py`'s fixtures).
+    `properties["name"]` for Capability, `properties["title"]` for Policy --
+    mirrors `graph_reader.read_baseline_graph`'s own property-key convention
+    (see `test_graph_reader.py`'s fixtures) and
+    `read_existing_canonical_index`'s own `_TEXT_PROPERTY_BY_LABEL`
+    dispatch, kept as two separate lookup tables since one reads a
+    `BaselineNode.properties` dict and the other a query's property name.
     """
-    return cast("str", node.properties["name"])
+    key = _TEXT_PROPERTY_BY_LABEL[kind]
+    return cast("str", node.properties[key])
 
 
 def dedupe_canonical_nodes(
     incoming_nodes: tuple[BaselineNode, ...],
     *,
-    kind: Literal["Capability"],
+    kind: Literal["Capability", "Policy"],
     single_tenant_graph: GraphHandle,
     model: str,
     threshold: float,
@@ -199,10 +220,11 @@ def dedupe_canonical_nodes(
     """Combined resolution over the whole incoming collection, before any write.
 
     PLAN_REVIEWED.md §5.4, Increment 9 -- run for the WHOLE incoming
-    Capability collection before `merge.py` writes anything. `kind` is
-    `"Capability"` only since #42 (Obligation is passed through, not deduped);
-    it is passed straight to `read_existing_canonical_index` as its `label`
-    and is also the scope hook for a future internal-SoP Policy pass.
+    collection before `merge.py` writes anything. `kind` is `"Capability"`
+    since #42 (Obligation is passed through, not deduped) or, since issue
+    #54's S4, `"Policy"` (Standard/Control are weak entities, passed
+    through, never deduped); it is passed straight to
+    `read_existing_canonical_index` as its `label`.
 
     Makes exactly one read call (`read_existing_canonical_index`) and never
     a single write call -- "abort with no partial write" on a
@@ -234,7 +256,7 @@ def dedupe_canonical_nodes(
     near_misses: list[NearMissPair] = []
 
     for node in incoming_nodes:
-        node_text = _incoming_name(node)
+        node_text = _incoming_text(node, kind)
         existing_ids = frozenset(working_index)
 
         if resolve_exact_match(node.id, existing_ids):
@@ -343,6 +365,7 @@ def resolve_capability_convergence_offline(
     incoming_embeddings: dict[str, tuple[float, ...]],
     single_tenant_graph: GraphHandle,
     threshold: float,
+    kind: Literal["Capability", "Policy"] = "Capability",
     emitter: LogEmitter | None = None,
 ) -> DedupResult:
     """D6's offline counterpart to `dedupe_canonical_nodes`, for a restore's baseline merge.
@@ -363,15 +386,22 @@ def resolve_capability_convergence_offline(
     `dedup.py:222`/`:278`). When one or more existing candidates were
     skipped for lacking a cached embedding, one aggregate
     `outcome="warning"` log entry records the total count (OQ4).
+
+    `kind` defaults to `"Capability"` (its original, pre-#54 scope) and
+    widens to `"Policy"` (issue #54, S6/B6) -- dispatched into
+    `read_existing_canonical_index`/`_incoming_text` exactly as
+    `dedupe_canonical_nodes` already dispatches its own `kind` parameter for
+    the live path (`_TEXT_PROPERTY_BY_LABEL`), so a restore's offline Policy
+    convergence uses the identical text-property/read-query mapping.
     """
-    existing_index = read_existing_canonical_index(single_tenant_graph, "Capability")
+    existing_index = read_existing_canonical_index(single_tenant_graph, kind)
     working_index: dict[str, ExistingCanonicalNode] = {node.id: node for node in existing_index}
     resolutions: list[CanonicalResolution] = []
     near_misses: list[NearMissPair] = []
     skipped_count = 0
 
     for node in incoming_nodes:
-        node_text = _incoming_name(node)
+        node_text = _incoming_text(node, kind)
         if resolve_exact_match(node.id, frozenset(working_index)):
             resolutions.append(
                 CanonicalResolution(

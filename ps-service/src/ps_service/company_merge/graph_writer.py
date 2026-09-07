@@ -96,6 +96,7 @@ __all__ = [
     "persist_obligation_passthrough",
     "persist_rewired_edges",
     "persist_role_and_requirement_passthrough",
+    "persist_standard_and_control_passthrough",
 ]
 
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
@@ -103,13 +104,24 @@ _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"
 _CAPABILITY_LABEL = "Capability"
+_POLICY_LABEL = "Policy"
+_STANDARD_LABEL = "Standard"
+_CONTROL_LABEL = "Control"
 
 # source_label, target_label per relationship_type -- the Edge Catalog shape
-# mirrored from domain_mapper.graph_writer.persist_obligation_and_capability_graph.
-_EDGE_ENDPOINT_LABELS: dict[Literal["HAS", "SATISFIED_BY", "REQUIRES"], tuple[str, str]] = {
+# mirrored from domain_mapper.graph_writer.persist_obligation_and_capability_graph
+# (HAS/SATISFIED_BY/REQUIRES) and .persist_governance_graph (GOVERNED_BY/
+# SUPPORTED_BY/IMPLEMENTED_BY, issue #54 S4).
+_EDGE_ENDPOINT_LABELS: dict[
+    Literal["HAS", "SATISFIED_BY", "REQUIRES", "GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTED_BY"],
+    tuple[str, str],
+] = {
     "HAS": (_ROLE_LABEL, _OBLIGATION_LABEL),
     "SATISFIED_BY": (_REQUIREMENT_LABEL, _OBLIGATION_LABEL),
     "REQUIRES": (_OBLIGATION_LABEL, _CAPABILITY_LABEL),
+    "GOVERNED_BY": (_CAPABILITY_LABEL, _POLICY_LABEL),
+    "SUPPORTED_BY": (_POLICY_LABEL, _STANDARD_LABEL),
+    "IMPLEMENTED_BY": (_STANDARD_LABEL, _CONTROL_LABEL),
 }
 
 
@@ -248,12 +260,40 @@ def persist_obligation_passthrough(
         )
 
 
+def persist_standard_and_control_passthrough(
+    single_tenant_graph: GraphHandle,
+    standard_nodes: tuple[BaselineNode, ...],
+    control_nodes: tuple[BaselineNode, ...],
+) -> None:
+    """Persist one governance-derivation run's Standard/Control nodes (issue #54, S4).
+
+    Uses the same unconditional `MERGE ... SET` shape as Role/Requirement/
+    Obligation: Standard is a weak entity of exactly one Policy, and Control
+    a weak entity of exactly one Standard (`ps-domain-concepts.md`) -- never
+    canonically deduped across sources, so there is no "existing wins"
+    concern here, unlike Capability/Policy (`persist_canonical_nodes`,
+    above).
+
+    Called by `merge.py` after `persist_canonical_nodes(..., kind="Policy")`
+    and before `persist_rewired_edges`, so the `SUPPORTED_BY`/
+    `IMPLEMENTED_BY` edge writes can `MATCH` these nodes.
+    """
+    for standard in standard_nodes:
+        _upsert_passthrough_node(
+            single_tenant_graph, _STANDARD_LABEL, standard.id, standard.properties
+        )
+    for control in control_nodes:
+        _upsert_passthrough_node(
+            single_tenant_graph, _CONTROL_LABEL, control.id, control.properties
+        )
+
+
 def persist_canonical_nodes(
     single_tenant_graph: GraphHandle,
     incoming_nodes: tuple[BaselineNode, ...],
     resolutions: tuple[CanonicalResolution, ...],
     *,
-    kind: Literal["Capability"],
+    kind: Literal["Capability", "Policy"],
 ) -> None:
     """Mint every `match_kind="new"` `CanonicalResolution` as a `kind` node.
 
@@ -262,9 +302,11 @@ def persist_canonical_nodes(
     call at all here -- it already resolved onto an existing canonical node,
     and this function's whole point is to never touch one.
 
-    `kind` is `"Capability"` only since #42 -- Obligation is no longer
-    canonically deduped (`persist_obligation_passthrough` above); the
-    parameter is kept for symmetry with a future internal-SoP Policy pass.
+    `kind` is `"Capability"` since #42 -- Obligation is no longer
+    canonically deduped (`persist_obligation_passthrough` above) -- or,
+    since issue #54's S4, `"Policy"` (Standard/Control are weak entities,
+    never canonically deduped -- see `persist_standard_and_control_passthrough`
+    below).
 
     `MERGE (n:{kind} {id: $id}) ON CREATE SET n += $properties` -- NOT an
     unconditional `SET` -- is the load-bearing invariant that makes
@@ -305,7 +347,7 @@ def persist_canonical_nodes(
 def backfill_canonical_embeddings(
     single_tenant_graph: GraphHandle,
     *,
-    kind: Literal["Capability"],
+    kind: Literal["Capability", "Policy"],
     embeddings: dict[str, tuple[float, ...]],
 ) -> None:
     """Write each `embeddings` entry onto an ALREADY-EXISTING `kind` canonical node.
@@ -340,20 +382,24 @@ def backfill_canonical_embeddings(
 
 
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
-    """Return `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`) is Capability.
+    """Return `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`) is canonically deduped.
 
-    Capability endpoints are the only ones that went through
-    `dedup.dedupe_canonical_nodes` and are therefore guaranteed, by
-    construction, to carry an entry in a correctly-built
+    Capability and (since issue #54's S4) Policy endpoints are the only ones
+    that went through `dedup.dedupe_canonical_nodes` and are therefore
+    guaranteed, by construction, to carry an entry in a correctly-built
     `canonical_id_by_incoming_id`. Since #42, Obligation is a passthrough
     node (Role-scoped, never deduped), so `HAS`/`SATISFIED_BY` yield nothing
     (Role/Requirement source, Obligation target -- all passthrough) and
     `REQUIRES` yields only its target (Capability); its Obligation source
-    passes through. Order in the returned tuple is source-before-target when
-    both are eligible; callers should not otherwise rely on it.
+    passes through. Since #54, `GOVERNED_BY` yields both endpoints
+    (Capability source, Policy target -- both canonically deduped);
+    `SUPPORTED_BY`/`IMPLEMENTED_BY` yield nothing (Standard/Control are weak
+    entities, passthrough, never deduped). Order in the returned tuple is
+    source-before-target when both are eligible; callers should not
+    otherwise rely on it.
     """
     source_label, target_label = _EDGE_ENDPOINT_LABELS[edge.relationship_type]
-    dedupe_eligible_labels = (_CAPABILITY_LABEL,)
+    dedupe_eligible_labels = (_CAPABILITY_LABEL, _POLICY_LABEL)
     ids: list[str] = []
     if source_label in dedupe_eligible_labels:
         ids.append(edge.source_id)

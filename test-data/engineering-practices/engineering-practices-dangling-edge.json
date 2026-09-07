@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "label": "RegulatoryInstrument",
+      "id": "ENGPRAC-DANGLING-1.0",
+      "properties": {
+        "title": "Engineering Practices Dangling-Edge Fixture",
+        "source_type": "internal",
+        "effective_date": "2026-08-01",
+        "version": "1.0",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-1",
+      "properties": {
+        "name": "Engineering Manager",
+        "description": "Owns team execution and adherence to engineering policy."
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-1",
+      "properties": {
+        "text": "Engineering managers shall maintain approved policy governance.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-1",
+      "properties": {
+        "text": "Maintain Policy Governance"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DEFINES",
+      "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-DANGLING-1.0" },
+      "to": { "label": "Role", "id": "role-1" },
+      "properties": { "source_ref": "Sec. 3.1" }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-DANGLING-1.0" },
+      "to": { "label": "Requirement", "id": "req-1" },
+      "properties": { "source_ref": "4.1" }
+    },
+    {
+      "type": "HAS",
+      "from": { "label": "Role", "id": "role-1" },
+      "to": { "label": "Obligation", "id": "obl-1" }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": { "label": "Requirement", "id": "req-1" },
+      "to": { "label": "Obligation", "id": "obl-1" }
+    },
+    {
+      "type": "REQUIRES",
+      "from": { "label": "Obligation", "id": "obl-1" },
+      "to": { "label": "Capability", "id": "cap-never-declared" }
+    }
+  ]
+}

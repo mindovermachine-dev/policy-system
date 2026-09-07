@@ -33,13 +33,17 @@ from pydantic import ValidationError
 from ps_service.domain_mapper.errors import (
     DomainMapperDerivationError,
     DomainMapperExtractionError,
+    DomainMapperGovernanceError,
 )
-from ps_service.domain_mapper.identity import capability_id, obligation_id
+from ps_service.domain_mapper.identity import capability_id, obligation_id, policy_id
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
+    ControlDecision,
     ExtractionUnit,
     ObligationAssignment,
+    PolicyAssignment,
     RequirementCandidate,
+    StandardDecision,
 )
 
 
@@ -484,3 +488,247 @@ def _resolve_capability(
         f"capability item with neither a matched_existing_id resolvable in the registry, nor "
         f"a valid new_name: {item!r}"
     )
+
+
+# --- Policy derivation (issue #54, S3) --------------------------------------
+#
+# Mirrors `OBLIGATION_DERIVATION_SYSTEM_PROMPT`'s exact mint/match/unmatchable
+# three-outcome shape (AC-BI-014 needs the same "surfaced, not silently
+# skipped" mechanism Obligation derivation already established for AC-004),
+# but the registry shown here is whole-run and Capability-independent (like
+# Capability derivation's own registry), not scoped to any one Capability --
+# a Policy commonly governs several Capabilities at once
+# (`ps-domain-concepts.md`), so there is no per-Capability partition to show
+# the model.
+
+POLICY_DERIVATION_SYSTEM_PROMPT = """You maintain a canonical registry of Policies \
+(organizational commitments governing one or more Capabilities) for a compliance graph. Given \
+a Capability's name and the existing Policy registry (already-registered Policy titles), \
+decide exactly one of three outcomes:
+
+- MATCH: if this Capability is genuinely governed by an existing registry entry (it may be \
+worded differently), return that entry's id in matched_existing_id.
+- MINT: otherwise, if this Capability needs a genuine new Policy, return a terse, generic \
+Policy title in new_title (e.g. "Data Protection Policy", "Secure Development Policy") that \
+could plausibly govern other Capabilities too, not a paraphrase of the Capability name itself.
+- UNMATCHABLE: if no coherent Policy can be matched or minted for this Capability at all (e.g. \
+the Capability is too vague or incomplete to derive an organizational commitment from), set \
+unmatchable to true instead.
+
+confidence: your own certainty, 0.0-1.0, in this specific decision (matching, minting, or \
+declaring unmatchable). Always include it, unconditionally.
+
+Return strict JSON: {"matched_existing_id": str|null, "new_title": str|null, "unmatchable": \
+bool, "confidence": float}. Exactly one of matched_existing_id/new_title must be non-null, \
+UNLESS unmatchable is true, in which case both must be null."""
+
+
+def parse_policy_response(
+    text: str,
+    capability_node_id: str,
+    registry: dict[str, str],
+) -> PolicyAssignment:
+    """Parse a Capability's policy-derivation completion into a `PolicyAssignment`.
+
+    `registry` is the whole-run Policy registry (`policy_id -> title`) built
+    up so far across every Capability processed — used to resolve a
+    `matched_existing_id` back into its title (the model is never asked to
+    repeat text it already has access to). Mirrors
+    `parse_obligation_response`'s exact three-outcome shape.
+
+    Three valid outcomes, per `POLICY_DERIVATION_SYSTEM_PROMPT`:
+    - `unmatchable: true` -> `PolicyAssignment(policy_node_id=None,
+      policy_title=None, ...)`. Not an error — a valid, expected AC-BI-014
+      outcome.
+    - a `matched_existing_id` present in `registry` -> the assignment's
+      `policy_title` is that registry entry's title, and `policy_node_id`
+      is `identity.policy_id(title)` recomputed from it (always equal to
+      `matched_existing_id` itself, since registry keys are themselves
+      `policy_id()` outputs).
+    - a non-empty `new_title` -> the assignment's `policy_title` is
+      `new_title`, `policy_node_id` is `identity.policy_id(new_title)`.
+
+    Raises `DomainMapperGovernanceError`, naming `capability_node_id`, on:
+    - malformed JSON (`json.JSONDecodeError`) or a non-object response,
+    - a response with neither a `matched_existing_id` that resolves within
+      `registry`, nor a valid `new_title`, nor `unmatchable: true` set,
+    - an invalid/missing `confidence`.
+    """
+    payload = _load_policy_payload(text, capability_node_id)
+
+    if payload.get("unmatchable") is True:
+        return _build_policy_assignment(
+            capability_node_id=capability_node_id,
+            policy_node_id=None,
+            policy_title=None,
+            confidence=payload.get("confidence"),
+        )
+
+    proposed_title = _resolve_proposed_policy_title(payload, capability_node_id, registry)
+    return _build_policy_assignment(
+        capability_node_id=capability_node_id,
+        policy_node_id=policy_id(proposed_title),
+        policy_title=proposed_title,
+        confidence=payload.get("confidence"),
+    )
+
+
+def _load_policy_payload(text: str, capability_node_id: str) -> dict[str, object]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DomainMapperGovernanceError(
+            f"policy derivation response for capability {capability_node_id!r} was not "
+            f"valid JSON: {exc}"
+        ) from exc
+    if not _is_json_object(payload):
+        raise DomainMapperGovernanceError(
+            f"policy derivation response for capability {capability_node_id!r} was not a "
+            f"JSON object: {payload!r}"
+        )
+    return payload
+
+
+def _resolve_proposed_policy_title(
+    payload: dict[str, object], capability_node_id: str, registry: dict[str, str]
+) -> str:
+    """Resolve a match-or-mint outcome to its proposed Policy title.
+
+    Mirrors `_resolve_proposed_obligation_text`'s exact shape.
+    """
+    matched_existing_id = payload.get("matched_existing_id")
+    if isinstance(matched_existing_id, str) and matched_existing_id in registry:
+        return registry[matched_existing_id]
+
+    new_title = payload.get("new_title")
+    if isinstance(new_title, str) and new_title.strip():
+        return new_title
+
+    raise DomainMapperGovernanceError(
+        f"policy derivation response for capability {capability_node_id!r} had neither a "
+        f"matched_existing_id resolvable in the registry, nor a valid new_title, nor "
+        f"unmatchable=true: {payload!r}"
+    )
+
+
+def _build_policy_assignment(
+    *,
+    capability_node_id: str,
+    policy_node_id: str | None,
+    policy_title: str | None,
+    confidence: object,
+) -> PolicyAssignment:
+    try:
+        return PolicyAssignment.model_validate(
+            {
+                "capability_node_id": capability_node_id,
+                "policy_node_id": policy_node_id,
+                "policy_title": policy_title,
+                "confidence": confidence,
+            }
+        )
+    except ValidationError as exc:
+        raise DomainMapperGovernanceError(
+            f"policy derivation response for capability {capability_node_id!r} had an "
+            f"invalid confidence value: {exc}"
+        ) from exc
+
+
+# --- Standard derivation (issue #54, S3) ------------------------------------
+#
+# Unlike Policy's mint-or-match-or-unmatchable shape, Standard is a weak
+# entity of exactly one Policy (`ps-domain-concepts.md`) — no registry, no
+# convergence decision, always exactly one mint per Policy processed.
+
+STANDARD_DERIVATION_SYSTEM_PROMPT = """You draft one Standard (implementation guidance for how \
+a Policy is actually to be achieved) for a given Policy title in a compliance graph.
+
+title: a concrete, actionable Standard title (e.g. "Security Log Retention Standard"), specific \
+enough to guide implementation, not a restatement of the Policy title itself.
+description: an optional one-line description of what the Standard actually requires; omit \
+(null) if the title is already self-explanatory.
+confidence: your own certainty, 0.0-1.0, that this is a coherent, implementable Standard for \
+the given Policy. Always include it, unconditionally.
+
+Return strict JSON: {"title": str, "description": str|null, "confidence": float}."""
+
+
+def parse_standard_response(text: str, policy_node_id: str) -> StandardDecision:
+    """Parse one Policy's standard-derivation completion into a `StandardDecision`.
+
+    Raises `DomainMapperGovernanceError`, naming `policy_node_id`, on
+    malformed JSON, a non-object response, a missing/empty `title`, or an
+    invalid/missing `confidence`.
+    """
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DomainMapperGovernanceError(
+            f"standard derivation response for policy {policy_node_id!r} was not valid JSON: {exc}"
+        ) from exc
+    if not _is_json_object(payload):
+        raise DomainMapperGovernanceError(
+            f"standard derivation response for policy {policy_node_id!r} was not a JSON "
+            f"object: {payload!r}"
+        )
+    try:
+        return StandardDecision.model_validate({**payload, "policy_node_id": policy_node_id})
+    except ValidationError as exc:
+        raise DomainMapperGovernanceError(
+            f"standard derivation response for policy {policy_node_id!r} was malformed: {exc}"
+        ) from exc
+
+
+# --- Control derivation (issue #54, S3) -------------------------------------
+#
+# Mirrors Standard derivation's shape exactly one level deeper: Control is a
+# weak entity of exactly one Standard, always exactly one mint per Standard
+# processed. AC-BI-017: the LLM is never asked for, and never returns, any
+# of the four operational fields (execution_frequency/last_test_date/
+# next_review_date/evidence_ref) — they are structurally absent from
+# `ControlDecision`/this prompt, not merely defaulted to null.
+
+CONTROL_DERIVATION_SYSTEM_PROMPT = """You draft one Control (a concrete, testable verification \
+mechanism) for a given Standard title in a compliance graph.
+
+type: "automated" if the Control can be verified by a system/pipeline check (e.g. a CI/CD \
+policy-as-code check); "manual" if it requires a human review/audit step.
+title: a concrete, testable Control title (e.g. "Automated Log Retention Integrity Check"), \
+specific enough to be implementable, not a restatement of the Standard title itself.
+description: an optional one-line description of what the Control actually verifies; omit \
+(null) if the title is already self-explanatory.
+confidence: your own certainty, 0.0-1.0, that this is a coherent, testable Control for the \
+given Standard. Always include it, unconditionally.
+
+Do NOT include execution_frequency, last_test_date, next_review_date, or evidence_ref -- those \
+are operational fields filled in later by engineering teams, never at mint time.
+
+Return strict JSON: {"type": "automated"|"manual", "title": str, "description": str|null, \
+"confidence": float}."""
+
+
+def parse_control_response(text: str, standard_node_id: str) -> ControlDecision:
+    """Parse one Standard's control-derivation completion into a `ControlDecision`.
+
+    Raises `DomainMapperGovernanceError`, naming `standard_node_id`, on
+    malformed JSON, a non-object response, a missing/invalid `type`, a
+    missing/empty `title`, or an invalid/missing `confidence`.
+    """
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DomainMapperGovernanceError(
+            f"control derivation response for standard {standard_node_id!r} was not valid "
+            f"JSON: {exc}"
+        ) from exc
+    if not _is_json_object(payload):
+        raise DomainMapperGovernanceError(
+            f"control derivation response for standard {standard_node_id!r} was not a JSON "
+            f"object: {payload!r}"
+        )
+    try:
+        return ControlDecision.model_validate({**payload, "standard_node_id": standard_node_id})
+    except ValidationError as exc:
+        raise DomainMapperGovernanceError(
+            f"control derivation response for standard {standard_node_id!r} was malformed: {exc}"
+        ) from exc

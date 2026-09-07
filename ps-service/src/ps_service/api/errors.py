@@ -45,18 +45,6 @@ class InternalSeedValidationError(ApiError):
     """
 
 
-class InternalIngestionNotImplementedError(ApiError):
-    """A ``POST /ingestions`` request selected ``source: "internal"``, which this release omits.
-
-    Internal-document ingestion (the internal Ingestion + Domain Mapping adapter
-    pair plus governance derivation) is split out to
-    ``mindovermachine-dev/policy-system#54``. Until it lands, a well-formed
-    internal request validates and then returns a clean HTTP 501; a malformed
-    one still 422s at Pydantic validation. Handled as HTTP 501; ``str(exc)``
-    names the tracking issue and is surfaced verbatim.
-    """
-
-
 class IngestionConfigIncompleteError(ApiError):
     """The resolved ``ServiceConfig`` is missing a value the pipeline needs.
 

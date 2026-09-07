@@ -63,7 +63,7 @@ class _RecordedCall:
 # (Capability only, since #42) -- used to distinguish a "read" call from a
 # "write" call in a fake single-tenant graph's call log (test (b)'s
 # call-order proof).
-_READ_MARKERS = ("RETURN n.id, n.name, n.embedding",)
+_READ_MARKERS = ("RETURN n.id, n.name, n.embedding", "RETURN n.id, n.title, n.embedding")
 
 
 def _is_read_call(call: _RecordedCall) -> bool:
@@ -90,6 +90,12 @@ class _FakeBaselineGraph:
         has_rows: list[object],
         satisfied_by_rows: list[object],
         requires_rows: list[object],
+        policy_rows: list[object] | None = None,
+        standard_rows: list[object] | None = None,
+        control_rows: list[object] | None = None,
+        governed_by_rows: list[object] | None = None,
+        supported_by_rows: list[object] | None = None,
+        implemented_by_rows: list[object] | None = None,
     ) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
@@ -101,6 +107,12 @@ class _FakeBaselineGraph:
         self._has_rows = has_rows
         self._satisfied_by_rows = satisfied_by_rows
         self._requires_rows = requires_rows
+        self._policy_rows = policy_rows or []
+        self._standard_rows = standard_rows or []
+        self._control_rows = control_rows or []
+        self._governed_by_rows = governed_by_rows or []
+        self._supported_by_rows = supported_by_rows or []
+        self._implemented_by_rows = implemented_by_rows or []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
@@ -115,6 +127,18 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._satisfied_by_rows)
         if "[:REQUIRES]" in q:
             return _FakeQueryResult(self._requires_rows)
+        if "[:GOVERNED_BY]" in q:
+            return _FakeQueryResult(self._governed_by_rows)
+        if "[:SUPPORTED_BY]" in q:
+            return _FakeQueryResult(self._supported_by_rows)
+        if "[:IMPLEMENTED_BY]" in q:
+            return _FakeQueryResult(self._implemented_by_rows)
+        if "(n:Policy) RETURN" in q:
+            return _FakeQueryResult(self._policy_rows)
+        if "(n:Standard) RETURN" in q:
+            return _FakeQueryResult(self._standard_rows)
+        if "(n:Control) RETURN" in q:
+            return _FakeQueryResult(self._control_rows)
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
@@ -158,6 +182,7 @@ class _FakeSingleTenantGraph:
         *,
         obligation_rows: list[object] | None = None,
         capability_rows: list[object] | None = None,
+        policy_rows: list[object] | None = None,
     ) -> None:
         self._obligations: dict[str, list[object]] = {}
         for row in obligation_rows or []:
@@ -167,23 +192,43 @@ class _FakeSingleTenantGraph:
         for row in capability_rows or []:
             row_list = list(cast("list[object]", row))
             self._capabilities[cast("str", row_list[0])] = row_list
+        self._policies: dict[str, list[object]] = {}
+        for row in policy_rows or []:
+            row_list = list(cast("list[object]", row))
+            self._policies[cast("str", row_list[0])] = row_list
+        self._standards: dict[str, list[object]] = {}
+        self._controls: dict[str, list[object]] = {}
         self.calls: list[_RecordedCall] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
+        if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
+            return _FakeQueryResult([list(row) for row in self._policies.values()])
         if "MERGE (n:Obligation {id: $id}) SET n += $properties" in q:
             # #42: Obligation is a passthrough node -- unconditional SET,
             # keyed on id (which is Role-scoped, so a given id only ever
             # originates from one Role/regulation and its props are stable).
             self._set(self._obligations, params, "text")
             return _FakeQueryResult([])
+        if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
+            self._set(self._standards, params, "title")
+            return _FakeQueryResult([])
+        if "MERGE (n:Control {id: $id}) SET n += $properties" in q:
+            self._set(self._controls, params, "title")
+            return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
             self._mint(self._capabilities, params, "name")
             return _FakeQueryResult([])
+        if "MERGE (n:Policy {id: $id}) ON CREATE SET" in q:
+            self._mint(self._policies, params, "title")
+            return _FakeQueryResult([])
         if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
             self._backfill(self._capabilities, params)
+            return _FakeQueryResult([])
+        if "MATCH (n:Policy {id: $id}) WHERE n.embedding IS NULL" in q:
+            self._backfill(self._policies, params)
             return _FakeQueryResult([])
         return _FakeQueryResult([[0]])
 
@@ -762,4 +807,127 @@ def test_cross_regulation_capability_requires_edge_converges_via_exact_key_match
         "REQUIRES edge's Capability TARGET must be rewritten to the canonical id "
         "across the two calls -- the exact Increment 12 bug scenario, proven "
         "cross-regulation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #54, S4 -- Policy convergence + Standard/Control passthrough +
+# governance-edge rewiring, guarded by `if graph.policy_nodes:`.
+# ---------------------------------------------------------------------------
+
+
+def _internal_baseline_with_governance() -> _FakeBaselineGraph:
+    """One Capability, one Policy, one Standard, one Control, fully wired
+    with `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` -- an internal-sourced
+    baseline (`DeriveGovernanceArtifacts` ran). No Role/Requirement/
+    Obligation content is needed for these tests -- only the governance
+    layer's own merge behavior is under test.
+    """
+    capability_id_value = "cap_engineering_review_abc"
+    policy_id_value = "pol_engineering_practices_xyz"
+    standard_id_value = "std_pol_engineering_practices_xyz_v1"
+    control_id_value = "ctrl_std_pol_engineering_practices_xyz_v1_manual"
+
+    return _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "ENGPRAC-3.0", "title": "Engineering Practices"},
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[[capability_id_value, "Engineering Review Capability", 0.8, None]],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+        policy_rows=[
+            [policy_id_value, "Engineering Practices Policy", "draft", 0.9],
+        ],
+        standard_rows=[
+            [standard_id_value, "Code Review Standard", "draft", 0.85, None],
+        ],
+        control_rows=[
+            [control_id_value, "manual", "Peer Review Control", "planned", 0.8, None],
+        ],
+        governed_by_rows=[[capability_id_value, policy_id_value]],
+        supported_by_rows=[[policy_id_value, standard_id_value]],
+        implemented_by_rows=[[standard_id_value, control_id_value]],
+    )
+
+
+def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
+    make_emitter: MakeEmitter,
+) -> None:
+    """S4: an internal-sourced baseline (`graph.policy_nodes` non-empty)
+    runs the Policy dedup pass, mints the canonical Policy node, persists
+    Standard/Control as passthrough, and rewrites `GOVERNED_BY`/
+    `SUPPORTED_BY`/`IMPLEMENTED_BY` -- closing the loop to a real UC-3
+    `Capability-[:GOVERNED_BY]->Policy-[:SUPPORTED_BY]->Standard-
+    [:IMPLEMENTED_BY]->Control` traversal in the single-tenant graph.
+    """
+    emitter, _log_path = make_emitter()
+    baseline = _internal_baseline_with_governance()
+    single_tenant = _FakeSingleTenantGraph()
+
+    result = merge_baseline_graph(
+        "ENGPRAC-3.0",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        emitter=emitter,
+    )
+
+    assert result.policy_canonical_ids == ("pol_engineering_practices_xyz",)
+
+    writes = single_tenant.writes()
+    assert any("MERGE (n:Policy {id: $id}) ON CREATE SET" in c.query for c in writes)
+    assert any("MERGE (n:Standard {id: $id}) SET n += $properties" in c.query for c in writes)
+    assert any("MERGE (n:Control {id: $id}) SET n += $properties" in c.query for c in writes)
+
+    governed_by_writes = single_tenant.calls_matching("[:GOVERNED_BY]")
+    assert len(governed_by_writes) == 1
+    assert governed_by_writes[0].params == {
+        "source_id": "cap_engineering_review_abc",
+        "target_id": "pol_engineering_practices_xyz",
+    }
+
+    supported_by_writes = single_tenant.calls_matching("[:SUPPORTED_BY]")
+    assert len(supported_by_writes) == 1
+    assert supported_by_writes[0].params == {
+        "source_id": "pol_engineering_practices_xyz",
+        "target_id": "std_pol_engineering_practices_xyz_v1",
+    }
+
+    implemented_by_writes = single_tenant.calls_matching("[:IMPLEMENTED_BY]")
+    assert len(implemented_by_writes) == 1
+    assert implemented_by_writes[0].params == {
+        "source_id": "std_pol_engineering_practices_xyz_v1",
+        "target_id": "ctrl_std_pol_engineering_practices_xyz_v1_manual",
+    }
+
+
+def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) -> None:
+    """S4: an external-sourced baseline (`graph.policy_nodes == ()`) is a
+    structural no-op for the whole Policy pass -- `MergeResult.
+    policy_canonical_ids == ()`, no Policy dedup read ever issued, no
+    Policy/Standard/Control write ever issued.
+    """
+    emitter, _log_path = make_emitter()
+    baseline = _everything_new_baseline_graph()  # Capability-only, no governance rows
+    single_tenant = _FakeSingleTenantGraph()
+
+    result = merge_baseline_graph(
+        "REG-1.0",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        emitter=emitter,
+    )
+
+    assert result.policy_canonical_ids == ()
+    assert not single_tenant.calls_matching("(n:Policy) RETURN n.id, n.title, n.embedding")
+    assert not any(
+        "Policy" in c.query or "Standard" in c.query or "Control" in c.query
+        for c in single_tenant.writes()
     )

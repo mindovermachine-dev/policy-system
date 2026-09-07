@@ -194,8 +194,8 @@ graph TB
 
 | User Role | Accessible Containers/Services |
 |-----------|-------------------------------|
-| Compliance Officers | PS Service via PS Question Skill (read-only query) |
-| Policy Managers | PS Service via Policy Editor (create/edit/approve policies/standards — under exploration) |
+| Compliance Officers | PS Service via PS Question Skill (read-only query) and ps-cli (select/ingest external regulations) |
+| Policy Managers | PS Service via ps-cli (ingest internal regulations, current mechanism; PDF ingestion pipeline once built would extend this same path) and Policy Editor (create/edit/approve policies/standards — under exploration) |
 | Legal Counsel | PS Service via PS Question Skill (read-only query) |
 | Security Architects | PS Service via PS Question Skill (read-only query) |
 | Risk Managers | PS Service via PS Question Skill (read-only query) |
@@ -204,7 +204,7 @@ graph TB
 | Software Engineers | PS Service via PS Question Skill (read-only query) |
 | Security Engineers | PS Service via PS Question Skill (read-only query) |
 | Engineering Managers | PS Service via PS Question Skill (read-only query) |
-| System Admin | PS Service via PS-Cli (health/readiness, regulation ingestion; PDF ingestion pipeline — under exploration) |
+| System Admin | PS Service via PS-Cli (health/readiness; provisioning named targets/contexts and other Policy-System global settings, mostly relevant in production deployment) |
 
 **Purpose:** Maps user roles to the containers/services they can access, clarifying access control boundaries.
 
@@ -307,7 +307,6 @@ This section maps non-functional requirements (from URS) to architectural decisi
 | Technical Debt | LLM extraction (Domain Mapper) is explicitly non-deterministic, yet Role/Requirement/Obligation/Capability identity is content-hash-derived — a retried run after a partial failure could reword the same source text differently and mint a duplicate instead of matching the existing node | Not yet addressed; requires design exploration into retry-safe extraction or a within-regulation semantic-match fallback, not just Company Merge's cross-regulation convergence |
 | Design Gap | Company Merge surfaces (rather than resolves) a low-confidence semantic-match candidate, aborting the merge — no review/resolution workflow is defined for that surfaced state. Reached only via a manual PS-Cli ingestion today; once the Regulatory Change Monitor trigger is chained through to Company Merge (UC-4 end-to-end wiring) and a scheduler is added, it can be hit unattended | To be resolved through further design exploration — needs an owner, a queue/notification mechanism, and a decision on whether ingestion stays blocked pending review |
 | Technical Debt | No schema/data migration strategy exists for the graph itself — RegulatoryInstrument instances version explicitly, but nothing addresses what happens to already-minted nodes when `ps-domain-concepts.md`'s own shape changes (a property renamed or added) | Deferred for the general case (a property rename, or any change that forces re-minting existing nodes). The `instrument_type` addition for Directive modelling is the first live instance and is handled as a purely additive backfill — no node re-identified, existing baselines untouched |
-| Coverage Gap | UC-1 (Select and add a regulation to the system) — no human role is defined as the one who lists/selects a regulation to trigger ingestion. UC-2 (Govern internal regulations — Role/Requirement/Obligation/Capability for internal content) has no assigned role or component; neither PS-Cli's pipeline nor Policy Editor currently targets this shape | To be resolved through further design exploration; must be assigned before Use Case Coverage Mapping is complete |
 
 **Common Risk Categories:**
 - **Single Points of Failure:** Components or systems whose failure would cause system-wide issues

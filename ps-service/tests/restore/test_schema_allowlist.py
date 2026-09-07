@@ -61,8 +61,19 @@ def test_native_allowed_labels_and_relationship_types_cover_the_documented_schem
         "PARAGRAPH",
         "ANNEX",
         "RECITAL",
+        # Internal-source native shape (issue #54, B5) -- see schema_allowlist.py.
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability",
     } == NATIVE_ALLOWED_LABELS
-    assert {"HAS"} == NATIVE_ALLOWED_RELATIONSHIP_TYPES
+    assert {
+        "HAS",
+        "DEFINES",
+        "EXPRESSES",
+        "SATISFIED_BY",
+        "REQUIRES",
+    } == NATIVE_ALLOWED_RELATIONSHIP_TYPES
 
 
 def test_validate_serialized_graph_accepts_an_allow_listed_graph() -> None:

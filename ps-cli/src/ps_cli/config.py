@@ -27,6 +27,7 @@ from ps_cli.targets import load_targets, resolve_config_dir
 _OVERRIDE_FILE_NAME = "ps-cli.toml"
 _ENV_VAR_NAME = "PS_CLI_SERVICE_URL"
 _CURATED_REPO_ENV_VAR_NAME = "PS_CLI_CURATED_REPO_PATH"
+_FIXTURES_ROOT_ENV_VAR_NAME = "PS_CLI_FIXTURES_ROOT"
 _VALID_URL_SCHEMES = frozenset({"http", "https"})
 
 
@@ -36,6 +37,7 @@ class CliConfig:
 
     service_url: str
     curated_repo_path: Path = Path("./curated-content")
+    fixtures_root: Path = Path("./test-data")
 
 
 def _read_packaged_default() -> dict[str, object]:
@@ -140,6 +142,36 @@ def _resolve_curated_repo_path(cwd: Path) -> Path:
     assert_contract(
         contract=isinstance(raw, str),
         msg=f"resolved config's 'curated_repo_path' is not a string, got {raw!r}",
+    )
+    return Path(cast("str", raw))
+
+
+def _resolve_fixtures_root(cwd: Path) -> Path:
+    """Resolve `fixtures_root`, independently of `service_url`'s resolution.
+
+    Precedence (highest wins): the `PS_CLI_FIXTURES_ROOT` environment
+    variable; otherwise the project-root override file (`<cwd>/ps-cli.toml`)
+    deep-merged over the packaged default -- the same chain
+    `_resolve_curated_repo_path` uses for its own field (D3/§4.4). Resolved
+    by its own standalone function, unconditionally, so it applies
+    regardless of which `service_url` case fires in `load_config`.
+    """
+    env_value = os.environ.get(_FIXTURES_ROOT_ENV_VAR_NAME)
+    if env_value is not None:
+        assert_contract(
+            contract=env_value != "",
+            msg=(
+                f"{_FIXTURES_ROOT_ENV_VAR_NAME} is set but empty; "
+                "unset it to use the default, or set a path"
+            ),
+        )
+        return Path(env_value)
+    override = _read_project_override(cwd)
+    merged = _deep_merge(_read_packaged_default(), override)
+    raw = merged.get("fixtures_root")
+    assert_contract(
+        contract=isinstance(raw, str),
+        msg=f"resolved config's 'fixtures_root' is not a string, got {raw!r}",
     )
     return Path(cast("str", raw))
 
@@ -252,4 +284,9 @@ def load_config(
 
     _validate_service_url(service_url, source=source)
     curated_repo_path = _resolve_curated_repo_path(resolved_cwd)
-    return CliConfig(service_url=service_url, curated_repo_path=curated_repo_path)
+    fixtures_root = _resolve_fixtures_root(resolved_cwd)
+    return CliConfig(
+        service_url=service_url,
+        curated_repo_path=curated_repo_path,
+        fixtures_root=fixtures_root,
+    )

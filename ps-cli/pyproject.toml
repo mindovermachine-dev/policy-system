@@ -5,6 +5,7 @@ description = "Policy System CLI: thin operator client driving PS Service's REST
 requires-python = ">=3.14"
 dependencies = [
     "httpx==0.28.1",
+    "jsonschema==4.26.0",
     "keyring==25.7.0",
 ]
 

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
 _VALID_CELEX = "32024R2847"
+_INTERNAL_FIXTURE_PATH = "engineering-practices/engineering-practices-seed.json"
 
 
 def _app_config() -> ServiceConfig:
@@ -86,6 +87,44 @@ def test_log_lines_emitted_during_a_request_carry_the_returned_run_id(
     assert lines, "the orchestration emitted no lines through the process-default emitter"
     assert all(line.get("run_id") == returned_run_id for line in lines)
     assert any(line.get("action") == "ingestion_run" for line in lines)
+
+
+def test_log_lines_emitted_during_an_internal_request_carry_the_returned_run_id(
+    configured_logging: Path, read_lines: ReadLines
+) -> None:
+    """AC-BI-016: the internal-ingestion path's ``ingestion_run`` log lines carry
+    the run id, source identifier, caller, and start/end timestamps.
+
+    ``run_internal_ingestion_pipeline`` calls the same ``_emit_run`` helper as
+    ``run_catalog_ingestion_pipeline`` (proved by
+    ``test_log_lines_emitted_during_a_request_carry_the_returned_run_id``
+    above) -- but for a ``source: "internal"`` request specifically, so that
+    wiring is proven for this path rather than assumed from the catalog one.
+    """
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post(
+        "/ingestions",
+        json={"source": "internal", "fixture_path": _INTERNAL_FIXTURE_PATH},
+    )
+
+    assert response.status_code == 200
+    returned_run_id = response.json()["run_id"]
+    assert returned_run_id
+
+    facade.reset_for_tests()  # drain + join the writer thread so the file is complete
+    lines = read_lines(configured_logging)
+
+    run_lines = [line for line in lines if line.get("action") == "ingestion_run"]
+    assert run_lines, "the internal pipeline emitted no ingestion_run lines"
+    assert all(line.get("run_id") == returned_run_id for line in run_lines)
+    assert all(line.get("source_identifier") for line in run_lines)
+    assert all(line.get("caller") for line in run_lines)
+    assert all(line.get("timestamp") is not None for line in run_lines)
+    outcomes = {line.get("outcome") for line in run_lines}
+    assert "started" in outcomes, "no ingestion_run 'started' entry (run start not recorded)"
+    assert "succeeded" in outcomes, "no ingestion_run 'succeeded' entry (run end not recorded)"
 
 
 @pytest.mark.usefixtures("configured_logging")

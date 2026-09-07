@@ -34,7 +34,7 @@ sequence above completes), and `"failed"` (whenever anything after
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from ps_service.company_merge import graph_reader, graph_writer
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
@@ -61,6 +61,8 @@ from ps_service.restore.staging import (
 if TYPE_CHECKING:
     from falkordb import FalkorDB
 
+    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.models import BaselineGraph, DedupResult
     from ps_service.export.models import SerializedGraph
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact
@@ -131,21 +133,26 @@ def _emit_restore_log(
     )
 
 
-def _capability_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
-    """Extract every Capability node's artifact-supplied embedding (D7), keyed by id.
+def _embeddings_by_label(
+    baseline_graph: SerializedGraph, label: Literal["Capability", "Policy"]
+) -> dict[str, tuple[float, ...]]:
+    """Extract every `label` node's artifact-supplied embedding (D7), keyed by id.
 
     Read directly off the already-parsed baseline `SerializedGraph` --
-    `graph_reader.read_baseline_graph`'s own `_CAPABILITY_QUERY` never reads
-    `n.embedding` (a live baseline graph never carries one, PLAN.md §0.3), so
-    this is the only place a restore ever recovers D7's artifact-supplied
-    vectors. A Capability with no `embedding` property (never backfilled at
-    export time) is simply absent from the returned mapping --
-    `resolve_capability_convergence_offline`'s own `incoming_embeddings.get(
-    node.id)` already treats a missing entry as "no artifact embedding."
+    `graph_reader.read_baseline_graph`'s own Capability/Policy queries never
+    read `n.embedding` (a live baseline graph never carries one, PLAN.md
+    §0.3), so this is the only place a restore ever recovers D7's
+    artifact-supplied vectors. A `label` node with no `embedding` property
+    (never backfilled at export time) is simply absent from the returned
+    mapping -- `resolve_capability_convergence_offline`'s own
+    `incoming_embeddings.get(node.id)` already treats a missing entry as "no
+    artifact embedding." Shared by `_capability_embeddings`/
+    `_policy_embeddings` (issue #54, S6) -- one extraction shape, dispatched
+    by `label`, mirroring `dedup.py`'s own `_TEXT_PROPERTY_BY_LABEL` pattern.
     """
     embeddings: dict[str, tuple[float, ...]] = {}
     for node in baseline_graph.nodes:
-        if node.label != "Capability":
+        if node.label != label:
             continue
         raw_embedding = node.properties.get("embedding")
         if raw_embedding is None:
@@ -153,6 +160,71 @@ def _capability_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[f
         node_id = cast("str", node.properties["id"])
         embeddings[node_id] = tuple(cast("list[float]", raw_embedding))
     return embeddings
+
+
+def _capability_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
+    """Extract every Capability node's artifact-supplied embedding (D7), keyed by id.
+
+    See `_embeddings_by_label`.
+    """
+    return _embeddings_by_label(baseline_graph, "Capability")
+
+
+def _policy_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float, ...]]:
+    """Extract every Policy node's artifact-supplied embedding (D7), keyed by id.
+
+    Issue #54, S6 -- restore's Policy-convergence counterpart to
+    `_capability_embeddings`. See `_embeddings_by_label`.
+    """
+    return _embeddings_by_label(baseline_graph, "Policy")
+
+
+def _run_offline_policy_pass(
+    baseline: BaselineGraph,
+    *,
+    snapshot_graph: GraphHandle,
+    policy_incoming_embeddings: dict[str, tuple[float, ...]],
+    similarity_threshold: float,
+    emitter: LogEmitter | None,
+    canonical_id_by_incoming_id: dict[str, str],
+) -> DedupResult | None:
+    """Issue #54, S6/B6's restore-path counterpart to `merge.py::_run_policy_pass`.
+
+    A no-op (returns `None`, no calls of any kind) when `baseline.policy_nodes`
+    is empty -- an external-sourced restore, mirroring `merge.py`'s own
+    `if graph.policy_nodes:` guard. Otherwise: dedupe Policy nodes OFFLINE
+    (`resolve_capability_convergence_offline(..., kind="Policy", ...)`, the
+    same offline function already used for Capability above, just with its
+    `kind` widened), persist canonical Policy nodes, persist Standard/Control
+    as unconditional-`SET` passthrough nodes (weak entities, never deduped),
+    and fold the Policy resolutions into `canonical_id_by_incoming_id`
+    (mutated in place) so the caller's single `persist_rewired_edges` call
+    covers both Capability and Policy endpoints -- mirrors `merge.py`'s own
+    `_run_policy_pass` exactly, substituting the offline dedup function for
+    the live one (D6: never `route_embedding`, every embedding is either
+    artifact-supplied or already cached).
+    """
+    if not baseline.policy_nodes:
+        return None
+
+    policy_dedup = resolve_capability_convergence_offline(
+        baseline.policy_nodes,
+        incoming_embeddings=policy_incoming_embeddings,
+        single_tenant_graph=snapshot_graph,
+        threshold=similarity_threshold,
+        kind="Policy",
+        emitter=emitter,
+    )
+    graph_writer.persist_canonical_nodes(
+        snapshot_graph, baseline.policy_nodes, policy_dedup.resolutions, kind="Policy"
+    )
+    graph_writer.persist_standard_and_control_passthrough(
+        snapshot_graph, baseline.standard_nodes, baseline.control_nodes
+    )
+    canonical_id_by_incoming_id.update(
+        {resolution.incoming_id: resolution.canonical_id for resolution in policy_dedup.resolutions}
+    )
+    return policy_dedup
 
 
 def _run_baseline_merge(
@@ -163,6 +235,7 @@ def _run_baseline_merge(
     similarity_threshold: float,
     snapshot_name: str,
     emitter: LogEmitter | None,
+    policy_incoming_embeddings: dict[str, tuple[float, ...]] | None = None,
 ) -> None:
     """D8 step 5 / D6: dedupe and merge the staged baseline graph into `snapshot_name`.
 
@@ -174,7 +247,14 @@ def _run_baseline_merge(
     (Slice 5.6's own requirement -- reused, not reimplemented), in the same
     write order `merge.py::merge_baseline_graph` itself uses: role/
     requirement passthrough, obligation passthrough, canonical Capability
-    mints, rewired edges, then embedding backfill.
+    mints, (issue #54, S6) canonical Policy mints + Standard/Control
+    passthrough when `baseline.policy_nodes` is non-empty, rewired edges
+    (regulatory-spine + governance), then Capability (and, if the Policy
+    pass ran, Policy) embedding backfill.
+
+    `policy_incoming_embeddings` defaults to `None` (treated as `{}`) so
+    existing callers that never restore an internal-sourced instrument (no
+    Policy content in the artifact) need not pass it.
 
     This function is passed as `stage_and_finalize_policy_system_leg`'s
     `run_offline_merge` argument -- it writes only into `snapshot_name`
@@ -236,12 +316,34 @@ def _run_baseline_merge(
     canonical_id_by_incoming_id = {
         resolution.incoming_id: resolution.canonical_id for resolution in dedup_result.resolutions
     }
+
+    # issue #54, S6/B6 -- the Policy convergence + Standard/Control
+    # passthrough pass, a structural no-op for an external-sourced restore
+    # (empty baseline.policy_nodes): no Policy dedup read, no Policy/
+    # Standard/Control write, no Policy entries folded into the rewiring
+    # mapping. Mirrors merge.py's own live-path Policy pass exactly.
+    policy_dedup = _run_offline_policy_pass(
+        baseline,
+        snapshot_graph=snapshot_graph,
+        policy_incoming_embeddings=policy_incoming_embeddings or {},
+        similarity_threshold=similarity_threshold,
+        emitter=emitter,
+        canonical_id_by_incoming_id=canonical_id_by_incoming_id,
+    )
+
+    # One rewiring call over BOTH the regulatory-spine edges and the
+    # governance edges -- governance_edges is empty for an external-sourced
+    # restore, so this is unchanged from before S6 in that case.
     graph_writer.persist_rewired_edges(
-        snapshot_graph, baseline.bare_edges, canonical_id_by_incoming_id
+        snapshot_graph, baseline.bare_edges + baseline.governance_edges, canonical_id_by_incoming_id
     )
     graph_writer.backfill_canonical_embeddings(
         snapshot_graph, kind="Capability", embeddings=dedup_result.embedding_backfills
     )
+    if policy_dedup is not None:
+        graph_writer.backfill_canonical_embeddings(
+            snapshot_graph, kind="Policy", embeddings=policy_dedup.embedding_backfills
+        )
 
 
 def restore_instrument(
@@ -315,6 +417,7 @@ def restore_instrument(
         )
 
         incoming_embeddings = _capability_embeddings(baseline_graph)
+        policy_incoming_embeddings = _policy_embeddings(baseline_graph)
         token = uuid.uuid4().hex
 
         def _run_offline_merge(snapshot_name: str) -> None:
@@ -326,6 +429,7 @@ def restore_instrument(
                 similarity_threshold,
                 snapshot_name,
                 emitter,
+                policy_incoming_embeddings,
             )
 
         stage_and_finalize_policy_system_leg(

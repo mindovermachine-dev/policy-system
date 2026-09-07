@@ -1,11 +1,14 @@
 """Tests for ps_cli.modules.handlers: handle_regulations_list (PLAN.md §3 Increment 9),
 handle_regulations_ingest (PLAN.md §3 Increment 12).
 
-`handle_internal_ingest` (PLAN.md §3 Increment 15) is deliberately not
-unit-tested at this layer -- per PLAN.md §3 Increment 15 and the batch task
-brief, its coverage is exactly two `cli.run()`-level tests in
-`ps-cli/tests/test_cli.py`, which prove the full wiring (parser -> dispatch ->
-handler -> client) end to end.
+`handle_internal_ingest`'s full happy-path wiring (PLAN.md §3 Increment 15) is
+deliberately not unit-tested at this layer -- its coverage there is exactly two
+`cli.run()`-level tests in `ps-cli/tests/test_cli.py`, which prove the full
+wiring (parser -> dispatch -> handler -> client) end to end. Issue #54's S1
+slice adds exactly one test at this layer for the new local-validation-before-
+any-network-call behavior (`validate_local_seed_file`, D3/B4) -- distinct from
+happy-path wiring, and the one place a fake client can assert zero calls were
+made.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from ps_cli.modules.handlers import (
     handle_catalog_list,
     handle_catalog_restore,
     handle_health,
+    handle_internal_ingest,
     handle_regulations_ingest,
     handle_regulations_list,
 )
@@ -195,6 +199,31 @@ def test_handle_regulations_ingest_propagates_ps_cli_error_from_client_uncaught(
 
     with pytest.raises(PsCliError):
         handle_regulations_ingest("32016R0679", fake)
+
+
+def test_handle_internal_ingest_validates_locally_before_any_http_call(
+    tmp_path: Path,
+) -> None:
+    """A schema-invalid local fixture is rejected before `client.ingest_internal()` is called.
+
+    `client` here is a bare `_UnusedPsServiceClientMethods` instance --
+    its `ingest_internal` raises `AssertionError` if ever called, so the
+    absence of that failure (only `PsCliError` is raised, from local
+    validation) is itself the proof of zero HTTP calls (issue #54 D3/B4,
+    AC-BI-019).
+    """
+    invalid_document: dict[str, object] = {
+        "nodes": [],
+        "edges": [],
+        "graph_name": "policy_system",
+    }
+    (tmp_path / "bad-seed.json").write_text(json.dumps(invalid_document), encoding="utf-8")
+    client = _UnusedPsServiceClientMethods()
+
+    with pytest.raises(PsCliError) as excinfo:
+        handle_internal_ingest("bad-seed.json", client, fixtures_root=tmp_path)
+
+    assert "graph_name" in excinfo.value.msg or "additional" in excinfo.value.msg.lower()
 
 
 class _FakeProgressIngestClient(_UnusedPsServiceClientMethods):

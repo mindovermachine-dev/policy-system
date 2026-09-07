@@ -42,17 +42,18 @@ analogy:
   "always a fixed Python literal, never adapter/DB-sourced" design note.
 
 **Deviation from PLAN_REVIEWED.md's "six/seven queries" phrasing**: this
-implementation issues ten queries -- one RegulatoryInstrument, one each for
-Role/Requirement/Obligation/Capability (four), two provenance-edge queries
-(`DEFINES`, `EXPRESSES`) and three bare-edge queries (`HAS`, `SATISFIED_BY`,
-`REQUIRES`) -- rather than collapsing the edge reads into one combined
-query per category via a runtime `type(e)` dispatch. Each relationship
-type's Python-side literal is fixed by which query produced the row, never
-parsed/cast from a returned string, matching `graph_writer.py`'s own
-"no allow-list needed, always a fixed literal" precedent exactly and
-avoiding an unforced runtime-narrowing cast that a combined query would
-require. The plan's own count was written as an approximation ("six/seven")
-and does not fix a specific number.
+implementation issues sixteen queries -- one RegulatoryInstrument, one each
+for Role/Requirement/Obligation/Capability/Policy/Standard/Control (seven),
+two provenance-edge queries (`DEFINES`, `EXPRESSES`) and six bare-edge
+queries (`HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`,
+`IMPLEMENTED_BY`, the last three added by issue #54's S4) -- rather than
+collapsing the edge reads into one combined query per category via a
+runtime `type(e)` dispatch. Each relationship type's Python-side literal is
+fixed by which query produced the row, never parsed/cast from a returned
+string, matching `graph_writer.py`'s own "no allow-list needed, always a
+fixed literal" precedent exactly and avoiding an unforced runtime-narrowing
+cast that a combined query would require. The plan's own count was written
+as an approximation ("six/seven") and does not fix a specific number.
 """
 
 from __future__ import annotations
@@ -87,6 +88,20 @@ _EXPRESSES_QUERY = (
 _HAS_QUERY = "MATCH (s:Role)-[:HAS]->(t:Obligation) RETURN s.id, t.id"
 _SATISFIED_BY_QUERY = "MATCH (s:Requirement)-[:SATISFIED_BY]->(t:Obligation) RETURN s.id, t.id"
 _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id, t.id"
+
+# issue #54, S4 -- Policy/Standard/Control + governance edges. Empty result
+# sets for an external-sourced baseline (DeriveGovernanceArtifacts never ran).
+_POLICY_QUERY = "MATCH (n:Policy) RETURN n.id, n.title, n.status, n.confidence"
+_STANDARD_QUERY = (
+    "MATCH (n:Standard) RETURN n.id, n.title, n.implementation_status, n.confidence, n.description"
+)
+_CONTROL_QUERY = (
+    "MATCH (n:Control) RETURN n.id, n.type, n.title, n.implementation_status, "
+    "n.confidence, n.description"
+)
+_GOVERNED_BY_QUERY = "MATCH (s:Capability)-[:GOVERNED_BY]->(t:Policy) RETURN s.id, t.id"
+_SUPPORTED_BY_QUERY = "MATCH (s:Policy)-[:SUPPORTED_BY]->(t:Standard) RETURN s.id, t.id"
+_IMPLEMENTED_BY_QUERY = "MATCH (s:Standard)-[:IMPLEMENTED_BY]->(t:Control) RETURN s.id, t.id"
 
 
 class _RegulatoryInstrumentNode(Protocol):
@@ -129,6 +144,10 @@ def read_baseline_graph(
     capability_nodes = _read_capability_nodes(baseline_graph)
     provenance_edges = _read_provenance_edges(baseline_graph, regulatory_instrument_id)
     bare_edges = _read_bare_edges(baseline_graph)
+    policy_nodes = _read_policy_nodes(baseline_graph)
+    standard_nodes = _read_standard_nodes(baseline_graph)
+    control_nodes = _read_control_nodes(baseline_graph)
+    governance_edges = _read_governance_edges(baseline_graph)
 
     return BaselineGraph(
         regulatory_instrument_id=regulatory_instrument_id,
@@ -139,6 +158,10 @@ def read_baseline_graph(
         capability_nodes=capability_nodes,
         provenance_edges=provenance_edges,
         bare_edges=bare_edges,
+        policy_nodes=policy_nodes,
+        standard_nodes=standard_nodes,
+        control_nodes=control_nodes,
+        governance_edges=governance_edges,
     )
 
 
@@ -182,22 +205,27 @@ def _read_role_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
 
 
 def _read_requirement_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Requirement node, omitting `role_id` when the graph returns `NULL`.
+
+    F1 (CHANGES.md): `role_id` is bookkeeping, not always present -- an
+    internal-source Requirement can lack one. D6's "never write `None`" rule
+    applied symmetrically on the read side: `role_id` is added to
+    `properties` only `if role_id is not None`, never unconditionally
+    `cast()`.
+    """
     result = baseline_graph.query(_REQUIREMENT_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[BaselineNode] = []
     for row in rows:
         node_id, text, requirement_type, confidence, role_id = row
-        nodes.append(
-            BaselineNode(
-                id=cast("str", node_id),
-                properties={
-                    "text": cast("str", text),
-                    "type": cast("str", requirement_type),
-                    "confidence": cast("float", confidence),
-                    "role_id": cast("str", role_id),
-                },
-            )
-        )
+        properties: dict[str, str | float] = {
+            "text": cast("str", text),
+            "type": cast("str", requirement_type),
+            "confidence": cast("float", confidence),
+        }
+        if role_id is not None:
+            properties["role_id"] = cast("str", role_id)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
     return tuple(nodes)
 
 
@@ -315,6 +343,130 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
         edges.append(
             BareEdge(
                 relationship_type="REQUIRES",
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
+            )
+        )
+
+    return tuple(edges)
+
+
+def _read_policy_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Policy node (issue #54, S4). Empty for an external-sourced baseline.
+
+    Properties are `title`/`status`/`confidence` -- never optional, mirroring
+    `_read_role_nodes`'s own "no optional fields" shape (`DeriveGovernanceArtifacts`
+    always sets all three at mint time).
+    """
+    result = baseline_graph.query(_POLICY_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        node_id, title, status, confidence = row
+        nodes.append(
+            BaselineNode(
+                id=cast("str", node_id),
+                properties={
+                    "title": cast("str", title),
+                    "status": cast("str", status),
+                    "confidence": cast("float", confidence),
+                },
+            )
+        )
+    return tuple(nodes)
+
+
+def _read_standard_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Standard node (issue #54, S4). Empty for an external-sourced baseline.
+
+    Properties are `title`/`implementation_status`/`confidence` and, when
+    set, `description` -- mirroring `_read_capability_nodes`'s own
+    "optional description" shape.
+    """
+    result = baseline_graph.query(_STANDARD_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        node_id, title, implementation_status, confidence, description = row
+        properties: dict[str, str | float] = {
+            "title": cast("str", title),
+            "implementation_status": cast("str", implementation_status),
+            "confidence": cast("float", confidence),
+        }
+        if description is not None:
+            properties["description"] = cast("str", description)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+    return tuple(nodes)
+
+
+def _read_control_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Control node (issue #54, S4). Empty for an external-sourced baseline.
+
+    Properties are `type`/`title`/`implementation_status`/`confidence` and,
+    when set, `description` -- mirroring `_read_capability_nodes`'s own
+    "optional description" shape. The four AC-BI-017 operational fields
+    (`execution_frequency`/`last_test_date`/`next_review_date`/
+    `evidence_ref`) are never written at mint time, so they are never present
+    to read back here either -- no special handling needed.
+    """
+    result = baseline_graph.query(_CONTROL_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        node_id, control_type, title, implementation_status, confidence, description = row
+        properties: dict[str, str | float] = {
+            "type": cast("str", control_type),
+            "title": cast("str", title),
+            "implementation_status": cast("str", implementation_status),
+            "confidence": cast("float", confidence),
+        }
+        if description is not None:
+            properties["description"] = cast("str", description)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+    return tuple(nodes)
+
+
+def _read_governance_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
+    """Read the `GOVERNED_BY`, `SUPPORTED_BY`, and `IMPLEMENTED_BY` edges (issue #54, S4).
+
+    `GOVERNED_BY` (Capability -> Policy), then `SUPPORTED_BY` (Policy ->
+    Standard), then `IMPLEMENTED_BY` (Standard -> Control) -- each read via
+    its own fixed-relationship-type query, same reasoning as
+    `_read_bare_edges`. Endpoint ids here are BASELINE-LOCAL; rewiring a
+    `GOVERNED_BY` edge's Policy endpoint onto its canonical id is
+    `dedup`/`graph_writer`'s job, not this reader's. Empty for an
+    external-sourced baseline, with no exception raised.
+    """
+    edges: list[BareEdge] = []
+
+    governed_by_result = baseline_graph.query(_GOVERNED_BY_QUERY)
+    for row in cast("list[list[object]]", governed_by_result.result_set):
+        source_id, target_id = row
+        edges.append(
+            BareEdge(
+                relationship_type="GOVERNED_BY",
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
+            )
+        )
+
+    supported_by_result = baseline_graph.query(_SUPPORTED_BY_QUERY)
+    for row in cast("list[list[object]]", supported_by_result.result_set):
+        source_id, target_id = row
+        edges.append(
+            BareEdge(
+                relationship_type="SUPPORTED_BY",
+                source_id=cast("str", source_id),
+                target_id=cast("str", target_id),
+            )
+        )
+
+    implemented_by_result = baseline_graph.query(_IMPLEMENTED_BY_QUERY)
+    for row in cast("list[list[object]]", implemented_by_result.result_set):
+        source_id, target_id = row
+        edges.append(
+            BareEdge(
+                relationship_type="IMPLEMENTED_BY",
                 source_id=cast("str", source_id),
                 target_id=cast("str", target_id),
             )

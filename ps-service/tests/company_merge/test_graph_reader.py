@@ -44,9 +44,11 @@ class _FakeRegulatoryInstrumentNode:
 
 
 class _ScriptedFakeGraph:
-    """Satisfies `GraphHandle` structurally. Every one of the ten queries
+    """Satisfies `GraphHandle` structurally. Every one of the sixteen queries
     `read_baseline_graph` issues is answered with its own scripted row set,
-    dispatched by a distinctive substring of the query text.
+    dispatched by a distinctive substring of the query text. The six
+    governance queries (issue #54, S4) default to an empty result set --
+    the external-baseline shape -- unless a test passes its own rows.
     """
 
     def __init__(
@@ -62,6 +64,12 @@ class _ScriptedFakeGraph:
         has_rows: list[object],
         satisfied_by_rows: list[object],
         requires_rows: list[object],
+        policy_rows: list[object] | None = None,
+        standard_rows: list[object] | None = None,
+        control_rows: list[object] | None = None,
+        governed_by_rows: list[object] | None = None,
+        supported_by_rows: list[object] | None = None,
+        implemented_by_rows: list[object] | None = None,
     ) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
@@ -73,6 +81,12 @@ class _ScriptedFakeGraph:
         self._has_rows = has_rows
         self._satisfied_by_rows = satisfied_by_rows
         self._requires_rows = requires_rows
+        self._policy_rows = policy_rows or []
+        self._standard_rows = standard_rows or []
+        self._control_rows = control_rows or []
+        self._governed_by_rows = governed_by_rows or []
+        self._supported_by_rows = supported_by_rows or []
+        self._implemented_by_rows = implemented_by_rows or []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         if "[e:DEFINES]" in q:
@@ -85,6 +99,18 @@ class _ScriptedFakeGraph:
             return _FakeQueryResult(self._satisfied_by_rows)
         if "[:REQUIRES]" in q:
             return _FakeQueryResult(self._requires_rows)
+        if "[:GOVERNED_BY]" in q:
+            return _FakeQueryResult(self._governed_by_rows)
+        if "[:SUPPORTED_BY]" in q:
+            return _FakeQueryResult(self._supported_by_rows)
+        if "[:IMPLEMENTED_BY]" in q:
+            return _FakeQueryResult(self._implemented_by_rows)
+        if "(n:Policy) RETURN" in q:
+            return _FakeQueryResult(self._policy_rows)
+        if "(n:Standard) RETURN" in q:
+            return _FakeQueryResult(self._standard_rows)
+        if "(n:Control) RETURN" in q:
+            return _FakeQueryResult(self._control_rows)
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
@@ -279,6 +305,180 @@ def test_read_regulatory_instrument_properties_includes_instrument_type() -> Non
     result = read_baseline_graph(graph, "NIS2-1.0")
 
     assert result.regulatory_instrument_properties["instrument_type"] == "directive"
+
+
+def _empty_scripted_graph(**overrides: object) -> _ScriptedFakeGraph:
+    """A `_ScriptedFakeGraph` with every required row list empty, overridable by kwarg."""
+    defaults: dict[str, object] = {
+        "regulatory_instrument_properties": {"id": "REG-1.0", "title": "Test Regulation"},
+        "role_rows": [],
+        "requirement_rows": [],
+        "obligation_rows": [],
+        "capability_rows": [],
+        "defines_rows": [],
+        "expresses_rows": [],
+        "has_rows": [],
+        "satisfied_by_rows": [],
+        "requires_rows": [],
+    }
+    defaults.update(overrides)
+    return _ScriptedFakeGraph(**defaults)  # type: ignore[arg-type]
+
+
+def test_read_requirement_nodes_omits_role_id_when_absent() -> None:
+    """F1 (CHANGES.md): a Requirement whose `role_id` the query returns as
+    `NULL` (an internal-source Requirement lacking one) gets NO `role_id`
+    key in `BaselineNode.properties` at all -- never a cast-to-`str` `None`.
+    A sibling Requirement that DOES carry a `role_id` keeps it, proving the
+    omission is conditional, not a blanket removal.
+    """
+    graph = _empty_scripted_graph(
+        requirement_rows=[
+            [
+                "REG-1.0_req_art_1.1",
+                "Must report incidents.",
+                "requirement",
+                0.9,
+                "role_manufacturer_abc123",
+            ],
+            [
+                "REG-1.0_req_art_2.1",
+                "Must maintain records.",
+                "requirement",
+                0.85,
+                None,
+            ],
+        ],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    with_role = next(n for n in result.requirement_nodes if n.id == "REG-1.0_req_art_1.1")
+    without_role = next(n for n in result.requirement_nodes if n.id == "REG-1.0_req_art_2.1")
+    assert with_role.properties["role_id"] == "role_manufacturer_abc123"
+    assert "role_id" not in without_role.properties
+    assert without_role.properties == {
+        "text": "Must maintain records.",
+        "type": "requirement",
+        "confidence": 0.85,
+    }
+
+
+def test_reads_policy_standard_control_and_governance_edges() -> None:
+    """Issue #54, S4: `read_baseline_graph` reads Policy/Standard/Control
+    nodes and the `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges onto
+    `BaselineGraph.policy_nodes`/`standard_nodes`/`control_nodes`/
+    `governance_edges` -- reusing `BareEdge` for the governance edges (no
+    parallel `GovernanceEdge` type).
+    """
+    graph = _empty_scripted_graph(
+        capability_rows=[
+            ["cap_engineering_review_abc", "Engineering Review Capability", 0.8, None]
+        ],
+        policy_rows=[
+            ["pol_engineering_practices_xyz", "Engineering Practices Policy", "draft", 0.9]
+        ],
+        standard_rows=[
+            [
+                "std_pol_engineering_practices_xyz_v1",
+                "Code Review Standard",
+                "draft",
+                0.85,
+                "Peer review before merge",
+            ]
+        ],
+        control_rows=[
+            [
+                "ctrl_std_pol_engineering_practices_xyz_v1_manual",
+                "manual",
+                "Peer Review Control",
+                "planned",
+                0.8,
+                None,
+            ]
+        ],
+        governed_by_rows=[["cap_engineering_review_abc", "pol_engineering_practices_xyz"]],
+        supported_by_rows=[
+            ["pol_engineering_practices_xyz", "std_pol_engineering_practices_xyz_v1"]
+        ],
+        implemented_by_rows=[
+            [
+                "std_pol_engineering_practices_xyz_v1",
+                "ctrl_std_pol_engineering_practices_xyz_v1_manual",
+            ]
+        ],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.policy_nodes == (
+        BaselineNode(
+            id="pol_engineering_practices_xyz",
+            properties={
+                "title": "Engineering Practices Policy",
+                "status": "draft",
+                "confidence": 0.9,
+            },
+        ),
+    )
+    assert result.standard_nodes == (
+        BaselineNode(
+            id="std_pol_engineering_practices_xyz_v1",
+            properties={
+                "title": "Code Review Standard",
+                "implementation_status": "draft",
+                "confidence": 0.85,
+                "description": "Peer review before merge",
+            },
+        ),
+    )
+    assert result.control_nodes == (
+        BaselineNode(
+            id="ctrl_std_pol_engineering_practices_xyz_v1_manual",
+            properties={
+                "type": "manual",
+                "title": "Peer Review Control",
+                "implementation_status": "planned",
+                "confidence": 0.8,
+            },
+        ),
+    )
+    assert result.governance_edges == (
+        BareEdge(
+            relationship_type="GOVERNED_BY",
+            source_id="cap_engineering_review_abc",
+            target_id="pol_engineering_practices_xyz",
+        ),
+        BareEdge(
+            relationship_type="SUPPORTED_BY",
+            source_id="pol_engineering_practices_xyz",
+            target_id="std_pol_engineering_practices_xyz_v1",
+        ),
+        BareEdge(
+            relationship_type="IMPLEMENTED_BY",
+            source_id="std_pol_engineering_practices_xyz_v1",
+            target_id="ctrl_std_pol_engineering_practices_xyz_v1_manual",
+        ),
+    )
+
+
+def test_external_baseline_yields_empty_governance_tuples() -> None:
+    """Issue #54, S4: an external-sourced baseline (no `DeriveGovernanceArtifacts`
+    ever ran) has no Policy/Standard/Control nodes or governance edges --
+    `read_baseline_graph` returns empty tuples for all four fields, no
+    exception, same tolerance as the existing empty-Obligation/Capability path.
+    """
+    graph = _empty_scripted_graph(
+        role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9]],
+        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.policy_nodes == ()
+    assert result.standard_nodes == ()
+    assert result.control_nodes == ()
+    assert result.governance_edges == ()
 
 
 @pytest.mark.falkordb_live

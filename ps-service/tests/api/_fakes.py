@@ -32,7 +32,12 @@ from ps_service.api.ingestion_orchestration import (
     PipelineStages,
 )
 from ps_service.company_merge.models import MergeResult
-from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
+from ps_service.domain_mapper.models import (
+    DerivationResult,
+    ExtractionResult,
+    GovernanceDerivationResult,
+)
+from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
 from ps_service.ingestion.models import IngestResult
 
 if TYPE_CHECKING:
@@ -41,6 +46,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.models import ExtractionUnit
+    from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
     from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
@@ -284,6 +290,97 @@ class FakeMergeStage:
         )
 
 
+class FakeIngestInternalStage:
+    """Stand-in for ``internal_seed.persist.ingest_internal_regulatory_instrument``."""
+
+    def __init__(
+        self,
+        recorder: StageRecorder,
+        *,
+        rid: str = "ENGPRAC-3.0",
+        error: Exception | None = None,
+    ) -> None:
+        """Prime the recorder, the id to return, and an optional error to raise."""
+        self._recorder = recorder
+        self._rid = rid
+        self._error = error
+
+    def __call__(
+        self,
+        seed: InternalRegulationSeed,
+        *,
+        baseline_graph: GraphHandle,
+        native_graph: GraphHandle,
+        emitter: LogEmitter | None = None,
+    ) -> InternalIngestResult:
+        """Record the call and return (or raise) a canned :class:`InternalIngestResult`."""
+        _ = (seed, baseline_graph, native_graph, emitter)
+        self._recorder.calls.append(StageCall("internal_ingestion", None, {}))
+        if self._error is not None:
+            raise self._error
+        return InternalIngestResult(
+            regulatory_instrument_id=self._rid,
+            role_count=0,
+            requirement_count=0,
+            obligation_count=0,
+            capability_count=0,
+        )
+
+
+class FakeDeriveGovernanceStage:
+    """Stand-in for ``derive_governance_artifacts`` (issue #54, S3)."""
+
+    def __init__(self, recorder: StageRecorder, *, error: Exception | None = None) -> None:
+        """Prime the recorder and an optional error to raise."""
+        self._recorder = recorder
+        self._error = error
+
+    def __call__(
+        self,
+        regulatory_instrument_id: str,
+        *,
+        baseline_graph: GraphHandle,
+        model: str,
+        call_completion: CompletionCaller | None = None,
+        emitter: LogEmitter | None = None,
+    ) -> GovernanceDerivationResult:
+        """Record the call and return (or raise) a canned :class:`GovernanceDerivationResult`."""
+        _ = (baseline_graph, call_completion, emitter)
+        self._recorder.calls.append(
+            StageCall("governance_derivation", regulatory_instrument_id, {"model": model})
+        )
+        if self._error is not None:
+            raise self._error
+        return GovernanceDerivationResult(
+            regulatory_instrument_id=regulatory_instrument_id,
+            policy_node_ids=(),
+            standard_node_ids=(),
+            control_node_ids=(),
+            unmatched_capability_ids=(),
+        )
+
+
+class FakeInternalSeedAdapter:
+    """Stand-in for ``InternalSeedIngestionAdapter`` -- reads a real seed file off disk.
+
+    Unlike :class:`FakeIngestionAdapter` (never invoked, since the faked
+    ``ingest`` stage ignores its adapter), the internal pipeline's own
+    orchestration genuinely calls ``adapter.read_seed(...)`` itself (to
+    derive the graph ``short_name`` before any graph is opened) -- so this
+    fake delegates to the real, already-tested ``InternalSeedIngestionAdapter``
+    rather than raising, letting a route-level test exercise real parsing
+    against a real fixture file while every downstream stage stays faked.
+    """
+
+    def read_seed(self, identifier: str) -> InternalRegulationSeed:
+        """Delegate to the real adapter -- fixture parsing is not what these tests fake."""
+        from ps_service.ingestion.adapters.internal_seed.adapter import (
+            InternalSeedIngestionAdapter,
+        )
+
+        return InternalSeedIngestionAdapter().read_seed(identifier)
+
+
 class FakeIngestionAdapter:
     """Satisfies ``ps_service.ingestion.adapters.base.IngestionAdapter`` structurally.
 
@@ -327,6 +424,9 @@ def build_fake_pipeline_dependencies(
     derive_error: Exception | None = None,
     merge_error: Exception | None = None,
     derive_unmatched_obligation_ids: tuple[str, ...] = (),
+    internal_rid: str = "ENGPRAC-3.0",
+    ingest_internal_error: Exception | None = None,
+    derive_governance_error: Exception | None = None,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -338,10 +438,16 @@ def build_fake_pipeline_dependencies(
         merge_error: If set, the merge stage raises this.
         derive_unmatched_obligation_ids: Canned ``unmatched_obligation_ids`` for
             the fake derive stage's ``DerivationResult`` (issue #64 slice 9).
+        internal_rid: The ``regulatory_instrument_id`` the fake
+            ``ingest_internal`` stage returns (issue #54, S2).
+        ingest_internal_error: If set, the ``ingest_internal`` stage raises
+            this instead of returning.
+        derive_governance_error: If set, the ``governance_derivation`` stage
+            raises this instead of returning (issue #54, S3).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
-        ``run_catalog_ingestion_pipeline``.
+        ``run_catalog_ingestion_pipeline``/``run_internal_ingestion_pipeline``.
     """
     recorder = StageRecorder()
     native = FakeGraphHandle()
@@ -373,8 +479,16 @@ def build_fake_pipeline_dependencies(
                 unmatched_obligation_ids=derive_unmatched_obligation_ids,
             ),
             merge=FakeMergeStage(recorder, error=merge_error),
+            ingest_internal=FakeIngestInternalStage(
+                recorder, rid=internal_rid, error=ingest_internal_error
+            ),
+            derive_governance=FakeDeriveGovernanceStage(recorder, error=derive_governance_error),
         ),
-        adapters=PipelineAdapters(ingestion=FakeIngestionAdapter, mapping=FakeDomainMappingAdapter),
+        adapters=PipelineAdapters(
+            ingestion=FakeIngestionAdapter,
+            mapping=FakeDomainMappingAdapter,
+            internal_seed=FakeInternalSeedAdapter,
+        ),
     )
     return FakePipeline(
         dependencies=dependencies,

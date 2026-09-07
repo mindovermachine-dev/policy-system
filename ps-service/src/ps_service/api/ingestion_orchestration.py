@@ -46,6 +46,7 @@ from ps_service.api.error_handlers import (
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
     IngestionConfigIncompleteError,
+    InternalSeedValidationError,
     PipelineStageError,
 )
 from ps_service.api.run_status import clear_stage, set_stage
@@ -54,16 +55,25 @@ from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
 from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
 from ps_service.ingestion.adapters.errors import CellarNotFoundError
+from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
+from ps_service.ingestion.adapters.internal_seed.persist import find_regulatory_instrument
 from ps_service.logging.facade import emit_log_entry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
-    from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
+    from ps_service.domain_mapper.models import (
+        DerivationResult,
+        ExtractionResult,
+        GovernanceDerivationResult,
+    )
     from ps_service.ingestion.adapters.base import IngestionAdapter
+    from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
+    from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
     from ps_service.ingestion.models import IngestResult
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
@@ -153,6 +163,45 @@ class DeriveStage(Protocol):
         ...
 
 
+class InternalSeedAdapter(Protocol):
+    """Call shape of ``InternalSeedIngestionAdapter.read_seed``."""
+
+    def read_seed(self, identifier: str) -> InternalRegulationSeed:
+        """Read, validate, and parse one internal-regulation seed document."""
+        ...
+
+
+class IngestInternalStage(Protocol):
+    """Call shape of ``internal_seed.persist.ingest_internal_regulatory_instrument``."""
+
+    def __call__(
+        self,
+        seed: InternalRegulationSeed,
+        *,
+        baseline_graph: GraphHandle,
+        native_graph: GraphHandle,
+        emitter: LogEmitter | None = None,
+    ) -> InternalIngestResult:
+        """Validate, mint, and persist one internal-regulation seed."""
+        ...
+
+
+class DeriveGovernanceStage(Protocol):
+    """Call shape of ``ps_service.domain_mapper.derive_governance_artifacts`` (issue #54, S3)."""
+
+    def __call__(
+        self,
+        regulatory_instrument_id: str,
+        *,
+        baseline_graph: GraphHandle,
+        model: str,
+        call_completion: CompletionCaller | None = None,
+        emitter: LogEmitter | None = None,
+    ) -> GovernanceDerivationResult:
+        """Derive Policy/Standard/Control nodes on the baseline graph (internal source only)."""
+        ...
+
+
 class MergeStage(Protocol):
     """Call shape of ``ps_service.company_merge.merge_baseline_graph``."""
 
@@ -185,12 +234,20 @@ class GraphOpeners:
 
 @dataclass(frozen=True, slots=True)
 class PipelineStages:
-    """The four external-pipeline stage entry points, in run order."""
+    """The four external-pipeline stage entry points, plus the internal-seed pipeline's own stages.
+
+    In run order. S2 added ``ingest_internal``; S3 (issue #54) added
+    ``derive_governance``, the internal pipeline's second stage; S4 reuses
+    the catalog pipeline's own ``merge`` as the internal pipeline's third
+    stage -- one shared stage function, two callers.
+    """
 
     ingest: IngestStage
     extract: ExtractStage
     derive: DeriveStage
     merge: MergeStage
+    ingest_internal: IngestInternalStage
+    derive_governance: DeriveGovernanceStage
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +256,7 @@ class PipelineAdapters:
 
     ingestion: Callable[[], IngestionAdapter]
     mapping: Callable[[], DomainMappingAdapter]
+    internal_seed: Callable[[], InternalSeedAdapter]
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +283,8 @@ class _ResolvedPipelineConfig:
 def _require_ingestion_config(config: ServiceConfig) -> _ResolvedPipelineConfig:
     """Return the narrowed pipeline config, or raise if any required value is unset.
 
-    Called first by :func:`run_catalog_ingestion_pipeline`, before any graph or
+    Called first by :func:`run_catalog_ingestion_pipeline` and (issue #54, S3)
+    :func:`run_internal_ingestion_pipeline`, before any graph or
     stage call, so an incomplete configuration fails as HTTP 503 with no I/O.
 
     Args:
@@ -747,6 +806,221 @@ def run_catalog_ingestion_pipeline(
     return IngestionOutcome(regulatory_instrument_id=rid, source="catalog", stages=reports)
 
 
+# --- internal-seed pipeline (issue #54, S2) ---
+
+
+def _internal_ingestion_summary(result: InternalIngestResult) -> dict[str, int]:
+    """Summarise an ``InternalIngestResult`` as small integer counts."""
+    return {
+        "roles": result.role_count,
+        "requirements": result.requirement_count,
+        "obligations": result.obligation_count,
+        "capabilities": result.capability_count,
+    }
+
+
+def _governance_derivation_summary(result: GovernanceDerivationResult) -> dict[str, int]:
+    """Summarise a ``GovernanceDerivationResult`` as small integer counts (issue #54, S3)."""
+    return {
+        "policies": len(result.policy_node_ids),
+        "standards": len(result.standard_node_ids),
+        "controls": len(result.control_node_ids),
+        "unmatched_capabilities": len(result.unmatched_capability_ids),
+    }
+
+
+def _internal_short_name(regulatory_instrument_id: str) -> str:
+    """``{SHORT}`` from a ``{SHORT}-{VERSION}`` internal RegulatoryInstrument id.
+
+    Mirrors the intake format's own ``{SHORT}-{VERSION}`` natural-key
+    pattern (``internal-regulation-intake-format.md``, ``ps-domain-
+    concepts.md``); ``native_graph_name``/``baseline_graph_name`` lowercase
+    it themselves, so no case handling is needed here. Splits on the
+    *last* ``-`` so a short name that itself contains a hyphen (unusual but
+    not forbidden) is not truncated early -- only the version segment is
+    discarded.
+
+    Args:
+        regulatory_instrument_id: The seed's own ``RegulatoryInstrument.id``.
+
+    Returns:
+        The ``{SHORT}`` prefix.
+
+    Raises:
+        InternalSeedValidationError: ``regulatory_instrument_id`` has no
+            ``-`` separator at all.
+    """
+    short_name, separator, _version = regulatory_instrument_id.rpartition("-")
+    if not separator or not short_name:
+        raise InternalSeedValidationError(
+            f"RegulatoryInstrument id {regulatory_instrument_id!r} is not in "
+            "the expected '{SHORT}-{VERSION}' shape"
+        )
+    return short_name
+
+
+def _read_internal_seed_and_short_name(
+    adapter: InternalSeedAdapter, seed_path: Path
+) -> tuple[InternalRegulationSeed, str]:
+    """Read, parse, and derive the graph ``short_name`` for ``seed_path``.
+
+    Runs before any pipeline stage and before any graph is opened (AC-BI-006's
+    "no I/O until validated" precedent, applied to the internal path): both a
+    schema/shape violation (AC-BI-002/003) from ``adapter.read_seed`` and a
+    missing/duplicate ``RegulatoryInstrument`` node from ``find_regulatory_instrument``
+    are translated to ``InternalSeedValidationError`` (422) here, distinct from a
+    later ``PipelineStageError`` (502) a genuine stage failure would raise.
+    """
+    try:
+        seed = adapter.read_seed(str(seed_path))
+        short_name = _internal_short_name(find_regulatory_instrument(seed).id)
+    except InternalSeedError as exc:
+        raise InternalSeedValidationError(str(exc)) from exc
+    return seed, short_name
+
+
+def run_internal_ingestion_pipeline(
+    seed_path: Path,
+    *,
+    config: ServiceConfig,
+    run_id: str,
+    caller: str,
+    dependencies: PipelineDependencies,
+    emitter: LogEmitter | None = None,
+) -> IngestionOutcome:
+    """Run the internal-seed ingestion pipeline for one resolved fixture path.
+
+    Three stages in sequence (issue #54, S4 extends S3's two): ``internal_
+    ingestion`` (read + validate + mint + persist, S2), ``governance_
+    derivation`` (``derive_governance_artifacts``, S3), then ``merge``
+    (``merge_baseline_graph``, S4 -- merges the internal baseline's spine
+    and governance layer into the single-tenant ``policy_system`` graph,
+    the same stage function :func:`run_catalog_ingestion_pipeline` already
+    uses), each wrapped by :func:`_run_stage` so a failure in any of them
+    aborts the sequence and names the failing stage (AC-BI-013). The seed is
+    read (and translated to :class:`InternalSeedValidationError` on a
+    schema/shape violation) *before* any graph is opened, since the
+    ``{short}_baseline``/``{short}_native`` graph names are derived from the
+    seed's own ``RegulatoryInstrument.id`` -- unlike the catalog path, the
+    short name is not known until the document has been parsed. This
+    pipeline needs a resolved LLM model and similarity threshold (``
+    governance_derivation`` is LLM-driven, ``merge`` needs the Company Merge
+    similarity threshold), so :func:`_require_ingestion_config` runs first,
+    before any graph is opened or any stage runs -- the same
+    HTTP-503-before-any-I/O guarantee the catalog pipeline already gives.
+
+    Args:
+        seed_path: The already-resolved (``ps_service.api.fixtures.
+            resolve_fixture_path``) filesystem path to the seed document.
+        config: The resolved service configuration.
+        run_id: The request-scoped run id.
+        caller: The requesting client host, or ``"unknown"``.
+        dependencies: The injected graph openers, stage functions, and
+            adapter factories (``build_default_pipeline_dependencies`` in
+            production; a fake in fast tests).
+        emitter: Optional explicit log emitter; otherwise the process default.
+
+    Returns:
+        An :class:`IngestionOutcome` with ``source="internal"`` and three
+        :class:`StageReport` entries, in pipeline order (issue #54, S4).
+
+    Raises:
+        IngestionConfigIncompleteError: If the configuration is missing an
+            LLM model / embed model / similarity threshold (HTTP 503).
+        InternalSeedValidationError: The seed document fails structural or
+            shape validation (422), or its ``RegulatoryInstrument.id`` is
+            not in the expected ``{SHORT}-{VERSION}`` shape.
+        PipelineStageError: The ``internal_ingestion``, ``governance_
+            derivation``, or ``merge`` stage raises for any other reason --
+            e.g. a referential-integrity/cardinality violation
+            (AC-BI-011), a non-``internal`` ``source_type`` reaching
+            governance derivation (AC-BI-008, defense-in-depth only -- the
+            route never resolves one this way in practice), or a FalkorDB
+            write failure (502).
+    """
+    resolved = _require_ingestion_config(config)
+    adapter = dependencies.adapters.internal_seed()
+    started = time.perf_counter()
+    _emit_run(
+        outcome="started",
+        run_id=run_id,
+        source_identifier=str(seed_path),
+        caller=caller,
+        emitter=emitter,
+    )
+    try:
+        try:
+            seed, short_name = _read_internal_seed_and_short_name(adapter, seed_path)
+            native_graph = dependencies.graphs.native(config, short_name)
+            baseline_graph = dependencies.graphs.baseline(config, short_name)
+            single_tenant_graph = dependencies.graphs.single_tenant(config)
+            set_stage(run_id, "internal_ingestion")
+            ingest_result = _run_stage(
+                "internal_ingestion",
+                lambda: dependencies.stages.ingest_internal(
+                    seed,
+                    baseline_graph=baseline_graph,
+                    native_graph=native_graph,
+                    emitter=emitter,
+                ),
+                emitter=emitter,
+            )
+            rid = ingest_result.regulatory_instrument_id
+            set_stage(run_id, "governance_derivation")
+            governance_result = _run_stage(
+                "governance_derivation",
+                lambda: dependencies.stages.derive_governance(
+                    rid,
+                    baseline_graph=baseline_graph,
+                    model=resolved.chat_model,
+                    emitter=emitter,
+                ),
+                emitter=emitter,
+            )
+            set_stage(run_id, "merge")
+            merge_result = _run_stage(
+                "merge",
+                lambda: dependencies.stages.merge(
+                    rid,
+                    baseline_graph=baseline_graph,
+                    single_tenant_graph=single_tenant_graph,
+                    embed_model=resolved.embed_model,
+                    similarity_threshold=resolved.similarity_threshold,
+                ),
+                emitter=emitter,
+            )
+        except PipelineStageError as exc:
+            _emit_run(
+                outcome="failed",
+                run_id=run_id,
+                source_identifier=str(seed_path),
+                caller=caller,
+                emitter=emitter,
+                duration_ms=_elapsed_ms(started),
+                failing_stage=exc.stage,
+            )
+            raise
+    finally:
+        clear_stage(run_id)
+    _emit_run(
+        outcome="succeeded",
+        run_id=run_id,
+        source_identifier=str(seed_path),
+        caller=caller,
+        emitter=emitter,
+        duration_ms=_elapsed_ms(started),
+    )
+    return IngestionOutcome(
+        regulatory_instrument_id=rid,
+        source="internal",
+        stages=(
+            StageReport("internal_ingestion", _internal_ingestion_summary(ingest_result)),
+            StageReport("governance_derivation", _governance_derivation_summary(governance_result)),
+            StageReport("merge", _merge_summary(merge_result)),
+        ),
+    )
+
+
 # --- default wiring (M6 -- every pipeline import below is function-local) ---
 
 
@@ -801,6 +1075,15 @@ def _default_mapping_adapter() -> DomainMappingAdapter:
     return CellarEliDomainMappingAdapter()
 
 
+def _default_internal_seed_adapter() -> InternalSeedAdapter:
+    """Build the default internal-seed Ingestion Adapter (issue #54, S2)."""
+    from ps_service.ingestion.adapters.internal_seed.adapter import (  # noqa: PLC0415 -- mirrors _default_ingestion_adapter's own local-import style
+        InternalSeedIngestionAdapter,
+    )
+
+    return InternalSeedIngestionAdapter()
+
+
 def build_default_pipeline_dependencies() -> PipelineDependencies:
     """Wire the real shipped pipeline entry points into a ``PipelineDependencies``.
 
@@ -815,11 +1098,15 @@ def build_default_pipeline_dependencies() -> PipelineDependencies:
     """
     from ps_service.company_merge import merge_baseline_graph  # noqa: PLC0415 -- M6: function-local
     from ps_service.domain_mapper import (  # noqa: PLC0415 -- M6: function-local
+        derive_governance_artifacts,
         derive_obligations_and_capabilities,
         extract_roles_and_requirements,
     )
     from ps_service.ingestion import (  # noqa: PLC0415 -- M6: function-local
         ingest_regulatory_instrument,
+    )
+    from ps_service.ingestion.adapters.internal_seed.persist import (  # noqa: PLC0415 -- mirrors the other stage imports' local-import style
+        ingest_internal_regulatory_instrument,
     )
 
     return PipelineDependencies(
@@ -833,9 +1120,12 @@ def build_default_pipeline_dependencies() -> PipelineDependencies:
             extract=extract_roles_and_requirements,
             derive=derive_obligations_and_capabilities,
             merge=merge_baseline_graph,
+            ingest_internal=ingest_internal_regulatory_instrument,
+            derive_governance=derive_governance_artifacts,
         ),
         adapters=PipelineAdapters(
             ingestion=_default_ingestion_adapter,
             mapping=_default_mapping_adapter,
+            internal_seed=_default_internal_seed_adapter,
         ),
     )

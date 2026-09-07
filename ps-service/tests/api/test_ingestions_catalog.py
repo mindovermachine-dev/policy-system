@@ -3,9 +3,9 @@
 Increment 6 (#51a). Drives the route with ``TestClient`` and an
 ``app.dependency_overrides`` fake ``PipelineDependencies`` (``tests/api/_fakes.py``)
 so request validation, catalog lookup, the pipeline hand-off, and error mapping
-are exercised without a real graph, adapter, or LLM. The well-formed
-``source: "internal"`` request is covered here too: it must validate and then
-return a clean 501 referencing issue #54 (the internal pipeline is #54).
+are exercised without a real graph, adapter, or LLM. The ``source: "internal"``
+path is covered separately, in ``tests/api/test_ingestions_internal.py``
+(issue #54).
 
 AC coverage: AC-BI-002 (runs the pipeline, reports stages), AC-BI-006 (unknown
 CELEX -> 404, malformed body -> 422, both before any stage), AC-BI-008/009
@@ -239,25 +239,6 @@ def test_create_ingestion_auto_mints_run_id_when_client_omits_it() -> None:
 
     assert response.status_code == 200
     assert response.json()["run_id"]
-
-
-def test_internal_request_returns_501_referencing_54() -> None:
-    """A well-formed ``source: "internal"`` request validates, then 501s naming issue #54."""
-    fake = build_fake_pipeline_dependencies()
-    client = _client_with_fake(fake.dependencies)
-
-    response = client.post(
-        "/ingestions",
-        json={
-            "source": "internal",
-            "fixture_path": "engineering-practices/engineering-practices-seed.json",
-        },
-    )
-
-    assert response.status_code == 501
-    body = response.json()
-    assert "#54" in body["error"]["message"]
-    assert fake.recorder.order == []
 
 
 # --- Cellar fallback, end-to-end over HTTP (Increment 8, AC-BI-003/004/005/006/007) --

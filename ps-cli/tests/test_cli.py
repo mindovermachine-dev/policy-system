@@ -389,7 +389,40 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
         )
 
 
+# A minimal schema-valid document (issue #54 D7's JSON Schema) -- these two
+# tests exercise `cli.run()`'s wiring *past* S1's new local-validation step
+# (`ps_cli.intake_validation.validate_local_seed_file`), not that step itself
+# (which has its own dedicated tests in `ps-cli/tests/test_intake_validation.py`
+# and `ps-cli/tests/modules/test_handlers.py`) -- so the on-disk fixture here
+# just needs to pass validation, not be a realistic example.
+_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT = {
+    "nodes": [
+        {
+            "label": "RegulatoryInstrument",
+            "id": "ENGPRAC-3.0",
+            "properties": {
+                "title": "Engineering Practices Policy",
+                "source_type": "internal",
+                "effective_date": "2026-08-01",
+                "version": "3.0",
+                "status": "active",
+            },
+        }
+    ],
+    "edges": [],
+}
+
+
+def _write_valid_internal_seed_fixture(fixtures_root: Path, relative_path: str) -> None:
+    """Write a schema-valid seed document at `fixtures_root / relative_path`."""
+    seed_path = fixtures_root / relative_path
+    seed_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
+
+
 def test_internal_ingest_prints_run_id_on_mocked_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Covers AC-BI-003's CLI plumbing only, per orchestrator decision 1 (2026-08-30).
@@ -398,8 +431,12 @@ def test_internal_ingest_prints_run_id_on_mocked_success(
     proves ps-cli's command/argument/REST wiring against a mocked success
     response -- it is NOT proof the real service can ingest an internal
     fixture, and AC-BI-003 must not be marked done on the strength of this
-    test alone.
+    test alone. `PS_CLI_FIXTURES_ROOT` points at a scratch directory holding a
+    schema-valid fixture (issue #54 S1) so local validation passes and the
+    call reaches the fake client, unrelated to what this test itself proves.
     """
+    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngestSuccessClient()
 
     exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
@@ -410,6 +447,8 @@ def test_internal_ingest_prints_run_id_on_mocked_success(
 
 
 def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """What running this command against the real, unmodified ps-service produces today.
@@ -419,7 +458,12 @@ def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
     (`internal_ingestion_not_implemented`) until issue #54's backend lands.
     Asserts AC-BI-008's shape: exit 1, the `internal_ingestion_not_implemented`
     message surfaced in stderr, no traceback substring present.
+    `PS_CLI_FIXTURES_ROOT` points at a scratch directory holding a
+    schema-valid fixture (issue #54 S1) so local validation passes and the
+    call reaches the fake client, unrelated to what this test itself proves.
     """
+    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngest501Client()
 
     exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)

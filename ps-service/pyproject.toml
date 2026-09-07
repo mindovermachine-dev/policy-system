@@ -7,6 +7,7 @@ dependencies = [
     "defusedxml==0.7.1",
     "falkordb==1.7.1",
     "fastapi==0.141.1",
+    "jsonschema==4.26.0",
     "litellm==1.98.0",
     "mcp==2.0.0",
     "openai==2.54.0",

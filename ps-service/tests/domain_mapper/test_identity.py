@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 from ps_service.domain_mapper.identity import (
     capability_id,
+    control_id,
     obligation_id,
+    policy_id,
     requirement_id,
     role_id,
+    standard_id,
 )
 
 # --- role_id ---------------------------------------------------------
@@ -87,3 +92,41 @@ def test_capability_id_differs_for_different_names() -> None:
     first = capability_id("Security Logging")
     second = capability_id("Data Encryption")
     assert first != second
+
+
+# --- policy_id / standard_id / control_id (issue #54, F4 -- moved from S1) ---
+#
+# B3 (FLAWS2.md BLOCKER-3): the starting blueprint's worked example ids
+# (`pol_engineering_policy_governance_6b0f1a`, ps-domain-concepts.md's
+# `pol_data_protection_a8f3b1`) are hand-authored illustrations, not formula
+# output -- asserting `policy_id(title) == <hand-authored id>` would fail
+# immediately and mislead about what the real function does. Every test below
+# asserts shape and composition only, self-consistently derived from the
+# functions' own other outputs -- never a hand-authored literal.
+
+_POLICY_ID_SHAPE_RE = re.compile(r"^pol_[a-z0-9_]+_[0-9a-f]{6}$")
+
+
+def test_policy_id_shape_and_determinism() -> None:
+    title = "Data Protection Policy"
+    first = policy_id(title)
+    second = policy_id(title)
+
+    assert _POLICY_ID_SHAPE_RE.match(first)
+    assert first == second
+
+
+def test_standard_id_is_compositional() -> None:
+    """Derived from `policy_id`'s own output, never a magic string."""
+    title = "Data Protection Policy"
+    pid = policy_id(title)
+
+    assert standard_id(pid, "1") == f"std_{pid}_v1"
+
+
+def test_control_id_is_compositional() -> None:
+    """One level deeper: derived from `standard_id`'s own output."""
+    title = "Data Protection Policy"
+    sid = standard_id(policy_id(title), "1")
+
+    assert control_id(sid, "automated") == f"ctrl_{sid}_automated"

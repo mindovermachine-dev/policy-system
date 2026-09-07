@@ -59,19 +59,19 @@ Claude Desktop wired to a locally-spawned MCP server. That path works now.
 
 These roles consume the Policy System through a client, never directly:
 
-| Role                     | Primary use case                                                                                                                                           |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compliance Officers**  | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps; select and ingest external regulations |
-| **Policy Managers**      | Create, edit, and approve business policies and standards; manage content lifecycle                                                                        |
-| **Legal Counsel**        | Review regulatory requirements and organizational responses; evaluate coverage gaps                                                                        |
-| **Security Architects**  | See technical controls mapped to the obligations they fulfil; design compliant solutions                                                                   |
-| **Risk Managers**        | Compliance scores with drill-down by obligation, policy, standard, and control                                                                             |
-| **DevOps/Engineering**   | Query compliance status of solutions; integrate automated checks into CI/CD                                                                                |
-| **Auditors**             | Review governance decisions and approval logs; trace obligations to controls with full provenance                                                          |
-| **Software Engineers**   | Check what a Standard or Control requires before shipping; "is my service compliant?"                                                                      |
-| **Security Engineers**   | Find coverage gaps below the Policy level; reason about blast radius if a control fails                                                                    |
-| **Engineering Managers** | Whole-team posture summaries and prioritised punch lists — open-ended synthesis, not single-entity lookups                                                 |
-| **System Admins**        | Check service health and readiness; configure which instance ps-cli targets; trigger ingestion                                                             |
+| Role                     | Primary use case                                                                                                                                                                                          |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compliance Officers**  | Define governance processes; review regulations; query obligations and see mapped policies/controls; identify gaps; select and ingest external regulations                                                |
+| **Policy Managers**      | Create, edit, and approve business policies and standards; manage content lifecycle; ingest internal regulations via ps-cli today (Policy Editor once built), selecting the right ps-cli context to do so |
+| **Legal Counsel**        | Review regulatory requirements and organizational responses; evaluate coverage gaps                                                                                                                       |
+| **Security Architects**  | See technical controls mapped to the obligations they fulfil; design compliant solutions                                                                                                                  |
+| **Risk Managers**        | Compliance scores with drill-down by obligation, policy, standard, and control                                                                                                                            |
+| **DevOps/Engineering**   | Query compliance status of solutions; integrate automated checks into CI/CD                                                                                                                               |
+| **Auditors**             | Review governance decisions and approval logs; trace obligations to controls with full provenance                                                                                                         |
+| **Software Engineers**   | Check what a Standard or Control requires before shipping; "is my service compliant?"                                                                                                                     |
+| **Security Engineers**   | Find coverage gaps below the Policy level; reason about blast radius if a control fails                                                                                                                   |
+| **Engineering Managers** | Whole-team posture summaries and prioritised punch lists — open-ended synthesis, not single-entity lookups                                                                                                |
+| **System Admins**        | Check service health and readiness; provision ps-cli's named targets/contexts; manage Policy-System global settings (mostly relevant in production deployment)                                            |
 
 ## Development
 

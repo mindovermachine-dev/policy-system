@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, cast
 from ps_cli import catalog_repo
 from ps_cli.config import load_config
 from ps_cli.errors import assert_contract
+from ps_cli.intake_validation import validate_local_seed_file
 
 if TYPE_CHECKING:
     import argparse
@@ -130,23 +131,34 @@ def handle_regulations_ingest(
         print(f"{stage.stage}: {stage.status}")
 
 
-def handle_internal_ingest(fixture_path: str, client: PsServiceClientProtocol) -> None:
+def handle_internal_ingest(
+    fixture_path: str, client: PsServiceClientProtocol, *, fixtures_root: Path
+) -> None:
     """Ingest an internal-document fixture, identified by `fixture_path`, via PS Service.
 
-    `fixture_path` is a reference to a file on PS Service's own fixtures
-    root -- it is never read from, or otherwise touched on, the operator's
-    local filesystem (PLAN.md §1 D8). Its shape (non-empty, ends with
-    `.json`) is already validated by argparse's `type=_fixture_path_type`
-    callback (`ps_cli.modules.parser`) before this handler ever runs -- a
-    fast-fail that avoids a wasted round trip for input PS Service would
-    reject anyway (L1 "Fail Fast at Boundaries"), enforced at parse time
-    rather than re-checked here (PLAN.md §1 D10). On success, prints the run
-    id, the regulatory instrument id, and each pipeline stage's name and
-    status (AC-BI-010). A `PsCliError` raised by the client (e.g. today's real
-    `internal_ingestion_not_implemented` 501, pending issue #54's backend)
-    propagates uncaught -- only `ps_cli.cli.run()` catches `PsCliError`
-    (PLAN.md §1 D5/D9).
+    `fixture_path` is a reference to a file PS Service itself resolves
+    server-side against its own fixtures root -- the wire request never
+    changes shape (PLAN.md §1 D8, issue #54 D3). Its format (non-empty, ends
+    with `.json`) is already validated by argparse's `type=_fixture_path_type`
+    callback (`ps_cli.modules.parser`) before this handler ever runs (L1
+    "Fail Fast at Boundaries").
+
+    Before any network call, `validate_local_seed_file` validates the same
+    file *locally*, at `fixtures_root / fixture_path` -- the same relative
+    path PS Service will independently resolve and validate itself, since
+    the two processes share a filesystem in every environment this issue
+    targets (issue #54 PLAN.md D3/D7, AC-BI-019). A schema violation (or a
+    missing/unreadable local file) raises `PsCliError` here, naming the
+    specific problem, and `client.ingest_internal()` is never called --
+    provable by a fake client recording zero calls.
+
+    On success, prints the run id, the regulatory instrument id, and each
+    pipeline stage's name and status (AC-BI-010). A `PsCliError` raised by
+    the client (a structured PS Service failure response) propagates
+    uncaught -- only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1
+    D5/D9).
     """
+    validate_local_seed_file(fixtures_root / fixture_path)
     result = client.ingest_internal(fixture_path)
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
@@ -276,8 +288,16 @@ def _dispatch_regulations_ingest(args: argparse.Namespace, client: PsServiceClie
 
 
 def _dispatch_internal_ingest(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_internal_ingest`'s signature to the dispatch shape, passing `fixture_path`."""
-    handle_internal_ingest(cast("str", args.fixture_path), client)
+    """Adapt `handle_internal_ingest`'s signature to the dispatch shape.
+
+    Resolves `fixtures_root` locally via `load_config()` (mirroring
+    `_dispatch_catalog_restore`'s own `curated_repo_path` resolution) so
+    `handle_internal_ingest` can validate the submitted file before any
+    network call (issue #54 D3).
+    """
+    context = getattr(args, "context", None)
+    fixtures_root = load_config(context=context).fixtures_root
+    handle_internal_ingest(cast("str", args.fixture_path), client, fixtures_root=fixtures_root)
 
 
 def _dispatch_health(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:

@@ -31,7 +31,6 @@ from ps_service.api.errors import (
     PipelineStageError,
 )
 from ps_service.api.ingestion_orchestration import (
-    PipelineStages,
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     resolve_via_cellar,
@@ -716,7 +715,8 @@ def test_execute_catalog_stages_records_each_stage_as_current_before_running_it(
     fake = build_fake_pipeline_dependencies()
     dependencies = replace(
         fake.dependencies,
-        stages=PipelineStages(
+        stages=replace(
+            fake.dependencies.stages,
             ingest=_StageOrderIngest(run_id),
             extract=_StageOrderExtract(run_id),
             derive=_StageOrderDerive(run_id),

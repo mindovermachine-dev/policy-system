@@ -31,14 +31,14 @@ from __future__ import annotations
 import typing
 from typing import Literal
 
+import pytest
+
 from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.merge import merge_baseline_graph
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 
 if typing.TYPE_CHECKING:
-    import pytest
-
     from company_merge._fakes import MakeEmitter
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.models import BaselineNode, DedupResult
@@ -91,6 +91,12 @@ class _FakeBaselineGraph:
         has_rows: list[object],
         satisfied_by_rows: list[object],
         requires_rows: list[object],
+        policy_rows: list[object] | None = None,
+        standard_rows: list[object] | None = None,
+        control_rows: list[object] | None = None,
+        governed_by_rows: list[object] | None = None,
+        supported_by_rows: list[object] | None = None,
+        implemented_by_rows: list[object] | None = None,
     ) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
@@ -102,6 +108,12 @@ class _FakeBaselineGraph:
         self._has_rows = has_rows
         self._satisfied_by_rows = satisfied_by_rows
         self._requires_rows = requires_rows
+        self._policy_rows = policy_rows or []
+        self._standard_rows = standard_rows or []
+        self._control_rows = control_rows or []
+        self._governed_by_rows = governed_by_rows or []
+        self._supported_by_rows = supported_by_rows or []
+        self._implemented_by_rows = implemented_by_rows or []
         self.calls: list[str] = []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
@@ -116,6 +128,18 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._satisfied_by_rows)
         if "[:REQUIRES]" in q:
             return _FakeQueryResult(self._requires_rows)
+        if "[:GOVERNED_BY]" in q:
+            return _FakeQueryResult(self._governed_by_rows)
+        if "[:SUPPORTED_BY]" in q:
+            return _FakeQueryResult(self._supported_by_rows)
+        if "[:IMPLEMENTED_BY]" in q:
+            return _FakeQueryResult(self._implemented_by_rows)
+        if "(n:Policy) RETURN" in q:
+            return _FakeQueryResult(self._policy_rows)
+        if "(n:Standard) RETURN" in q:
+            return _FakeQueryResult(self._standard_rows)
+        if "(n:Control) RETURN" in q:
+            return _FakeQueryResult(self._control_rows)
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
@@ -180,35 +204,97 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
     )
 
 
-def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability() -> None:
+def _internal_baseline_with_governance() -> _FakeBaselineGraph:
+    """F2 (CHANGES.md): an internal-sourced baseline -- one Capability, one
+    Policy, one Standard, one Control, fully wired with `GOVERNED_BY`/
+    `SUPPORTED_BY`/`IMPLEMENTED_BY` -- so `merge_baseline_graph`'s Policy
+    dedup pass (`if graph.policy_nodes:`) actually fires. Mirrors
+    `test_merge_baseline_graph.py`'s own `_internal_baseline_with_governance`
+    fixture.
+    """
+    role_node_id = "role_manufacturer_abc123"
+    requirement_node_id = "REG-AC008_req_art_1.1"
+    obligation_text = "Report the incident to the competent authority."
+    obligation_node_id = obligation_id(role_node_id, obligation_text)
+    capability_name = "Incident Reporting Capability"
+    capability_node_id = capability_id(capability_name)
+    policy_node_id = "pol_incident_response_xyz"
+    standard_node_id = "std_pol_incident_response_xyz_v1"
+    control_node_id = "ctrl_std_pol_incident_response_xyz_v1_manual"
+
+    return _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": _REGULATION_ID, "title": "Test Regulation"},
+        role_rows=[[role_node_id, "Manufacturer", 0.9]],
+        requirement_rows=[
+            [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
+        ],
+        obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
+        capability_rows=[[capability_node_id, capability_name, 0.8, None]],
+        defines_rows=[[role_node_id, "Article 1(1)"]],
+        expresses_rows=[[requirement_node_id, "Article 1(1)"]],
+        has_rows=[[role_node_id, obligation_node_id]],
+        satisfied_by_rows=[[requirement_node_id, obligation_node_id]],
+        requires_rows=[[obligation_node_id, capability_node_id]],
+        policy_rows=[[policy_node_id, "Incident Response Policy", "draft", 0.9]],
+        standard_rows=[[standard_node_id, "Incident Notification Standard", "draft", 0.85, None]],
+        control_rows=[
+            [control_node_id, "manual", "Incident Notification Control", "planned", 0.8, None]
+        ],
+        governed_by_rows=[[capability_node_id, policy_node_id]],
+        supported_by_rows=[[policy_node_id, standard_node_id]],
+        implemented_by_rows=[[standard_node_id, control_node_id]],
+    )
+
+
+def test_dedupe_canonical_nodes_kind_parameter_is_literal_capability_or_policy() -> None:
     """Static proof: `dedupe_canonical_nodes`'s `kind` parameter's resolved
-    type hint is exactly `Literal["Capability"]` -- confirmed via
+    type hint is exactly `Literal["Capability", "Policy"]` -- confirmed via
     `typing.get_type_hints`/`typing.get_origin`/`typing.get_args` against the
     live function object, not merely by reading `dedup.py`'s source text.
-    Pylance strict mode rejects any other literal at every
-    statically-checked call site -- a genuine but lint-time-only guarantee
-    (PLAN_REVIEWED.md §9's N2 fix), which is why this test exists alongside,
-    never instead of, the runtime proof below.
+    Widened in issue #54's S4 (CHANGES.md F2): Company Merge now dedupes
+    Policy alongside Capability -- Role/Requirement/Obligation/Standard/
+    Control remain out of scope (AC-008), never in this Literal. Pylance
+    strict mode rejects any other literal at every statically-checked call
+    site -- a genuine but lint-time-only guarantee (PLAN_REVIEWED.md §9's N2
+    fix), which is why this test exists alongside, never instead of, the
+    runtime proof below.
     """
     hints = typing.get_type_hints(dedupe_canonical_nodes)
     kind_hint = hints["kind"]
 
     assert typing.get_origin(kind_hint) is Literal
-    assert typing.get_args(kind_hint) == ("Capability",)
+    assert typing.get_args(kind_hint) == ("Capability", "Policy")
 
 
-def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
-    monkeypatch: pytest.MonkeyPatch, make_emitter: MakeEmitter
+@pytest.mark.parametrize(
+    ("baseline_factory", "expected_kinds"),
+    [
+        pytest.param(_internal_baseline_with_governance, ["Capability", "Policy"], id="internal"),
+        pytest.param(_everything_new_baseline_graph, ["Capability"], id="external"),
+    ],
+)
+def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
+    baseline_factory: typing.Callable[[], _FakeBaselineGraph],
+    expected_kinds: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    make_emitter: MakeEmitter,
 ) -> None:
-    """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9):
-    a hand-written wrapper -- not `unittest.mock.patch` -- installed over
+    """Runtime proof, the actual enforcement mechanism (PLAN_REVIEWED.md §9),
+    widened by issue #54's S4 (CHANGES.md F2): a hand-written wrapper -- not
+    `unittest.mock.patch` -- installed over
     `ps_service.company_merge.dedup.dedupe_canonical_nodes` via `monkeypatch.
     setattr` records every `kind=` keyword argument `merge_baseline_graph`
     invokes it with, then delegates to the real implementation (so `merge_
     baseline_graph`'s own return value/behavior is unaffected by the
-    wrapper's presence). Asserts the recorded sequence is exactly
-    `["Capability"]` -- never `"Role"`, `"Requirement"`, or `"Obligation"`
-    (all passthrough since #42), never called twice.
+    wrapper's presence).
+
+    Two cases: an internal-sourced baseline (`graph.policy_nodes`
+    non-empty) records `["Capability", "Policy"]` -- the Policy pass fired,
+    guarded by `if graph.policy_nodes:` (`merge.py`); an external-sourced
+    baseline (`graph.policy_nodes == ()`) records `["Capability"]` only --
+    the Policy pass never ran. Neither case ever records `"Role"`,
+    `"Requirement"`, `"Obligation"`, `"Standard"`, or `"Control"` (all
+    passthrough).
 
     `merge.py` calls `dedup.dedupe_canonical_nodes(...)` through the `dedup`
     module object (`from ps_service.company_merge import dedup, ...`), so
@@ -222,7 +308,7 @@ def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
     def _recording_wrapper(
         incoming_nodes: tuple[BaselineNode, ...],
         *,
-        kind: Literal["Capability"],
+        kind: Literal["Capability", "Policy"],
         single_tenant_graph: GraphHandle,
         model: str,
         threshold: float,
@@ -248,7 +334,7 @@ def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
     monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", _recording_wrapper)
 
     emitter, _log_path = make_emitter()
-    baseline = _everything_new_baseline_graph()
+    baseline = baseline_factory()
     single_tenant = _FakeSingleTenantGraph()
 
     merge_baseline_graph(
@@ -260,7 +346,9 @@ def test_merge_baseline_graph_calls_dedup_once_for_capability_only(
         emitter=emitter,
     )
 
-    assert recorded_kinds == ["Capability"]
+    assert recorded_kinds == expected_kinds
     assert "Role" not in recorded_kinds
     assert "Requirement" not in recorded_kinds
     assert "Obligation" not in recorded_kinds
+    assert "Standard" not in recorded_kinds
+    assert "Control" not in recorded_kinds
