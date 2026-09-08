@@ -18,7 +18,7 @@ from ps_cli.http_client import (
     PsServiceClient,
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
 )
-from ps_cli.models import ReadinessResult
+from ps_cli.models import ChangeCheckResult, ReadinessResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -916,3 +916,60 @@ class TestCheckReadiness:
             client.check_readiness()
 
         assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
+
+
+_CHANGE_CHECK_SUCCESS_BODY: dict[str, object] = {"run_id": "r1", "instruments": []}
+
+
+def _change_check_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/change-checks"
+    assert request.method == "POST"
+    return httpx.Response(200, json=_CHANGE_CHECK_SUCCESS_BODY)
+
+
+class TestRunChangeCheck:
+    """Issue #73, PLAN.md §4 Slice 1: PsServiceClient.run_change_check()."""
+
+    def test_run_change_check_returns_result_on_success(self) -> None:
+        """A 200 POST /change-checks body parses into a ChangeCheckResult."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_change_check_handler)
+        )
+
+        result = client.run_change_check()
+
+        assert result == ChangeCheckResult(run_id="r1", instruments=[])
+
+    def test_run_change_check_raises_ps_cli_error_on_connect_failure(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5/D14's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.run_change_check()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+
+    def test_run_change_check_raises_from_structured_error_body_on_non_2xx(self) -> None:
+        """A 500 with the standard ErrorBody shape raises via `_raise_from_error_body` (D14) --
+        `/change-checks` can still fail this way (an unguarded graph-open failure, D12),
+        so it belongs in the "has an error body" camp like `ingest_catalog()`.
+        """
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=500,
+                    code="internal_error",
+                    message="An internal error occurred.",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.run_change_check()
+
+        assert "internal_error" in excinfo.value.msg

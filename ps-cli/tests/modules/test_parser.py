@@ -191,3 +191,22 @@ def test_build_parser_health_accepts_context_flag_before_and_after() -> None:
 
     assert args_before.context == "prod"
     assert args_after.context == "prod"
+
+
+def test_build_parser_parses_check() -> None:
+    """`ps-cli check` (no arguments) parses correctly (issue #73 D1): a top-level,
+    subgroup-less leaf, mirroring `health`'s own D8 precedent exactly.
+    """
+    args = build_parser().parse_args(["check"])
+
+    assert args.command == "check"
+    assert args.group == "check"
+
+
+def test_build_parser_check_accepts_context_flag_before_and_after() -> None:
+    """`--context` works both before and after `check`, via the shared parent parser (D1)."""
+    args_before = build_parser().parse_args(["--context", "prod", "check"])
+    args_after = build_parser().parse_args(["check", "--context", "prod"])
+
+    assert args_before.context == "prod"
+    assert args_after.context == "prod"

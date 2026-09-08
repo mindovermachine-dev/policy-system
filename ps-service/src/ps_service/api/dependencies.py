@@ -19,6 +19,10 @@ from typing import TYPE_CHECKING
 
 from fastapi import Request  # noqa: TC002 — FastAPI needs it at runtime (else a 422 body field)
 
+from ps_service.api.change_check_orchestration import (
+    ChangeCheckDependencies,
+    build_default_change_check_dependencies,
+)
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     build_default_pipeline_dependencies,
@@ -97,3 +101,21 @@ def provide_restore_dependencies() -> RestoreDependencies:
         The production :class:`RestoreDependencies` bundle.
     """
     return build_default_restore_dependencies()
+
+
+def provide_change_check_dependencies() -> ChangeCheckDependencies:
+    """Return the production ``ChangeCheckDependencies`` for the change-check sweep.
+
+    Mirrors :func:`provide_pipeline_dependencies`/:func:`provide_restore_dependencies`
+    exactly: a plain provider (not a generator) so tests can swap it wholesale
+    via ``app.dependency_overrides`` with a fake bundle. The real bundle wires
+    the shipped Regulatory Change Monitor entry points through
+    ``build_default_change_check_dependencies``, whose
+    ``ps_service.change_monitor.*`` imports are all function-local (M6 --
+    ``ps_service.main`` never transitively loads that component at module
+    load).
+
+    Returns:
+        The production :class:`ChangeCheckDependencies` bundle.
+    """
+    return build_default_change_check_dependencies()

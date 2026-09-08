@@ -24,7 +24,9 @@ import pytest
 from ps_cli.config import CliConfig
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
+    ChangeCheckResult,
     IngestionResult,
+    InstrumentCheckOutcome,
     ReadinessResult,
     RegulationEntry,
     RegulationsResult,
@@ -35,6 +37,7 @@ from ps_cli.models import (
 from ps_cli.modules.handlers import (
     handle_catalog_list,
     handle_catalog_restore,
+    handle_check,
     handle_health,
     handle_internal_ingest,
     handle_regulations_ingest,
@@ -89,6 +92,10 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `restore_instrument()` to be called."""
         msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
         raise AssertionError(msg)
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """Fail: this test's fake does not expect `run_change_check()` to be called."""
+        raise AssertionError("run_change_check must not be called in this test")
 
 
 class _FakeRegulationsClient(_UnusedPsServiceClientMethods):
@@ -569,3 +576,65 @@ def test_handle_health_not_ready_message_never_says_could_not_reach() -> None:
         handle_health(fake)
 
     assert "Could not reach" not in str(excinfo.value)
+
+
+class _FakeCheckClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake implementing `run_change_check()`'s signature (issue #73)."""
+
+    def __init__(self, result: ChangeCheckResult) -> None:
+        """Script this fake's `run_change_check()` return value."""
+        self._result = result
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """Return the scripted result."""
+        return self._result
+
+
+def test_handle_check_prints_run_id_and_no_tracked_instruments_message_when_empty(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An empty sweep prints `run_id: {run_id}` then `no tracked instruments`, in that
+    order, raising nothing (issue #73, PLAN.md §4 Slice 1).
+    """
+    fake = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
+
+    handle_check(fake)
+
+    captured = capsys.readouterr()
+    assert captured.out == "run_id: r1\nno tracked instruments\n"
+    assert captured.err == ""
+
+
+def test_handle_check_prints_run_id_first_then_one_line_per_instrument(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A mixed-bucket sweep prints `run_id: {run_id}` first, then one line per
+    instrument (`"{instrument_id}: {outcome}"`, with `" ({detail})"` appended
+    only when `detail` is not `None`), in tracked order (issue #73, PLAN.md §4
+    Slice 2 -- moved forward from Slice 6 per CHANGES.md's re-sequencing).
+    This fabricated multi-bucket result is valid this slice: Slice 1's Green
+    step already declared all six `Literal` outcome values in `ps_cli.models`,
+    so this formatter test needs no real orchestration behind
+    `amendment_reingested`/`skipped`/`reingest_failed` to exist yet.
+    """
+    fake = _FakeCheckClient(
+        ChangeCheckResult(
+            run_id="sweep-1",
+            instruments=[
+                InstrumentCheckOutcome(
+                    "CRA-1.0", "amendment_reingested", "-> CRA-1.0 (superseded)", "ingest-run-1"
+                ),
+                InstrumentCheckOutcome("GDPR-1.0", "current", None, None),
+            ],
+        )
+    )
+
+    handle_check(fake)
+
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "run_id: sweep-1\n"
+        "CRA-1.0: amendment_reingested (-> CRA-1.0 (superseded))\n"
+        "GDPR-1.0: current\n"
+    )
+    assert captured.err == ""

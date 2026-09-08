@@ -531,6 +531,7 @@ Global flags, usable before or after any subcommand:
 | Command | Arguments | Description |
 | --- | --- | --- |
 | `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency. |
+| `ps-cli check` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
 | `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). No FalkorDB/LLM dependency. |
 | `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli internal ingest <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |

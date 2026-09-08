@@ -230,6 +230,44 @@ class RestorationAcceptedResponse(BaseModel):
     stages: list[RestorationStageOutcome]
 
 
+class InstrumentCheckOutcomeBody(BaseModel):
+    """One tracked instrument's classification, as reported by `POST /change-checks`.
+
+    All six `Literal` outcome values are declared up front (issue #73 PLAN.md
+    §1 D6/D7, §4 Slice 1's Green step) even though this slice only ever
+    produces an empty `instruments` list -- keeps the wire contract stable
+    across every later slice, no repeated model edits. ``current`` /
+    ``poll_failed`` / ``not_configured`` are the poll-stage buckets (Slice 2);
+    ``amendment_reingested`` covers all three of ``trigger_reingestion``'s
+    success states (Slice 3, D7); ``skipped`` is the national-transposition
+    guard (Slice 4); ``reingest_failed`` is the sixth, plan-added bucket for
+    any other re-ingest-stage failure (Slice 5, D6).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    instrument_id: str = Field(min_length=1)
+    outcome: Literal[
+        "current",
+        "amendment_reingested",
+        "poll_failed",
+        "not_configured",
+        "skipped",
+        "reingest_failed",
+    ]
+    detail: str | None = None
+    reingest_run_id: str | None = None
+
+
+class ChangeCheckResponse(BaseModel):
+    """Response body for `POST /change-checks`: the run id and each tracked instrument's outcome."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str = Field(min_length=1)
+    instruments: list[InstrumentCheckOutcomeBody]
+
+
 class ErrorDetail(BaseModel):
     """The ``error`` object inside a structured error body."""
 

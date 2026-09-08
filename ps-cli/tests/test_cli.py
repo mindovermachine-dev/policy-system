@@ -19,7 +19,9 @@ from ps_cli.cli import run
 from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
+    ChangeCheckResult,
     IngestionResult,
+    InstrumentCheckOutcome,
     ReadinessResult,
     RegulationsResult,
     RestorationResult,
@@ -76,6 +78,10 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `restore_instrument()` to be called."""
         msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
         raise AssertionError(msg)
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """Fail: this test's fake does not expect `run_change_check()` to be called."""
+        raise AssertionError("run_change_check must not be called in this test")
 
 
 class _FakeSuccessClient(_UnusedPsServiceClientMethods):
@@ -895,3 +901,60 @@ def test_run_health_with_context_flag_resolves_named_targets_url(
     assert set_exit_code == 0
     assert use_exit_code == 0
     assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
+
+
+class _FakeCheckClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in with a scripted run_change_check() (issue #73)."""
+
+    def __init__(self, result: ChangeCheckResult) -> None:
+        """Script this fake's `run_change_check()` return value."""
+        self._result = result
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """Return the scripted result."""
+        return self._result
+
+
+def test_run_check_returns_zero_on_empty_sweep(capsys: pytest.CaptureFixture[str]) -> None:
+    """`run(["check"], client=<empty-sweep fake>)` returns 0; stdout has both lines
+    (issue #73, PLAN.md §4 Slice 1).
+    """
+    fake_client = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
+
+    exit_code = run(["check"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "run_id: r1" in captured.out
+    assert "no tracked instruments" in captured.out
+
+
+def test_run_check_prints_run_id_and_returns_zero_end_to_end(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`run(["check"], client=<multi-bucket fake>)` -> `0`; stdout has the run id
+    first, proving ps-cli can display any outcome bucket from Slice 2 onward
+    (issue #73, PLAN.md §4 Slice 2, CHANGES.md's re-sequencing) -- closing the
+    display gap for Slices 3-5 structurally, the same way Slice 7 structurally
+    closes AC-BI-009.
+    """
+    fake_client = _FakeCheckClient(
+        ChangeCheckResult(
+            run_id="sweep-1",
+            instruments=[
+                InstrumentCheckOutcome(
+                    "CRA-1.0", "amendment_reingested", "-> CRA-1.0 (superseded)", "ingest-run-1"
+                ),
+                InstrumentCheckOutcome("GDPR-1.0", "current", None, None),
+            ],
+        )
+    )
+
+    exit_code = run(["check"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    lines = captured.out.splitlines()
+    assert lines[0] == "run_id: sweep-1"
+    assert "CRA-1.0: amendment_reingested (-> CRA-1.0 (superseded))" in lines
+    assert "GDPR-1.0: current" in lines

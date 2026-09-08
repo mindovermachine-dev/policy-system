@@ -249,6 +249,31 @@ def handle_health(client: PsServiceClientProtocol) -> None:
     print(f"ready: {readiness.status}")
 
 
+def handle_check(client: PsServiceClientProtocol) -> None:
+    """Sweep every tracked instrument for amendments and re-ingest any found.
+
+    Prints the run id first (issue #73, PLAN.md §1 D8), matching
+    `handle_regulations_ingest`'s own `print(f"run_id: {result.run_id}")`
+    precedent, then one line per tracked instrument, in the order the sweep
+    reported them: `"{instrument_id}: {outcome}"`, with `" ({detail})"`
+    appended only when `detail` is not `None`. A generic, outcome-agnostic
+    formatter (issue #73, PLAN.md §4 Slice 2, moved forward from Slice 6 per
+    CHANGES.md's re-sequencing) -- no per-outcome-value special casing, so
+    every bucket a later slice's orchestration produces
+    (`amendment_reingested` / `poll_failed` / `not_configured` / `skipped` /
+    `reingest_failed`) already prints correctly with zero further ps-cli
+    changes. An empty sweep instead prints `"no tracked instruments"`.
+    """
+    result = client.run_change_check()
+    print(f"run_id: {result.run_id}")
+    if not result.instruments:
+        print("no tracked instruments")
+        return
+    for outcome in result.instruments:
+        detail_suffix = f" ({outcome.detail})" if outcome.detail is not None else ""
+        print(f"{outcome.instrument_id}: {outcome.outcome}{detail_suffix}")
+
+
 def _dispatch_catalog_list(args: argparse.Namespace) -> None:
     """Adapt `handle_catalog_list`'s signature to the `NO_CLIENT_DISPATCH` shape.
 
@@ -306,12 +331,19 @@ def _dispatch_health(args: argparse.Namespace, client: PsServiceClientProtocol) 
     handle_health(client)
 
 
+def _dispatch_check(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_check`'s single-argument signature to the dispatch shape."""
+    del args
+    handle_check(client)
+
+
 DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None]] = {
     "regulations_list": _dispatch_regulations_list,
     "regulations_ingest": _dispatch_regulations_ingest,
     "internal_ingest": _dispatch_internal_ingest,
     "catalog_restore": _dispatch_catalog_restore,
     "health": _dispatch_health,
+    "check": _dispatch_check,
 }
 
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must

@@ -315,4 +315,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     health_parser.set_defaults(command="health")
 
+    # `check` (issue #73, PLAN.md §1 D1): a top-level, subgroup-less leaf --
+    # mirrors `health`'s own D8 precedent exactly (no positional argument,
+    # sweeps the whole tracked catalog, service-wide rather than
+    # instrument/CELEX/fixture-scoped like `regulations`/`internal`/`catalog`).
+    check_parser = top_level_subparsers.add_parser(
+        "check",
+        parents=[verbose_parent_parser],
+        help="Sweep every tracked instrument for amendments and re-ingest any found.",
+    )
+    check_parser.set_defaults(command="check")
+
     return parser

@@ -144,3 +144,37 @@ class ReadinessResult:
 
     status: str
     unhealthy_dependencies: list[str]
+
+
+class InstrumentCheckOutcomeBody(TypedDict):
+    """Raw JSON shape of one entry in a `POST /change-checks` 200 response's `instruments` array."""
+
+    instrument_id: str
+    outcome: str
+    detail: str | None
+    reingest_run_id: str | None
+
+
+class ChangeCheckResponseBody(TypedDict):
+    """Raw JSON shape of a `POST /change-checks` 200 response body."""
+
+    run_id: str
+    instruments: list[InstrumentCheckOutcomeBody]
+
+
+@dataclass(frozen=True)
+class InstrumentCheckOutcome:
+    """One tracked instrument's classification, as reported in a change-check sweep result."""
+
+    instrument_id: str
+    outcome: str
+    detail: str | None
+    reingest_run_id: str | None
+
+
+@dataclass(frozen=True)
+class ChangeCheckResult:
+    """Parsed result of `PsServiceClient.run_change_check()`."""
+
+    run_id: str
+    instruments: list[InstrumentCheckOutcome]

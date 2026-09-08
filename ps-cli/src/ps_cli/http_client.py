@@ -16,7 +16,9 @@ import httpx
 
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
+    ChangeCheckResult,
     IngestionResult,
+    InstrumentCheckOutcome,
     ReadinessResult,
     RegulationEntry,
     RegulationsResult,
@@ -49,6 +51,7 @@ _INGESTIONS_PATH = "/ingestions"
 _RESTORATIONS_PATH = "/restorations"
 _HEALTH_PATH = "/health"
 _READY_PATH = "/ready"
+_CHANGE_CHECKS_PATH = "/change-checks"
 
 # `POST /ingestions` blocks synchronously for the entire real pipeline (Ingestion ->
 # Domain Mapper -> Company Merge, no async job queue, by #51's own design) -- a real CRA
@@ -76,6 +79,14 @@ _STATUS_POLL_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 # Service, so this is a documented, generous-but-bounded assumption (no real curated
 # instrument has been timed yet), not a precisely measured value like ingestion's.
 _RESTORATION_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=5.0, pool=5.0)
+
+# `POST /change-checks` can call Cellar/ELI once per tracked instrument (poll) plus a
+# full Ingestion-only re-ingest per finding -- potentially several sequential external
+# calls (issue #73, PLAN.md §1 D15). Reuses `_INGESTION_REQUEST_TIMEOUT`'s own 1800s
+# (30 min) read budget and rationale rather than inventing a new, unmeasured number --
+# this plan's own reasonable, revisable choice, not a measured value (same category as
+# `_RESTORATION_REQUEST_TIMEOUT`'s own flagged assumption above).
+_CHANGE_CHECK_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=1800.0, write=5.0, pool=5.0)
 
 
 def _should_warn_insecure(url: str) -> bool:
@@ -277,6 +288,50 @@ def _parse_restoration_response(payload: object) -> RestorationResult:
     return RestorationResult(instrument_id=instrument_id, stages=stages)
 
 
+def _parse_instrument_check_outcome(payload: object) -> InstrumentCheckOutcome:
+    """Parse one raw JSON object into an `InstrumentCheckOutcome`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    instrument_id = body.get("instrument_id")
+    outcome = body.get("outcome")
+    detail_raw = body.get("detail")
+    reingest_run_id_raw = body.get("reingest_run_id")
+    if not isinstance(instrument_id, str) or not isinstance(outcome, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    if detail_raw is not None and not isinstance(detail_raw, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    if reingest_run_id_raw is not None and not isinstance(reingest_run_id_raw, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return InstrumentCheckOutcome(
+        instrument_id=instrument_id,
+        outcome=outcome,
+        detail=detail_raw,
+        reingest_run_id=reingest_run_id_raw,
+    )
+
+
+def _parse_change_check_response(payload: object) -> ChangeCheckResult:
+    """Parse a `POST /change-checks` 200 response body into a `ChangeCheckResult`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
+    expected `ChangeCheckResponse` shape.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    run_id = body.get("run_id")
+    instruments_raw = body.get("instruments")
+    if not isinstance(run_id, str) or not isinstance(instruments_raw, list):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    instrument_items = cast("list[object]", instruments_raw)
+    instruments = [_parse_instrument_check_outcome(item) for item in instrument_items]
+    return ChangeCheckResult(run_id=run_id, instruments=instruments)
+
+
 def _raise_from_error_body(response: httpx.Response) -> NoReturn:
     """Parse a non-2xx PS Service response into `PsCliError` per D5's mapping table.
 
@@ -354,6 +409,10 @@ class PsServiceClientProtocol(Protocol):
 
     def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
         """`POST /restorations` with `artifact`'s manifest fields + base64-encoded blobs."""
+        ...
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """`POST /change-checks`: sweep tracked instruments, re-ingesting any amendments found."""
         ...
 
 
@@ -503,6 +562,30 @@ class PsServiceClient:
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_restoration_response(response.json())
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """`POST /change-checks`: sweep tracked instruments, re-ingesting any amendments found.
+
+        No request body -- the sweep always covers the whole tracked catalog
+        (issue #73, PLAN.md §1 D13). Raises `PsCliError` if PS Service cannot
+        be reached (connection refused or a connect timeout), if it returns a
+        non-2xx response (parsed per D5's error-body mapping -- `/change-checks`
+        can still fail with the standard structured `ErrorBody` shape, e.g. a
+        generic 500 from an unguarded graph-open failure, D12/D14), or if a 200
+        response body does not match the expected success shape.
+        """
+        try:
+            response = self._client.post(
+                _CHANGE_CHECKS_PATH,
+                timeout=_CHANGE_CHECK_REQUEST_TIMEOUT,
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        if not response.is_success:
+            _raise_from_error_body(response)
+        return _parse_change_check_response(response.json())
 
     def poll_ingestion_status(self, run_id: str) -> str | None:
         """`GET /ingestions/{run_id}`: the run's currently-executing stage, best-effort.

@@ -13,8 +13,14 @@ from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 
 from ps_service.api.catalog import CATALOG, REGULATION_CATALOG, find_by_celex
+from ps_service.api.change_check_orchestration import (
+    ChangeCheckDependencies,
+    ChangeCheckResult,
+    run_change_check_sweep,
+)
 from ps_service.api.dependencies import (
     get_service_config,
+    provide_change_check_dependencies,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_run_id,
@@ -28,10 +34,12 @@ from ps_service.api.ingestion_orchestration import (
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
+    ChangeCheckResponse,
     CuratedCatalogResponse,
     IngestionAcceptedResponse,
     IngestionRequest,
     IngestionStatusResponse,
+    InstrumentCheckOutcomeBody,
     RegulationCatalogEntry,
     RegulationCatalogResponse,
     RestorationAcceptedResponse,
@@ -212,6 +220,55 @@ async def create_restoration(
     return run_restoration(request_body, config=config, actor=caller, dependencies=dependencies)
 
 
+def _to_change_check_response(result: ChangeCheckResult) -> ChangeCheckResponse:
+    """Map a ``ChangeCheckResult`` to the ``POST /change-checks`` success body."""
+    return ChangeCheckResponse(
+        run_id=result.run_id,
+        instruments=[
+            InstrumentCheckOutcomeBody(
+                instrument_id=outcome.instrument_id,
+                outcome=outcome.outcome,
+                detail=outcome.detail,
+                reingest_run_id=outcome.reingest_run_id,
+            )
+            for outcome in result.instruments
+        ],
+    )
+
+
+async def create_change_check(
+    run_id: Annotated[str, Depends(provide_run_id)],
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[ChangeCheckDependencies, Depends(provide_change_check_dependencies)],
+) -> ChangeCheckResponse:
+    """Sweep every tracked instrument for amendments and re-ingest any found.
+
+    No auth dependency, matching ``POST /ingestions``'s posture (AC-BI-001).
+    Delegates to ``change_check_orchestration.run_change_check_sweep`` (D2's
+    algorithm, PLAN.md §4): opens the merged ``policy_system`` graph, reads
+    the tracked-instrument set once, polls for amendments, and reports one
+    outcome per tracked instrument -- ``current``/``poll_failed``/
+    ``not_configured`` (Slice 2) and, for a detected amendment,
+    ``amendment_reingested``/``reingest_failed`` (Slice 3, D2-D7's
+    ``_reingest_one`` call contract). ``skipped`` (the national-transposition
+    guard, D10) is still a structural gap until Slice 4 wires it.
+
+    Args:
+        run_id: The request-scoped run id (injected by ``provide_run_id``).
+        config: The resolved service configuration (injected).
+        dependencies: The change-check dependency bundle (injected;
+            overridden in tests).
+
+    Returns:
+        A :class:`ChangeCheckResponse` with the run id and each tracked
+        instrument's outcome.
+    """
+    result = await run_in_threadpool(
+        run_change_check_sweep, config=config, run_id=run_id, dependencies=dependencies
+    )
+    return _to_change_check_response(result)
+
+
 async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
     """Return ``run_id``'s currently-executing pipeline stage, best-effort.
 
@@ -251,6 +308,12 @@ def build_api_router() -> APIRouter:
     router.add_api_route(
         "/restorations",
         create_restoration,
+        methods=["POST"],
+        status_code=status.HTTP_200_OK,
+    )
+    router.add_api_route(
+        "/change-checks",
+        create_change_check,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
     )
