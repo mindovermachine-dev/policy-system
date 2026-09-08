@@ -33,13 +33,7 @@
       }
     },
     "nodeLabel": {
-      "enum": [
-        "RegulatoryInstrument",
-        "Role",
-        "Requirement",
-        "Obligation",
-        "Capability"
-      ]
+      "enum": ["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability"]
     },
     "node": {
       "type": "object",
@@ -52,43 +46,31 @@
       },
       "allOf": [
         {
-          "if": {
-            "properties": { "label": { "const": "RegulatoryInstrument" } }
-          },
+          "if": { "properties": { "label": { "const": "RegulatoryInstrument" } } },
           "then": {
-            "properties": {
-              "properties": { "$ref": "#/$defs/regulatoryInstrumentProperties" }
-            }
+            "properties": { "properties": { "$ref": "#/$defs/regulatoryInstrumentProperties" } }
           }
         },
         {
           "if": { "properties": { "label": { "const": "Role" } } },
-          "then": {
-            "properties": { "properties": { "$ref": "#/$defs/roleProperties" } }
-          }
+          "then": { "properties": { "properties": { "$ref": "#/$defs/roleProperties" } } }
         },
         {
           "if": { "properties": { "label": { "const": "Requirement" } } },
           "then": {
-            "properties": {
-              "properties": { "$ref": "#/$defs/requirementProperties" }
-            }
+            "properties": { "properties": { "$ref": "#/$defs/requirementProperties" } }
           }
         },
         {
           "if": { "properties": { "label": { "const": "Obligation" } } },
           "then": {
-            "properties": {
-              "properties": { "$ref": "#/$defs/obligationProperties" }
-            }
+            "properties": { "properties": { "$ref": "#/$defs/obligationProperties" } }
           }
         },
         {
           "if": { "properties": { "label": { "const": "Capability" } } },
           "then": {
-            "properties": {
-              "properties": { "$ref": "#/$defs/capabilityProperties" }
-            }
+            "properties": { "properties": { "$ref": "#/$defs/capabilityProperties" } }
           }
         }
       ]
@@ -96,13 +78,7 @@
     "regulatoryInstrumentProperties": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "title",
-        "source_type",
-        "effective_date",
-        "version",
-        "status"
-      ],
+      "required": ["title", "source_type", "effective_date", "version", "status"],
       "properties": {
         "title": { "type": "string", "minLength": 1 },
         "source_type": { "const": "internal" },
@@ -159,9 +135,7 @@
       "additionalProperties": false,
       "required": ["type", "from", "to"],
       "properties": {
-        "type": {
-          "enum": ["DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES"]
-        },
+        "type": { "enum": ["DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES"] },
         "from": { "$ref": "#/$defs/nodeRef" },
         "to": { "$ref": "#/$defs/nodeRef" },
         "properties": {
