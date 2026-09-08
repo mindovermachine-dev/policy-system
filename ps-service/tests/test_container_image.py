@@ -575,7 +575,10 @@ def test_ready_returns_200_not_ready_while_the_llm_provider_is_unconfigured(
     assert response.status_code == _HTTP_OK, (
         f"/ready answered {response.status_code}: {response.text}"
     )
-    assert response.json() == {"status": "not_ready"}
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": [_BARRIER_DEPENDENCY],
+    }
 
 
 def test_startup_probe_reports_the_llm_interface_dependency_unhealthy(
@@ -734,6 +737,9 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
 
         response = httpx.get(f"{service.base_url}/ready", timeout=_HTTP_TIMEOUT_SECONDS)
         assert response.status_code == _HTTP_OK
-        assert response.json() == {"status": "not_ready"}
+        assert response.json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": [_FALKORDB_DEPENDENCY, _BARRIER_DEPENDENCY],
+        }
     finally:
         _remove_container(container_cli, name)
