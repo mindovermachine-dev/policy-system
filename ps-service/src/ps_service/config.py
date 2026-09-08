@@ -21,6 +21,8 @@ _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
+_DEFAULT_QUERY_TIMEOUT_MS = 5000
+_DEFAULT_QUERY_ROW_CAP = 1000
 
 # The fixed caller identity attached to every query answered while the
 # local-test bypass (issue #67, AC-BI-008) is active. Colocated with the
@@ -74,6 +76,8 @@ class ServiceConfig:
     company_merge_similarity_threshold: float | None = None
     is_local_test_bypass_active: bool = False
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
+    query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
+    query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -219,6 +223,45 @@ def _parse_max_request_body_bytes(raw: str) -> int:
     return max_bytes
 
 
+def _parse_query_timeout_ms(raw: str) -> int:
+    """Parse and range-check `PS_QUERY_TIMEOUT_MS`, failing closed on any bad value.
+
+    Mirrors `_parse_max_request_body_bytes`'s exact validation shape (parse,
+    then positivity check), but the message names this env var. Used as the
+    FalkorDB-native `timeout=` argument (milliseconds) `execute_cypher_query`
+    passes to `graph.query`.
+    """
+    try:
+        query_timeout_ms = int(raw)
+    except ValueError as exc:
+        message = f"PS_QUERY_TIMEOUT_MS must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if query_timeout_ms <= 0:
+        message = f"PS_QUERY_TIMEOUT_MS must be positive, got {query_timeout_ms}"
+        raise ServiceConfigurationError(message)
+    return query_timeout_ms
+
+
+def _parse_query_row_cap(raw: str) -> int:
+    """Parse and range-check `PS_QUERY_ROW_CAP`, failing closed on any bad value.
+
+    Mirrors `_parse_max_request_body_bytes`'s exact validation shape (parse,
+    then positivity check), but the message names this env var. Used as the
+    maximum number of rows `execute_cypher_query` returns from a single
+    Cypher query, truncating any larger result set in Python after
+    `graph.query()` returns (never a FalkorDB-side `RESULTSET_SIZE`).
+    """
+    try:
+        query_row_cap = int(raw)
+    except ValueError as exc:
+        message = f"PS_QUERY_ROW_CAP must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if query_row_cap <= 0:
+        message = f"PS_QUERY_ROW_CAP must be positive, got {query_row_cap}"
+        raise ServiceConfigurationError(message)
+    return query_row_cap
+
+
 def _parse_local_test_bypass(raw: str | None) -> bool:
     """Parse `PS_SERVICE_LOCAL_TEST_BYPASS`, failing closed on any unrecognized value.
 
@@ -313,6 +356,13 @@ def load_config() -> ServiceConfig:
         os.environ.get("PS_SERVICE_MAX_REQUEST_BODY_BYTES", str(_DEFAULT_MAX_REQUEST_BODY_BYTES))
     )
 
+    query_timeout_ms = _parse_query_timeout_ms(
+        os.environ.get("PS_QUERY_TIMEOUT_MS", str(_DEFAULT_QUERY_TIMEOUT_MS))
+    )
+    query_row_cap = _parse_query_row_cap(
+        os.environ.get("PS_QUERY_ROW_CAP", str(_DEFAULT_QUERY_ROW_CAP))
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -325,4 +375,6 @@ def load_config() -> ServiceConfig:
         company_merge_similarity_threshold=company_merge_similarity_threshold,
         is_local_test_bypass_active=is_local_test_bypass_active,
         max_request_body_bytes=max_request_body_bytes,
+        query_timeout_ms=query_timeout_ms,
+        query_row_cap=query_row_cap,
     )

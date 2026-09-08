@@ -114,7 +114,13 @@ def test_live_read_only_query_matches_real_driver_response_shape(
     that wouldn't just re-derive the same tautology through a second query
     (PLAN_REVIEWED.md §5, Q2). This is intentional, not an oversight.
     """
-    result = execute_cypher_query("MATCH (n) RETURN n LIMIT 5", graph=real_graph, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n) RETURN n LIMIT 5",
+        graph=real_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
+    )
 
     assert result.columns, "expected at least one column back from the real driver"
     assert result.columns == ["n"], (
@@ -142,7 +148,11 @@ def test_live_write_clause_rejected_and_graph_provably_unmutated(
 
     with pytest.raises(WriteClauseRejectedError):
         execute_cypher_query(
-            "CREATE (n:LiveCapstoneProbe) RETURN n", graph=real_graph, emitter=emitter
+            "CREATE (n:LiveCapstoneProbe) RETURN n",
+            graph=real_graph,
+            emitter=emitter,
+            timeout_ms=5000,
+            row_cap=1000,
         )
 
     count_after = _count_nodes(real_graph)

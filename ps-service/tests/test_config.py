@@ -55,6 +55,8 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
     monkeypatch.delenv("PS_SERVICE_LOCAL_TEST_BYPASS", raising=False)
     monkeypatch.delenv("PS_SERVICE_MAX_REQUEST_BODY_BYTES", raising=False)
+    monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
 
     result = load_config()
 
@@ -480,3 +482,69 @@ def test_load_config_raises_for_unrecognized_local_test_bypass_value(
 
     assert "PS_SERVICE_LOCAL_TEST_BYPASS" in str(excinfo.value)
     assert invalid_value in str(excinfo.value)
+
+
+def test_load_config_with_no_ps_query_timeout_ms_set_defaults_to_5000(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_QUERY_TIMEOUT_MS` set -> defaults to 5000 (AC-BI-001)."""
+    monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
+
+    assert load_config().query_timeout_ms == 5000
+
+
+def test_load_config_honors_ps_query_timeout_ms_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_QUERY_TIMEOUT_MS` override takes effect (AC-BI-001)."""
+    monkeypatch.setenv("PS_QUERY_TIMEOUT_MS", "2500")
+
+    assert load_config().query_timeout_ms == 2500
+
+
+@pytest.mark.parametrize(
+    "invalid_query_timeout_ms",
+    ["not-a-number", "0", "-1"],
+)
+def test_load_config_raises_service_configuration_error_for_invalid_ps_query_timeout_ms(
+    invalid_query_timeout_ms: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-integer, zero, or negative `PS_QUERY_TIMEOUT_MS` fails closed (AC-BI-001)."""
+    monkeypatch.setenv("PS_QUERY_TIMEOUT_MS", invalid_query_timeout_ms)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_load_config_with_no_ps_query_row_cap_set_defaults_to_1000(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_QUERY_ROW_CAP` set -> defaults to 1000 (AC-BI-002)."""
+    monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
+
+    assert load_config().query_row_cap == 1000
+
+
+def test_load_config_honors_ps_query_row_cap_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_QUERY_ROW_CAP` override takes effect (AC-BI-002)."""
+    monkeypatch.setenv("PS_QUERY_ROW_CAP", "50")
+
+    assert load_config().query_row_cap == 50
+
+
+@pytest.mark.parametrize(
+    "invalid_query_row_cap",
+    ["not-a-number", "0", "-1"],
+)
+def test_load_config_raises_service_configuration_error_for_invalid_ps_query_row_cap(
+    invalid_query_row_cap: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-integer, zero, or negative `PS_QUERY_ROW_CAP` fails closed (AC-BI-002)."""
+    monkeypatch.setenv("PS_QUERY_ROW_CAP", invalid_query_row_cap)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()

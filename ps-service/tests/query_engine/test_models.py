@@ -10,7 +10,7 @@ from ps_service.query_engine.models import QueryResult
 
 
 def _query_result() -> QueryResult:
-    return QueryResult(columns=["n"], rows=[["obl_risk_a1b2c3"]], row_count=1)
+    return QueryResult(columns=["n"], rows=[["obl_risk_a1b2c3"]], row_count=1, truncated=False)
 
 
 def test_query_result_mutation_raises() -> None:
@@ -27,7 +27,7 @@ def test_query_result_constructs_with_valid_fields() -> None:
 
 
 def test_query_result_accepts_empty_rows_and_columns() -> None:
-    result = QueryResult(columns=[], rows=[], row_count=0)
+    result = QueryResult(columns=[], rows=[], row_count=0, truncated=False)
     assert result.columns == []
     assert result.rows == []
     assert result.row_count == 0

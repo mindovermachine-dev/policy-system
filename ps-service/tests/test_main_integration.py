@@ -454,7 +454,9 @@ class _FakeGraphHandle:
     def __init__(self, *, result: _FakeQueryResult) -> None:
         self._result = result
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         return self._result

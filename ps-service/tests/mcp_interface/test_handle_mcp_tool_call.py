@@ -69,7 +69,9 @@ class _FakeGraphHandle:
         self._error = error
         self.calls: list[str] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.calls.append(q)
         if self._error is not None:
             raise self._error
@@ -88,13 +90,18 @@ def test_success_returns_columns_rows_row_count_dict(emitter: LogEmitter) -> Non
     )
 
     result = mcp_server.handle_mcp_tool_call(
-        "MATCH (n) RETURN n.id, n.name", graph=fake, emitter=emitter
+        "MATCH (n) RETURN n.id, n.name",
+        graph=fake,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
     assert result == {
         "columns": ["id", "name"],
         "rows": [["a", "Alice"], ["b", "Bob"]],
         "row_count": 2,
+        "truncated": False,
     }
 
 
@@ -104,20 +111,28 @@ def test_delegates_to_execute_cypher_query(
     calls: list[dict[str, object]] = []
 
     def spy(
-        query: str, *, graph: object, emitter: object = None, principal: object = None
+        query: str,
+        *,
+        graph: object,
+        emitter: object = None,
+        principal: object = None,
+        timeout_ms: int,
+        row_cap: int,
     ) -> QueryResult:
         calls.append({"query": query, "graph": graph, "emitter": emitter, "principal": principal})
-        return QueryResult(columns=["x"], rows=[[1]], row_count=1)
+        return QueryResult(columns=["x"], rows=[[1]], row_count=1, truncated=False)
 
     monkeypatch.setattr(mcp_server, "execute_cypher_query", spy)
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
 
-    result = mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert len(calls) == 1
     assert calls[0]["graph"] is fake
     assert calls[0]["query"] == "MATCH (n) RETURN n"
-    assert result == {"columns": ["x"], "rows": [[1]], "row_count": 1}
+    assert result == {"columns": ["x"], "rows": [[1]], "row_count": 1, "truncated": False}
 
 
 def test_principal_given_attaches_principal_to_query_engine_log_entry(
@@ -132,7 +147,12 @@ def test_principal_given_attaches_principal_to_query_engine_log_entry(
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
 
     mcp_server.handle_mcp_tool_call(
-        "MATCH (n) RETURN n", graph=fake, emitter=emitter, principal="local-test-bypass"
+        "MATCH (n) RETURN n",
+        graph=fake,
+        emitter=emitter,
+        principal="local-test-bypass",
+        timeout_ms=5000,
+        row_cap=1000,
     )
     emitter.flush()
 
@@ -154,7 +174,9 @@ def test_no_principal_given_omits_principal_key_end_to_end(
     emitter, log_path = make_emitter()
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
 
-    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -172,18 +194,30 @@ def test_module_has_no_subprocess_or_sys() -> None:
 def test_error_string_returned_verbatim(emitter: LogEmitter) -> None:
     fake = _FakeGraphHandle(error=RuntimeError("boom"))
 
-    result = mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result == "error: boom"
 
 
 def test_success_dict_not_rewrapped_or_truncated(emitter: LogEmitter) -> None:
+    """A result set under `row_cap` is passed through by `handle_mcp_tool_call`
+    unchanged -- this layer never independently re-wraps or re-truncates what
+    `execute_cypher_query` already computed (D3). `row_cap` here is
+    deliberately larger than the scripted result set so issue #38's own
+    row-cap enforcement (now load-bearing, Slice 3) is a no-op for this test;
+    truncation itself is covered by `tests/query_engine/
+    test_execute_cypher_query_row_cap.py`.
+    """
     big_rows: list[object] = [[i, f"row-{i}"] for i in range(5000)]
     fake = _FakeGraphHandle(
         result=_FakeQueryResult(header=[[0, "n"], [0, "label"]], result_set=big_rows)
     )
 
-    result = mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=10000
+    )
 
     assert isinstance(result, dict)
     assert result["row_count"] == 5000
@@ -194,7 +228,9 @@ def test_success_dict_not_rewrapped_or_truncated(emitter: LogEmitter) -> None:
 def test_write_clause_rejected_and_graph_query_never_called(emitter: LogEmitter) -> None:
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
 
-    result = mcp_server.handle_mcp_tool_call("CREATE (n) RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "CREATE (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result == f"error: {_WRITE_CLAUSE_REJECTION_MESSAGE}"
     assert fake.calls == []
@@ -203,7 +239,9 @@ def test_write_clause_rejected_and_graph_query_never_called(emitter: LogEmitter)
 def test_falkordb_execution_error_surfaced_verbatim(emitter: LogEmitter) -> None:
     fake = _FakeGraphHandle(error=RuntimeError("syntax error at offset 4"))
 
-    result = mcp_server.handle_mcp_tool_call("MATCH (n RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "MATCH (n RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result == "error: syntax error at offset 4"
     assert isinstance(result, str)

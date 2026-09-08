@@ -51,7 +51,9 @@ class _RunIdRecordingGraphHandle:
     def __init__(self) -> None:
         self.seen_run_ids: list[str | None] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.seen_run_ids.append(current_run_id())
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
@@ -62,7 +64,9 @@ def test_run_id_bound_and_visible_to_delegate(make_emitter: MakeEmitter) -> None
     emitter, _ = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
-    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     assert len(fake.seen_run_ids) == 2
@@ -76,8 +80,12 @@ def test_two_calls_get_distinct_run_ids(make_emitter: MakeEmitter) -> None:
     emitter, _ = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
-    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
-    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     assert len(fake.seen_run_ids) == 4
@@ -93,7 +101,9 @@ def test_emitted_log_entry_carries_bound_run_id(
     emitter, log_path = make_emitter()
     fake = _RunIdRecordingGraphHandle()
 
-    mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -108,7 +118,9 @@ def test_no_emitted_log_entry_contains_query_text(make_emitter: MakeEmitter) -> 
     fake = _RunIdRecordingGraphHandle()
     query = "MATCH (n {ssn: '123-45-6789'}) RETURN n"
 
-    mcp_server.handle_mcp_tool_call(query, graph=fake, emitter=emitter)
+    mcp_server.handle_mcp_tool_call(
+        query, graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     raw = log_path.read_text(encoding="utf-8")

@@ -58,7 +58,9 @@ class _FakeSuccessGraphHandle:
     scripted two-row result.
     """
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _ScriptedQueryResult:
         if q == _SEED_CHECK_QUERY:
             return _ScriptedQueryResult(header=[[0, "c"]], result_set=[[1]])
         return _ScriptedQueryResult(
@@ -70,7 +72,9 @@ class _FakeSuccessGraphHandle:
 class _FakeRaisingGraphHandle:
     """Satisfies `GraphHandle` structurally -- `.query()` always raises."""
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> NoReturn:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> NoReturn:
         raise RuntimeError("connection refused: FalkorDB unreachable")
 
 
@@ -98,7 +102,9 @@ def test_success_emits_entry_with_bound_run_id_and_succeeded_outcome(
     fake_graph = _FakeSuccessGraphHandle()
 
     with bind_run_context("run-x"):
-        execute_cypher_query(_SUCCESS_QUERY, graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            _SUCCESS_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -118,7 +124,9 @@ def test_rejected_emits_entry_with_bound_run_id_and_rejected_outcome(
     fake_graph = _FakeSuccessGraphHandle()
 
     with bind_run_context("run-x"), pytest.raises(WriteClauseRejectedError):
-        execute_cypher_query(_WRITE_QUERY, graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            _WRITE_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -138,7 +146,9 @@ def test_failed_emits_entry_with_bound_run_id_and_failed_outcome(
     fake_graph = _FakeRaisingGraphHandle()
 
     with bind_run_context("run-x"), pytest.raises(QueryEngineExecutionError):
-        execute_cypher_query(_FAILING_QUERY, graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            _FAILING_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -157,7 +167,9 @@ def test_no_bound_run_context_run_id_absent_and_no_crash(
     emitter, log_path = make_emitter()
     fake_graph = _FakeSuccessGraphHandle()
 
-    execute_cypher_query(_SUCCESS_QUERY, graph=fake_graph, emitter=emitter)
+    execute_cypher_query(
+        _SUCCESS_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     lines = read_lines(log_path)
@@ -176,7 +188,12 @@ def test_success_with_principal_includes_principal_on_entry(
     fake_graph = _FakeSuccessGraphHandle()
 
     execute_cypher_query(
-        _SUCCESS_QUERY, graph=fake_graph, emitter=emitter, principal="local-test-bypass"
+        _SUCCESS_QUERY,
+        graph=fake_graph,
+        emitter=emitter,
+        principal="local-test-bypass",
+        timeout_ms=5000,
+        row_cap=1000,
     )
     emitter.flush()
 
@@ -198,7 +215,12 @@ def test_rejected_with_principal_includes_principal_on_entry(
 
     with pytest.raises(WriteClauseRejectedError):
         execute_cypher_query(
-            _WRITE_QUERY, graph=fake_graph, emitter=emitter, principal="local-test-bypass"
+            _WRITE_QUERY,
+            graph=fake_graph,
+            emitter=emitter,
+            principal="local-test-bypass",
+            timeout_ms=5000,
+            row_cap=1000,
         )
     emitter.flush()
 
@@ -220,7 +242,12 @@ def test_failed_with_principal_includes_principal_on_entry(
 
     with pytest.raises(QueryEngineExecutionError):
         execute_cypher_query(
-            _FAILING_QUERY, graph=fake_graph, emitter=emitter, principal="local-test-bypass"
+            _FAILING_QUERY,
+            graph=fake_graph,
+            emitter=emitter,
+            principal="local-test-bypass",
+            timeout_ms=5000,
+            row_cap=1000,
         )
     emitter.flush()
 
@@ -241,7 +268,9 @@ def test_no_principal_given_omits_principal_key(
     emitter, log_path = make_emitter()
     fake_graph = _FakeSuccessGraphHandle()
 
-    execute_cypher_query(_SUCCESS_QUERY, graph=fake_graph, emitter=emitter)
+    execute_cypher_query(
+        _SUCCESS_QUERY, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
     emitter.flush()
 
     lines = read_lines(log_path)

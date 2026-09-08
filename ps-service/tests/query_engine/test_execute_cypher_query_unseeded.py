@@ -64,7 +64,9 @@ class _ScriptedGraphHandle:
         self._responses = list(responses)
         self.calls: list[str] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.calls.append(q)
         return self._responses.pop(0)
 
@@ -73,7 +75,9 @@ def test_unseeded_graph_raises_before_callers_query_runs(emitter: LogEmitter) ->
     fake = _ScriptedGraphHandle([_FakeQueryResult(header=[[0, "c"]], result_set=[[0]])])
 
     with pytest.raises(GraphUnseededError):
-        execute_cypher_query("MATCH (n:Thing) RETURN n", graph=fake, emitter=emitter)
+        execute_cypher_query(
+            "MATCH (n:Thing) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
 
     assert fake.calls == [_SEED_CHECK_QUERY]
 
@@ -86,7 +90,9 @@ def test_seeded_graph_runs_callers_query_normally(emitter: LogEmitter) -> None:
         ]
     )
 
-    result = execute_cypher_query("MATCH (n:Thing) RETURN n", graph=fake, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n:Thing) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert fake.calls == [_SEED_CHECK_QUERY, "MATCH (n:Thing) RETURN n"]
     assert result.row_count == 1
@@ -104,6 +110,8 @@ def test_write_clause_on_unseeded_graph_still_rejected_first_with_zero_io(
     fake = _ScriptedGraphHandle([])
 
     with pytest.raises(WriteClauseRejectedError):
-        execute_cypher_query("CREATE (n:Thing) RETURN n", graph=fake, emitter=emitter)
+        execute_cypher_query(
+            "CREATE (n:Thing) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
 
     assert fake.calls == []

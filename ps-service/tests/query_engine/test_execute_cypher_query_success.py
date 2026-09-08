@@ -61,7 +61,9 @@ class _ScriptedGraphHandle:
     def __init__(self, result: _ScriptedQueryResult) -> None:
         self._result = result
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _ScriptedQueryResult:
         if q == _SEED_CHECK_QUERY:
             return _ScriptedQueryResult(header=[[0, "c"]], result_set=[[1]])
         return self._result
@@ -75,13 +77,18 @@ def test_success_path_maps_header_and_result_set_to_exact_query_result(emitter: 
     fake_graph = _ScriptedGraphHandle(scripted)
 
     result = execute_cypher_query(
-        "MATCH (n) RETURN n.id, n.name", graph=fake_graph, emitter=emitter
+        "MATCH (n) RETURN n.id, n.name",
+        graph=fake_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
     assert result == QueryResult(
         columns=["id", "name"],
         rows=[["a", "Alice"], ["b", "Bob"]],
         row_count=2,
+        truncated=False,
     )
 
 
@@ -89,7 +96,9 @@ def test_empty_result_set_yields_zero_row_count_and_empty_rows(emitter: LogEmitt
     scripted = _ScriptedQueryResult(header=[[0, "id"]], result_set=[])
     fake_graph = _ScriptedGraphHandle(scripted)
 
-    result = execute_cypher_query("MATCH (n) RETURN n.id", graph=fake_graph, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n) RETURN n.id", graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result.rows == []
     assert result.row_count == 0
@@ -100,7 +109,9 @@ def test_falsy_header_yields_empty_columns_list(emitter: LogEmitter) -> None:
     scripted = _ScriptedQueryResult(header=[], result_set=[])
     fake_graph = _ScriptedGraphHandle(scripted)
 
-    result = execute_cypher_query("MATCH (n) RETURN n", graph=fake_graph, emitter=emitter)
+    result = execute_cypher_query(
+        "MATCH (n) RETURN n", graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result.columns == []
     assert result.rows == []
@@ -126,7 +137,11 @@ def test_whole_node_and_edge_results_are_converted_to_plain_jsonable_dicts(
     fake_graph = _ScriptedGraphHandle(scripted)
 
     result = execute_cypher_query(
-        "MATCH (r)-[rel]->() RETURN r, rel", graph=fake_graph, emitter=emitter
+        "MATCH (r)-[rel]->() RETURN r, rel",
+        graph=fake_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
     assert result.rows == [

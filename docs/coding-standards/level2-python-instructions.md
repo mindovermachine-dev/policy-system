@@ -103,7 +103,7 @@
 - Parameterize Cypher queries: pass values via `params={...}`, never interpolate them into the query string — follow the existing precedent in `tools/graph-ingestion/merge_capabilities.py`'s `graph.query(query, params={"id": ...})`.
 - The one exception is labels/relationship types, which Cypher cannot parameterize (see `load_graph.py`'s `f"MATCH (n:{label})"`) — validate against the allow-list of known schema labels (`docs/artifacts/ps-domain-concepts.md`) before interpolating; never interpolate a raw user- or LLM-supplied string there.
 - The write-clause regex guard (`query_engine/cypher_query.py`'s `_WRITE_CLAUSE`) is defense-in-depth, not the boundary — the real boundary is the FalkorDB connection's own privileges: the read-only query surface (Query Engine, MCP Interface) must connect as a database user/role restricted to read-only operations.
-- Bound query cost: no query execution timeout or result-size cap exists yet in the read-only query surface (Query Engine / MCP Interface) — an open risk once FalkorDB is reachable over a network (issue #38). Enforce both at the FalkorDB driver/connection level when addressed.
+- Bound query cost: both a query execution timeout and a result-size cap are enforced in the read-only query surface (Query Engine / MCP Interface) (issue #38) — the timeout via `graph.query`'s native `timeout=` kwarg (FalkorDB aborts server-side), the row cap via caller-side Python truncation of the returned rows (never FalkorDB's global `RESULTSET_SIZE`/`GRAPH.CONFIG SET`, which is instance-wide).
 
 ### API Patterns
 

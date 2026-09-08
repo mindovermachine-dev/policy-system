@@ -69,7 +69,9 @@ class _FakeGraphHandle:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.calls.append(q)
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
@@ -96,7 +98,9 @@ def test_write_clause_rejected_before_graph_query_called(
     fake_graph = _FakeGraphHandle()
 
     with pytest.raises(WriteClauseRejectedError):
-        execute_cypher_query(query, graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            query, graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
 
     assert fake_graph.calls == []
 
@@ -109,7 +113,13 @@ def test_write_clause_rejected_error_exact_message_text(emitter: LogEmitter) -> 
     fake_graph = _FakeGraphHandle()
 
     with pytest.raises(WriteClauseRejectedError) as excinfo:
-        execute_cypher_query("CREATE (n:Thing) RETURN n", graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            "CREATE (n:Thing) RETURN n",
+            graph=fake_graph,
+            emitter=emitter,
+            timeout_ms=5000,
+            row_cap=1000,
+        )
 
     assert str(excinfo.value) == cypher_query._WRITE_CLAUSE_REJECTION_MESSAGE  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
 
@@ -122,7 +132,11 @@ def test_word_boundary_does_not_false_positive_on_identifier_substring(emitter: 
     fake_graph = _FakeGraphHandle()
 
     result = execute_cypher_query(
-        "MATCH (n:CreateEvent) RETURN n", graph=fake_graph, emitter=emitter
+        "MATCH (n:CreateEvent) RETURN n",
+        graph=fake_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
     assert fake_graph.calls == [_SEED_CHECK_QUERY, "MATCH (n:CreateEvent) RETURN n"]

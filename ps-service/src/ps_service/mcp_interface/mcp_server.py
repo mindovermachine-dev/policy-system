@@ -4,8 +4,8 @@
 Also serves the ps-domain-concepts resource, for clients (e.g. Claude
 Desktop) with no shell. Calls ps_service.query_engine.execute_cypher_query
 IN-PROCESS. The write-clause guard and all execution live in Query Engine
-and are never duplicated here. No network transport, no auth, no query
-timeout / result-size cap (issues #38 / #39).
+and are never duplicated here. No network transport, no auth, no
+result-size cap (issue #39).
 
 This module's own source stays stdio-only: the Streamable HTTP transport
 (issue #39) lives in the sibling `http_transport.py` module, which calls
@@ -98,11 +98,13 @@ def handle_mcp_tool_call(
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
     principal: str | None = None,
+    timeout_ms: int,
+    row_cap: int,
 ) -> dict[str, object] | str:
     """HandleMcpToolCall: run `query` through Query Engine in-process.
 
-    Binds a fresh run_id, then returns `{columns, rows, row_count}` on
-    success or an `error: <message>` string verbatim on a rejected,
+    Binds a fresh run_id, then returns `{columns, rows, row_count, truncated}`
+    on success or an `error: <message>` string verbatim on a rejected,
     unseeded-graph, or failed query.
 
     `principal` is an opaque caller identity string (issue #67), threaded
@@ -110,15 +112,30 @@ def handle_mcp_tool_call(
     `query_engine` log entry; omitted entirely when `None` (the default),
     matching Slice 3's silent-by-default behavior end to end. This layer
     never decides who the principal is -- see Slice 5 for where it's set.
+
+    `timeout_ms`/`row_cap` (issue #38, D4) are required and threaded
+    straight through to `execute_cypher_query` unchanged -- this layer never
+    decides the bounds, only threads what its own caller (`cypher()`, wired
+    from `ServiceConfig`) gives it.
     """
     with bind_run_context():
         try:
             result: QueryResult = execute_cypher_query(
-                query, graph=graph, emitter=emitter, principal=principal
+                query,
+                graph=graph,
+                emitter=emitter,
+                principal=principal,
+                timeout_ms=timeout_ms,
+                row_cap=row_cap,
             )
         except (WriteClauseRejectedError, QueryEngineExecutionError, GraphUnseededError) as exc:
             return f"error: {exc}"
-    return {"columns": result.columns, "rows": result.rows, "row_count": result.row_count}
+    return {
+        "columns": result.columns,
+        "rows": result.rows,
+        "row_count": result.row_count,
+        "truncated": result.truncated,
+    }
 
 
 def _resolve_graph(config: ServiceConfig) -> GraphHandle:
@@ -146,12 +163,14 @@ def _resolve_graph(config: ServiceConfig) -> GraphHandle:
 def cypher(query: str) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
 
-    On success returns an object with `columns`, `rows`, and `row_count`. Returns a
-    string beginning `error: ` when the query contains a write clause
-    (CREATE, MERGE, DELETE, SET, REMOVE, DROP, FOREACH -- rejected before execution),
-    when the graph has no seeded content at all yet (distinct from a query that
-    legitimately matches nothing, which still returns the normal empty-result shape),
-    when FalkorDB rejects the query, or when the graph database cannot be reached.
+    On success returns an object with `columns`, `rows`, `row_count`, and
+    `truncated` (`true` when more rows matched than the configured row cap
+    returned). Returns a string beginning `error: ` when the query contains
+    a write clause (CREATE, MERGE, DELETE, SET, REMOVE, DROP, FOREACH --
+    rejected before execution), when the graph has no seeded content at all
+    yet (distinct from a query that legitimately matches nothing, which
+    still returns the normal empty-result shape), when FalkorDB rejects the
+    query, or when the graph database cannot be reached.
     """
     try:
         config = load_config()
@@ -160,7 +179,13 @@ def cypher(query: str) -> dict[str, object] | str:
         emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
         return _GRAPH_UNAVAILABLE_MESSAGE
     principal = LOCAL_TEST_PRINCIPAL_ID if config.is_local_test_bypass_active else None
-    return handle_mcp_tool_call(query, graph=graph, principal=principal)
+    return handle_mcp_tool_call(
+        query,
+        graph=graph,
+        principal=principal,
+        timeout_ms=config.query_timeout_ms,
+        row_cap=config.query_row_cap,
+    )
 
 
 @server.resource(

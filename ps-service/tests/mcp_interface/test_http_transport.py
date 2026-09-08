@@ -75,7 +75,9 @@ class _FakeGraphHandle:
         self._result = result
         self.calls: list[str] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.calls.append(q)
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
@@ -223,6 +225,7 @@ def test_cypher_tool_reachable_through_the_built_app(monkeypatch: pytest.MonkeyP
         "columns": ["id", "name"],
         "rows": [["a", "Alice"], ["b", "Bob"]],
         "row_count": 2,
+        "truncated": False,
     }
 
 

@@ -24,13 +24,37 @@ running the caller's query at all. A seeded graph's own legitimate
 zero-row answer is unaffected: it still reaches the normal
 `{columns, rows: [], row_count: 0}` shape via the existing success path
 below.
+
+Issue #38, Slice 2 (PLAN.md §4 S2, D1/D2): `execute_cypher_query` now
+requires `timeout_ms`/`row_cap` keyword-only arguments (D4 -- no default,
+so a caller that forgets to pass them fails loudly rather than silently
+reintroducing an unbounded query). `timeout_ms` is forwarded as
+`graph.query(query, timeout=timeout_ms)`'s native `timeout=` kwarg on the
+caller's own query only -- never on `_is_graph_seeded`'s own separate,
+fixed, cheap `graph.query` call (D1). FalkorDB has no dedicated timeout
+exception type (PLAN.md §2.5), so `_classify_execution_failure` inspects
+the raised exception's own message for a timeout-shaped substring to pick
+`outcome="timeout"` vs. `outcome="failed"` on the log entry -- the
+classification never changes what is raised back to the caller (D2).
+`row_cap` is accepted here but not yet load-bearing -- Slice 3 adds the
+post-hoc Python-side truncation.
+
+Issue #38, Slice 3 (PLAN.md §4 S3, D1): once `graph.query()` returns
+successfully, `rows` is sliced to `rows[:row_cap]` in pure Python --
+strictly *after* FalkorDB has already computed and returned every row, and
+never via a `LIMIT` clause or FalkorDB's global `GRAPH.CONFIG SET
+RESULTSET_SIZE` (AC-BI-007 -- instance-wide, would affect other components
+sharing the same FalkorDB instance). `row_count` reflects the post-slice
+(returned) count; `QueryResult.truncated` is the only signal that more rows
+existed (AC-BI-006). A query that times out or otherwise raises never
+reaches this step at all.
 """
 
 from __future__ import annotations
 
 import re
 import time
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from falkordb import (  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
     Edge,
@@ -100,6 +124,21 @@ def _is_graph_seeded(graph: GraphHandle) -> bool:
     return count > 0
 
 
+def _classify_execution_failure(exc: Exception) -> Literal["timeout", "failed"]:
+    """Classify a `graph.query` failure as `"timeout"` or `"failed"` for logging only.
+
+    D2: FalkorDB gives no dedicated timeout exception type, so this is a
+    best-effort message-substring check (`"timed out"`, case-insensitive)
+    against the exception's own server-emitted text -- never the caller's
+    query text. Only ever changes the log entry's `outcome`; the exception
+    re-raised to the caller (`QueryEngineExecutionError(str(exc))`) is
+    unaffected either way.
+    """
+    if "timed out" in str(exc).lower():
+        return "timeout"
+    return "failed"
+
+
 def _to_jsonable(value: object) -> object:
     """Recursively convert a raw FalkorDB result value into a JSON-serializable shape.
 
@@ -140,6 +179,8 @@ def execute_cypher_query(
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
     principal: str | None = None,
+    timeout_ms: int,
+    row_cap: int,
 ) -> QueryResult:
     """ExecuteCypherQuery: execute a read-only Cypher query against `graph`.
 
@@ -168,6 +209,20 @@ def execute_cypher_query(
     entirely when `None` (the default) -- groundwork for AC-BI-008; this
     layer never decides who the principal is, it only threads what it's
     given.
+
+    `timeout_ms` (issue #38, AC-BI-004) is forwarded to `graph.query` as its
+    native `timeout=` kwarg for the caller's own query, so FalkorDB aborts
+    the query server-side once it runs longer than this many milliseconds
+    (D1) -- required, no default, so a caller can never accidentally run an
+    unbounded query by omission. A timeout-shaped failure is still wrapped
+    as `QueryEngineExecutionError` like any other failure (AC-BI-005), but
+    logged with `outcome="timeout"` instead of `outcome="failed"` (D2,
+    AC-BI-009). `row_cap` (issue #38, AC-BI-006/AC-BI-007) bounds the number
+    of rows returned: once `graph.query` returns successfully, `rows` is
+    sliced to its first `row_cap` entries in pure Python -- never via a
+    `LIMIT` clause or FalkorDB's global `RESULTSET_SIZE` config -- and
+    `QueryResult.truncated` reports whether that slice actually shortened
+    the result.
     """
     started = time.perf_counter()
     if is_write_clause(query):
@@ -185,9 +240,10 @@ def execute_cypher_query(
         raise GraphUnseededError(_GRAPH_UNSEEDED_DETAIL)
 
     try:
-        result = graph.query(query)
+        result = graph.query(query, timeout=timeout_ms)
     except Exception as exc:
-        _log(outcome="failed", started=started, emitter=emitter, principal=principal)
+        outcome = _classify_execution_failure(exc)
+        _log(outcome=outcome, started=started, emitter=emitter, principal=principal)
         raise QueryEngineExecutionError(str(exc)) from exc
 
     columns = [cast("str", c[1]) for c in result.header] if result.header else []
@@ -195,6 +251,9 @@ def execute_cypher_query(
         [_to_jsonable(cell) for cell in row]
         for row in cast("list[list[object]]", result.result_set)
     ]
+    full_row_count = len(rows)
+    rows = rows[:row_cap]
+    truncated = full_row_count > row_cap
     _log(
         outcome="succeeded",
         started=started,
@@ -202,7 +261,7 @@ def execute_cypher_query(
         row_count=len(rows),
         principal=principal,
     )
-    return QueryResult(columns=columns, rows=rows, row_count=len(rows))
+    return QueryResult(columns=columns, rows=rows, row_count=len(rows), truncated=truncated)
 
 
 def _log(
@@ -221,6 +280,11 @@ def _log(
     `extra={"model": ...}` precedent). `run_id` is never passed explicitly,
     so `emit_log_entry` auto-bakes the currently bound run context -- the
     mechanism AC-004 relies on.
+
+    `outcome` is always one of a small closed vocabulary:
+    `"succeeded"`/`"rejected"`/`"unseeded"`/`"failed"`/`"timeout"` (issue
+    #38, AC-BI-009) -- never free text, and never the raw exception message
+    that `_classify_execution_failure` inspected to pick `"timeout"`.
     """
     duration_ms = (time.perf_counter() - started) * 1000
     extra: dict[str, object] = {}

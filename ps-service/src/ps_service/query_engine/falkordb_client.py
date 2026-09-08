@@ -57,8 +57,10 @@ class GraphHandle(Protocol):
     Callers outside this module never import `falkordb.Graph` directly.
     """
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
-        """Run Cypher `q` with optional `params`; return the raw result."""
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> GraphQueryResult:
+        """Run Cypher `q` with optional `params`/`timeout` (ms); return the raw result."""
         ...
 
 

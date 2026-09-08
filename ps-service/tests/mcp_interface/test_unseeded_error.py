@@ -59,7 +59,9 @@ class _ScriptedGraphHandle:
         self._responses = list(responses)
         self.calls: list[str] = []
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
         self.calls.append(q)
         return self._responses.pop(0)
 
@@ -67,7 +69,9 @@ class _ScriptedGraphHandle:
 def test_unseeded_graph_returns_sanitized_error_string(emitter: LogEmitter) -> None:
     fake = _ScriptedGraphHandle([_FakeQueryResult(header=[[0, "c"]], result_set=[[0]])])
 
-    result = mcp_server.handle_mcp_tool_call("MATCH (n) RETURN n", graph=fake, emitter=emitter)
+    result = mcp_server.handle_mcp_tool_call(
+        "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert result == f"error: {_GRAPH_UNSEEDED_DETAIL}"
     assert fake.calls == [_SEED_CHECK_QUERY]
@@ -88,8 +92,12 @@ def test_seeded_graph_genuinely_empty_result_still_returns_normal_shape(
     )
 
     result = mcp_server.handle_mcp_tool_call(
-        "MATCH (n:Nonexistent) RETURN n", graph=fake, emitter=emitter
+        "MATCH (n:Nonexistent) RETURN n",
+        graph=fake,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
-    assert result == {"columns": ["n"], "rows": [], "row_count": 0}
+    assert result == {"columns": ["n"], "rows": [], "row_count": 0, "truncated": False}
     assert fake.calls == [_SEED_CHECK_QUERY, "MATCH (n:Nonexistent) RETURN n"]

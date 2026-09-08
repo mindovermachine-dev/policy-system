@@ -95,7 +95,13 @@ def test_live_read_only_query_returns_expected_shape(
     the real `policy_system` graph, executed through the actual
     `handle_mcp_tool_call` -> `execute_cypher_query` -> real FalkorDB driver.
     """
-    result = handle_mcp_tool_call("MATCH (n) RETURN n LIMIT 3", graph=real_graph, emitter=emitter)
+    result = handle_mcp_tool_call(
+        "MATCH (n) RETURN n LIMIT 3",
+        graph=real_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
+    )
 
     assert isinstance(result, dict)
     row_count = cast("int", result["row_count"])
@@ -116,7 +122,9 @@ def test_live_malformed_query_returns_verbatim_error(
     FalkorDB's own error text verbatim as an `error: ` string, never a
     formatted traceback.
     """
-    result = handle_mcp_tool_call("MATCH (n RETURN n", graph=real_graph, emitter=emitter)
+    result = handle_mcp_tool_call(
+        "MATCH (n RETURN n", graph=real_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+    )
 
     assert isinstance(result, str)
     assert result.startswith("error: ")
@@ -136,7 +144,11 @@ def test_live_write_clause_rejected(real_graph: GraphHandle, emitter: LogEmitter
     count_before = _count_nodes(real_graph)
 
     result = handle_mcp_tool_call(
-        "CREATE (x:CapstoneProbe) RETURN x", graph=real_graph, emitter=emitter
+        "CREATE (x:CapstoneProbe) RETURN x",
+        graph=real_graph,
+        emitter=emitter,
+        timeout_ms=5000,
+        row_cap=1000,
     )
 
     assert result == f"error: {_WRITE_CLAUSE_REJECTION_MESSAGE}"

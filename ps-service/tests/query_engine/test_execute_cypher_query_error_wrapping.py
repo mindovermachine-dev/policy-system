@@ -45,7 +45,9 @@ class _RaisingGraphHandle:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> NoReturn:
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> NoReturn:
         raise self._exc
 
 
@@ -56,7 +58,9 @@ def test_graph_query_failure_wrapped_as_query_engine_execution_error_with_verbat
     fake_graph = _RaisingGraphHandle(original)
 
     with pytest.raises(QueryEngineExecutionError) as excinfo:
-        execute_cypher_query("MATCH (n) RETURN n", graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            "MATCH (n) RETURN n", graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
 
     assert str(excinfo.value) == "connection refused: FalkorDB unreachable"
 
@@ -66,6 +70,8 @@ def test_graph_query_failure_chains_original_exception_as_cause(emitter: LogEmit
     fake_graph = _RaisingGraphHandle(original)
 
     with pytest.raises(QueryEngineExecutionError) as excinfo:
-        execute_cypher_query("MATCH (n) RETURN n", graph=fake_graph, emitter=emitter)
+        execute_cypher_query(
+            "MATCH (n) RETURN n", graph=fake_graph, emitter=emitter, timeout_ms=5000, row_cap=1000
+        )
 
     assert excinfo.value.__cause__ is original
