@@ -10,9 +10,10 @@
   - [3. Clone the repo](#3-clone-the-repo)
   - [4. Create the local cluster](#4-create-the-local-cluster)
   - [5. Deploy Policy System](#5-deploy-policy-system)
-  - [6. Load regulations into the graph](#6-load-regulations-into-the-graph)
-  - [7. Install the Policy System plugin](#7-install-the-policy-system-plugin)
-  - [8. Ask a question](#8-ask-a-question)
+  - [6. Install ps-cli](#6-install-ps-cli)
+  - [7. Load regulations into the graph](#7-load-regulations-into-the-graph)
+  - [8. Install the Policy System plugin](#8-install-the-policy-system-plugin)
+  - [9. Ask a question](#9-ask-a-question)
   - [Troubleshooting (Local Test)](#troubleshooting-local-test)
 - [Ollama / Local Model Support](#ollama--local-model-support)
 - [Policy System plugin (ps-qna)](#policy-system-plugin-ps-qna)
@@ -145,30 +146,40 @@ open http://localhost:3001/login
 
 ```
 
-`/health` reports process liveness.
-
-`/ready` reports whether FalkorDB is currently reachable — wait for `/ready` before
-continuing. It also reports (in `unhealthy_dependencies`) whether Cellar/ELI or the LLM
-Interface are currently unreachable, but neither blocks readiness: only FalkorDB does.
-
 `localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
 
-The local-test profile defaults to `llm.provider=ollama`. If Ollama runs on your Podman
-host (not in-cluster), see [Ollama / Local Model Support](#ollama--local-model-support)
-before running the command above — `/ready` will likely never turn healthy without it.
+### 6. Install ps-cli
 
-The chart pulls PS Service from `ghcr.io/mindovermachine-dev/ps-service`; pin a release
-tag rather than tracking `latest` when you want a local test you can reproduce later.
+`ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
+regulations from Cellar/ELI, ingest internal policies, and check service health and
+readiness. It's a distributed client, installable independently of this repo like
+`gh`/`az` — no clone/checkout needed:
 
-LLM provider credentials, when you need them, are supplied as chart values backed by a
-Kubernetes secret, never baked into the image.
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@ps-cli-v0.1.1#subdirectory=ps-cli"
+```
 
-Every operator-facing chart value (image tags, LLM provider, persistence, Ollama
-networking, ...) is documented in the
-[Helm Chart Values Reference](./helm-chart-values-reference.md), separate from this
-walkthrough.
+`uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via its
+tool-install shims. Verify:
 
-### 6. Load regulations into the graph
+```bash
+ps-cli --version
+```
+
+Replace `ps-cli-v0.1.1` with the latest `ps-cli-v*` tag (`git ls-remote --tags
+https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'`). Tags on this
+repository are not currently protected against force-move/re-pointing. If you need
+install-time integrity beyond "trust the tag," pin the exact commit SHA the tag points
+at instead:
+
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
+```
+
+See [ps-cli](#ps-cli) below for targeting a non-default PS Service instance, contexts,
+credential storage, and the full command reference.
+
+### 7. Load regulations into the graph
 
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
@@ -212,7 +223,7 @@ error rather than an empty result.
 > [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
 > below) — this command is not yet implemented.
 
-### 7. Install the Policy System plugin
+### 8. Install the Policy System plugin
 
 The plugin lives in this repo at `ps-skills/policy-system/` — a `ps-qna` skill plus a
 bundled MCP connector (`.mcp.json`), installable via the repo-root marketplace manifest
@@ -246,7 +257,7 @@ loopback, and warns on every startup — it is for evaluation only.
 > ✅ **Verified end-to-end.** The plugin's files (`plugin.json`, `.mcp.json`,
 > `skills/ps-qna/SKILL.md`, the marketplace manifest) have been installed against a real
 > Claude Desktop/Code instance and confirmed working. See
-> [8. Ask a question](#8-ask-a-question) below for the smoke-test runbook that was run.
+> [9. Ask a question](#9-ask-a-question) below for the smoke-test runbook that was run.
 > Remote MCP transport with per-user authentication is tracked separately on
 > [#39](https://github.com/mindovermachine-dev/policy-system/issues/39). The local-test
 > bypass mode described above is implemented
@@ -261,7 +272,7 @@ loopback, and warns on every startup — it is for evaluation only.
 > not expect real per-user auth enforcement, only that a local-test-bypass deployment
 > answers questions with the field left blank.
 
-### 8. Ask a question
+### 9. Ask a question
 
 ```text
 What obligations does the Cyber Resilience Act place on manufacturers,
@@ -278,20 +289,20 @@ If the skill does not engage on its own, ask for it by name: _"Use the ps-qna sk
 
 > ✅ **This runbook is human-run and has been executed end-to-end** against a real machine
 > — a working Claude Desktop install, a local `kind` cluster with Policy System deployed,
-> and a live Claude Desktop turn against that deployment — confirming steps 1-8 all work.
+> and a live Claude Desktop turn against that deployment — confirming steps 1-9 all work.
 
 To run the smoke test yourself:
 
-1. Complete steps 1-7 above against a real machine: a working Claude Desktop install, a
+1. Complete steps 1-8 above against a real machine: a working Claude Desktop install, a
    local `kind` cluster with Policy System deployed, and CRA content seeded via
-   `ps-cli catalog restore CRA-1.0` (step 6 — already proven to work).
-2. Install the `policy-system` plugin per step 7, pointing `ps_service_url` at
+   `ps-cli catalog restore CRA-1.0` (step 7 — already proven to work).
+2. Install the `policy-system` plugin per step 8, pointing `ps_service_url` at
    `http://localhost:8000/mcp` (the default) and leaving `operator_token` blank, since the
    local-test deployment runs under `PS_SERVICE_LOCAL_TEST_BYPASS=true` with no credential
    validation.
-3. In Claude Desktop, ask exactly the question from step 8 above: _"What obligations does
+3. In Claude Desktop, ask exactly the question from step 9 above: _"What obligations does
    the Cyber Resilience Act place on manufacturers, and which of our policies cover
-   them?"_ — reusing the CRA content step 6 already seeded, no new fixture data needed.
+   them?"_ — reusing the CRA content step 7 already seeded, no new fixture data needed.
 4. Confirm the `ps-qna` skill engages (automatically, or by asking for it by name), that it
    issues a Cypher query over the `policy-system-graph` MCP connector rather than answering
    from model recall, and that the answer cites what it retrieved from the graph (e.g.
@@ -314,7 +325,7 @@ enforced.
 | Service unreachable                    | `ps-cli health` — reports reachability, health, readiness, and which dependency (if any) is unhealthy                                            |
 | Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
 | `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — FalkorDB is unreachable; check `ps-cli health`'s `unhealthy_dependencies` for LLM Interface/Cellar-ELI issues, which no longer affect `/ready` itself |
-| Answers say "not present in the graph" | Step 6 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
+| Answers say "not present in the graph" | Step 7 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
 | Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
 
 ---
@@ -382,29 +393,9 @@ readiness.
 
 ### Install
 
-`ps-cli` is a distributed client, installable independently of this repo like `gh`/`az`
-— no clone/checkout needed:
-
-```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@ps-cli-v0.1.1#subdirectory=ps-cli"
-```
-
-`uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via its
-tool-install shims. Verify:
-
-```bash
-ps-cli --version
-```
-
-Replace `ps-cli-v0.1.1` with the latest `ps-cli-v*` tag (`git ls-remote --tags
-https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'`). Tags on this
-repository are not currently protected against force-move/re-pointing. If you need
-install-time integrity beyond "trust the tag," pin the exact commit SHA the tag points
-at instead:
-
-```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
-```
+Installed as [step 6](#6-install-ps-cli) of the [Local Test](#local-test) walkthrough
+above. The rest of this section covers targeting a non-default PS Service instance,
+credential storage, and the full command reference.
 
 ### Configuring which PS Service instance ps-cli targets
 

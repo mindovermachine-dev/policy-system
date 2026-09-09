@@ -477,7 +477,7 @@ http://127.0.0.1:8000/mcp
 There is no real authentication on this endpoint yet — the only supported
 local, no-credential path is the opt-in local-test bypass from issue #67
 (`PS_SERVICE_LOCAL_TEST_BYPASS=true`, loopback-bind only, warns on every
-start); see the [user guide's local-test walkthrough](./docs/artifacts/user-guide.md#6-install-the-policy-system-plugin)
+start); see the [user guide's local-test walkthrough](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin)
 for how that bypass is used against this exact endpoint. Real per-user
 authentication/authorization/rate-limiting for a network-reachable
 deployment remains deferred — see the "Authentication is explicitly open,
@@ -512,7 +512,7 @@ purely local dev prototype (talks directly to a local FalkorDB) — not the
 
 2. Restart Claude Desktop.
 3. Install the `policy-system` plugin instead of uploading a skill by hand —
-   see [the user guide's Local Test walkthrough, step 6](./docs/artifacts/user-guide.md#6-install-the-policy-system-plugin),
+   see [the user guide's Local Test walkthrough, step 8](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin),
    which wires up the `ps-qna` skill together with its own MCP connector in
    one step.
 4. Ask a question (see above). If it doesn't auto-engage, say "Use the Policy Question skill" first.

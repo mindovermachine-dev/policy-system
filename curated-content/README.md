@@ -33,5 +33,5 @@ directories or `catalog.json` are committed yet. Populating it with real curated
 instruments (CRA, GDPR, NIS2, and the internal Engineering Practices baseline) is a
 one-time maintainer action, tracked separately from restoring an already-curated
 instrument (see the user guide's
-[Local Test, step 5](../docs/artifacts/user-guide.md#5-load-regulations-into-the-graph)
+[Local Test, step 7](../docs/artifacts/user-guide.md#7-load-regulations-into-the-graph)
 for what an operator sees once it is populated).
