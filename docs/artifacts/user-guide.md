@@ -153,10 +153,18 @@ open http://localhost:3001/login
 `ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
 regulations from Cellar/ELI, ingest internal policies, and check service health and
 readiness. It's a distributed client, installable independently of this repo like
-`gh`/`az` — no clone/checkout needed:
+`gh`/`az` — no clone/checkout needed.
+
+Find the latest `ps-cli-v*` tag:
 
 ```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@ps-cli-v0.1.1#subdirectory=ps-cli"
+git ls-remote --tags https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'
+```
+
+Install it, replacing `<tag>` with what that printed (e.g. `ps-cli-v0.1.1`):
+
+```bash
+uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<tag>#subdirectory=ps-cli"
 ```
 
 `uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via its
@@ -166,11 +174,9 @@ tool-install shims. Verify:
 ps-cli --version
 ```
 
-Replace `ps-cli-v0.1.1` with the latest `ps-cli-v*` tag (`git ls-remote --tags
-https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'`). Tags on this
-repository are not currently protected against force-move/re-pointing. If you need
-install-time integrity beyond "trust the tag," pin the exact commit SHA the tag points
-at instead:
+Tags on this repository are not currently protected against force-move/re-pointing. If
+you need install-time integrity beyond "trust the tag," pin the exact commit SHA the tag
+points at instead:
 
 ```bash
 uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
