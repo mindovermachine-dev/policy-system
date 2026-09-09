@@ -153,30 +153,23 @@ open http://localhost:3001/login
 `ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
 regulations from Cellar/ELI, ingest internal policies, and check service health and
 readiness. It's a distributed client, installable independently of this repo like
-`gh`/`az` — no clone/checkout needed.
-
-Find the latest `ps-cli-v*` tag:
-
-```bash
-git ls-remote --tags https://github.com/mindovermachine-dev/policy-system 'ps-cli-v*'
-```
-
-Install it, replacing `<tag>` with what that printed (e.g. `ps-cli-v0.1.1`):
+`gh`/`az` — no clone/checkout needed. Installing it requires
+[uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<tag>#subdirectory=ps-cli"
+curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
 ```
 
-`uv` builds the wheel from the tagged git ref and puts `ps-cli` on `PATH` via its
-tool-install shims. Verify:
+This runs [`ps-cli/install.sh`](../../ps-cli/install.sh), which installs `ps-cli` via
+`uv tool install` and puts it on `PATH` through `uv`'s tool-install shims. Verify:
 
 ```bash
 ps-cli --version
 ```
 
-Tags on this repository are not currently protected against force-move/re-pointing. If
-you need install-time integrity beyond "trust the tag," pin the exact commit SHA the tag
-points at instead:
+`ps-cli` has no tagged releases yet, so this installs whatever is current on `main` —
+fine for this local-test walkthrough. If you need a reproducible, pinned install
+instead, run the equivalent command yourself against a specific commit SHA:
 
 ```bash
 uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
