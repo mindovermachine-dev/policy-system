@@ -40,6 +40,34 @@ _POLL_INTERVAL_SECONDS = 2.0
 # safety bound against an unexpectedly slow/stuck thread.
 _POLLER_JOIN_TIMEOUT_SECONDS = 5.0
 
+# The dependency name PS Service's `/ready` reports when its LLM provider is unreachable
+# (issue #75). Only this dependency's presence in `unhealthy_dependencies` blocks
+# `regulations ingest`'s pre-flight check (AC-BI-009) -- `cellar_eli` alone never does
+# (AC-BI-010).
+_LLM_INTERFACE_DEPENDENCY_NAME = "llm_interface"
+
+
+def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
+    """Pre-flight check (AC-BI-009..013): fail fast if LLM Interface is unreachable.
+
+    Reuses `check_readiness()` (#68's existing `/ready` client method, AC-BI-011) --
+    no new endpoint. If PS Service itself can't be reached, `check_readiness()`
+    already raises a `PsCliError` worded distinctly ("Could not reach PS Service...")
+    from a confirmed-unavailable LLM Interface (AC-BI-012) -- that failure mode needs
+    no extra handling here. Only `llm_interface`'s presence in `unhealthy_dependencies`
+    blocks the command (AC-BI-009); `cellar_eli` alone never does (AC-BI-010 --
+    warn-only, since it's only conditionally needed for the non-curated CELEX
+    fallback). The message names the dependency only, never `dependency_health`'s raw
+    recorded error string (AC-BI-013) -- `unhealthy_dependencies` is already just a
+    list of names, nothing further to sanitize here.
+    """
+    readiness = client.check_readiness()
+    assert_contract(
+        contract=_LLM_INTERFACE_DEPENDENCY_NAME not in readiness.unhealthy_dependencies,
+        msg="LLM Interface is unavailable.",
+        hint="check PS Service's /ready endpoint and its LLM provider configuration",
+    )
+
 
 def handle_regulations_list(client: PsServiceClientProtocol) -> None:
     """Print PS Service's curated regulation catalog, one line per regulation.
@@ -90,6 +118,12 @@ def handle_regulations_ingest(
 ) -> None:
     """Ingest a curated EU regulation, identified by `celex`, via PS Service.
 
+    Before anything else, `_assert_llm_interface_available` runs a pre-flight
+    readiness check (issue #75, AC-BI-009..013): a target reporting LLM
+    Interface unreachable fails fast here, before `celex` validation's
+    round-trip-avoidance even matters, and well before the expensive
+    `POST /ingestions` call below.
+
     `celex`'s format is already validated by argparse's `type=_celex_type`
     callback (`ps_cli.modules.parser`) before this handler ever runs -- a
     fast-fail that avoids a wasted round trip for input PS Service would
@@ -109,6 +143,7 @@ def handle_regulations_ingest(
     caller (e.g. a test) may override it to avoid waiting on the real
     interval.
     """
+    _assert_llm_interface_available(client)
     run_id = uuid.uuid4().hex
     stop_event = threading.Event()
     poller = threading.Thread(
@@ -149,8 +184,16 @@ def handle_internal_ingest(
     the two processes share a filesystem in every environment this issue
     targets (issue #54 PLAN.md D3/D7, AC-BI-019). A schema violation (or a
     missing/unreadable local file) raises `PsCliError` here, naming the
-    specific problem, and `client.ingest_internal()` is never called --
-    provable by a fake client recording zero calls.
+    specific problem, and neither `_assert_llm_interface_available` nor
+    `client.ingest_internal()` is ever called -- provable by a fake client
+    recording zero calls.
+
+    Once local validation succeeds, `_assert_llm_interface_available` runs
+    the same pre-flight readiness check `handle_regulations_ingest` runs
+    (issue #75, AC-BI-009..013): a target reporting LLM Interface unreachable
+    fails fast here too, before `client.ingest_internal()`'s network call
+    (DD2 -- local validation still runs first, since it's the cheaper check
+    and would reject the request regardless of readiness).
 
     On success, prints the run id, the regulatory instrument id, and each
     pipeline stage's name and status (AC-BI-010). A `PsCliError` raised by
@@ -159,6 +202,7 @@ def handle_internal_ingest(
     D5/D9).
     """
     validate_local_seed_file(fixtures_root / fixture_path)
+    _assert_llm_interface_available(client)
     result = client.ingest_internal(fixture_path)
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
@@ -252,6 +296,12 @@ def handle_health(client: PsServiceClientProtocol) -> None:
 def handle_check(client: PsServiceClientProtocol) -> None:
     """Sweep every tracked instrument for amendments and re-ingest any found.
 
+    Before anything else, `_assert_llm_interface_available` runs a pre-flight
+    readiness check (issue #75, AC-BI-009..013): a target reporting LLM
+    Interface unreachable fails fast here, before `client.run_change_check()`'s
+    sweep, which would otherwise attempt an LLM-dependent re-ingest for every
+    amended instrument found.
+
     Prints the run id first (issue #73, PLAN.md §1 D8), matching
     `handle_regulations_ingest`'s own `print(f"run_id: {result.run_id}")`
     precedent, then one line per tracked instrument, in the order the sweep
@@ -264,6 +314,7 @@ def handle_check(client: PsServiceClientProtocol) -> None:
     `reingest_failed`) already prints correctly with zero further ps-cli
     changes. An empty sweep instead prints `"no tracked instruments"`.
     """
+    _assert_llm_interface_available(client)
     result = client.run_change_check()
     print(f"run_id: {result.run_id}")
     if not result.instruments:

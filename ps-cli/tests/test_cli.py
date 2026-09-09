@@ -112,6 +112,22 @@ def test_run_regulations_list_returns_zero_on_success() -> None:
     assert exit_code == 0
 
 
+def test_regulations_list_unaffected_by_llm_interface_outage() -> None:
+    """AC-BI-008: `regulations list` succeeds unaffected while LLM Interface is down.
+
+    Reuses `_FakeSuccessClient` unmodified: it never overrides `check_health()` or
+    `check_readiness()`, so if `handle_regulations_list` ever called either (e.g. to
+    gate on PS Service's dependency health) this test would fail with an uncaught
+    `AssertionError` from `_UnusedPsServiceClientMethods`, regardless of what those
+    methods would have returned for an LLM Interface outage.
+    """
+    fake_client = _FakeSuccessClient()
+
+    exit_code = run(["regulations", "list"], client=fake_client)
+
+    assert exit_code == 0
+
+
 def test_run_formats_ps_cli_error_to_stderr_without_traceback(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -206,6 +222,10 @@ def test_main_module_only_imports_and_conditionally_calls_main() -> None:
 class _FakeIngestSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_catalog() succeeds."""
 
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Return a fixed IngestionResult, ignoring `celex`/`run_id`."""
         del celex, run_id
@@ -219,6 +239,10 @@ class _FakeIngestSuccessClient(_UnusedPsServiceClientMethods):
 
 class _FakeIngestFailingClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_catalog() always raises."""
+
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Raise a PsCliError, simulating a 502 pipeline_stage_failed response."""
@@ -288,6 +312,10 @@ class _FakeIngestRecordingClient(_UnusedPsServiceClientMethods):
         """Initialize with no recorded call yet."""
         self.called_with_celex: str | None = None
 
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Record `celex`, then return a fixed IngestionResult."""
         del run_id
@@ -322,6 +350,117 @@ def test_run_regulations_ingest_propagates_client_ps_cli_error_as_exit_one(
     assert "pipeline_stage_failed" in captured.err
     assert "domain_mapper" in captured.err
     assert "Traceback" not in captured.err
+
+
+class _FakeReadinessGatedIngestClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome.
+
+    Used to prove the pre-flight check (AC-BI-009..013): either a scripted
+    `ReadinessResult` is returned, or a scripted `PsCliError` is raised (simulating PS
+    Service itself being unreachable, `http_client.py:105-110`'s shape). By default
+    `ingest_catalog()` raises `AssertionError` if called -- proving the pre-flight check
+    ran first and blocked the command; pass `allow_ingest=True` for the one test where
+    the pre-flight check must let the command proceed to a normal, successful ingest.
+    """
+
+    def __init__(
+        self,
+        *,
+        readiness: ReadinessResult | None = None,
+        readiness_error: PsCliError | None = None,
+        allow_ingest: bool = False,
+    ) -> None:
+        """Script this fake's check_readiness() outcome: a result, or an error to raise."""
+        self._readiness = readiness
+        self._readiness_error = readiness_error
+        self._allow_ingest = allow_ingest
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return the scripted ReadinessResult, or raise the scripted PsCliError."""
+        if self._readiness_error is not None:
+            raise self._readiness_error
+        assert self._readiness is not None
+        return self._readiness
+
+    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
+        """Fail the test unless `allow_ingest=True` -- proves the pre-flight check ran first."""
+        if not self._allow_ingest:
+            msg = (
+                f"ingest_catalog must not be called in this test "
+                f"(celex={celex!r}, run_id={run_id!r})"
+            )
+            raise AssertionError(msg)
+        return IngestionResult(
+            run_id="run-ingest-cli",
+            regulatory_instrument_id="ri-cli",
+            source="catalog",
+            stages=[],
+        )
+
+
+def test_run_regulations_ingest_fails_fast_when_llm_interface_unreachable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-009: LLM Interface unhealthy blocks the command before any POST /ingestions."""
+    fake_client = _FakeReadinessGatedIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
+    )
+
+    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "LLM Interface" in captured.err
+    assert "unavailable" in captured.err
+
+
+def test_run_regulations_ingest_does_not_block_when_only_cellar_eli_unreachable() -> None:
+    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks the command."""
+    fake_client = _FakeReadinessGatedIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
+        allow_ingest=True,
+    )
+
+    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+
+    assert exit_code == 0
+
+
+def test_run_regulations_ingest_preflight_fails_closed_distinctly_when_ps_service_unreachable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-012: an unreachable PS Service fails with its own distinct wording.
+
+    Never conflated with the LLM-Interface-unavailable message -- these are two
+    different failure modes.
+    """
+    fake_client = _FakeReadinessGatedIngestClient(
+        readiness_error=PsCliError(
+            msg="Could not reach PS Service at http://x.",
+            hint="check PS_CLI_SERVICE_URL / ps-cli.toml, and that ps-service is running",
+        )
+    )
+
+    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Could not reach PS Service" in captured.err
+    assert "LLM Interface is unavailable" not in captured.err
+
+
+def test_run_regulations_ingest_preflight_message_never_contains_raw_dependency_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-013: the failure message is the fixed string, never interpolating `readiness`."""
+    fake_client = _FakeReadinessGatedIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
+    )
+
+    run(["regulations", "ingest", "32016R0679"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "❌ LLM Interface is unavailable." in captured.err
 
 
 def test_run_with_unreachable_real_service_returns_one_without_crashing(
@@ -365,6 +504,10 @@ _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
 class _FakeInternalIngestSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose ingest_internal() succeeds."""
 
+    def check_readiness(self) -> ReadinessResult:
+        """Return a healthy default -- this fake's test is not about the pre-flight check."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """Return a fixed IngestionResult, ignoring `fixture_path`."""
         del fixture_path
@@ -384,6 +527,10 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
     501 response (Increment 14's `TestIngestInternal`), so this test proves
     `cli.run()`'s handling of that failure without a real network call.
     """
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return a healthy default -- this fake's test is not about the pre-flight check."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
     def ingest_internal(self, fixture_path: str) -> IngestionResult:
         """Raise the PsCliError PsServiceClient.ingest_internal() raises for the real 501."""
@@ -478,6 +625,108 @@ def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
     assert exit_code == 1
     assert "internal_ingestion_not_implemented" in captured.err
     assert _INTERNAL_NOT_IMPLEMENTED_MESSAGE in captured.err
+    assert "Traceback" not in captured.err
+
+
+class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
+    `internal ingest` (mirrors `_FakeReadinessGatedIngestClient` for `regulations ingest`).
+
+    By default `ingest_internal()` raises `AssertionError` if called -- proving the
+    pre-flight check ran first and blocked the command; pass `allow_ingest=True` for the
+    one test where the pre-flight check must let the command proceed to a normal,
+    successful ingest.
+    """
+
+    def __init__(self, *, readiness: ReadinessResult, allow_ingest: bool = False) -> None:
+        """Script this fake's check_readiness() outcome, and whether ingest may proceed."""
+        self._readiness = readiness
+        self._allow_ingest = allow_ingest
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return the scripted ReadinessResult."""
+        return self._readiness
+
+    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+        """Fail the test unless `allow_ingest=True` -- proves the pre-flight check ran first."""
+        if not self._allow_ingest:
+            msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+            raise AssertionError(msg)
+        return IngestionResult(
+            run_id="run-internal-cli",
+            regulatory_instrument_id="ri-internal-cli",
+            source="internal",
+            stages=[],
+        )
+
+
+def test_internal_ingest_fails_fast_when_llm_interface_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-009: LLM Interface unhealthy blocks `internal ingest` before any network call.
+
+    The fixture is schema-valid so local validation passes and the pre-flight check is
+    actually reached -- proving it is *this* check, not local validation, that blocks.
+    """
+    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
+    fake_client = _FakeReadinessGatedInternalIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
+    )
+
+    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "LLM Interface" in captured.err
+    assert "unavailable" in captured.err
+
+
+def test_internal_ingest_does_not_block_when_only_cellar_eli_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `internal ingest`."""
+    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
+    fake_client = _FakeReadinessGatedInternalIngestClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
+        allow_ingest=True,
+    )
+
+    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+
+    assert exit_code == 0
+
+
+def test_internal_ingest_still_rejects_invalid_local_file_before_any_network_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """DD2: local validation still runs before the pre-flight check.
+
+    The bare `_UnusedPsServiceClientMethods()` fake raises `AssertionError` if
+    `check_readiness()` (or `ingest_internal()`) is ever called -- so the invalid
+    fixture being rejected with a clean `PsCliError`-shaped exit, and no
+    `AssertionError` escaping, proves the pre-flight check is never reached for an
+    invalid local file.
+    """
+    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    invalid_document: dict[str, object] = {
+        "nodes": [],
+        "edges": [],
+        "graph_name": "policy_system",
+    }
+    (tmp_path / "bad-seed.json").write_text(json.dumps(invalid_document), encoding="utf-8")
+    fake_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(["internal", "ingest", "bad-seed.json"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
     assert "Traceback" not in captured.err
 
 
@@ -734,6 +983,30 @@ def test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path
     assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
 
 
+def test_catalog_list_unaffected_by_llm_interface_outage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-008: `catalog list` succeeds unaffected while LLM Interface is down.
+
+    Mirrors `test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path`:
+    `catalog list` never receives a real `PsServiceClient` at all (D13), so it is
+    structurally unaffected by any PS Service dependency state, LLM Interface included.
+    Proven via an uncallable client fake -- if `run()` ever called a method on
+    `uncallable_client`, this test would fail with an uncaught `AssertionError`.
+    """
+    curated_repo_path = tmp_path / "curated-content"
+    curated_repo_path.mkdir()
+    _write_catalog_fixture(curated_repo_path)
+    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(["catalog", "list"], client=uncallable_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
+
+
 class _FakeRestoreSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose restore_instrument() succeeds."""
 
@@ -910,9 +1183,66 @@ class _FakeCheckClient(_UnusedPsServiceClientMethods):
         """Script this fake's `run_change_check()` return value."""
         self._result = result
 
+    def check_readiness(self) -> ReadinessResult:
+        """Return a healthy default -- this fake's tests are not about the pre-flight check."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
     def run_change_check(self) -> ChangeCheckResult:
         """Return the scripted result."""
         return self._result
+
+
+class _FakeReadinessGatedCheckClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
+    `check` (mirrors `_FakeReadinessGatedIngestClient` for `regulations ingest`).
+
+    By default `run_change_check()` raises `AssertionError` if called -- proving the
+    pre-flight check ran first and blocked the command; pass `allow_check=True` for the
+    one test where the pre-flight check must let the command proceed.
+    """
+
+    def __init__(self, *, readiness: ReadinessResult, allow_check: bool = False) -> None:
+        """Script this fake's check_readiness() outcome, and whether the sweep may proceed."""
+        self._readiness = readiness
+        self._allow_check = allow_check
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return the scripted ReadinessResult."""
+        return self._readiness
+
+    def run_change_check(self) -> ChangeCheckResult:
+        """Fail the test unless `allow_check=True` -- proves the pre-flight check ran first."""
+        if not self._allow_check:
+            raise AssertionError("run_change_check must not be called in this test")
+        return ChangeCheckResult(run_id="run-check-cli", instruments=[])
+
+
+def test_check_fails_fast_when_llm_interface_unreachable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-009: LLM Interface unhealthy blocks `check` before any pipeline call."""
+    fake_client = _FakeReadinessGatedCheckClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
+    )
+
+    exit_code = run(["check"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "LLM Interface" in captured.err
+    assert "unavailable" in captured.err
+
+
+def test_check_does_not_block_when_only_cellar_eli_unreachable() -> None:
+    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `check`."""
+    fake_client = _FakeReadinessGatedCheckClient(
+        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
+        allow_check=True,
+    )
+
+    exit_code = run(["check"], client=fake_client)
+
+    assert exit_code == 0
 
 
 def test_run_check_returns_zero_on_empty_sweep(capsys: pytest.CaptureFixture[str]) -> None:

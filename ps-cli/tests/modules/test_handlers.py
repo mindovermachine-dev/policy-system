@@ -155,6 +155,10 @@ class _FakeIngestClient(_UnusedPsServiceClientMethods):
         self._error = error
         self.called_with_celex: str | None = None
 
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Record `celex`, then return the scripted result or raise the scripted error."""
         del run_id
@@ -255,6 +259,10 @@ class _FakeProgressIngestClient(_UnusedPsServiceClientMethods):
         self._stages = stages
         self._block_seconds = block_seconds
         self._poll_calls = 0
+
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
         """Record nothing; block briefly, then return the scripted result."""
@@ -584,6 +592,10 @@ class _FakeCheckClient(_UnusedPsServiceClientMethods):
     def __init__(self, result: ChangeCheckResult) -> None:
         """Script this fake's `run_change_check()` return value."""
         self._result = result
+
+    def check_readiness(self) -> ReadinessResult:
+        """Return a healthy default -- this fake's tests are not about the pre-flight check."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
     def run_change_check(self) -> ChangeCheckResult:
         """Return the scripted result."""

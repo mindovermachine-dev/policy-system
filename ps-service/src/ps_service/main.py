@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import uvicorn
 from fastapi import FastAPI, status
+from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.requests import Request
 
@@ -152,6 +153,14 @@ def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     """Probe FalkorDB, LLM Interface, and Cellar/ELI once at startup, logging a warning per failure.
 
+    Returns whether FalkorDB's own probe succeeded -- the only outcome that
+    gates `app.state.ready` (issue #75, AC-BI-002). LLM Interface and
+    Cellar/ELI are still probed unconditionally, in the same fixed order,
+    and a failure in either is still logged below exactly as before -- only
+    their effect on this function's *return value* is removed. `ready()`'s
+    live gate still reports either by name via `unhealthy_dependencies`,
+    unchanged (AC-BI-003).
+
     Deliberately never raises (issue #22): unlike
     `configure()`'s failures above, a dependency outage must never crash the
     process, only keep it out of `/ready`'s pool. Runs every probe even
@@ -164,7 +173,7 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     registry is what lets `/ready` self-heal from a later real-traffic
     success without a restart, beyond this one-time startup snapshot.
     """
-    all_succeeded = True
+    falkordb_succeeded = True
     for dependency, probe in (
         (FALKORDB, lambda: check_falkordb_connectivity(config)),
         (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
@@ -173,14 +182,15 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
         try:
             probe()
         except Exception as exc:  # noqa: BLE001 - a dependency outage must never crash the process (see docstring)
-            all_succeeded = False
+            if dependency == FALKORDB:
+                falkordb_succeeded = False
             emit_log_entry(
                 component="entrypoint",
                 action="startup",
                 outcome="warning",
                 extra={"dependency": dependency, "error": str(exc)},
             )
-    return all_succeeded
+    return falkordb_succeeded
 
 
 def create_app(config: ServiceConfig) -> FastAPI:
@@ -255,13 +265,18 @@ def create_app(config: ServiceConfig) -> FastAPI:
         startup-failure path reports it to stderr.
 
         `app.state.ready` only flips `True` once `_check_dependencies_at_startup`
-        (issue #22) confirms FalkorDB, LLM Interface, and Cellar/ELI are all
-        reachable AND every `INGESTION_REQUIRED_CONFIG_FIELDS` value resolved
-        (issue #16 follow-up) — unlike `configure()` above, neither failure
-        here propagates: each only keeps this instance out of `/ready`'s
-        pool, preserving liveness/readiness's whole reason for existing (a
-        dependency outage, or an incomplete deploy, must never crash-loop an
-        otherwise-healthy process).
+        (issue #22) confirms FalkorDB itself is reachable AND every
+        `INGESTION_REQUIRED_CONFIG_FIELDS` value resolved (issue #16
+        follow-up) — LLM Interface and Cellar/ELI are still probed
+        unconditionally at startup and still logged on failure, but neither
+        one's outcome affects this flag (issue #75, AC-BI-002): a transient
+        LLM/Cellar-ELI outage at boot must not wedge readiness for the rest
+        of the process's life. Unlike `configure()` above, neither a
+        dependency failure nor incomplete config propagates here: each only
+        keeps this instance out of `/ready`'s pool, preserving
+        liveness/readiness's whole reason for existing (a dependency outage,
+        or an incomplete deploy, must never crash-loop an otherwise-healthy
+        process).
 
         Missing config is checked once here, not folded into
         `dependency_health`'s live-updating registry: `config` is a frozen
@@ -319,37 +334,53 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """
         return {"status": "alive"}
 
-    async def ready() -> dict[str, str | list[str]]:
-        """Report "ready" only once startup succeeded AND every dependency is currently healthy.
+    async def ready() -> JSONResponse:
+        """Report "ready" only once startup succeeded AND FalkorDB is currently healthy.
 
         Two independent gates (issue #22): `app.state.ready` (the one-time
         startup probe from `lifespan` — which itself folds in both the three
         dependency probes AND ingestion config completeness, issue #16
-        follow-up) AND the live `dependency_health` registry (updated by real
-        FalkorDB/LLM Interface/Cellar-ELI traffic as it happens) both have to
-        hold. The live gate is what lets `/ready` flip back to `not_ready` if
-        a dependency fails mid-run, and self-heal on its next success,
-        without waiting for a restart — config completeness has no
-        equivalent live gate because it cannot change mid-run (see
-        `lifespan`'s docstring), so `app.state.ready` alone is the whole
-        story for that half.
+        follow-up) AND the live `dependency_health` registry's FalkorDB entry
+        (updated by real FalkorDB traffic as it happens, read via
+        `is_healthy`) both have to hold. The live gate is what lets `/ready`
+        flip back to `not_ready` if FalkorDB fails mid-run, and self-heal on
+        its next success, without waiting for a restart — config
+        completeness has no equivalent live gate because it cannot change
+        mid-run (see `lifespan`'s docstring), so `app.state.ready` alone is
+        the whole story for that half. LLM Interface and Cellar/ELI are
+        deliberately excluded from this predicate (issue #75): they are
+        still probed at startup and still tracked live in
+        `dependency_health`, but neither their startup nor live health ever
+        flips `/ready`'s status — only FalkorDB does.
 
         `unhealthy_dependencies` (issue #68) names every currently-unhealthy
-        member of `_READY_DEPENDENCIES` by its `dependency_health` constant
+        member of `_READY_DEPENDENCIES` (still all three dependencies, issue
+        #75 does not change this list) by its `dependency_health` constant
         string, read directly off the live registry via `is_healthy` — never
         the raw error text `mark_unhealthy` stores, which stays private to
         `dependency_health`. Always present, empty when every dependency is
         healthy, so callers get one predictable shape rather than two
-        distinguished by key presence.
+        distinguished by key presence. A dependency may appear here even
+        while `status` stays `"ready"`, when it is LLM Interface or
+        Cellar/ELI.
+
+        Returns an actual non-2xx status (`503`) when `status` is
+        `"not_ready"` (issue #75) — the response body alone previously left
+        an always-200 `/ready` unable to pull the pod from Kubernetes
+        Service rotation on a real outage, since the chart's `readinessProbe`
+        is a plain body-blind `httpGet`.
         """
         unhealthy_dependencies = [
             dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
         ]
-        is_ready = app.state.ready and not unhealthy_dependencies
-        return {
-            "status": "ready" if is_ready else "not_ready",
-            "unhealthy_dependencies": unhealthy_dependencies,
-        }
+        is_ready = app.state.ready and is_healthy(FALKORDB)
+        return JSONResponse(
+            status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "ready" if is_ready else "not_ready",
+                "unhealthy_dependencies": unhealthy_dependencies,
+            },
+        )
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/ready", ready, methods=["GET"])

@@ -1,63 +1,25 @@
 # Policy System
 
-Ingest EU regulations and internal business policies into a unified compliance
-knowledge graph, and answer questions against it in natural language.
+Policy System is a Open Source Software that can ingest EU regulations and internal business policies into a unified regulatory and compliance knowledge graph, and answer questions against it in natural language.
 
 - _"What approved policies do we have in place that cover the Cyber Resilience Act's obligations for manufacturers?"_
 - _"What do I need to consider if I use library XYZ in the code base I'm working on?"_
 - _"Which governed capabilities have no working control yet?"_
 
 Answers are grounded in the graph — every claim traces to regulation text and
-policy content that was actually retrieved, not to model recall.
+policy content that was retrieved. AI is used to analyze questions, derive intent, create queries and converting the returned data into an answer. The actual queries are fully deterministic. Where AI is involved, measures have been implemented to ensure that data is accurate and reliable.
 
-## Architecture
-
-Two deployable containers:
-
-| Container      | Responsibility                                                                                                                                                                                                    |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PS Service** | EU regulation meta-model, ingestion pipeline, guarded read-only Cypher query engine, MCP interface, REST API, and a LiteLLM interface to 100+ models via Ollama, Azure Foundry, AWS Bedrock, Anthropic, or OpenAI |
-| **FalkorDB**   | The graph database holding the compliance knowledge graph — a separate container so it can be patched independently without rebuilding or redeploying PS Service                                                  |
-
-PS Service's image is `ghcr.io/mindovermachine-dev/ps-service`. Each release publishes
-it under the release's semver tag and `latest`, as a multi-arch manifest list covering
-`linux/amd64` and `linux/arm64`.
-
-Users never talk to PS Service directly. They use a client:
-
-- **Policy System plugin** — a Claude plugin bundling the `ps-qna` skill and its MCP
-  connector. Read-only: ask compliance questions, get graph-grounded answers.
-- **ps-cli** — a command-line client driving PS Service's REST API: select and ingest
-  EU regulations from Cellar/ELI, ingest internal policies, check service health and
-  readiness. See the [user guide](./docs/artifacts/user-guide.md#ps-cli).
-- **Policy Editor** — authoring Policies, Standards, and Controls and linking them to
-  Capabilities. Under exploration; not yet designed.
-
----
-
-## Getting started for local testing
+## Getting started with local testing
 
 Deploying Policy System to try it out on your own laptop — prerequisites, the
-step-by-step walkthrough, current implementation status of each step, and
-troubleshooting — is documented in the user guide's
-[Local Test](./docs/artifacts/user-guide.md#local-test) section. Steps 1–5 (cluster,
-chart install, and seeding the graph from the curated catalog) work today; steps 6–7
-(the Policy System plugin) do not yet — see the section's own
-[Status of this path](./docs/artifacts/user-guide.md#status-of-this-path) table, tracked
-as [#53](https://github.com/mindovermachine-dev/policy-system/issues/53).
-
-If something doesn't come up, run `ps-cli health` first — it reports whether PS Service
-is reachable, alive, and ready, naming any unhealthy dependency.
-
-**To actually run the system today**, follow [CONTRIBUTING.md](./CONTRIBUTING.md)
-Option A or B — a devcontainer or local venv, with FalkorDB in a Podman container and
-Claude Desktop wired to a locally-spawned MCP server. That path works now.
+step-by-step walkthrough, and troubleshooting — is documented in the user guide's
+[Local Test](./docs/artifacts/user-guide.md#local-test) section.
 
 ---
 
 ## Target audiences
 
-These roles consume the Policy System through a client, never directly:
+Policy System has been designed with the following roles in mind:
 
 | Role                     | Primary use case                                                                                                                                                                                          |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

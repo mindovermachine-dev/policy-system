@@ -43,8 +43,14 @@ def test_create_app_registers_get_regulations_and_post_ingestions() -> None:
 
 
 def test_create_app_still_serves_health_and_ready() -> None:
-    """Regression: mounting the REST router leaves `/health` and `/ready` intact."""
+    """Regression: mounting the REST router leaves `/health` and `/ready` intact.
+
+    `/ready` is queried via a bare (never-entered) `TestClient`, so `lifespan`
+    startup never runs and `app.state.ready` stays its `False` default —
+    since issue #75, a not-ready `/ready` returns 503, not 200 (see
+    `ps_service.main.ready`'s docstring).
+    """
     client = TestClient(_make_app())
 
     assert client.get("/health").status_code == 200
-    assert client.get("/ready").status_code == 200
+    assert client.get("/ready").status_code == 503

@@ -134,11 +134,11 @@ def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) 
     assert response.json() == {"status": "alive"}
 
 
-def test_ready_returns_200_and_not_ready_status_before_lifespan_runs(app: FastAPI) -> None:
-    """GET /ready via a bare (never-entered) TestClient returns 200 and 'not_ready'."""
+def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAPI) -> None:
+    """GET /ready via a bare (never-entered) TestClient returns 503 and 'not_ready'."""
     response = TestClient(app).get("/ready")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
 
 
@@ -256,28 +256,30 @@ def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
 
 
 @pytest.mark.parametrize(
-    ("make_response", "expected_keys"),
+    ("make_response", "expected_status", "expected_keys"),
     [
-        (_get_bare_health, {"status"}),
-        (_get_bare_ready, {"status", "unhealthy_dependencies"}),
-        (_get_ready_after_lifespan_startup, {"status", "unhealthy_dependencies"}),
+        (_get_bare_health, 200, {"status"}),
+        (_get_bare_ready, 503, {"status", "unhealthy_dependencies"}),
+        (_get_ready_after_lifespan_startup, 200, {"status", "unhealthy_dependencies"}),
     ],
 )
-def test_200_response_body_contains_only_a_status_key(
+def test_response_body_contains_only_a_status_key(
     make_response: Callable[[FastAPI], httpx.Response],
+    expected_status: int,
     expected_keys: set[str],
     app: FastAPI,
 ) -> None:
-    """AC-BI-009 (final): every 200-response body's key set is exactly the documented shape.
+    """AC-BI-009 (final): every response body's key set is exactly the documented shape.
 
-    Covers every 200-response state reached by increments 1-4's tests: bare
-    `/health` (`{"status"}`), and bare/post-`lifespan`-startup `/ready`
-    (`{"status", "unhealthy_dependencies"}` since issue #68) — no undocumented
-    key ever leaks into either response.
+    Covers every state reached by increments 1-4's tests: bare `/health`
+    (200, `{"status"}`), bare `/ready` before `lifespan` runs (503, not
+    ready), and `/ready` after `lifespan` startup completes (200, ready) —
+    both `/ready` states carry `{"status", "unhealthy_dependencies"}` (issue
+    #68) — no undocumented key ever leaks into either response.
     """
     response = make_response(app)
 
-    assert response.status_code == 200
+    assert response.status_code == expected_status
     assert response.json().keys() == expected_keys
 
 
@@ -1099,6 +1101,184 @@ def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: 
 
     assert "super-secret-connection-string-should-never-leak" not in response.text
     assert response.json()["unhealthy_dependencies"] == ["falkordb"]
+
+
+def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: FastAPI) -> None:
+    """AC-BI-001/AC-BI-005 (live half): only FalkorDB health determines `/ready`'s
+    status — an LLM Interface outage recorded on the live registry still names
+    it in `unhealthy_dependencies` but must not flip `status` to `not_ready`.
+    """
+    with TestClient(app) as client:
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+        dependency_health.mark_unhealthy(
+            dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
+        )
+
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": ["llm_interface"],
+        }
+
+
+def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI) -> None:
+    """AC-BI-001/AC-BI-006 (live half): a Cellar/ELI outage recorded on the live
+    registry still names it in `unhealthy_dependencies` but must not flip
+    `status` to `not_ready`.
+    """
+    with TestClient(app) as client:
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+        dependency_health.mark_unhealthy(
+            dependency_health.CELLAR_ELI, error=ConnectionError("boom")
+        )
+
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": ["cellar_eli"],
+        }
+
+
+def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without_restart(
+    app: FastAPI,
+) -> None:
+    """AC-BI-004 (extended to LLM Interface): once LLM Interface recovers, its
+    name drops from `unhealthy_dependencies` on the next poll, without a
+    restart. `status` stays `ready` throughout, since LLM Interface never
+    gates it.
+    """
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(
+            dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
+        )
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": ["llm_interface"],
+        }
+
+        dependency_health.mark_healthy(dependency_health.LLM_INTERFACE)
+
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+
+def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_restart(
+    app: FastAPI,
+) -> None:
+    """AC-BI-004 (extended to Cellar/ELI): once Cellar/ELI recovers, its name
+    drops from `unhealthy_dependencies` on the next poll, without a restart.
+    `status` stays `ready` throughout, since Cellar/ELI never gates it.
+    """
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(
+            dependency_health.CELLAR_ELI, error=ConnectionError("boom")
+        )
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": ["cellar_eli"],
+        }
+
+        dependency_health.mark_healthy(dependency_health.CELLAR_ELI)
+
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+
+def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_stays_ready(
+    app: FastAPI,
+) -> None:
+    """Strengthens AC-BI-001/AC-BI-003 against a "only one dependency at a time"
+    blind spot: both non-FalkorDB dependencies unhealthy at once are both
+    named, in `_READY_DEPENDENCIES`'s declared order, while `status` stays
+    `ready` since FalkorDB itself is untouched.
+    """
+    with TestClient(app) as client:
+        dependency_health.mark_unhealthy(
+            dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
+        )
+        dependency_health.mark_unhealthy(
+            dependency_health.CELLAR_ELI, error=ConnectionError("boom")
+        )
+
+        response = client.get("/ready")
+
+    assert response.json() == {
+        "status": "ready",
+        "unhealthy_dependencies": ["llm_interface", "cellar_eli"],
+    }
+
+
+def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succeeds(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-002/AC-BI-005 (startup half): an LLM Interface probe failure at
+    startup must not wedge `app.state.ready` -- only a FalkorDB startup
+    failure does. Once `lifespan` completes, `/ready` reports ready, still
+    naming LLM Interface as unhealthy.
+    """
+
+    def failing_llm_check(config: ServiceConfig) -> None:
+        error = LlmProviderError("PS_LLMINTERFACE_MODEL is not configured")
+        dependency_health.mark_unhealthy(dependency_health.LLM_INTERFACE, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", failing_llm_check)
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": ["llm_interface"]}
+
+
+def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeeds(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-002/AC-BI-006 (startup half): a Cellar/ELI probe failure at
+    startup must not wedge `app.state.ready` -- only a FalkorDB startup
+    failure does. Once `lifespan` completes, `/ready` reports ready, still
+    naming Cellar/ELI as unhealthy.
+    """
+
+    def failing_cellar_check() -> None:
+        error = IngestionConfigurationError("Cellar/ELI connection failed")
+        dependency_health.mark_unhealthy(dependency_health.CELLAR_ELI, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", failing_cellar_check)
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": ["cellar_eli"]}
+
+
+def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_dependency(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI, tmp_path: Path
+) -> None:
+    """AC-BI-014 (extended to Cellar/ELI): mirrors
+    `test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency`
+    (LLM Interface) -- a Cellar/ELI startup probe failure must still emit a
+    warning log entry naming it, even though it no longer affects
+    `app.state.ready`.
+    """
+
+    def failing_cellar_check() -> None:
+        raise IngestionConfigurationError("Cellar/ELI connection failed")
+
+    monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", failing_cellar_check)
+
+    with TestClient(app):
+        pass
+
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    warning_entries = [
+        line
+        for line in lines
+        if line.get("action") == "startup" and line.get("outcome") == "warning"
+    ]
+
+    assert any(entry.get("dependency") == "cellar_eli" for entry in warning_entries)
 
 
 # --- Config-completeness-gated readiness (issue #16 follow-up) -------------

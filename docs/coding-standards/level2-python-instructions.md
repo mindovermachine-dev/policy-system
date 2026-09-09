@@ -140,8 +140,8 @@
 
 ### Error Handling
 
-- Domain-specific exception types per component, not generic `Exception`/`ValueError` — follow the existing precedent in `spikes/ps-cli` (e.g. `MissingBaselineError`, `GraphNotFoundError`, `RestoreError`) rather than returning ambiguous error strings.
-- Result types (e.g. `MergeResult`, `IngestResult`) are acceptable for operations with a meaningful success payload alongside possible partial failure — mirrors the pattern already used in `spikes/ps-cli`.
+- Domain-specific exception types per component, not generic `Exception`/`ValueError` — follow the existing precedent already established within `ps-service` itself (e.g. `IngestionPersistenceError`, `DomainMapperExtractionError`, `CompanyMergeValidationError`) rather than returning ambiguous error strings.
+- Result types (e.g. `MergeResult`, `IngestResult`) are acceptable for operations with a meaningful success payload alongside possible partial failure — already used this way elsewhere in `ps-service` (`ingestion/models.py`'s `IngestResult`, `company_merge/models.py`'s `MergeResult`).
 
 ### Configuration & Secrets
 

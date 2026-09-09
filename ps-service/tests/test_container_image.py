@@ -263,7 +263,7 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
 # `app.state.ready` also requires the Cellar/ELI probe, whose endpoint is a hardcoded module
 # constant (`ingestion/adapters/cellar_eli/fetch.py`) with no configuration seam. A literal
 # `"ready"` would therefore make the release gate depend on a live third-party service. The
-# gate instead asserts `/ready` answers 200 `not_ready` for the exactly-known reason, and
+# gate instead asserts `/ready` answers 503 `not_ready` for the exactly-known reason, and
 # proves FalkorDB specifically healthy -- which is the half of AC-BI-007 this image controls.
 
 _FALKORDB_IMAGE = "falkordb/falkordb:latest"
@@ -281,6 +281,7 @@ _BARRIER_DEPENDENCY = "llm_interface"
 _UNREACHABLE_FALKORDB_HOST = "falkordb-unreachable.invalid"
 
 _HTTP_OK = 200
+_HTTP_SERVICE_UNAVAILABLE = 503
 _HTTP_TIMEOUT_SECONDS = 10.0
 _POLL_INTERVAL_SECONDS = 0.25
 _STARTUP_BARRIER_SECONDS = 30.0
@@ -555,10 +556,10 @@ def test_health_returns_200_alive_through_the_published_port(
     assert response.json() == {"status": "alive"}
 
 
-def test_ready_returns_200_not_ready_while_the_llm_provider_is_unconfigured(
+def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     smoke_service: _RunningService,
 ) -> None:
-    """B' (AC-BI-007): `/ready` answers 200 `not_ready`.
+    """B' (AC-BI-007): `/ready` answers 503 `not_ready`.
 
     Deterministic, not merely observed: `connectivity.check_connectivity` raises without a
     network call because neither model variable is set, and `missing_ingestion_config_fields`
@@ -572,7 +573,7 @@ def test_ready_returns_200_not_ready_while_the_llm_provider_is_unconfigured(
     """
     response = httpx.get(f"{smoke_service.base_url}/ready", timeout=_HTTP_TIMEOUT_SECONDS)
 
-    assert response.status_code == _HTTP_OK, (
+    assert response.status_code == _HTTP_SERVICE_UNAVAILABLE, (
         f"/ready answered {response.status_code}: {response.text}"
     )
     assert response.json() == {
@@ -736,7 +737,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
         )
 
         response = httpx.get(f"{service.base_url}/ready", timeout=_HTTP_TIMEOUT_SECONDS)
-        assert response.status_code == _HTTP_OK
+        assert response.status_code == _HTTP_SERVICE_UNAVAILABLE
         assert response.json() == {
             "status": "not_ready",
             "unhealthy_dependencies": [_FALKORDB_DEPENDENCY, _BARRIER_DEPENDENCY],

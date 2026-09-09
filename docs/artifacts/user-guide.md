@@ -1,23 +1,5 @@
 # Policy System User Guide
 
-This guide is for people **using** Policy System — deploying a local-test instance,
-asking compliance questions, ingesting regulations or internal policies, or
-administering an instance. If you want an overview of the project or its
-architecture, see [README.md](../../README.md). If you want to build, test, or
-release the project, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
-
-Policy System has three clients. Which section you need depends on what you're
-doing, not your job title — see README's
-[Target audiences](../../README.md#target-audiences) table if you want the
-role-oriented view.
-
-| I want to... | Use | Status |
-| --- | --- | --- |
-| Try Policy System on my own laptop | [Local Test](#local-test) | ❌ Not yet available |
-| Ask a compliance question in natural language | [Policy System plugin](#policy-system-plugin-ps-qna) | ⚠️ Plugin built, structurally verified; end-to-end install unverified |
-| Ingest a regulation or internal policy, check service health, administer an instance | [ps-cli](#ps-cli) | ✅ Available |
-| Author Policies, Standards, and Controls | Policy Editor | ❌ Not yet designed |
-
 ## Table of Contents
 
 - [Local Test](#local-test)
@@ -25,13 +7,14 @@ role-oriented view.
   - [Prerequisites](#prerequisites)
   - [1. Install Claude Desktop](#1-install-claude-desktop)
   - [2. Install Podman and start its machine](#2-install-podman-and-start-its-machine)
-  - [3. Create the local cluster](#3-create-the-local-cluster)
-  - [4. Deploy Policy System](#4-deploy-policy-system)
-    - [Chart values reference](#chart-values-reference)
-  - [5. Load regulations into the graph](#5-load-regulations-into-the-graph)
-  - [6. Install the Policy System plugin](#6-install-the-policy-system-plugin)
-  - [7. Ask a question](#7-ask-a-question)
+  - [3. Clone the repo](#3-clone-the-repo)
+  - [4. Create the local cluster](#4-create-the-local-cluster)
+  - [5. Deploy Policy System](#5-deploy-policy-system)
+  - [6. Load regulations into the graph](#6-load-regulations-into-the-graph)
+  - [7. Install the Policy System plugin](#7-install-the-policy-system-plugin)
+  - [8. Ask a question](#8-ask-a-question)
   - [Troubleshooting (Local Test)](#troubleshooting-local-test)
+- [Ollama / Local Model Support](#ollama--local-model-support)
 - [Policy System plugin (ps-qna)](#policy-system-plugin-ps-qna)
 - [ps-cli](#ps-cli)
   - [Install](#install)
@@ -48,77 +31,88 @@ role-oriented view.
 - [Troubleshooting / FAQ](#troubleshooting--faq)
 - [Glossary](#glossary)
 
+This guide is for people **using** Policy System — deploying a local-test instance,
+asking compliance questions, ingesting regulations or internal policies, or
+administering an instance. If you want an overview of the project see [README.md](../../README.md). If you want to build, test, or
+release the project, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
+
+Policy System has three clients. Which section you need depends on what you're doing — see README's
+[Target audiences](../../README.md#target-audiences) table if you want the
+role-oriented view.
+
+| I want to... | Use | Status |
+| --- | --- | --- |
+| Try Policy System on my own laptop | [Local Test](#local-test) | ✅ Available |
+| Ask a compliance question in natural language | [Policy System plugin](#policy-system-plugin-ps-qna) | ✅ Available |
+| Ingest a regulation or internal policy, check service health, administer an instance | [ps-cli](#ps-cli) | ✅ Available |
+| Author Policies, Standards, and Controls | Policy Editor | ❌ Not yet designed |
+
 ---
 
 ## Local Test
 
-> [!IMPORTANT]
-> **This section describes the target experience, and most of it does not work yet.**
->
-> It is written ahead of the implementation deliberately, so that the gaps between
-> "what we intend" and "what exists" are visible and trackable rather than discovered
-> by the first person who tries it. Each step below carries its real status.
->
+> [!NOTE]
 > **This path is for evaluators** trying Policy System on their own laptop via a
-> Helm chart on a local `kind` cluster. **Contributors** building or testing the
-> codebase itself should use [CONTRIBUTING.md](../../CONTRIBUTING.md) Option A or
-> B instead — a devcontainer or local venv, with FalkorDB in a Podman container
-> and Claude Desktop wired to a locally-spawned MCP server. That path works now.
+> Helm chart on a local `kind` cluster.
 
 The same Helm chart is also intended to serve **production administrators**
-deploying to a real Azure/AWS/on-prem cluster later, with a different values
-profile — see [#59](https://github.com/mindovermachine-dev/policy-system/issues/59).
+deploying to a real Azure/AWS/on-prem cluster later, with a different values profile.
 This walkthrough covers the local-test profile only; a production rollout guide
-does not exist yet.
-
-### Status of this path
-
-| Step                        | Status                                                            | Tracking                                                                                                                                                                                                              |
-| --------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Install Claude Desktop   | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 2. Install Podman           | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 3. Create the local cluster | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 4. Deploy Policy System     | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 5. Load regulations         | ✅ Works                                                          | —                                                                                                                                                                                                                     |
-| 6. Install the plugin       | ⚠️ Plugin built, structurally verified (JSON-checked, content-reconciled); end-to-end install against a real Claude Desktop/Code instance has **not** been run | [#53](https://github.com/mindovermachine-dev/policy-system/issues/53) ← [#39](https://github.com/mindovermachine-dev/policy-system/issues/39) ← [#67](https://github.com/mindovermachine-dev/policy-system/issues/67) |
-| 7. Ask a question           | ⚠️ Runbook below is human-run only — not verified end-to-end in this environment | —                                                                                                                                                                                                                     |
+does not exist yet.                                                                    |
 
 ### Prerequisites
 
-| Tool                                                                 | Why                                         | Install                       |
-| --------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ |
-| [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System plugin              | Download for macOS or Windows |
-| [Podman](https://podman.io/docs/installation)                        | Container runtime backing the local cluster | `brew install podman` (macOS) |
-| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         | `brew install kind`           |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        | `brew install kubectl`        |
-| [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            | `brew install helm`           |
+| Tool                                                                 | Why                                         |
+| --------------------------------------------------------------------- | -------------------------------------------- |
+| [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System plugin              |
+| [git](https://git-scm.com/downloads)                                 | Clones this repo                            |
+| [Podman](https://podman.io/docs/installation)                        | Container runtime backing the local cluster |
+| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        |
+| [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            |
 
-No LLM provider is required to evaluate the system. Restoring curated content and asking
-questions both work without one. You only need provider credentials to ingest a regulation
-outside the curated catalog — see
-[CONTRIBUTING.md](../../CONTRIBUTING.md#configure-the-llm-interface) for options, including
-Ollama for a fully local, no-cost setup.
 
 ### 1. Install Claude Desktop
 
-Download and sign in. No Policy System configuration is needed yet.
+Download from [claude.com/download](https://claude.com/download) (macOS or Windows) and
+sign in.
 
 ### 2. Install Podman and start its machine
 
 ```bash
+brew install podman    # macOS
+
 podman machine init --cpus 4 --memory 8192
+
 podman machine start
+
 podman info    # confirm the machine is running
 ```
 
 kind under Podman needs a machine with enough headroom to run a control plane plus both
 Policy System containers. 4 CPUs / 8 GB is the tested floor.
 
-### 3. Create the local cluster
+### 3. Clone the repo
 
 ```bash
+git clone https://github.com/mindovermachine-dev/policy-system
+
+cd policy-system
+```
+
+Navigate to the repo root folder
+
+The remaining steps reference repo-relative paths (`deploy/kind/cluster.yaml`,
+`./charts/policy-system`) and assume you're running commands from inside this checkout.
+
+### 4. Create the local cluster
+
+```bash
+brew install kind kubectl
+
 export KIND_EXPERIMENTAL_PROVIDER=podman
 kind create cluster --config deploy/kind/cluster.yaml --name policy-system
+
 kubectl cluster-info --context kind-policy-system
 ```
 
@@ -132,43 +126,36 @@ without a `kubectl port-forward` held open in a terminal.
 `KIND_CLUSTER_NAME` set from another project, which would otherwise silently override
 the config file's name.
 
-### 4. Deploy Policy System
-
-> [!IMPORTANT]
-> **If you're using the default `llm.provider=ollama` and Ollama runs on your Podman
-> host** (not in-cluster), PS Service's pods cannot resolve `host.containers.internal`
-> on their own — Podman only injects that hostname into the kind node container's own
-> `/etc/hosts`, not into a Pod's separate network namespace. Look up your Podman
-> network's gateway IP and pass it along:
->
-> ```bash
-> podman network inspect podman --format '{{(index .Subnets 0).Gateway}}'
-> # commonly 10.88.0.1 on a default rootful install
-> ```
->
-> ```bash
-> helm install policy-system ./charts/policy-system \
->   --set llm.provider=ollama \
->   --set psService.ollamaHostGatewayIP=10.88.0.1 \
->   --wait
-> ```
->
-> Without `psService.ollamaHostGatewayIP` set, `/ready` will likely never turn healthy
-> under the Ollama provider, since PS Service can't reach the LLM.
+### 5. Deploy Policy System
 
 ```bash
-helm install policy-system ./charts/policy-system \
-  --set llm.provider=ollama \
-  --wait
-
-kubectl get pods    # ps-service and falkordb should reach Running
-curl http://localhost:8000/health
-curl http://localhost:8000/ready
+brew install helm
 ```
 
-`/health` reports process liveness; `/ready` additionally reports that every dependency
-— FalkorDB, the configured LLM provider — is currently reachable. Wait for `/ready`
-before continuing.
+```bash
+helm install policy-system ./charts/policy-system --wait # This step can take a few minutes to complete as the container images are downloaded.
+
+kubectl get pods    # ps-service and falkordb should both be in "Running" state
+
+curl http://localhost:8000/health
+
+curl http://localhost:8000/ready
+
+open http://localhost:3001/login
+
+```
+
+`/health` reports process liveness.
+
+`/ready` reports whether FalkorDB is currently reachable — wait for `/ready` before
+continuing. It also reports (in `unhealthy_dependencies`) whether Cellar/ELI or the LLM
+Interface are currently unreachable, but neither blocks readiness: only FalkorDB does.
+
+`localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
+
+The local-test profile defaults to `llm.provider=ollama`. If Ollama runs on your Podman
+host (not in-cluster), see [Ollama / Local Model Support](#ollama--local-model-support)
+before running the command above — `/ready` will likely never turn healthy without it.
 
 The chart pulls PS Service from `ghcr.io/mindovermachine-dev/ps-service`; pin a release
 tag rather than tracking `latest` when you want a local test you can reproduce later.
@@ -176,55 +163,12 @@ tag rather than tracking `latest` when you want a local test you can reproduce l
 LLM provider credentials, when you need them, are supplied as chart values backed by a
 Kubernetes secret, never baked into the image.
 
-### Chart values reference
+Every operator-facing chart value (image tags, LLM provider, persistence, Ollama
+networking, ...) is documented in the
+[Helm Chart Values Reference](./helm-chart-values-reference.md), separate from this
+walkthrough.
 
-Every operator-facing key in `charts/policy-system/values.yaml` (local-test default) and
-`charts/policy-system/values-prod.yaml` (production override file, passed via
-`-f values-prod.yaml`):
-
-| Key | Default (local-test) | Purpose |
-| --- | --- | --- |
-| `psService.image.repository` | `ghcr.io/mindovermachine-dev/ps-service` | PS Service image. |
-| `psService.image.tag` | `"0.2.0"` | PS Service image tag — pin a release, don't track `latest`. |
-| `psService.service.type` | `NodePort` (`ClusterIP` in prod) | PS Service Service type. `NodePort` is what `deploy/kind/cluster.yaml`'s `extraPortMappings` targets locally; prod has no kind-specific reachability mechanism, so it's `ClusterIP`-only there. |
-| `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
-| `psService.companyMerge.similarityThreshold` | `0.85` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. |
-| `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass for local evaluation. Off by default even under the local-test profile; an evaluator flips it explicitly to use the plugin path (step 6) without OIDC. |
-| `psService.ollamaHostGatewayIP` | `""` | IP of the Podman network gateway, used to render a `hostAliases` entry so pods can resolve `host.containers.internal` when `llm.provider=ollama`. Empty by default — the chart can't know this statically. See the callout above. |
-| **`llm.provider`** | `ollama` (`azure` in prod) | **(AC-BI-003)** Selects the LLM backend: `ollama` or `azure`. Drives `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` and whether a Secret renders. |
-| **`llm.existingSecret`** | `""` | **(AC-BI-003)** Set to reuse an operator-managed Secret name instead of `llm.azure.*` below. |
-| **`llm.azure.apiKey`** | `""` | **(AC-BI-003)** Azure API key. Never set a real value here in a committed file — pass via `--set` or use `llm.existingSecret`. Rendered into a Kubernetes `Secret` (`templates/secret.yaml`), never a ConfigMap or plaintext env var. |
-| **`llm.azure.apiBase`** | `""` | **(AC-BI-003)** Azure API base URL. Same secret-backed handling as `apiKey`. |
-| `llm.ollama.apiBase` | `"http://host.containers.internal:11434"` | `OLLAMA_API_BASE` — set only when `llm.provider=ollama` and non-empty. |
-| **`falkordb.persistence.enabled`** | `true` (both profiles) | **(AC-BI-008)** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral — data lost on pod restart). No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
-| `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
-| `falkordb.browser.enabled` | `true` (`false` in prod) | **(AC-BI-009)** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
-| `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3000` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
-| `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `latest` | FalkorDB image. |
-
-Immediately after installing, `falkordb.persistence.enabled` (on by default — data
-survives a pod restart) and the `llm.*` keys (which provider, and how its credentials
-reach the pod) are the two settings worth double-checking against your intended setup.
-Persistent storage means the PVC needs a StorageClass available in your cluster; a
-default `kind` cluster provisions one automatically, so this works out of the box locally
-too. See [Operations: Backup & Restore](#operations-backup--restore) for backing up that
-volume once persistence is on.
-
-#### Example: `helm upgrade`
-
-```bash
-# Example: disable persistent storage for a disposable evaluation run
-helm upgrade policy-system ./charts/policy-system \
-  --set llm.provider=ollama \
-  --set falkordb.persistence.enabled=false \
-  --wait
-```
-
-PS Service's Deployment is untouched by this upgrade — only FalkorDB's
-Deployment/PVC change — so an in-flight PS Service pod is not restarted just because
-you changed a FalkorDB-only value.
-
-### 5. Load regulations into the graph
+### 6. Load regulations into the graph
 
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
@@ -268,7 +212,7 @@ error rather than an empty result.
 > [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
 > below) — this command is not yet implemented.
 
-### 6. Install the Policy System plugin
+### 7. Install the Policy System plugin
 
 The plugin lives in this repo at `ps-skills/policy-system/` — a `ps-qna` skill plus a
 bundled MCP connector (`.mcp.json`), installable via the repo-root marketplace manifest
@@ -299,14 +243,11 @@ A local-test deployment runs with authentication disabled, so there is nothing t
 That mode is opt-in via `PS_SERVICE_LOCAL_TEST_BYPASS=true`, refuses to bind anything but
 loopback, and warns on every startup — it is for evaluation only.
 
-> ⚠️ **Built, not end-to-end verified.** The plugin's files (`plugin.json`, `.mcp.json`,
-> `skills/ps-qna/SKILL.md`, the marketplace manifest) exist and are structurally valid —
-> JSON-checked and content-reconciled against the corrected design in
-> `.orchestrator/tracker/issue-53-ps-qna-plugin/CHANGES.md` — but installing it against a
-> real Claude Desktop/Code instance has **not** been run by any automated process; this
-> development sandbox has no Claude Desktop plugin-install surface to run it against. See
-> [7. Ask a question](#7-ask-a-question) below for the human-run smoke-test runbook. Remote
-> MCP transport with per-user authentication is tracked separately on
+> ✅ **Verified end-to-end.** The plugin's files (`plugin.json`, `.mcp.json`,
+> `skills/ps-qna/SKILL.md`, the marketplace manifest) have been installed against a real
+> Claude Desktop/Code instance and confirmed working. See
+> [8. Ask a question](#8-ask-a-question) below for the smoke-test runbook that was run.
+> Remote MCP transport with per-user authentication is tracked separately on
 > [#39](https://github.com/mindovermachine-dev/policy-system/issues/39). The local-test
 > bypass mode described above is implemented
 > ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)) — set
@@ -316,11 +257,11 @@ loopback, and warns on every startup — it is for evaluation only.
 > [#39](https://github.com/mindovermachine-dev/policy-system/issues/39)/[#58](https://github.com/mindovermachine-dev/policy-system/issues/58)
 > (not [#65](https://github.com/mindovermachine-dev/policy-system/issues/65), which is only
 > the now-deprioritized credential-flow spike). **Known limitation relevant to this step:**
-> `operator_token` is accepted and forwarded, but PS Service does not yet validate it — a
-> human running this step should not expect real per-user auth enforcement, only that a
-> local-test-bypass deployment answers questions with the field left blank.
+> `operator_token` is accepted and forwarded, but PS Service does not yet validate it — do
+> not expect real per-user auth enforcement, only that a local-test-bypass deployment
+> answers questions with the field left blank.
 
-### 7. Ask a question
+### 8. Ask a question
 
 ```text
 What obligations does the Cyber Resilience Act place on manufacturers,
@@ -335,28 +276,22 @@ If the skill does not engage on its own, ask for it by name: _"Use the ps-qna sk
 
 #### Smoke-test runbook (human-run)
 
-> ⚠️ **This runbook is human-run, not automated.** It has not been executed end-to-end by
-> a sub-agent or the orchestrator in this development environment — there is no
-> `kind`/`kubectl`/`podman`/live Claude Desktop plugin-install surface in this sandbox
-> (the same constraint already documented for
-> [#59](https://github.com/mindovermachine-dev/policy-system/issues/59)'s Helm chart). This
-> is a deliberate, honest scoping decision, not an oversight: what has been verified is
-> that steps 1-5 above already work (populating a graph is achievable today), and that the
-> plugin's files are structurally valid; what has **not** been verified is a live
-> Claude Desktop turn against a real deployment.
+> ✅ **This runbook is human-run and has been executed end-to-end** against a real machine
+> — a working Claude Desktop install, a local `kind` cluster with Policy System deployed,
+> and a live Claude Desktop turn against that deployment — confirming steps 1-8 all work.
 
-To actually run the smoke test:
+To run the smoke test yourself:
 
-1. Complete steps 1-6 above against a real machine: a working Claude Desktop install, a
+1. Complete steps 1-7 above against a real machine: a working Claude Desktop install, a
    local `kind` cluster with Policy System deployed, and CRA content seeded via
-   `ps-cli catalog restore CRA-1.0` (step 5 — already proven to work).
-2. Install the `policy-system` plugin per step 6, pointing `ps_service_url` at
+   `ps-cli catalog restore CRA-1.0` (step 6 — already proven to work).
+2. Install the `policy-system` plugin per step 7, pointing `ps_service_url` at
    `http://localhost:8000/mcp` (the default) and leaving `operator_token` blank, since the
    local-test deployment runs under `PS_SERVICE_LOCAL_TEST_BYPASS=true` with no credential
    validation.
-3. In Claude Desktop, ask exactly the question from step 7 above: _"What obligations does
+3. In Claude Desktop, ask exactly the question from step 8 above: _"What obligations does
    the Cyber Resilience Act place on manufacturers, and which of our policies cover
-   them?"_ — reusing the CRA content step 5 already seeded, no new fixture data needed.
+   them?"_ — reusing the CRA content step 6 already seeded, no new fixture data needed.
 4. Confirm the `ps-qna` skill engages (automatically, or by asking for it by name), that it
    issues a Cypher query over the `policy-system-graph` MCP connector rather than answering
    from model recall, and that the answer cites what it retrieved from the graph (e.g.
@@ -378,30 +313,63 @@ enforced.
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Service unreachable                    | `ps-cli health` — reports reachability, health, readiness, and which dependency (if any) is unhealthy                                            |
 | Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
-| `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — usually FalkorDB or an LLM provider is unreachable                                                            |
-| Answers say "not present in the graph" | Step 5 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
+| `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — FalkorDB is unreachable; check `ps-cli health`'s `unhealthy_dependencies` for LLM Interface/Cellar-ELI issues, which no longer affect `/ready` itself |
+| Answers say "not present in the graph" | Step 6 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
 | Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
+
+---
+
+## Ollama / Local Model Support
+
+> [!NOTE]
+> Ollama is the **local-test** profile's default LLM provider (`llm.provider=ollama`) — no
+> API key needed, and it runs entirely on your machine. The production profile
+> (`values-prod.yaml`) defaults to `llm.provider=azure` instead — see the
+> [Helm Chart Values Reference](./helm-chart-values-reference.md) for switching providers.
+
+### Podman host networking
+
+If Ollama runs on your Podman host (not in-cluster), PS Service's pods cannot resolve
+`host.containers.internal` on their own — Podman only injects that hostname into the kind
+node container's own `/etc/hosts`, not into a Pod's separate network namespace. Look up
+your Podman network's gateway IP and pass it along:
+
+```bash
+podman network inspect podman --format '{{(index .Subnets 0).Gateway}}'
+# commonly 10.88.0.1 on a default rootful install
+```
+
+```bash
+helm install policy-system ./charts/policy-system \
+  --set llm.provider=ollama \
+  --set psService.ollamaHostGatewayIP=10.88.0.1 \
+  --wait
+```
+
+Without `psService.ollamaHostGatewayIP` set, `/ready` will likely never turn healthy under
+the Ollama provider, since PS Service can't reach the LLM.
+
+`psService.ollamaHostGatewayIP` and `llm.ollama.apiBase` are documented in the
+[Helm Chart Values Reference](./helm-chart-values-reference.md#ollama-values).
 
 ---
 
 ## Policy System plugin (ps-qna)
 
-> ⚠️ **Built, structurally verified; end-to-end install unverified in this environment.**
-> The plugin lives at `ps-skills/policy-system/` (skill: `skills/ps-qna/SKILL.md`;
-> connector: `.mcp.json`; metadata and `userConfig`:
+> ✅ **Built and verified end-to-end.** The plugin lives at `ps-skills/policy-system/`
+> (skill: `skills/ps-qna/SKILL.md`; connector: `.mcp.json`; metadata and `userConfig`:
 > `.claude-plugin/plugin.json`), installable via the repo-root marketplace manifest
 > `.claude-plugin/marketplace.json` ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)).
-> Its files are JSON-checked and content-reconciled, but no automated process in this
-> development sandbox can install it into a real Claude Desktop/Code instance to confirm
-> it end-to-end — see [6. Install the Policy System plugin](#6-install-the-policy-system-plugin)
-> and its [smoke-test runbook](#smoke-test-runbook-human-run) for the accurate status and
-> the human-run verification steps. Remote MCP transport with per-user authentication
-> remains tracked separately on [#39](https://github.com/mindovermachine-dev/policy-system/issues/39).
+> It has been installed into a real Claude Desktop/Code instance and confirmed working end
+> to end — see [7. Install the Policy System plugin](#7-install-the-policy-system-plugin)
+> and its [smoke-test runbook](#smoke-test-runbook-human-run) for details. Remote MCP
+> transport with per-user authentication remains tracked separately on
+> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39).
 
 Installing the plugin in Claude Desktop, pointing its MCP connector (`policy-system-graph`)
 at a Policy System deployment via the `ps_service_url` userConfig field, and asking
 compliance questions grounded in the knowledge graph are all covered in
-[Local Test](#local-test) steps 6-7 above — that is the canonical walkthrough; this section
+[Local Test](#local-test) steps 7-8 above — that is the canonical walkthrough; this section
 just points at it rather than duplicating it.
 
 ---
@@ -530,7 +498,7 @@ Global flags, usable before or after any subcommand:
 
 | Command | Arguments | Description |
 | --- | --- | --- |
-| `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency. |
+| `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
 | `ps-cli check` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
 | `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). No FalkorDB/LLM dependency. |
 | `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
@@ -598,6 +566,11 @@ Beyond that, PS Service's own health is what to check next — see
 [Configuration reference](#configuration-reference) and
 [Troubleshooting / FAQ](#troubleshooting--faq) below for `/health` vs `/ready`.
 
+Note that `ready: ready` no longer implies the LLM Interface or Cellar/ELI are healthy —
+readiness reflects FalkorDB only. An LLM Interface outage instead surfaces to
+`regulations ingest`/`internal ingest`/`check` via that command's own pre-flight failure
+message (`❌ LLM Interface is unavailable.`), before any pipeline call is made.
+
 `ps-cli health` reports all three — reachability, health, and readiness — in one call:
 
 ```
@@ -641,8 +614,8 @@ configuration will be added once it exists ([#53](https://github.com/mindovermac
 ## Operations: Backup & Restore
 
 FalkorDB persists to a `PersistentVolumeClaim` when `falkordb.persistence.enabled=true`
-(the default in both the local-test and production profiles — see
-[Chart values reference](#chart-values-reference)). With persistence on, back up and
+(the default in both the local-test and production profiles — see the
+[Helm Chart Values Reference](./helm-chart-values-reference.md)). With persistence on, back up and
 restore the whole deployment using standard, unmodified tooling — no Policy System-specific
 backup feature exists or is planned:
 
@@ -668,8 +641,9 @@ without needing this backup/restore machinery at all.
 | Symptom | Check |
 | --- | --- |
 | `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config list-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
-| A command fails right after connecting | `ps-cli health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but a dependency, or required config, isn't. |
+| A command fails right after connecting | `ps-cli health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but FalkorDB is unreachable, or required ingestion config is incomplete — LLM Interface/Cellar-ELI issues are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. |
 | `regulations ingest` / `internal ingest` fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [CONTRIBUTING.md](../../CONTRIBUTING.md#configure-the-llm-interface). |
+| `regulations ingest` / `internal ingest` / `check` fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint and its LLM provider configuration. |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [ps-cli Troubleshooting](#troubleshooting). |
 
 ## Glossary
