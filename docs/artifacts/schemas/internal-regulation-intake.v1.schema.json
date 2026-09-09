@@ -33,7 +33,7 @@
       }
     },
     "nodeLabel": {
-      "enum": ["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability"]
+      "enum": ["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability", "Policy", "Standard", "Control"]
     },
     "node": {
       "type": "object",
@@ -72,6 +72,18 @@
           "then": {
             "properties": { "properties": { "$ref": "#/$defs/capabilityProperties" } }
           }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Policy" } } },
+          "then": { "properties": { "properties": { "$ref": "#/$defs/policyProperties" } } }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Standard" } } },
+          "then": { "properties": { "properties": { "$ref": "#/$defs/standardProperties" } } }
+        },
+        {
+          "if": { "properties": { "label": { "const": "Control" } } },
+          "then": { "properties": { "properties": { "$ref": "#/$defs/controlProperties" } } }
         }
       ]
     },
@@ -130,12 +142,61 @@
         "confidence": { "$ref": "#/$defs/confidence" }
       }
     },
+    "policyProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "status"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["draft", "approved", "deprecated"] },
+        "description": { "type": "string" },
+        "owner_id": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "standardProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "implementation_status"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "implementation_status": { "enum": ["draft", "implemented", "reviewed", "deprecated"] },
+        "description": { "type": "string" },
+        "version": { "type": "string" }
+      }
+    },
+    "controlProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "implementation_status"],
+      "properties": {
+        "type": { "enum": ["automated", "manual"] },
+        "title": { "type": "string", "minLength": 1 },
+        "implementation_status": { "enum": ["planned", "implemented", "reviewed", "deprecated"] },
+        "description": { "type": "string" },
+        "execution_frequency": { "type": "string" },
+        "last_test_date": { "type": "string", "format": "date" },
+        "next_review_date": { "type": "string", "format": "date" },
+        "evidence_ref": { "type": "string" }
+      }
+    },
     "edge": {
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "from", "to"],
       "properties": {
-        "type": { "enum": ["DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES"] },
+        "type": {
+          "enum": [
+            "DEFINES",
+            "EXPRESSES",
+            "HAS",
+            "SATISFIED_BY",
+            "REQUIRES",
+            "GOVERNED_BY",
+            "SUPPORTED_BY",
+            "IMPLEMENTED_BY"
+          ]
+        },
         "from": { "$ref": "#/$defs/nodeRef" },
         "to": { "$ref": "#/$defs/nodeRef" },
         "properties": {

@@ -34,7 +34,14 @@ adding a regulation never modifies or deletes existing customer data.
 
 Internal regulations (e.g. an Engineering Practices standard) use the same
 domain model as external ones (`source_type: internal` — see
-[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)). This will populate the full compliance spine: the same Role/Requirement/Obligation/Capability chain as external regulations, continuing on to Policies, Standards and Control. Policies are mapped to Regulatory Capabilities where they already exist, or mint new Capabilities that link back to the internal Business Regulation.
+[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)). Two distinct mechanisms populate
+the full compliance spine, and they run in the same submission: the Role/Requirement/Obligation/
+Capability chain is extracted by Domain Mapper the same way as for external regulations, mapping
+onto existing Capabilities where they already exist or minting new ones that link back to the
+internal Business Regulation; Policies, Standards, and Controls are, by contrast, **authored
+directly by the Policy Manager** in that same submission (`GOVERNED_BY`/`SUPPORTED_BY`/
+`IMPLEMENTED_BY` edges to existing or newly-authored Policy/Standard/Control nodes), not derived
+by an LLM.
 
 ### UC-3: Ask compliance questions
 

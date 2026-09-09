@@ -443,7 +443,7 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter when
 Alternatively, matched/minted by the internal-source Domain Mapping Adapter once its parent Policy is internal-SoP-derived — see [Policy](#policy).
 
 **Node label:** `Standard`
-**Identity:** `std_{POLICY}_{VERSION}` (e.g. `std_pol_data_protection_a8f3b1_v1`) — derived from the Policy it supports plus version. This is the same weak-entity pattern used for Requirement, Obligation, and Control (not the canonical-hash pattern used for Capability and Policy): a Standard exists only in the context of exactly one Policy, so encoding that ownership in the ID is safe — there's no cross-Policy reuse to protect against.
+**Identity:** `std_{POLICY}_{hash of title}` (e.g. `std_security_log_retention_standard_bc6334`) — content-derived from the Standard's own `title` AND the Policy it supports (the Policy it links to via `SUPPORTED_BY`), mirroring [Obligation](#obligation)'s own identity shape: the visible slug is the Standard's own title, human-readable; the Policy enters only the opaque hash, never the id string. This is the same weak-entity pattern used for Requirement, Obligation, and Control (not the canonical-hash pattern used for Capability and Policy): a Standard exists only in the context of exactly one Policy, so encoding that ownership in the ID is safe — there's no cross-Policy reuse to protect against.
 
 #### Properties
 
@@ -473,7 +473,7 @@ Alternatively, matched/minted by the internal-source Domain Mapping Adapter once
 Alternatively, matched/minted by the internal-source Domain Mapping Adapter once its parent Standard is internal-SoP-derived — see [Policy](#policy). Operational fields (`execution_frequency`, `last_test_date`, `next_review_date`, `evidence_ref`) are never populated by the adapter on mint — they stay null until engineering teams fill them in during actual implementation/testing, the same as for a human-authored Control.
 
 **Node label:** `Control`
-**Identity:** `ctrl_{STANDARD}_{TYPE}` (e.g. `ctrl_std_pol_data_protection_a8f3b1_v1_automated`) — derived from the Standard it verifies plus control type, the same weak-entity pattern as Standard's own identity: a Control exists only to verify exactly one Standard, so there's no cross-Standard reuse to protect against.
+**Identity:** `ctrl_{slug}_{hash of title}` (e.g. `ctrl_automated_log_retention_integrity_check_0897e9`) — content-derived from the Control's own `title` AND the Standard it verifies (the Standard it links to via `IMPLEMENTED_BY`), mirroring [Standard](#standard)'s own identity shape: the visible slug is the Control's own title, human-readable; the Standard enters only the opaque hash, never the id string. This is the same weak-entity pattern used for Requirement, Obligation, and Standard (not the canonical-hash pattern used for Capability and Policy): a Control exists only to verify exactly one Standard, so there's no cross-Standard reuse to protect against.
 
 #### Properties
 
@@ -538,8 +538,8 @@ The model records what has been ingested and can be traced to real text. It does
 | `Obligation` | `obl_security_monitoring_5e1f2a` | `text`: "Maintain Security Monitoring" — `HAS` from `Manufacturer`, `SATISFIED_BY` from `CRA-1.0_req_art_11.1` |
 | `Capability` | `cap_security_logging_c4d9e2` | `name`: "Security Logging" — `REQUIRES` from the Obligation above |
 | `Policy` | `pol_data_protection_a8f3b1` | `title`: "Data Protection Policy", `status`: `approved` — `GOVERNED_BY` from the Capability above |
-| `Standard` | `std_pol_data_protection_a8f3b1_v1` | `title`: "Security Log Retention Standard", `implementation_status`: `implemented` — `SUPPORTED_BY` from the Policy above |
-| `Control` | `ctrl_std_pol_data_protection_a8f3b1_v1_automated` | `type`: `automated`, `title`: "Automated Log Retention Integrity Check" — `IMPLEMENTED_BY` from the Standard above |
+| `Standard` | `std_security_log_retention_standard_bc6334` | `title`: "Security Log Retention Standard", `implementation_status`: `implemented` — `SUPPORTED_BY` from the Policy above |
+| `Control` | `ctrl_automated_log_retention_integrity_check_0897e9` | `type`: `automated`, `title`: "Automated Log Retention Integrity Check" — `IMPLEMENTED_BY` from the Standard above |
 
 Path: CRA Art. 11 obliges Manufacturers to "Maintain Security Monitoring" → that requires the "Security Logging" Capability → governed by the "Data Protection Policy" → implemented via the "Security Log Retention Standard" → verified by an automated Control.
 
@@ -553,8 +553,8 @@ Path: CRA Art. 11 obliges Manufacturers to "Maintain Security Monitoring" → th
 | `Obligation` | `obl_structured_access_logging_7b3c9d` | `text`: "Maintain Structured Access Logging" — `HAS` from `Service Owner`, `SATISFIED_BY` from `ENGPRAC-2.1_req_art_4.2` |
 | `Capability` | `cap_security_logging_c4d9e2` | **Same node as Example 1** — `REQUIRES` from the Obligation above |
 | `Policy` | `pol_data_protection_a8f3b1` | **Same node as Example 1** — `GOVERNED_BY` from the Capability above |
-| `Standard` | `std_pol_data_protection_a8f3b1_v2` | `title`: "Structured Access Log Format Standard", `implementation_status`: `implemented` — `SUPPORTED_BY` from the Policy above (a second Standard under the same Policy) |
-| `Control` | `ctrl_std_pol_data_protection_a8f3b1_v2_automated` | `type`: `automated`, `title`: "CI Structured Log Schema Validator" — `IMPLEMENTED_BY` from the Standard above |
+| `Standard` | `std_structured_access_log_format_standard_970e1d` | `title`: "Structured Access Log Format Standard", `implementation_status`: `implemented` — `SUPPORTED_BY` from the Policy above (a second Standard under the same Policy) |
+| `Control` | `ctrl_ci_structured_log_schema_validator_d0447d` | `type`: `automated`, `title`: "CI Structured Log Schema Validator" — `IMPLEMENTED_BY` from the Standard above |
 
 Path: internal Engineering Practices Sec. 4.2 obliges Service Owners to "Maintain Structured Access Logging" → that requires the *same* "Security Logging" Capability CRA already required → governed by the *same* "Data Protection Policy" → implemented via its own "Structured Access Log Format Standard" → verified by its own Control.
 
@@ -570,8 +570,8 @@ Unlike Example 2, which converges onto Example 1's pre-existing, human-authored 
 | `Obligation` | `obl_least_privilege_access_3d8e21` | `text`: "Enforce Least-Privilege Access" — `HAS` from `Platform Engineer`, `SATISFIED_BY` from `INFRASEC-1.0_req_art_2.3` |
 | `Capability` | `cap_credential_access_control_f4a712` | `name`: "Credential Access Control" — `REQUIRES` from the Obligation above; a new Capability, not matched to any existing one |
 | `Policy` | `pol_credential_governance_9b2c05` | `title`: "Credential Governance Policy", `status`: `draft`, `confidence`: `0.88` — minted (not matched) by the internal-source Domain Mapping Adapter, `GOVERNED_BY` from the Capability above |
-| `Standard` | `std_pol_credential_governance_9b2c05_v1` | `title`: "Least-Privilege IAM Role Standard", `implementation_status`: `draft`, `confidence`: `0.83` — `SUPPORTED_BY` from the Policy above |
-| `Control` | `ctrl_std_pol_credential_governance_9b2c05_v1_automated` | `type`: `automated`, `title`: "Automated IAM Policy Drift Check", `implementation_status`: `planned`, `confidence`: `0.79` — `IMPLEMENTED_BY` from the Standard above |
+| `Standard` | `std_least_privilege_iam_role_standard_138784` | `title`: "Least-Privilege IAM Role Standard", `implementation_status`: `draft`, `confidence`: `0.83` — `SUPPORTED_BY` from the Policy above |
+| `Control` | `ctrl_automated_iam_policy_drift_check_6d8c8a` | `type`: `automated`, `title`: "Automated IAM Policy Drift Check", `implementation_status`: `planned`, `confidence`: `0.79` — `IMPLEMENTED_BY` from the Standard above |
 
 Path: internal Infrastructure Security Practices Sec. 2.3 obliges Platform Engineers to "Enforce Least-Privilege Access" → that requires a new "Credential Access Control" Capability → the same adapter run mints a "Credential Governance Policy" to govern it → a "Least-Privilege IAM Role Standard" to implement that Policy → an automated Control to verify the Standard, each hop a mint/match decision the LLM records its own confidence for, none of it yet touched by a policy manager or engineering team.
 

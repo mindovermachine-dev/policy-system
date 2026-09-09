@@ -1,0 +1,96 @@
+{
+  "nodes": [
+    {
+      "label": "RegulatoryInstrument",
+      "id": "AUTHGOV-DANGLING-1.0",
+      "properties": {
+        "title": "Authored Governance Dangling-Edge Fixture",
+        "source_type": "internal",
+        "effective_date": "2026-08-01",
+        "version": "1.0",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-1",
+      "properties": {
+        "name": "Compliance Owner",
+        "description": "Accountable owner of access-control compliance posture."
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-1",
+      "properties": {
+        "text": "Engineering managers shall maintain approved access-control governance.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-1",
+      "properties": {
+        "text": "Maintain Access Control Governance"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-1",
+      "properties": {
+        "name": "Access Control Governance"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "pol-1",
+      "properties": {
+        "title": "Access Control Policy",
+        "status": "approved",
+        "description": "Governs how access to production systems is granted, reviewed, and revoked.",
+        "owner_id": "role-1",
+        "version": "1.0"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DEFINES",
+      "from": { "label": "RegulatoryInstrument", "id": "AUTHGOV-DANGLING-1.0" },
+      "to": { "label": "Role", "id": "role-1" },
+      "properties": { "source_ref": "Sec. 3.1" }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": { "label": "RegulatoryInstrument", "id": "AUTHGOV-DANGLING-1.0" },
+      "to": { "label": "Requirement", "id": "req-1" },
+      "properties": { "source_ref": "4.1" }
+    },
+    {
+      "type": "HAS",
+      "from": { "label": "Role", "id": "role-1" },
+      "to": { "label": "Obligation", "id": "obl-1" }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": { "label": "Requirement", "id": "req-1" },
+      "to": { "label": "Obligation", "id": "obl-1" }
+    },
+    {
+      "type": "REQUIRES",
+      "from": { "label": "Obligation", "id": "obl-1" },
+      "to": { "label": "Capability", "id": "cap-1" }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": { "label": "Capability", "id": "cap-1" },
+      "to": { "label": "Policy", "id": "pol-1" }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": { "label": "Policy", "id": "pol-1" },
+      "to": { "label": "Standard", "id": "std-never-declared" }
+    }
+  ]
+}

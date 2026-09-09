@@ -1,64 +1,72 @@
-"""Issue #54, S7 -- the live internal-regulation ingestion capstone (PLAN.md §6 S7).
+"""GH #76, Slice 4 -- the live internal-regulation ingestion capstone.
 
 ``@pytest.mark.falkordb_live @pytest.mark.llm_live``: drives the real
 ``POST /ingestions`` route with a ``source: "internal"`` request for the
-Engineering Practices seed fixture (``engineering-practices-seed.json``,
-B1/S2's ten-Capability happy-path document) against real FalkorDB and real
-Azure OpenAI, and asserts the merged spine (including the governance layer
-Company Merge's S4 Policy-convergence pass produces) lands in a
-**disposable** single-tenant graph (``policy_system_api_internal_capstone_test``)
--- never the real, shared ``policy_system`` graph, whose node count is read
-before and after and asserted unchanged. Structurally mirrors
-``tests/api/test_live_capstone_external.py`` (same disposable-graph
-naming/cleanup pattern, same one-module-scoped-fixture-many-assertions
-shape, same safety property).
+Authored Governance seed fixture (``authored-governance-seed.json`` -- a
+single Capability -> Policy -> Standard -> Control chain, entirely human-
+authored) against real FalkorDB and real Azure OpenAI, and asserts the
+merged spine lands in a **disposable** single-tenant graph
+(``policy_system_api_internal_capstone_test``) -- never the real, shared
+``policy_system`` graph, whose node count is read before and after and
+asserted unchanged. Structurally mirrors ``tests/api/test_live_capstone_external.py``
+(same disposable-graph naming/cleanup pattern, same one-module-scoped-
+fixture-many-assertions shape, same safety property).
+
+**Why this still needs real LLM credentials (GH #76 CHANGES.md item 1)**:
+GH #76 deletes the ``governance_derivation`` pipeline stage outright --
+Policy/Standard/Control are now human-authored in the submitted document,
+never LLM-minted (that is AC-BI-011, proven structurally: Slice 1 deletes
+the stage and every one of its LLM call sites). But this test's pipeline is
+``internal_ingestion -> merge``, and ``merge`` (Company Merge, S4) still
+runs its semantic-dedup pass, which calls ``company_merge/dedup.py::
+route_embedding`` -- a real, credentialed embedding call, independent of
+governance derivation. So ``@pytest.mark.llm_live`` and its skip-guard stay;
+dropping them would make this file collect and immediately error the first
+time ``merge`` tries to embed something without credentials, rather than
+skip cleanly.
 
 **Structural-assertion style throughout** (node/edge counts and
-cardinality, never id/title equality against the fixture) -- Policy/
-Standard/Control ids are LLM-title-derived and unpredictable (PLAN.md §6
-S7's own instruction).
+cardinality) for the merge-layer proofs; **exact-id assertions** for the
+governance layer specifically, since -- unlike the old LLM-derived shape --
+Policy/Standard/Control are now exact-id-deterministic on every run (minted
+by ``domain_mapper.identity.policy_id``/``standard_id``/``control_id``, pure
+hashes over the fixture's own authored titles, never LLM output).
 
 Proves, against real infrastructure -- no fakes/mocks anywhere in this
 file:
 
 1. ``test_internal_ingestion_populates_governance_spine`` -- a
-   ``RegulatoryInstrument{source_type: 'internal'}`` exists; every
-   internal-source Capability has >=1 ``GOVERNED_BY`` edge; every derived
-   Policy has >=1 ``SUPPORTED_BY`` edge; every derived Control belongs to
-   exactly one Standard (``IMPLEMENTED_BY`` cardinality); the full
-   Regulation -> Role -> Obligation -> Capability -> Policy -> Standard ->
-   Control traversal is reachable end to end (the "back to query" proof).
-2. ``test_second_identical_ingestion_is_structural_no_op`` -- D4/AC-BI-018:
-   re-posting the exact same fixture is a structural no-op. The
-   Regulation/Role/Requirement/Obligation/Capability layer is CODE-
-   guaranteed identical across both runs (internal Capabilities are minted
-   from the fixture's own literal names via ``capability_id``, a pure
-   hash -- never LLM output, unlike the external/CELEX path). The
-   Policy/Standard/Control layer is LLM-title-derived on EVERY run (a
-   fresh ``governance_derivation`` call, empty registry, real LLM), so its
-   cross-run convergence depends on Company Merge's real semantic-
-   similarity dedup (S4's live Policy-convergence path) landing above
-   threshold for whatever wording the model happens to produce the second
-   time -- the same class of live non-determinism
-   ``test_second_catalog_ingestion_converges_exact_identity_nodes``
-   documents and bounds via an inline ``xfail`` for the external path's
-   Capability layer; the identical bounding is applied here, to the
-   governance layer specifically, for the identical reason.
+   ``RegulatoryInstrument{source_type: 'internal'}`` exists; the authored
+   Capability has a ``GOVERNED_BY`` edge to its Policy; the Policy has a
+   ``SUPPORTED_BY`` edge to its Standard; the Control belongs to exactly one
+   Standard (``IMPLEMENTED_BY`` cardinality); the full Regulation -> Role ->
+   Obligation -> Capability -> Policy -> Standard -> Control traversal is
+   reachable end to end (the "back to query" proof).
+2. ``test_second_identical_ingestion_is_structural_no_op`` -- re-posting the
+   exact same fixture is a structural no-op, **including the governance
+   layer, by exact canonical id, with no ``xfail``**: because Policy/
+   Standard/Control are now author-supplied and exact-id-deterministic
+   (the same property Role/Requirement/Obligation/Capability already had),
+   there is no LLM-wording non-determinism left for this layer to bound --
+   the ``xfail`` the old LLM-derived version of this test needed is a
+   genuine simplification GH #76 buys back, not a weakening of coverage.
 3. ``test_dangling_edge_fixture_fails_closed_against_real_pipeline`` --
-   AC-BI-011: the dedicated dangling-edge fixture
-   (``engineering-practices-dangling-edge.json``) 502s with
-   ``failing_stage: "internal_ingestion"`` and writes NOTHING to its own
-   ``{short}_native``/``{short}_baseline`` graphs or the disposable
-   single-tenant graph -- proven against the real pipeline (S2's own test
-   proves the same thing against fakes only).
+   AC-BI-008/009: the dedicated dangling-edge fixture
+   (``authored-governance-dangling-edge.json``, a dangling ``SUPPORTED_BY``
+   edge) 502s with ``failing_stage: "internal_ingestion"`` and writes
+   NOTHING to its own ``{short}_native``/``{short}_baseline`` graphs or the
+   disposable single-tenant graph -- proven against the real pipeline
+   (the fast-suite fake-graph tests already prove the same thing without
+   real infra).
 
 All three run against the SAME module-scoped fixture / disposable graph
 (one shared ``POST`` sequence) to bound LLM cost -- mirrors
 ``test_live_capstone_external.py``'s own one-fixture-many-assertions shape.
-The dangling-edge attempt costs no extra LLM tokens: referential-integrity
-validation happens in ``ingest_internal_regulatory_instrument`` before any
-graph write and before ``governance_derivation`` -- the stage that calls
-the LLM -- ever runs.
+The dangling-edge attempt costs no extra LLM tokens for the
+``internal_ingestion`` stage itself (referential-integrity validation
+happens in ``ingest_internal_regulatory_instrument`` before any graph write
+and before ``merge`` ever runs) -- it just cannot avoid needing credentials
+for the *other* two assertions in this module, hence the marker staying put.
 """
 
 from __future__ import annotations
@@ -93,14 +101,14 @@ _DISPOSABLE_GRAPH = "policy_system_api_internal_capstone_test"
 _REAL_GRAPH = "policy_system"
 _ENDPOINT = "/ingestions"
 
-_SEED_FIXTURE_PATH = "engineering-practices/engineering-practices-seed.json"
-_SEED_RID = "ENGPRAC-3.0"
-_SEED_SHORT_NAME = "ENGPRAC"
+_SEED_FIXTURE_PATH = "authored-governance/authored-governance-seed.json"
+_SEED_RID = "AUTHGOV-1.0"
+_SEED_SHORT_NAME = "AUTHGOV"
 _SEED_REQUEST: dict[str, str] = {"source": "internal", "fixture_path": _SEED_FIXTURE_PATH}
 
-_DANGLING_FIXTURE_PATH = "engineering-practices/engineering-practices-dangling-edge.json"
-_DANGLING_RID = "ENGPRAC-DANGLING-1.0"
-_DANGLING_SHORT_NAME = "ENGPRAC-DANGLING"
+_DANGLING_FIXTURE_PATH = "authored-governance/authored-governance-dangling-edge.json"
+_DANGLING_RID = "AUTHGOV-DANGLING-1.0"
+_DANGLING_SHORT_NAME = "AUTHGOV-DANGLING"
 _DANGLING_REQUEST: dict[str, str] = {"source": "internal", "fixture_path": _DANGLING_FIXTURE_PATH}
 
 _COUNT_ALL = "MATCH (n) RETURN count(n)"
@@ -192,9 +200,8 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
     (``_DISPOSABLE_GRAPH``, via the existing ``PS_FALKORDB_GRAPH`` override
     -- no new mechanism): the seed fixture is POSTed twice (item 1's
     proof, then item 2's no-op proof), then the dangling-edge fixture is
-    POSTed once (item 3's fail-closed proof; it never reaches
-    ``governance_derivation``/``merge``, so it cannot touch the disposable
-    graph either way).
+    POSTed once (item 3's fail-closed proof; it never reaches ``merge``, so
+    it cannot touch the disposable graph either way).
 
     The Domain Mapper / Company Merge stages emit through the process-wide
     default emitter, so a real ``configure()``d facade is installed for the
@@ -295,14 +302,15 @@ def capstone(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_InternalCaps
 
 
 def test_internal_ingestion_populates_governance_spine(capstone: _InternalCapstoneData) -> None:
-    """AC-BI-004 through AC-BI-007: the internal POST runs all three stages against real infra.
+    """AC-BI-004 through AC-BI-007: the internal POST runs both stages against real infra.
 
     A ``RegulatoryInstrument{source_type: 'internal'}`` exists; every
     Capability has >=1 ``GOVERNED_BY`` edge; every Policy has >=1
     ``SUPPORTED_BY`` edge; every Control belongs to EXACTLY ONE Standard;
     the full Regulation -> Role -> Obligation -> Capability -> Policy ->
     Standard -> Control chain is reachable in one traversal (the "back to
-    query" proof).
+    query" proof). The pipeline is now two stages, not three --
+    ``governance_derivation`` no longer exists (GH #76).
     """
     assert capstone.response_1_status == 200
     assert capstone.response_1_body["regulatory_instrument_id"] == _SEED_RID
@@ -310,7 +318,7 @@ def test_internal_ingestion_populates_governance_spine(capstone: _InternalCapsto
     assert [
         cast("dict[str, object]", stage)["stage"]
         for stage in cast("list[object]", capstone.response_1_body["stages"])
-    ] == ["internal_ingestion", "governance_derivation", "merge"]
+    ] == ["internal_ingestion", "merge"]
     assert all(
         cast("dict[str, object]", stage)["status"] == "succeeded"
         for stage in cast("list[object]", capstone.response_1_body["stages"])
@@ -376,67 +384,44 @@ def test_internal_ingestion_populates_governance_spine(capstone: _InternalCapsto
 
 
 def test_second_identical_ingestion_is_structural_no_op(capstone: _InternalCapstoneData) -> None:
-    """D4/AC-BI-018: re-posting the exact same fixture is a structural no-op.
+    """Re-posting the exact same fixture is a structural no-op -- governance layer included.
 
-    The Regulation/Role/Requirement/Obligation layer -- and Capability,
-    minted from the fixture's own literal names via ``capability_id`` (a
-    pure hash, never LLM output for the internal path) -- is CODE-
-    guaranteed identical across both runs; enforced unconditionally.
+    The Regulation/Role/Requirement/Obligation/Capability layer was already
+    CODE-guaranteed identical across both runs (minted from the fixture's
+    own literal names via pure-hash identity functions, never LLM output).
 
-    The Policy/Standard/Control layer is LLM-title-derived on every run (a
-    fresh ``governance_derivation`` call with an empty in-run registry), so
-    its cross-run convergence depends on Company Merge's real semantic-
-    similarity dedup (S4's live Policy-convergence path) landing above
-    threshold for whatever wording the model happens to produce the second
-    time -- the same class of live non-determinism
-    ``test_live_capstone_external.py::test_second_catalog_ingestion_converges_exact_identity_nodes``
-    documents and bounds via an inline ``xfail`` for the external path's
-    Capability layer. The identical bounding is applied here: the MERGE +
-    semantic-dedup mechanism itself is correct; the residual is upstream,
-    in whether the LLM reproduces close-enough wording.
+    GH #76 extends that same guarantee to Policy/Standard/Control: they are
+    now human-authored in the submitted document and minted by
+    ``domain_mapper.identity.policy_id``/``standard_id``/``control_id`` --
+    pure functions of the fixture's own titles, not LLM output -- so
+    re-ingesting the identical fixture twice converges the governance layer
+    too, by exact canonical id. Unlike the old LLM-derived version of this
+    test (which had to ``xfail``-bound the governance layer's cross-run
+    convergence against live wording non-determinism), no ``xfail`` is
+    needed here: convergence is asserted unconditionally, over the WHOLE
+    snapshot (deterministic layer and governance layer alike).
     """
     assert capstone.response_2_status == 200
     assert capstone.response_2_body["regulatory_instrument_id"] == _SEED_RID
 
-    deterministic_keys = (
-        {f"node:{label}" for label in _DETERMINISTIC_NODE_LABELS}
-        | {f"edge:{rel}" for rel in _DETERMINISTIC_EDGE_TYPES}
-        | {"node:Capability", "edge:REQUIRES"}
-    )
-    deterministic_1 = {k: v for k, v in capstone.snapshot_1.items() if k in deterministic_keys}
-    deterministic_2 = {k: v for k, v in capstone.snapshot_2.items() if k in deterministic_keys}
-    assert deterministic_2 == deterministic_1, (
-        "the code-guaranteed (non-LLM) layer changed on re-ingestion: "
-        f"{deterministic_1} -> {deterministic_2}"
+    assert capstone.snapshot_2 == capstone.snapshot_1, (
+        "re-ingesting the identical authored-governance fixture changed the merged graph's "
+        f"per-label/per-edge-type counts: {capstone.snapshot_1} -> {capstone.snapshot_2}"
     )
     assert capstone.snapshot_1["node:RegulatoryInstrument"] == 1
-
-    governance_keys = {f"node:{label}" for label in ("Policy", "Standard", "Control")} | {
-        f"edge:{rel}" for rel in ("GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTED_BY")
-    }
-    governance_1 = {k: v for k, v in capstone.snapshot_1.items() if k in governance_keys}
-    governance_2 = {k: v for k, v in capstone.snapshot_2.items() if k in governance_keys}
-    if governance_2 != governance_1:
-        pytest.xfail(
-            "AC-BI-018 governance-layer convergence is bounded by the same class of live LLM "
-            "non-determinism as the external path's Capability convergence (#34): a second "
-            "governance_derivation run can reword a Policy/Standard/Control enough that it "
-            "falls outside Company Merge's cosine-similarity dedup threshold; the MERGE + "
-            "semantic-dedup mechanism itself is correct. Observed: "
-            f"{governance_1} -> {governance_2}"
-        )
 
 
 def test_dangling_edge_fixture_fails_closed_against_real_pipeline(
     capstone: _InternalCapstoneData,
 ) -> None:
-    """AC-BI-011: the dangling-edge fixture 502s against the REAL pipeline, with zero writes.
+    """AC-BI-008/009: the dangling-edge fixture 502s against the REAL pipeline, with zero writes.
 
     Proven directly against real FalkorDB -- not the fast-fake proof
-    ``tests/ingestion/adapters/internal_seed/test_persist.py::
-    test_dangling_requires_edge_fails_closed_no_partial_write`` already
+    ``tests/ingestion/adapters/internal_seed/test_persist.py`` already
     gives, and not merely the route-level fake-dependency proof
-    ``tests/api/test_ingestions_internal.py`` gives either.
+    ``tests/api/test_ingestions_internal.py`` gives either. Retargeted at
+    the new ``authored-governance-dangling-edge.json`` fixture (a dangling
+    ``SUPPORTED_BY`` edge), the new edge type this issue introduces.
     """
     assert capstone.dangling_status == 502
     error = cast("dict[str, object]", capstone.dangling_body["error"])

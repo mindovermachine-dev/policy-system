@@ -78,11 +78,18 @@ def test_read_seed_accepts_a_well_formed_document(tmp_path: Path) -> None:
 
 
 def test_read_seed_rejects_unknown_edge_type(tmp_path: Path) -> None:
-    """AC-BI-002: an edge `type` outside the five-member allow-list is rejected."""
+    """AC-BI-002: an edge `type` outside the allow-list is rejected.
+
+    `VERIFIED_BY` (a real edge type in `ps-domain-concepts.md`'s wider
+    ontology, but not part of this intake format's allow-list -- it connects
+    a RiskPath, which this format does not support) is used here since
+    `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` (GH #76 Slices 1-3) are now
+    all valid edge types.
+    """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["edges"].append(
         {
-            "type": "GOVERNED_BY",
+            "type": "VERIFIED_BY",
             "from": {"label": "Obligation", "id": "obl-1"},
             "to": {"label": "Role", "id": "role-1"},
         }

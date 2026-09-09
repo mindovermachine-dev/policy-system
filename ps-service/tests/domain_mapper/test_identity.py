@@ -116,17 +116,80 @@ def test_policy_id_shape_and_determinism() -> None:
     assert first == second
 
 
-def test_standard_id_is_compositional() -> None:
-    """Derived from `policy_id`'s own output, never a magic string."""
-    title = "Data Protection Policy"
-    pid = policy_id(title)
-
-    assert standard_id(pid, "1") == f"std_{pid}_v1"
+_STANDARD_ID_SHAPE_RE = re.compile(r"^std_[a-z0-9_]+_[0-9a-f]{6}$")
 
 
-def test_control_id_is_compositional() -> None:
-    """One level deeper: derived from `standard_id`'s own output."""
-    title = "Data Protection Policy"
-    sid = standard_id(policy_id(title), "1")
+def test_standard_id_shape_and_determinism() -> None:
+    """GH #76 Slice 2: `standard_id` is now `(policy_node_id, title)`-keyed (the old
+    `(policy_node_id, version)` signature no longer exists) -- mirrors
+    `obligation_id`'s own shape: the child's own title is the visible slug, the
+    parent Policy id enters only the opaque hash.
+    """
+    pid = policy_id("Data Protection Policy")
+    title = "Security Log Retention Standard"
+    first = standard_id(pid, title)
+    second = standard_id(pid, title)
 
-    assert control_id(sid, "automated") == f"ctrl_{sid}_automated"
+    assert _STANDARD_ID_SHAPE_RE.match(first)
+    assert first == second
+
+
+def test_standard_id_slug_is_title_only() -> None:
+    """The Policy enters only the opaque hash, never the human-readable slug --
+    mirrors `obligation_id`'s own shape.
+    """
+    pid = policy_id("Data Protection Policy")
+    assert standard_id(pid, "Security Log Retention Standard").startswith(
+        "std_security_log_retention_standard_"
+    )
+
+
+def test_standard_id_differs_for_different_titles_under_same_policy() -> None:
+    """AC-BI-002's literal proof: two different titles under the same Policy yield
+    two different ids -- the fix for the version-keyed collision this issue resolves
+    (`SUPPORTED_BY` is `1 : 1..*`, so a Policy may have several Standards).
+    """
+    pid = policy_id("Data Protection Policy")
+    assert standard_id(pid, "A") != standard_id(pid, "B")
+
+
+_CONTROL_ID_SHAPE_RE = re.compile(r"^ctrl_[a-z0-9_]+_[0-9a-f]{6}$")
+
+
+def test_control_id_shape_and_determinism() -> None:
+    """GH #76 Slice 3: `control_id` is now `(standard_node_id, title)`-keyed (the old
+    `(standard_node_id, control_type)` signature no longer exists) -- mirrors
+    `standard_id`'s own shape: the child's own title is the visible slug, the
+    parent Standard id enters only the opaque hash.
+    """
+    sid = standard_id(policy_id("Data Protection Policy"), "Security Log Retention Standard")
+    title = "Automated Log Retention Integrity Check"
+    first = control_id(sid, title)
+    second = control_id(sid, title)
+
+    assert _CONTROL_ID_SHAPE_RE.match(first)
+    assert first == second
+
+
+def test_control_id_slug_is_title_only() -> None:
+    """The Standard enters only the opaque hash, never the human-readable slug --
+    mirrors `standard_id`'s own shape.
+    """
+    sid = standard_id(policy_id("Data Protection Policy"), "Security Log Retention Standard")
+    assert control_id(sid, "Automated Log Retention Integrity Check").startswith(
+        "ctrl_automated_log_retention_integrity_check_"
+    )
+
+
+def test_control_id_differs_for_different_titles_under_same_standard_even_same_type() -> None:
+    """AC-BI-003's literal proof: two different titles under the same Standard yield
+    two different ids, even when both would-be Controls share the same `type` --
+    the fix for the type-keyed collision this issue resolves (`IMPLEMENTED_BY` is
+    `1 : 0..*`, so a Standard may have several Controls). `type` is not even an
+    argument to `control_id` any more -- both Controls below would carry
+    `type: "automated"` as a submitted node property, entirely independent of
+    this identity check, which is exactly the point: distinctness comes from
+    title alone, never from type.
+    """
+    sid = standard_id(policy_id("Data Protection Policy"), "Security Log Retention Standard")
+    assert control_id(sid, "A") != control_id(sid, "B")

@@ -7,7 +7,8 @@ charts/**/templates/**
 # Packaged mirror of docs/artifacts/ps-domain-concepts.md (already excluded above);
 # must stay byte-identical to its source, so it can't be independently formatted.
 ps-service/src/ps_service/mcp_interface/ps-domain-concepts.md
-# Packaged mirror of docs/artifacts/schemas/internal-regulation-intake.v1.schema.json
-# (already excluded above); must stay byte-identical to its source, so it can't be
+# Packaged mirrors of docs/artifacts/schemas/internal-regulation-intake.v1.schema.json
+# (already excluded above); must stay byte-identical to its source, so they can't be
 # independently formatted.
 ps-service/src/ps_service/api/schemas/internal_regulation_intake_v1.schema.json
+ps-cli/src/ps_cli/schemas/internal_regulation_intake_v1.schema.json

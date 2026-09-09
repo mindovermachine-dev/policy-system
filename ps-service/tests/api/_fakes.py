@@ -34,11 +34,7 @@ from ps_service.api.ingestion_orchestration import (
 )
 from ps_service.change_monitor.models import PollReport
 from ps_service.company_merge.models import MergeResult
-from ps_service.domain_mapper.models import (
-    DerivationResult,
-    ExtractionResult,
-    GovernanceDerivationResult,
-)
+from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
 from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
 from ps_service.ingestion.models import IngestResult
 
@@ -331,39 +327,9 @@ class FakeIngestInternalStage:
             requirement_count=0,
             obligation_count=0,
             capability_count=0,
-        )
-
-
-class FakeDeriveGovernanceStage:
-    """Stand-in for ``derive_governance_artifacts`` (issue #54, S3)."""
-
-    def __init__(self, recorder: StageRecorder, *, error: Exception | None = None) -> None:
-        """Prime the recorder and an optional error to raise."""
-        self._recorder = recorder
-        self._error = error
-
-    def __call__(
-        self,
-        regulatory_instrument_id: str,
-        *,
-        baseline_graph: GraphHandle,
-        model: str,
-        call_completion: CompletionCaller | None = None,
-        emitter: LogEmitter | None = None,
-    ) -> GovernanceDerivationResult:
-        """Record the call and return (or raise) a canned :class:`GovernanceDerivationResult`."""
-        _ = (baseline_graph, call_completion, emitter)
-        self._recorder.calls.append(
-            StageCall("governance_derivation", regulatory_instrument_id, {"model": model})
-        )
-        if self._error is not None:
-            raise self._error
-        return GovernanceDerivationResult(
-            regulatory_instrument_id=regulatory_instrument_id,
-            policy_node_ids=(),
-            standard_node_ids=(),
-            control_node_ids=(),
-            unmatched_capability_ids=(),
+            policy_count=0,
+            standard_count=0,
+            control_count=0,
         )
 
 
@@ -433,7 +399,6 @@ def build_fake_pipeline_dependencies(
     derive_unmatched_obligation_ids: tuple[str, ...] = (),
     internal_rid: str = "ENGPRAC-3.0",
     ingest_internal_error: Exception | None = None,
-    derive_governance_error: Exception | None = None,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -449,8 +414,6 @@ def build_fake_pipeline_dependencies(
             ``ingest_internal`` stage returns (issue #54, S2).
         ingest_internal_error: If set, the ``ingest_internal`` stage raises
             this instead of returning.
-        derive_governance_error: If set, the ``governance_derivation`` stage
-            raises this instead of returning (issue #54, S3).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
@@ -489,7 +452,6 @@ def build_fake_pipeline_dependencies(
             ingest_internal=FakeIngestInternalStage(
                 recorder, rid=internal_rid, error=ingest_internal_error
             ),
-            derive_governance=FakeDeriveGovernanceStage(recorder, error=derive_governance_error),
         ),
         adapters=PipelineAdapters(
             ingestion=FakeIngestionAdapter,

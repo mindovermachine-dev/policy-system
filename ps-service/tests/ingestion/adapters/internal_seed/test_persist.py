@@ -259,6 +259,487 @@ def test_persists_native_verbatim_and_baseline_minted() -> None:
     assert "cap-1" not in baseline_node_ids
 
 
+def _policy(local_id: str, title: str, *, status: str = "draft") -> SeedNode:
+    return SeedNode(label="Policy", id=local_id, properties={"title": title, "status": status})
+
+
+def _standard(local_id: str, title: str, *, implementation_status: str = "draft") -> SeedNode:
+    return SeedNode(
+        label="Standard",
+        id=local_id,
+        properties={"title": title, "implementation_status": implementation_status},
+    )
+
+
+def _control(
+    local_id: str,
+    title: str,
+    *,
+    control_type: str = "automated",
+    implementation_status: str = "planned",
+    extra_properties: dict[str, str] | None = None,
+) -> SeedNode:
+    properties: dict[str, str | float] = {
+        "type": control_type,
+        "title": title,
+        "implementation_status": implementation_status,
+    }
+    if extra_properties:
+        properties.update(extra_properties)
+    return SeedNode(label="Control", id=local_id, properties=properties)
+
+
+def test_persists_authored_policy_node_and_governed_by_edge_verbatim() -> None:
+    """GH #76 AC-BI-004 (Policy portion): a submitted Policy + GOVERNED_BY edge
+    from a Capability persists verbatim, and `InternalIngestResult.policy_count == 1`.
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _policy("pol-1", "Access Control Policy"))
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.policy_count == 1
+    from ps_service.domain_mapper.identity import policy_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    policy_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Policy")
+    assert policy_writes == {
+        expected_policy_id: {"title": "Access Control Policy", "status": "draft"}
+    }
+
+
+def test_seed_with_no_policy_nodes_still_succeeds_with_zero_policy_count() -> None:
+    """AC-BI-005: omitting Policy/GOVERNED_BY entirely still succeeds, persisting
+    only the regulatory spine, with zero governance nodes invented in their place.
+    """
+    seed = _build_seed()
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.policy_count == 0
+    policy_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Policy")
+    assert policy_writes == {}
+
+
+def test_capability_with_two_governed_by_edges_fails_closed_no_partial_write() -> None:
+    """AC-BI-008/009 for GOVERNED_BY: a Capability with two outbound GOVERNED_BY
+    edges raises `InternalSeedError` naming the Capability, zero writes.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Policy One"),
+        _policy("pol-2", "Policy Two"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-2"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError, match="cap-1"):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_dangling_governed_by_edge_fails_closed() -> None:
+    """A GOVERNED_BY edge referencing an undeclared Policy id raises, zero writes."""
+    seed = _build_seed()
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=seed.nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_persists_authored_standard_node_and_supported_by_edge_verbatim() -> None:
+    """GH #76 AC-BI-004 (Standard portion): a submitted Standard + SUPPORTED_BY edge
+    from a Policy persists verbatim, and `InternalIngestResult.standard_count == 1`.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.standard_count == 1
+    from ps_service.domain_mapper.identity import policy_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
+    standard_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Standard")
+    assert standard_writes == {
+        expected_standard_id: {
+            "title": "Access Control Standard",
+            "implementation_status": "draft",
+        }
+    }
+
+
+@pytest.mark.parametrize("supported_by_count", [0, 2])
+def test_standard_with_zero_or_two_supported_by_edges_fails_closed_no_partial_write(
+    supported_by_count: int,
+) -> None:
+    """AC-BI-008/009 for SUPPORTED_BY: a Standard with zero or two-or-more inbound
+    SUPPORTED_BY edges raises `InternalSeedError` naming the Standard, zero writes.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Policy One"),
+        _policy("pol-2", "Policy Two"),
+        _standard("std-1", "Standard One"),
+    )
+    supporting_edges = tuple(
+        _edge("SUPPORTED_BY", "Policy", policy_local_id, "Standard", "std-1")
+        for policy_local_id in ("pol-1", "pol-2")[:supported_by_count]
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        *supporting_edges,
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError, match="std-1"):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_dangling_supported_by_edge_fails_closed() -> None:
+    """A SUPPORTED_BY edge referencing an undeclared Standard id raises, zero writes."""
+    seed = _build_seed()
+    nodes = (*seed.nodes, _policy("pol-1", "Policy One"))
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_policy_with_two_supported_by_edges_persists_two_distinct_standards() -> None:
+    """AC-BI-006's literal proof: one Policy, two SUPPORTED_BY edges to two
+    differently-titled Standards -- both persist as distinct nodes with distinct ids.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Standard A"),
+        _standard("std-2", "Standard B"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-2"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.standard_count == 2
+    from ps_service.domain_mapper.identity import policy_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_a = standard_id(expected_policy_id, "Standard A")
+    expected_b = standard_id(expected_policy_id, "Standard B")
+    assert expected_a != expected_b
+
+    standard_ids = _written_node_ids(baseline_graph, label_prefix="MERGE (n:Standard")
+    assert standard_ids == {expected_a, expected_b}
+
+
+def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> None:
+    """GH #76 AC-BI-004 (Control portion): a submitted Control + IMPLEMENTED_BY edge
+    from a Standard persists verbatim (including optional operational fields), and
+    `InternalIngestResult.control_count == 1`.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+        _control(
+            "ctrl-1",
+            "Automated Access Review Check",
+            implementation_status="implemented",
+            extra_properties={
+                "description": "Nightly automated review of privileged access grants.",
+                "execution_frequency": "daily",
+                "last_test_date": "2026-08-01",
+                "next_review_date": "2026-11-01",
+                "evidence_ref": "evidence://access-review/2026-08-01",
+            },
+        ),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.control_count == 1
+    from ps_service.domain_mapper.identity import control_id, policy_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
+    expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
+    control_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Control")
+    assert control_writes == {
+        expected_control_id: {
+            "type": "automated",
+            "title": "Automated Access Review Check",
+            "implementation_status": "implemented",
+            "description": "Nightly automated review of privileged access grants.",
+            "execution_frequency": "daily",
+            "last_test_date": "2026-08-01",
+            "next_review_date": "2026-11-01",
+            "evidence_ref": "evidence://access-review/2026-08-01",
+        }
+    }
+
+
+@pytest.mark.parametrize("implemented_by_count", [0, 2])
+def test_control_with_zero_or_two_implemented_by_edges_fails_closed_no_partial_write(
+    implemented_by_count: int,
+) -> None:
+    """AC-BI-008/009 for IMPLEMENTED_BY: a Control with zero or two-or-more inbound
+    IMPLEMENTED_BY edges raises `InternalSeedError` naming the Control, zero writes.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Policy One"),
+        _standard("std-1", "Standard One"),
+        _standard("std-2", "Standard Two"),
+        _control("ctrl-1", "Control One"),
+    )
+    implementing_edges = tuple(
+        _edge("IMPLEMENTED_BY", "Standard", standard_local_id, "Control", "ctrl-1")
+        for standard_local_id in ("std-1", "std-2")[:implemented_by_count]
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-2"),
+        *implementing_edges,
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError, match="ctrl-1"):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_dangling_implemented_by_edge_fails_closed() -> None:
+    """An IMPLEMENTED_BY edge referencing an undeclared Control id raises, zero writes."""
+    seed = _build_seed()
+    nodes = (*seed.nodes, _policy("pol-1", "Policy One"), _standard("std-1", "Standard One"))
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_controls() -> None:
+    """AC-BI-007's literal proof: one Standard, two IMPLEMENTED_BY edges to two Controls
+    both `type: "automated"` but differently titled -- both persist as distinct nodes
+    with distinct ids.
+
+    This is the test that would have been silently broken -- one Control clobbering
+    the other via `MERGE` -- before the AC-BI-003 identity fix (the old
+    `control_id(standard_node_id, control_type)` formula keyed identity on `type`
+    alone, so two same-typed Controls under the same Standard collided onto one
+    node). Confirmed as a genuine regression test (not a tautology) by running it
+    against the pre-fix `control_id` first -- see IMPL_SLICE_3.md's evidence block
+    for the red run.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+        _control("ctrl-1", "Control A", control_type="automated"),
+        _control("ctrl-2", "Control B", control_type="automated"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-2"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.control_count == 2
+    from ps_service.domain_mapper.identity import control_id, policy_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
+    expected_a = control_id(expected_standard_id, "Control A")
+    expected_b = control_id(expected_standard_id, "Control B")
+    assert expected_a != expected_b
+
+    control_ids = _written_node_ids(baseline_graph, label_prefix="MERGE (n:Control")
+    assert control_ids == {expected_a, expected_b}
+
+
+def test_full_capability_policy_standard_control_chain_persists_every_node_and_edge() -> None:
+    """End-to-end: one document submitting the complete Capability -> Policy ->
+    Standard -> Control chain -- every node and edge persists, and
+    `policy_count == standard_count == control_count == 1` (mirrors
+    `ps-domain-concepts.md`'s own Example 3 shape, minus `confidence`).
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+        _control("ctrl-1", "Automated Access Review Check"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.policy_count == 1
+    assert result.standard_count == 1
+    assert result.control_count == 1
+
+    from ps_service.domain_mapper.identity import control_id, policy_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
+    expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
+
+    baseline_node_ids = _written_node_ids(baseline_graph)
+    assert {expected_policy_id, expected_standard_id, expected_control_id} <= baseline_node_ids
+
+    governed_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:GOVERNED_BY]->(b)" in call.query
+    ]
+    supported_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:SUPPORTED_BY]->(b)" in call.query
+    ]
+    implemented_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:IMPLEMENTED_BY]->(b)" in call.query
+    ]
+    assert len(governed_by_calls) == 1
+    assert len(supported_by_calls) == 1
+    assert len(implemented_by_calls) == 1
+
+    native_node_ids = _written_node_ids(native_graph)
+    assert {"pol-1", "std-1", "ctrl-1"} <= native_node_ids
+
+
 def test_role_id_omitted_when_ambiguous_never_null() -> None:
     """D6: `req-1` (satisfied by one Role's Obligation) gets `role_id` set;
     `req-2` (satisfied by two different Roles' Obligations) omits it entirely --

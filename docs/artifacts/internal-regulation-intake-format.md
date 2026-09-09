@@ -67,16 +67,18 @@ from your `RegulatoryInstrument` node's own `id`, so there is nothing to get wro
 }
 ```
 
-Only five node labels and five edge types are recognized. Anything else is rejected — no
+Only eight node labels and eight edge types are recognized. Anything else is rejected — no
 partial file is ever accepted.
 
 | Allowed node labels | Allowed edge types |
 |---|---|
-| `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES` |
+| `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY` |
 
-Do **not** include `Policy`, `Standard`, `Control`, `PracticeArea`, or `RiskPath` nodes, or
-`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges — those are derived automatically once
-your file is ingested; including them yourself is a schema violation.
+`Policy`, `Standard`, and `Control` are **authored by you**, not derived — see the
+[`Policy`](#policy), [`Standard`](#standard), and [`Control`](#control) node references and the
+[`GOVERNED_BY`](#edge-reference)/[`SUPPORTED_BY`](#edge-reference)/
+[`IMPLEMENTED_BY`](#edge-reference) edges below. Do **not** include `PracticeArea` or `RiskPath`
+nodes — those are not yet supported by this format; including them is a schema violation.
 
 ## Ids: yours are local, ours are canonical
 
@@ -92,6 +94,9 @@ content-derived formulas, and rewrites every edge to point at the new id automat
 | `Requirement` | Any local string, e.g. `"req-1"` | Minted from your instrument's id plus this Requirement's `EXPRESSES` edge's `source_ref` |
 | `Obligation` | Any local string, e.g. `"obl-1"` | Minted from the Obligation's own `text` plus the Role that bears it |
 | `Capability` | Any local string, e.g. `"cap-1"` | Minted from the Capability's own `name` alone |
+| `Policy` | Any local string, e.g. `"pol-1"` | Minted from the Policy's own `title` alone |
+| `Standard` | Any local string, e.g. `"std-1"` | Minted from the Policy it supports plus this Standard's own `title` |
+| `Control` | Any local string, e.g. `"ctrl-1"` | Minted from the Standard it verifies plus this Control's own `title` |
 
 Because Capability ids are minted from `name` alone, **reuse the same local id** across every
 Obligation that requires the same underlying capability — that's what lets one Capability
@@ -140,10 +145,69 @@ node, instead of minting a near-duplicate for each.
 | `description` | No | |
 | `type` | No | e.g. `technical`, `organizational` |
 
-`confidence` (a 0.0–1.0 float our own LLM extraction records on every node) is **not required**
-from you and defaults to full confidence (`1.0`) when omitted — it exists to record an
-extracting model's uncertainty, and your content is either your own authored policy or your
-own assistant's best-effort extraction of it, not our pipeline's extraction.
+`confidence` (a 0.0–1.0 float our own LLM extraction records on every `Role`/`Requirement`/
+`Obligation`/`Capability` node) is **not required** from you and defaults to full confidence
+(`1.0`) when omitted — it exists to record an extracting model's uncertainty, and your content
+is either your own authored policy or your own assistant's best-effort extraction of it, not
+our pipeline's extraction.
+
+### `Policy`
+
+Unlike `Role`/`Requirement`/`Obligation`/`Capability` above, a `Policy` is not extracted from
+your source material at all — it is a governance node you author directly, representing an
+organizational commitment your Capabilities are governed by.
+
+| Property | Required | Notes |
+|---|---|---|
+| `title` | Yes | e.g. `"Access Control Policy"` |
+| `status` | Yes | `draft` \| `approved` \| `deprecated` — use `draft` for a first submission |
+| `description` | No | |
+| `owner_id` | No | An identifier for the person/team accountable for this Policy, if useful |
+| `version` | No | |
+
+`Policy` never carries a `confidence` property — there is no extracting model's uncertainty to
+record for a node you authored yourself, so this schema does not accept one on `Policy` at all
+(submitting one is a schema violation, not a silently-dropped field).
+
+### `Standard`
+
+Like `Policy`, a `Standard` is not extracted from your source material — it is a governance
+node you author directly, representing the implementation guidance (procedures, technical
+specifications, testing expectations) that turns one of your Policies into something concrete
+enough to build and verify. Every `Standard` must support exactly one `Policy` (see
+[`SUPPORTED_BY`](#edge-reference) below) — a Policy commonly has several Standards under it.
+
+| Property | Required | Notes |
+|---|---|---|
+| `title` | Yes | e.g. `"Access Control Standard"` |
+| `implementation_status` | Yes | `draft` \| `implemented` \| `reviewed` \| `deprecated` — use `draft` for a first submission |
+| `description` | No | |
+| `version` | No | |
+
+`Standard` never carries a `confidence` property, for the same reason as `Policy` — submitting
+one is a schema violation, not a silently-dropped field.
+
+### `Control`
+
+Like `Policy` and `Standard`, a `Control` is not extracted from your source material — it is a
+governance node you author directly, representing a concrete, testable verification mechanism
+confirming that a Standard's procedure is actually being followed (an automated check or a
+manual review). Every `Control` must implement exactly one `Standard` (see
+[`IMPLEMENTED_BY`](#edge-reference) below) — a Standard commonly has several Controls under it.
+
+| Property | Required | Notes |
+|---|---|---|
+| `type` | Yes | `automated` \| `manual` |
+| `title` | Yes | e.g. `"Automated Log Retention Integrity Check"` |
+| `implementation_status` | Yes | `planned` \| `implemented` \| `reviewed` \| `deprecated` — use `planned` for a first submission |
+| `description` | No | |
+| `execution_frequency` | No | e.g. `"daily"`, `"quarterly"` |
+| `last_test_date` | No | ISO 8601 date |
+| `next_review_date` | No | ISO 8601 date |
+| `evidence_ref` | No | An opaque pointer into your evidence/audit store |
+
+`Control` never carries a `confidence` property, for the same reason as `Policy`/`Standard` —
+submitting one is a schema violation, not a silently-dropped field.
 
 ## Edge reference
 
@@ -154,6 +218,9 @@ own assistant's best-effort extraction of it, not our pipeline's extraction.
 | `HAS` | `Role` → `Obligation` | — | **exactly one** Role per Obligation |
 | `SATISFIED_BY` | `Requirement` → `Obligation` | — | many-to-many |
 | `REQUIRES` | `Obligation` → `Capability` | — | many-to-many |
+| `GOVERNED_BY` | `Capability` → `Policy` | — (no required properties) | **at most one** Policy per Capability |
+| `SUPPORTED_BY` | `Policy` → `Standard` | — (no required properties) | **exactly one** Policy per Standard |
+| `IMPLEMENTED_BY` | `Standard` → `Control` | — (no required properties) | **exactly one** Standard per Control |
 
 ### Authoring rules the model must follow
 
@@ -167,11 +234,20 @@ own assistant's best-effort extraction of it, not our pipeline's extraction.
 - An `Obligation` can `REQUIRES` more than one `Capability`, and the same `Capability` can be
   `REQUIRES`d by many `Obligation`s — this is the intended convergence point (see
   [Ids](#ids-yours-are-local-ours-are-canonical) above).
+- A `Capability` can have **at most one** outbound `GOVERNED_BY` edge to a `Policy`. Governance
+  is optional per-Capability — a Capability with zero `GOVERNED_BY` edges is valid — but a
+  Capability with two or more is rejected.
+- Every `Standard` must have **exactly one** inbound `SUPPORTED_BY` edge from a `Policy`. A
+  Standard with zero or more than one supporting Policy is invalid.
+- Every `Control` must have **exactly one** inbound `IMPLEMENTED_BY` edge from a `Standard`. A
+  Control with zero or more than one implemented Standard is invalid.
 
 ## Worked example
 
 A small slice — one instrument, two roles, two requirements, two obligations, two
-capabilities — showing every edge type once. A real submission simply repeats this pattern.
+capabilities — showing every regulatory-spine edge type once, plus a full
+`Policy → Standard → Control` governance chain authored against one of the Capabilities. A real
+submission simply repeats this pattern.
 
 ```json
 {
@@ -197,7 +273,11 @@ capabilities — showing every edge type once. A real submission simply repeats 
     { "label": "Obligation", "id": "obl-access-control", "properties": { "text": "Enforce strong authentication, least privilege, and periodic access review" } },
 
     { "label": "Capability", "id": "cap-policy-exception-governance", "properties": { "name": "Policy Exception Governance" } },
-    { "label": "Capability", "id": "cap-access-control", "properties": { "name": "Access Control & Authentication" } }
+    { "label": "Capability", "id": "cap-access-control", "properties": { "name": "Access Control & Authentication" } },
+
+    { "label": "Policy", "id": "pol-access-control", "properties": { "title": "Access Control Policy", "status": "approved" } },
+    { "label": "Standard", "id": "std-access-control", "properties": { "title": "Access Control Standard", "implementation_status": "implemented" } },
+    { "label": "Control", "id": "ctrl-access-review", "properties": { "type": "automated", "title": "Automated Access Review Check", "implementation_status": "implemented", "execution_frequency": "daily" } }
   ],
   "edges": [
     { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role-eng-manager" }, "properties": { "source_ref": "Sec. 1" } },
@@ -213,7 +293,11 @@ capabilities — showing every edge type once. A real submission simply repeats 
     { "type": "SATISFIED_BY", "from": { "label": "Requirement", "id": "req-2" }, "to": { "label": "Obligation", "id": "obl-access-control" } },
 
     { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl-policy-governance" }, "to": { "label": "Capability", "id": "cap-policy-exception-governance" } },
-    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl-access-control" }, "to": { "label": "Capability", "id": "cap-access-control" } }
+    { "type": "REQUIRES", "from": { "label": "Obligation", "id": "obl-access-control" }, "to": { "label": "Capability", "id": "cap-access-control" } },
+
+    { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap-access-control" }, "to": { "label": "Policy", "id": "pol-access-control" } },
+    { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol-access-control" }, "to": { "label": "Standard", "id": "std-access-control" } },
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std-access-control" }, "to": { "label": "Control", "id": "ctrl-access-review" } }
   ]
 }
 ```
@@ -223,8 +307,11 @@ capabilities — showing every edge type once. A real submission simply repeats 
 - A node label or edge type outside the allow-list above.
 - A `RegulatoryInstrument` whose `source_type` is not `"internal"`.
 - An edge whose `from` or `to` id is not declared by any node in `nodes`.
-- Any `Policy`/`Standard`/`Control`/`PracticeArea`/`RiskPath` content — those are derived by
-  PS Service, never submitted.
+- A `Policy`, `Standard`, or `Control` node carrying a `confidence` property.
+- A Capability with two or more outbound `GOVERNED_BY` edges.
+- A Standard with zero, or two or more, inbound `SUPPORTED_BY` edges.
+- A Control with zero, or two or more, inbound `IMPLEMENTED_BY` edges.
+- Any `PracticeArea`/`RiskPath` content — not yet supported by this format.
 
 Every rejection is fail-closed: no partial graph is ever written from an invalid file.
 

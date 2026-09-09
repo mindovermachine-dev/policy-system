@@ -40,18 +40,6 @@ class DomainMapperPersistenceError(Exception):
     """
 
 
-class DomainMapperGovernanceError(Exception):
-    """A governance-derivation step could not proceed.
-
-    Malformed/unparseable LLM response for a Policy/Standard/Control
-    mint-or-match decision, or an attempt to run `DeriveGovernanceArtifacts`
-    for a `RegulatoryInstrument` whose `source_type` is not `"internal"`
-    (AC-BI-008's defense-in-depth guard, checked inside `governance.py`
-    itself even though the orchestration never invokes it for an external
-    source in practice). Raised by `governance.py`.
-    """
-
-
 class DomainMapperConfigurationError(Exception):
     """Domain Mapper's FalkorDB connection could not be established.
 

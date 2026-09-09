@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from litellm.types.utils import Embedding, EmbeddingResponse
 
+from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.export_instrument import InstrumentDescriptor, export_instrument
 from ps_service.export.models import InstrumentManifest
 
@@ -226,7 +227,7 @@ def test_export_instrument_writes_manifest_and_both_graph_files(
     assert manifest.celex == "32024R2847"
     assert manifest.source_type == "external"
     assert manifest.jurisdiction == "EU"
-    assert manifest.schema_version == "1"
+    assert manifest.schema_version == DOMAIN_SCHEMA_VERSION
     assert len(manifest.baseline_sha256) == 64
     assert len(manifest.native_sha256) == 64
 

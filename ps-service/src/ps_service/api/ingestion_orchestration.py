@@ -66,11 +66,7 @@ if TYPE_CHECKING:
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
-    from ps_service.domain_mapper.models import (
-        DerivationResult,
-        ExtractionResult,
-        GovernanceDerivationResult,
-    )
+    from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
     from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
@@ -186,22 +182,6 @@ class IngestInternalStage(Protocol):
         ...
 
 
-class DeriveGovernanceStage(Protocol):
-    """Call shape of ``ps_service.domain_mapper.derive_governance_artifacts`` (issue #54, S3)."""
-
-    def __call__(
-        self,
-        regulatory_instrument_id: str,
-        *,
-        baseline_graph: GraphHandle,
-        model: str,
-        call_completion: CompletionCaller | None = None,
-        emitter: LogEmitter | None = None,
-    ) -> GovernanceDerivationResult:
-        """Derive Policy/Standard/Control nodes on the baseline graph (internal source only)."""
-        ...
-
-
 class MergeStage(Protocol):
     """Call shape of ``ps_service.company_merge.merge_baseline_graph``."""
 
@@ -234,12 +214,15 @@ class GraphOpeners:
 
 @dataclass(frozen=True, slots=True)
 class PipelineStages:
-    """The four external-pipeline stage entry points, plus the internal-seed pipeline's own stages.
+    """The four external-pipeline stage entry points, plus the internal-seed pipeline's own stage.
 
-    In run order. S2 added ``ingest_internal``; S3 (issue #54) added
-    ``derive_governance``, the internal pipeline's second stage; S4 reuses
-    the catalog pipeline's own ``merge`` as the internal pipeline's third
-    stage -- one shared stage function, two callers.
+    In run order. S2 added ``ingest_internal``. GH #76 removed S3 (issue
+    #54)'s ``derive_governance`` stage outright -- Policy/Standard/Control
+    are now authored directly in the internal-seed document and minted by
+    ``ingest_internal`` itself, so there is no separate governance-derivation
+    stage any more. S4 reuses the catalog pipeline's own ``merge`` as the
+    internal pipeline's second stage -- one shared stage function, two
+    callers.
     """
 
     ingest: IngestStage
@@ -247,7 +230,6 @@ class PipelineStages:
     derive: DeriveStage
     merge: MergeStage
     ingest_internal: IngestInternalStage
-    derive_governance: DeriveGovernanceStage
 
 
 @dataclass(frozen=True, slots=True)
@@ -816,16 +798,9 @@ def _internal_ingestion_summary(result: InternalIngestResult) -> dict[str, int]:
         "requirements": result.requirement_count,
         "obligations": result.obligation_count,
         "capabilities": result.capability_count,
-    }
-
-
-def _governance_derivation_summary(result: GovernanceDerivationResult) -> dict[str, int]:
-    """Summarise a ``GovernanceDerivationResult`` as small integer counts (issue #54, S3)."""
-    return {
-        "policies": len(result.policy_node_ids),
-        "standards": len(result.standard_node_ids),
-        "controls": len(result.control_node_ids),
-        "unmatched_capabilities": len(result.unmatched_capability_ids),
+        "policies": result.policy_count,
+        "standards": result.standard_count,
+        "controls": result.control_count,
     }
 
 
@@ -890,22 +865,25 @@ def run_internal_ingestion_pipeline(
 ) -> IngestionOutcome:
     """Run the internal-seed ingestion pipeline for one resolved fixture path.
 
-    Three stages in sequence (issue #54, S4 extends S3's two): ``internal_
-    ingestion`` (read + validate + mint + persist, S2), ``governance_
-    derivation`` (``derive_governance_artifacts``, S3), then ``merge``
-    (``merge_baseline_graph``, S4 -- merges the internal baseline's spine
-    and governance layer into the single-tenant ``policy_system`` graph,
-    the same stage function :func:`run_catalog_ingestion_pipeline` already
-    uses), each wrapped by :func:`_run_stage` so a failure in any of them
-    aborts the sequence and names the failing stage (AC-BI-013). The seed is
-    read (and translated to :class:`InternalSeedValidationError` on a
-    schema/shape violation) *before* any graph is opened, since the
-    ``{short}_baseline``/``{short}_native`` graph names are derived from the
-    seed's own ``RegulatoryInstrument.id`` -- unlike the catalog path, the
-    short name is not known until the document has been parsed. This
-    pipeline needs a resolved LLM model and similarity threshold (``
-    governance_derivation`` is LLM-driven, ``merge`` needs the Company Merge
-    similarity threshold), so :func:`_require_ingestion_config` runs first,
+    Two stages in sequence (GH #76 removed issue #54 S3's ``governance_
+    derivation`` stage outright -- Policy/Standard/Control are now authored
+    directly in the submitted document and minted by ``internal_ingestion``
+    itself, so there is no separate governance-derivation stage any more):
+    ``internal_ingestion`` (read + validate + mint + persist, including the
+    now-authored Policy layer, S2) then ``merge`` (``merge_baseline_graph``,
+    S4 -- merges the internal baseline's spine and governance layer into the
+    single-tenant ``policy_system`` graph, the same stage function
+    :func:`run_catalog_ingestion_pipeline` already uses), each wrapped by
+    :func:`_run_stage` so a failure in either of them aborts the sequence and
+    names the failing stage (AC-BI-013). The seed is read (and translated to
+    :class:`InternalSeedValidationError` on a schema/shape violation)
+    *before* any graph is opened, since the ``{short}_baseline``/``{short}_
+    native`` graph names are derived from the seed's own
+    ``RegulatoryInstrument.id`` -- unlike the catalog path, the short name is
+    not known until the document has been parsed. This pipeline needs a
+    resolved LLM model and similarity threshold (``merge`` needs the Company
+    Merge similarity threshold; the LLM model is required for its embedding-
+    based dedup pass), so :func:`_require_ingestion_config` runs first,
     before any graph is opened or any stage runs -- the same
     HTTP-503-before-any-I/O guarantee the catalog pipeline already gives.
 
@@ -921,8 +899,8 @@ def run_internal_ingestion_pipeline(
         emitter: Optional explicit log emitter; otherwise the process default.
 
     Returns:
-        An :class:`IngestionOutcome` with ``source="internal"`` and three
-        :class:`StageReport` entries, in pipeline order (issue #54, S4).
+        An :class:`IngestionOutcome` with ``source="internal"`` and two
+        :class:`StageReport` entries, in pipeline order (GH #76).
 
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an
@@ -930,13 +908,10 @@ def run_internal_ingestion_pipeline(
         InternalSeedValidationError: The seed document fails structural or
             shape validation (422), or its ``RegulatoryInstrument.id`` is
             not in the expected ``{SHORT}-{VERSION}`` shape.
-        PipelineStageError: The ``internal_ingestion``, ``governance_
-            derivation``, or ``merge`` stage raises for any other reason --
-            e.g. a referential-integrity/cardinality violation
-            (AC-BI-011), a non-``internal`` ``source_type`` reaching
-            governance derivation (AC-BI-008, defense-in-depth only -- the
-            route never resolves one this way in practice), or a FalkorDB
-            write failure (502).
+        PipelineStageError: The ``internal_ingestion`` or ``merge`` stage
+            raises for any other reason -- e.g. a referential-integrity/
+            cardinality violation (AC-BI-011), or a FalkorDB write failure
+            (502).
     """
     resolved = _require_ingestion_config(config)
     adapter = dependencies.adapters.internal_seed()
@@ -966,17 +941,6 @@ def run_internal_ingestion_pipeline(
                 emitter=emitter,
             )
             rid = ingest_result.regulatory_instrument_id
-            set_stage(run_id, "governance_derivation")
-            governance_result = _run_stage(
-                "governance_derivation",
-                lambda: dependencies.stages.derive_governance(
-                    rid,
-                    baseline_graph=baseline_graph,
-                    model=resolved.chat_model,
-                    emitter=emitter,
-                ),
-                emitter=emitter,
-            )
             set_stage(run_id, "merge")
             merge_result = _run_stage(
                 "merge",
@@ -1015,7 +979,6 @@ def run_internal_ingestion_pipeline(
         source="internal",
         stages=(
             StageReport("internal_ingestion", _internal_ingestion_summary(ingest_result)),
-            StageReport("governance_derivation", _governance_derivation_summary(governance_result)),
             StageReport("merge", _merge_summary(merge_result)),
         ),
     )
@@ -1098,7 +1061,6 @@ def build_default_pipeline_dependencies() -> PipelineDependencies:
     """
     from ps_service.company_merge import merge_baseline_graph  # noqa: PLC0415 -- M6: function-local
     from ps_service.domain_mapper import (  # noqa: PLC0415 -- M6: function-local
-        derive_governance_artifacts,
         derive_obligations_and_capabilities,
         extract_roles_and_requirements,
     )
@@ -1121,7 +1083,6 @@ def build_default_pipeline_dependencies() -> PipelineDependencies:
             derive=derive_obligations_and_capabilities,
             merge=merge_baseline_graph,
             ingest_internal=ingest_internal_regulatory_instrument,
-            derive_governance=derive_governance_artifacts,
         ),
         adapters=PipelineAdapters(
             ingestion=_default_ingestion_adapter,

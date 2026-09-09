@@ -61,6 +61,9 @@ _EDGE_ENDPOINT_LABELS: dict[EdgeType, tuple[NodeLabel, NodeLabel]] = {
     "HAS": ("Role", "Obligation"),
     "SATISFIED_BY": ("Requirement", "Obligation"),
     "REQUIRES": ("Obligation", "Capability"),
+    "GOVERNED_BY": ("Capability", "Policy"),
+    "SUPPORTED_BY": ("Policy", "Standard"),
+    "IMPLEMENTED_BY": ("Standard", "Control"),
 }
 
 
@@ -90,6 +93,9 @@ class InternalIngestResult:
     requirement_count: int
     obligation_count: int
     capability_count: int
+    policy_count: int
+    standard_count: int
+    control_count: int
 
 
 # --- Requirement id (internal-source formula; not domain_mapper.identity's external one) ---
@@ -135,6 +141,23 @@ class _SeedIndex:
     """Requirement local id -> its single EXPRESSES edge's source_ref."""
     requirement_obligation_ids: dict[str, tuple[str, ...]]
     """Requirement local id -> the local ids of the Obligations it SATISFIED_BY-links to."""
+    policy_governor: dict[str, str]
+    """Capability local id -> its single governing Policy's local id (GH #76 Slice 1).
+
+    At most one outbound GOVERNED_BY per Capability -- zero is valid
+    (governance is optional per-Capability, Design Decision 4)."""
+    standard_supporter: dict[str, str]
+    """Standard local id -> its single supporting Policy's local id (GH #76 Slice 2).
+
+    Exactly one inbound SUPPORTED_BY per Standard -- zero or more than one
+    is rejected (unlike GOVERNED_BY, a Standard is a weak entity of exactly
+    one Policy)."""
+    control_implementer: dict[str, str]
+    """Control local id -> its single implemented Standard's local id (GH #76 Slice 3).
+
+    Exactly one inbound IMPLEMENTED_BY per Control -- zero or more than one
+    is rejected, mirroring standard_supporter's exactly-one-parent shape (a
+    Control is a weak entity of exactly one Standard)."""
 
 
 def find_regulatory_instrument(seed: InternalRegulationSeed) -> SeedNode:
@@ -239,6 +262,84 @@ def _index_requirement_source_refs(seed: InternalRegulationSeed) -> dict[str, st
     return source_ref_by_requirement
 
 
+def _index_policy_governors(seed: InternalRegulationSeed) -> dict[str, str]:
+    """Capability local id -> its single governing Policy's local id (GH #76 Slice 1).
+
+    Raises `InternalSeedError`, naming the offending Capability, for any
+    Capability with 2+ outbound GOVERNED_BY edges. Zero is valid --
+    governance is optional per-Capability (Design Decision 4) -- so a
+    Capability absent from the returned mapping simply has no Policy.
+    """
+    governor_by_capability: dict[str, str] = {}
+    governed_by_count: dict[str, int] = {}
+    for edge in seed.edges:
+        if edge.type != "GOVERNED_BY":
+            continue
+        governed_by_count[edge.from_.id] = governed_by_count.get(edge.from_.id, 0) + 1
+        governor_by_capability[edge.from_.id] = edge.to.id
+    for capability_id_, count in governed_by_count.items():
+        if count > 1:
+            raise InternalSeedError(
+                f"Capability {capability_id_!r} must have at most one outbound "
+                f"GOVERNED_BY edge, found {count}"
+            )
+    return governor_by_capability
+
+
+def _index_standard_supporters(seed: InternalRegulationSeed) -> dict[str, str]:
+    """Standard local id -> its single supporting Policy's local id (GH #76 Slice 2).
+
+    Raises `InternalSeedError` for any Standard with zero or more than one
+    inbound SUPPORTED_BY edge -- mirrors `_index_obligation_bearers`'s
+    exactly-one-bearer shape (a Standard is a weak entity of exactly one
+    Policy, unlike GOVERNED_BY's optional-per-Capability rule).
+    """
+    supporter_by_standard: dict[str, str] = {}
+    supported_by_count: dict[str, int] = {}
+    for edge in seed.edges:
+        if edge.type != "SUPPORTED_BY":
+            continue
+        supported_by_count[edge.to.id] = supported_by_count.get(edge.to.id, 0) + 1
+        supporter_by_standard[edge.to.id] = edge.from_.id
+    for node in seed.nodes:
+        if node.label != "Standard":
+            continue
+        count = supported_by_count.get(node.id, 0)
+        if count != 1:
+            raise InternalSeedError(
+                f"Standard {node.id!r} must have exactly one inbound "
+                f"SUPPORTED_BY edge, found {count}"
+            )
+    return supporter_by_standard
+
+
+def _index_control_implementers(seed: InternalRegulationSeed) -> dict[str, str]:
+    """Control local id -> its single implemented Standard's local id (GH #76 Slice 3).
+
+    Raises `InternalSeedError` for any Control with zero or more than one
+    inbound IMPLEMENTED_BY edge -- mirrors `_index_standard_supporters`'s
+    exactly-one-parent shape (a Control is a weak entity of exactly one
+    Standard).
+    """
+    implementer_by_control: dict[str, str] = {}
+    implemented_by_count: dict[str, int] = {}
+    for edge in seed.edges:
+        if edge.type != "IMPLEMENTED_BY":
+            continue
+        implemented_by_count[edge.to.id] = implemented_by_count.get(edge.to.id, 0) + 1
+        implementer_by_control[edge.to.id] = edge.from_.id
+    for node in seed.nodes:
+        if node.label != "Control":
+            continue
+        count = implemented_by_count.get(node.id, 0)
+        if count != 1:
+            raise InternalSeedError(
+                f"Control {node.id!r} must have exactly one inbound "
+                f"IMPLEMENTED_BY edge, found {count}"
+            )
+    return implementer_by_control
+
+
 def _index_requirement_obligations(seed: InternalRegulationSeed) -> dict[str, tuple[str, ...]]:
     """Requirement local id -> the local ids of every Obligation it SATISFIED_BY-links to."""
     obligations_by_requirement: dict[str, list[str]] = {}
@@ -266,6 +367,9 @@ def _validate_and_index(seed: InternalRegulationSeed) -> _SeedIndex:
         obligation_bearer=_index_obligation_bearers(seed),
         requirement_source_ref=_index_requirement_source_refs(seed),
         requirement_obligation_ids=_index_requirement_obligations(seed),
+        policy_governor=_index_policy_governors(seed),
+        standard_supporter=_index_standard_supporters(seed),
+        control_implementer=_index_control_implementers(seed),
     )
 
 
@@ -301,6 +405,54 @@ def _mint_capability_ids(seed: InternalRegulationSeed) -> dict[str, str]:
         for node in seed.nodes
         if node.label == "Capability"
     }
+
+
+def _mint_policy_ids(seed: InternalRegulationSeed) -> dict[str, str]:
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        policy_id,
+    )
+
+    return {
+        node.id: policy_id(_require_str_property(node, "title"))
+        for node in seed.nodes
+        if node.label == "Policy"
+    }
+
+
+def _mint_standard_ids(
+    seed: InternalRegulationSeed, index: _SeedIndex, policy_canonical_ids: dict[str, str]
+) -> dict[str, str]:
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        standard_id,
+    )
+
+    result: dict[str, str] = {}
+    for node in seed.nodes:
+        if node.label != "Standard":
+            continue
+        supporter_local_id = index.standard_supporter[node.id]
+        supporter_canonical_id = policy_canonical_ids[supporter_local_id]
+        title = _require_str_property(node, "title")
+        result[node.id] = standard_id(supporter_canonical_id, title)
+    return result
+
+
+def _mint_control_ids(
+    seed: InternalRegulationSeed, index: _SeedIndex, standard_canonical_ids: dict[str, str]
+) -> dict[str, str]:
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        control_id,
+    )
+
+    result: dict[str, str] = {}
+    for node in seed.nodes:
+        if node.label != "Control":
+            continue
+        implementer_local_id = index.control_implementer[node.id]
+        implementer_canonical_id = standard_canonical_ids[implementer_local_id]
+        title = _require_str_property(node, "title")
+        result[node.id] = control_id(implementer_canonical_id, title)
+    return result
 
 
 def _mint_obligation_ids(
@@ -417,6 +569,66 @@ def _capability_properties(node: SeedNode) -> dict[str, object]:
     return properties
 
 
+def _policy_properties(node: SeedNode) -> dict[str, object]:
+    """Required `title`/`status`, optional `description`/`owner_id`/`version`.
+
+    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
+    §3) -- an authored Policy carries no LLM-derivation uncertainty.
+    """
+    properties: dict[str, object] = {
+        "title": _require_str_property(node, "title"),
+        "status": _require_str_property(node, "status"),
+    }
+    for optional_key in ("description", "owner_id", "version"):
+        value = node.properties.get(optional_key)
+        if value is not None:
+            properties[optional_key] = value
+    return properties
+
+
+def _standard_properties(node: SeedNode) -> dict[str, object]:
+    """Required `title`/`implementation_status`, optional `description`/`version`.
+
+    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
+    §3) -- an authored Standard carries no LLM-derivation uncertainty.
+    Mirrors `_policy_properties`'s shape.
+    """
+    properties: dict[str, object] = {
+        "title": _require_str_property(node, "title"),
+        "implementation_status": _require_str_property(node, "implementation_status"),
+    }
+    for optional_key in ("description", "version"):
+        value = node.properties.get(optional_key)
+        if value is not None:
+            properties[optional_key] = value
+    return properties
+
+
+def _control_properties(node: SeedNode) -> dict[str, object]:
+    """Required `type`/`title`/`implementation_status`, optional operational fields.
+
+    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
+    §3) -- an authored Control carries no LLM-derivation uncertainty.
+    Mirrors `_standard_properties`'s shape.
+    """
+    properties: dict[str, object] = {
+        "type": _require_str_property(node, "type"),
+        "title": _require_str_property(node, "title"),
+        "implementation_status": _require_str_property(node, "implementation_status"),
+    }
+    for optional_key in (
+        "description",
+        "execution_frequency",
+        "last_test_date",
+        "next_review_date",
+        "evidence_ref",
+    ):
+        value = node.properties.get(optional_key)
+        if value is not None:
+            properties[optional_key] = value
+    return properties
+
+
 # --- FalkorDB write boundary ---
 
 
@@ -477,23 +689,48 @@ class _CanonicalIds:
     requirement: dict[str, str]
     obligation: dict[str, str]
     capability: dict[str, str]
+    policy: dict[str, str]
+    standard: dict[str, str]
+    control: dict[str, str]
 
     def resolve(self, ref: SeedRef) -> str:
-        """Return `ref`'s canonical id, dispatching on its own declared label."""
+        """Return `ref`'s canonical id, dispatching on its own declared label.
+
+        A dict-of-maps dispatch (rather than an if/elif chain) keeps this
+        under the L1/L2 cyclomatic-complexity ceiling as new labels are
+        added slice by slice -- `RegulatoryInstrument` is the one label
+        with no per-node map (its id is fixed at parse time), so it stays
+        a single early return.
+        """
         if ref.label == "RegulatoryInstrument":
             return self.regulatory_instrument_id
-        if ref.label == "Role":
-            return self.role[ref.id]
-        if ref.label == "Requirement":
-            return self.requirement[ref.id]
-        if ref.label == "Obligation":
-            return self.obligation[ref.id]
-        return self.capability[ref.id]
+        by_label: dict[str, dict[str, str]] = {
+            "Role": self.role,
+            "Requirement": self.requirement,
+            "Obligation": self.obligation,
+            "Capability": self.capability,
+            "Policy": self.policy,
+            "Standard": self.standard,
+            "Control": self.control,
+        }
+        return by_label[ref.label][ref.id]
 
 
-def _persist_baseline_nodes(
+def _persist_baseline_reference_nodes(
     graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
 ) -> None:
+    """Write RegulatoryInstrument/Role/Capability/Policy/Standard/Control.
+
+    Split out of `_persist_baseline_nodes` to keep cyclomatic complexity
+    <=8 (L1/L2 coding standards) -- the same `_index_*`-style splitting
+    already used elsewhere in this module. These are the labels other
+    nodes/edges reference (`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`
+    point at Policy/Standard/Control), so they must exist before anything
+    that could point at them -- the same ordering rule
+    `_persist_baseline_dependent_nodes` documents for Obligation/Requirement
+    below. Control is written last in this group (after Standard) since an
+    `IMPLEMENTED_BY` edge points Standard -> Control.
+    """
     _execute_query(
         graph,
         "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
@@ -518,6 +755,44 @@ def _persist_baseline_nodes(
                     "properties": _capability_properties(node),
                 },
             )
+        elif node.label == "Policy":
+            _execute_query(
+                graph,
+                "MERGE (n:Policy {id: $id}) SET n += $properties",
+                params={
+                    "id": canonical.policy[node.id],
+                    "properties": _policy_properties(node),
+                },
+            )
+        elif node.label == "Standard":
+            _execute_query(
+                graph,
+                "MERGE (n:Standard {id: $id}) SET n += $properties",
+                params={
+                    "id": canonical.standard[node.id],
+                    "properties": _standard_properties(node),
+                },
+            )
+        elif node.label == "Control":
+            _execute_query(
+                graph,
+                "MERGE (n:Control {id: $id}) SET n += $properties",
+                params={
+                    "id": canonical.control[node.id],
+                    "properties": _control_properties(node),
+                },
+            )
+
+
+def _persist_baseline_dependent_nodes(
+    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
+) -> None:
+    """Write Obligation/Requirement nodes.
+
+    Their properties depend on the reference nodes
+    `_persist_baseline_reference_nodes` already wrote (D6's `role_id`
+    resolution needs Role's canonical id).
+    """
     for node in seed.nodes:
         if node.label == "Obligation":
             _execute_query(
@@ -538,6 +813,13 @@ def _persist_baseline_nodes(
                     "properties": _requirement_properties(node, role_id_value),
                 },
             )
+
+
+def _persist_baseline_nodes(
+    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
+) -> None:
+    _persist_baseline_reference_nodes(graph, seed, index, canonical)
+    _persist_baseline_dependent_nodes(graph, seed, index, canonical)
 
 
 def _persist_baseline_edges(
@@ -606,6 +888,9 @@ def ingest_internal_regulatory_instrument(
 
     role_canonical_ids = _mint_role_ids(seed, regulatory_instrument_id)
     capability_canonical_ids = _mint_capability_ids(seed)
+    policy_canonical_ids = _mint_policy_ids(seed)
+    standard_canonical_ids = _mint_standard_ids(seed, index, policy_canonical_ids)
+    control_canonical_ids = _mint_control_ids(seed, index, standard_canonical_ids)
     obligation_canonical_ids = _mint_obligation_ids(seed, index, role_canonical_ids)
     requirement_canonical_ids = _mint_requirement_ids(seed, regulatory_instrument_id, index)
     canonical = _CanonicalIds(
@@ -614,6 +899,9 @@ def ingest_internal_regulatory_instrument(
         requirement=requirement_canonical_ids,
         obligation=obligation_canonical_ids,
         capability=capability_canonical_ids,
+        policy=policy_canonical_ids,
+        standard=standard_canonical_ids,
+        control=control_canonical_ids,
     )
 
     _persist_native(native_graph, seed)
@@ -625,4 +913,7 @@ def ingest_internal_regulatory_instrument(
         requirement_count=len(requirement_canonical_ids),
         obligation_count=len(obligation_canonical_ids),
         capability_count=len(capability_canonical_ids),
+        policy_count=len(policy_canonical_ids),
+        standard_count=len(standard_canonical_ids),
+        control_count=len(control_canonical_ids),
     )

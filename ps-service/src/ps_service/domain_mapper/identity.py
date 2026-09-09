@@ -88,22 +88,54 @@ def policy_id(title: str) -> str:
     return f"pol_{_slug(title)}_{_hash(title.lower())}"
 
 
-def standard_id(policy_node_id: str, version: str) -> str:
-    """`std_{POLICY}_v{VERSION}` — derived from the Policy it supports plus version.
+def standard_id(policy_node_id: str, title: str) -> str:
+    """`std_{slug}_{hash}` — content-derived from the Standard's `title` and Policy.
 
-    A weak-entity id (like `requirement_id`/`obligation_id`'s own owning-
-    parent composition), not a canonical hash: a Standard exists only in the
-    context of exactly one Policy, so there is no cross-Policy reuse to
-    protect against by opacity.
+    Derived from the Standard's own `title` AND the Policy it supports (the
+    Policy it links to via `SUPPORTED_BY`).
+
+    GH #76 (AC-BI-002) fixed this from the earlier `std_{POLICY}_v{VERSION}`
+    formula, which keyed identity on `version` — a property that is
+    constant (`"1"`) at mint time and, more fundamentally, is not what
+    distinguishes Standards under one Policy. `SUPPORTED_BY` is `1 : 1..*`
+    (a Policy may have several Standards, e.g. one covering logging, one
+    covering access control), so two distinct Standards under the same
+    Policy that happened to share a `version` collided onto one node via
+    `MERGE`. Keying on the Standard's own `title` instead — mirroring
+    `obligation_id(role_node_id, text)`'s existing shape exactly — fixes
+    this structurally: the `{slug}` is the child's own title, for human
+    readability (two different titles under the same Policy are guaranteed
+    two different ids by construction, since `_slug` differs whenever
+    `title.lower()` differs); the parent `policy_node_id` enters only the
+    opaque `{hash}`, never printed literally in the id string. `version`
+    remains an ordinary node *property* — it simply stops being an identity
+    input.
     """
-    return f"std_{policy_node_id}_v{version}"
+    return f"std_{_slug(title)}_{_hash(f'{policy_node_id}:{title.lower()}')}"
 
 
-def control_id(standard_node_id: str, control_type: str) -> str:
-    """`ctrl_{STANDARD}_{TYPE}` — derived from the Standard it verifies plus control type.
+def control_id(standard_node_id: str, title: str) -> str:
+    """`ctrl_{slug}_{hash}` — content-derived from the Control's `title` and Standard.
 
-    Same weak-entity pattern as `standard_id`: a Control exists only to
-    verify exactly one Standard, so there is no cross-Standard reuse to
-    protect against.
+    Derived from the Control's own `title` AND the Standard it verifies (the
+    Standard it links to via `IMPLEMENTED_BY`).
+
+    GH #76 (AC-BI-003) fixed this from the earlier `ctrl_{STANDARD}_{TYPE}`
+    formula, which keyed identity on `type` — a 2-valued enum (`automated`/
+    `manual`), not what distinguishes Controls under one Standard.
+    `IMPLEMENTED_BY` is `1 : 0..*` (a Standard may have several Controls,
+    e.g. two automated checks verifying different aspects of the same
+    Standard), so two distinct Controls under the same Standard that
+    happened to share a `type` collided onto one node via `MERGE` — this is
+    AC-BI-003's literal "even of the same `type`" wording. Keying on the
+    Control's own `title` instead — mirroring `standard_id(policy_node_id,
+    title)`'s existing shape exactly, itself mirroring `obligation_id
+    (role_node_id, text)` — fixes this structurally: the `{slug}` is the
+    child's own title, for human readability (two different titles under
+    the same Standard are guaranteed two different ids by construction,
+    since `_slug` differs whenever `title.lower()` differs); the parent
+    `standard_node_id` enters only the opaque `{hash}`, never printed
+    literally in the id string. `type` remains an ordinary node *property*
+    — it simply stops being an identity input.
     """
-    return f"ctrl_{standard_node_id}_{control_type}"
+    return f"ctrl_{_slug(title)}_{_hash(f'{standard_node_id}:{title.lower()}')}"

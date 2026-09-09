@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from api._fakes import build_fake_pipeline_dependencies
 from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.config import ServiceConfig
-from ps_service.domain_mapper.errors import DomainMapperGovernanceError
+from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
@@ -66,18 +66,19 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
 
 
 def test_post_ingestions_internal_runs_real_pipeline() -> None:
-    """A well-formed internal request runs the real ``internal_ingestion``,
-    ``governance_derivation``, and ``merge`` stages (issue #54, S4 --
-    extends S3's proof with the merge stage that closes the loop to
-    ``policy_system``).
+    """A well-formed internal request runs the real ``internal_ingestion`` and
+    ``merge`` stages (GH #76 removed the ``governance_derivation`` stage
+    outright -- Policy/Standard/Control are now authored directly in the
+    submitted document and minted by ``internal_ingestion`` itself; issue
+    #54 S4's ``merge`` stage still closes the loop to ``policy_system``).
 
     ``fixture_path`` resolves against PS Service's real fixtures root
     (``test-data/``) to the rewritten ``engineering-practices-seed.json``
     (B1) -- the fake adapter delegates to the real, already-tested
     ``InternalSeedIngestionAdapter.read_seed`` so this test exercises real
-    resolution + parsing, while the persistence/derivation/merge stages
-    themselves stay faked (no real FalkorDB/LLM reached, matching every
-    other route test in this package).
+    resolution + parsing, while the persistence/merge stages themselves stay
+    faked (no real FalkorDB/LLM reached, matching every other route test in
+    this package).
     """
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
@@ -91,15 +92,35 @@ def test_post_ingestions_internal_runs_real_pipeline() -> None:
     assert body["run_id"]
     assert body["regulatory_instrument_id"] == "ENGPRAC-3.0"
     assert body["source"] == "internal"
-    assert [stage["stage"] for stage in body["stages"]] == [
-        "internal_ingestion",
-        "governance_derivation",
-        "merge",
-    ]
+    assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
     assert body["stages"][0]["status"] == "succeeded"
     assert body["stages"][1]["status"] == "succeeded"
-    assert body["stages"][2]["status"] == "succeeded"
-    assert fake.recorder.order == ["internal_ingestion", "governance_derivation", "merge"]
+    assert fake.recorder.order == ["internal_ingestion", "merge"]
+
+
+def test_post_ingestions_internal_summary_reports_policies_key() -> None:
+    """AC-BI-010's structural half, now fully satisfied: the ``internal_ingestion``
+    stage's summary dict contains ``"policies"`` (GH #76 Slice 1), ``"standards"``
+    (GH #76 Slice 2), and ``"controls"`` (GH #76 Slice 3) keys -- and the
+    pipeline's own stage list is exactly ``["internal_ingestion", "merge"]``,
+    never the old three-stage ``governance_derivation`` shape, and no
+    ``governance_derivation``-outcome log entry is emitted anywhere in this
+    pipeline (structural: the stage itself was deleted outright in Slice 1).
+    """
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post(
+        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
+    internal_ingestion_stage = body["stages"][0]
+    assert "policies" in internal_ingestion_stage["summary"]
+    assert "standards" in internal_ingestion_stage["summary"]
+    assert "controls" in internal_ingestion_stage["summary"]
 
 
 def test_second_ingestion_same_title_is_structural_no_op() -> None:
@@ -134,21 +155,15 @@ def test_second_ingestion_same_title_is_structural_no_op() -> None:
     assert first_body["regulatory_instrument_id"] == "ENGPRAC-3.0"
     assert second_body["regulatory_instrument_id"] == "ENGPRAC-3.0"
     for body in (first_body, second_body):
-        assert [stage["stage"] for stage in body["stages"]] == [
-            "internal_ingestion",
-            "governance_derivation",
-            "merge",
-        ]
+        assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
         assert all(stage["status"] == "succeeded" for stage in body["stages"])
 
     # Both full pipeline runs happened, in the same order, each driving the
     # merge stage against the SAME regulatory_instrument_id both times.
     assert fake.recorder.order == [
         "internal_ingestion",
-        "governance_derivation",
         "merge",
         "internal_ingestion",
-        "governance_derivation",
         "merge",
     ]
     merge_calls = [call for call in fake.recorder.calls if call.stage == "merge"]
@@ -157,17 +172,19 @@ def test_second_ingestion_same_title_is_structural_no_op() -> None:
     assert merge_calls[1].regulatory_instrument_id == "ENGPRAC-3.0"
 
 
-def test_governance_stage_failure_aborts_before_merge_and_names_stage() -> None:
-    """AC-BI-013: a ``governance_derivation`` stage failure 502s, names the
-    stage, and no later stage (a future S4 ``merge``) ever runs -- extends
-    S2's ``test_post_ingestions_internal_runs_real_pipeline`` with a fake
-    ``derive_governance`` stage that raises, mirroring
+def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() -> None:
+    """AC-BI-013: an ``internal_ingestion`` stage failure 502s, names the
+    stage, and no later stage (``merge``) ever runs. Replaces the deleted
+    ``test_governance_stage_failure_aborts_before_merge_and_names_stage``
+    (GH #76 removed the ``governance_derivation`` stage outright) -- this is
+    the internal pipeline's remaining first-stage failure-path proof,
+    mirroring
     ``test_ingestions_catalog.py::test_stage_error_response_reports_failing_stage_and_sanitized_reason``'s
     exact shape for the catalog pipeline.
     """
     fake = build_fake_pipeline_dependencies(
         internal_rid="ENGPRAC-3.0",
-        derive_governance_error=DomainMapperGovernanceError("no coherent Policy could be derived"),
+        ingest_internal_error=InternalSeedError("referential integrity violation"),
     )
     client = _client_with_fake(fake.dependencies)
 
@@ -177,9 +194,9 @@ def test_governance_stage_failure_aborts_before_merge_and_names_stage() -> None:
 
     assert response.status_code == 502
     body = response.json()
-    assert body["error"]["failing_stage"] == "governance_derivation"
+    assert body["error"]["failing_stage"] == "internal_ingestion"
     assert body["error"]["message"]
-    assert fake.recorder.order == ["internal_ingestion", "governance_derivation"]
+    assert fake.recorder.order == ["internal_ingestion"]
 
 
 def test_fixture_path_outside_fixtures_root_rejected_at_point_of_use() -> None:

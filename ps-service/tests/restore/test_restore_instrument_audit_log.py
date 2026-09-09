@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 import ps_service.restore.restore_instrument as restore_instrument_module
+from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import InstrumentManifest, SerializedGraph
 from ps_service.export.serialize import checksum_bytes, to_json_bytes
 from ps_service.restore.models import RestoreArtifact
@@ -53,7 +54,7 @@ def _manifest() -> InstrumentManifest:
         version="1.0",
         source_type="external",
         jurisdiction=None,
-        schema_version="1",
+        schema_version=DOMAIN_SCHEMA_VERSION,
         exported_at="2026-09-04T00:00:00Z",
         baseline_sha256=checksum_bytes(_EMPTY_GRAPH_BYTES),
         native_sha256=checksum_bytes(_EMPTY_GRAPH_BYTES),
@@ -118,7 +119,7 @@ def test_succeeded_entry_carries_caller_and_schema_version(
         # "extra" key.
         assert entry["entity_id"] == _INSTRUMENT_ID
         assert entry["caller"] == _ACTOR
-        assert entry["schema_version"] == "1"
+        assert entry["schema_version"] == DOMAIN_SCHEMA_VERSION
         assert "actor" not in entry  # MA2's explicit correction: never extra["actor"]
 
 
@@ -151,4 +152,4 @@ def test_failed_entry_recorded_with_no_succeeded_entry_when_merge_step_raises(
     assert "succeeded" not in outcomes
     failed_entry = entries[-1]
     assert failed_entry["caller"] == _ACTOR
-    assert failed_entry["schema_version"] == "1"
+    assert failed_entry["schema_version"] == DOMAIN_SCHEMA_VERSION

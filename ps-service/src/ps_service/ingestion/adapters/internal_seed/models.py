@@ -15,13 +15,35 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NodeLabel = Literal["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability"]
-"""The intake format's five allowed node labels -- mirrors the packaged JSON Schema's
-`nodeLabel` enum exactly (D7)."""
+NodeLabel = Literal[
+    "RegulatoryInstrument",
+    "Role",
+    "Requirement",
+    "Obligation",
+    "Capability",
+    "Policy",
+    "Standard",
+    "Control",
+]
+"""The intake format's allowed node labels -- mirrors the packaged JSON Schema's
+`nodeLabel` enum exactly (D7). `Policy` (GH #76 Slice 1), `Standard` (GH #76
+Slice 2), and `Control` (GH #76 Slice 3) are authored governance labels --
+AC-BI-001 is fully satisfied now that all three land."""
 
-EdgeType = Literal["DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES"]
-"""The intake format's five allowed edge types -- mirrors the packaged JSON Schema's
-`edge.type` enum exactly (D7)."""
+EdgeType = Literal[
+    "DEFINES",
+    "EXPRESSES",
+    "HAS",
+    "SATISFIED_BY",
+    "REQUIRES",
+    "GOVERNED_BY",
+    "SUPPORTED_BY",
+    "IMPLEMENTED_BY",
+]
+"""The intake format's allowed edge types -- mirrors the packaged JSON Schema's
+`edge.type` enum exactly (D7). `GOVERNED_BY` (GH #76 Slice 1), `SUPPORTED_BY`
+(GH #76 Slice 2), and `IMPLEMENTED_BY` (GH #76 Slice 3) are authored
+governance edges -- AC-BI-001 is fully satisfied now that all three land."""
 
 
 class SeedRef(BaseModel):

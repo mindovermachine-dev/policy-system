@@ -99,7 +99,6 @@ _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
         "InternalSeedError",
         "DomainMapperExtractionError",
         "DomainMapperDerivationError",
-        "DomainMapperGovernanceError",
         "CompanyMergeConfigurationError",
     }
 )

@@ -91,19 +91,13 @@ from ps_service.domain_mapper.errors import DomainMapperPersistenceError
 from ps_service.domain_mapper.models import (
     CapabilityNode,
     CapabilityRequiresEdge,
-    ControlNode,
     ObligationHasEdge,
     ObligationNode,
-    PolicyGovernedByEdge,
-    PolicyNode,
-    PolicySupportedByEdge,
     RequirementExpressesEdge,
     RequirementNode,
     RequirementSatisfiedByEdge,
     RoleDefinesEdge,
     RoleNode,
-    StandardImplementedByEdge,
-    StandardNode,
 )
 
 if TYPE_CHECKING:
@@ -114,9 +108,6 @@ _ROLE_LABEL = "Role"
 _REQUIREMENT_LABEL = "Requirement"
 _OBLIGATION_LABEL = "Obligation"
 _CAPABILITY_LABEL = "Capability"
-_POLICY_LABEL = "Policy"
-_STANDARD_LABEL = "Standard"
-_CONTROL_LABEL = "Control"
 
 
 def _execute_query(
@@ -368,82 +359,3 @@ def _upsert_bare_edge(
         f"MERGE (s)-[:{relationship_type}]->(t)",
         params={"source_id": source_id, "target_id": target_id},
     )
-
-
-def persist_governance_graph(
-    graph: GraphHandle,
-    policy_nodes: tuple[PolicyNode, ...],
-    governed_by_edges: tuple[PolicyGovernedByEdge, ...],
-    standard_nodes: tuple[StandardNode, ...],
-    supported_by_edges: tuple[PolicySupportedByEdge, ...],
-    control_nodes: tuple[ControlNode, ...],
-    implemented_by_edges: tuple[StandardImplementedByEdge, ...],
-) -> None:
-    """Persist one governance-derivation run's Policy/Standard/Control graph into `graph`.
-
-    `graph` is the caller's already-selected `{short}_baseline` `GraphHandle`
-    — the SAME graph a prior `persist_role_and_requirement_graph`/
-    `persist_obligation_and_capability_graph` call already wrote Role/
-    Requirement/Obligation/Capability nodes into.
-
-    `policy_nodes`/`governed_by_edges`, `standard_nodes`/`supported_by_edges`,
-    `control_nodes`/`implemented_by_edges` are `governance.py`'s own
-    mint/match output (issue #54, S3). This function does no
-    mint/match/collision logic of its own, only writing.
-
-    Nodes are written before any edge that references them — `GOVERNED_BY`/
-    `SUPPORTED_BY`/`IMPLEMENTED_BY` all `MATCH` their endpoints rather than
-    `MERGE` them, exactly like `persist_obligation_and_capability_graph`'s
-    own `HAS`/`SATISFIED_BY`/`REQUIRES` — a `MATCH` against a not-yet-written
-    node silently matches zero rows and writes no edge, so write order here
-    is load-bearing, not stylistic.
-
-    Per the Edge Catalog (`ps-domain-concepts.md`), `GOVERNED_BY`/
-    `SUPPORTED_BY`/`IMPLEMENTED_BY` carry NO properties — this function never
-    sets one, mirroring `_upsert_bare_edge`'s existing "no SET clause"
-    contract exactly (reused verbatim, not re-implemented).
-
-    No validate-then-write pass, unlike `persist_role_and_requirement_graph`
-    — every `capability_node_id`/`policy_node_id`/`standard_node_id`
-    referenced by an edge collection here is guaranteed self-consistent BY
-    CONSTRUCTION within `governance.py`'s own whole-run algorithm, the same
-    reasoning `persist_obligation_and_capability_graph`'s own docstring
-    already gives for Obligation/Capability. The Capability endpoint of
-    `governed_by_edges` points outside this call's own node collections
-    (Capability was persisted by a PRIOR `persist_obligation_and_
-    capability_graph` call) — matching that function's own Role/Requirement
-    endpoint precedent, `MATCH`-only, not validated here.
-    """
-    for policy in policy_nodes:
-        _upsert_node(graph, _POLICY_LABEL, policy.id, policy.properties)
-    for standard in standard_nodes:
-        _upsert_node(graph, _STANDARD_LABEL, standard.id, standard.properties)
-    for control in control_nodes:
-        _upsert_node(graph, _CONTROL_LABEL, control.id, control.properties)
-    for governed_by_edge in governed_by_edges:
-        _upsert_bare_edge(
-            graph,
-            "GOVERNED_BY",
-            _CAPABILITY_LABEL,
-            governed_by_edge.capability_node_id,
-            _POLICY_LABEL,
-            governed_by_edge.policy_node_id,
-        )
-    for supported_by_edge in supported_by_edges:
-        _upsert_bare_edge(
-            graph,
-            "SUPPORTED_BY",
-            _POLICY_LABEL,
-            supported_by_edge.policy_node_id,
-            _STANDARD_LABEL,
-            supported_by_edge.standard_node_id,
-        )
-    for implemented_by_edge in implemented_by_edges:
-        _upsert_bare_edge(
-            graph,
-            "IMPLEMENTED_BY",
-            _STANDARD_LABEL,
-            implemented_by_edge.standard_node_id,
-            _CONTROL_LABEL,
-            implemented_by_edge.control_node_id,
-        )

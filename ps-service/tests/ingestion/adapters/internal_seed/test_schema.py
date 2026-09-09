@@ -186,14 +186,164 @@ def test_validate_seed_document_rejects_missing_required_node_property() -> None
 
 
 def test_validate_seed_document_rejects_unknown_node_label() -> None:
-    """A node labeled outside the five-label allow-list (e.g. `Policy`) is rejected (D2/AC-BI-002).
+    """A node labeled outside the allow-list (e.g. `PracticeArea`) is rejected (D2/AC-BI-002).
 
-    `Policy`/`Standard`/`Control` are derived automatically, never submitted --
-    the intake-format doc's own "What gets rejected" section.
+    `PracticeArea`/`RiskPath` remain genuinely out of scope for this format
+    even after GH #76 Slice 3 -- `Policy` (Slice 1), `Standard` (Slice 2),
+    and `Control` (Slice 3) are all accepted now, so `Control` itself is no
+    longer a valid "still rejected" example.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"].append(
-        {"label": "Policy", "id": "pol-1", "properties": {"title": "Not allowed"}}
+        {"label": "PracticeArea", "id": "pa-1", "properties": {"name": "Not allowed"}}
+    )
+
+    with pytest.raises(InternalSeedError):
+        validate_seed_document(document)
+
+
+def test_validate_seed_document_accepts_a_policy_node_and_governed_by_edge() -> None:
+    """GH #76 AC-BI-001 (Policy portion): a `Policy` node + `GOVERNED_BY` edge
+    from a Capability is schema-valid -- red before the schema gained
+    `Policy`/`GOVERNED_BY` (issue #76 Slice 1), green after.
+    """
+    document = copy.deepcopy(_VALID_SEED_DOCUMENT)
+    document["nodes"].append(
+        {
+            "label": "Policy",
+            "id": "pol-1",
+            "properties": {"title": "Access Control Policy", "status": "draft"},
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "GOVERNED_BY",
+            "from": {"label": "Capability", "id": "cap-access-control"},
+            "to": {"label": "Policy", "id": "pol-1"},
+        }
+    )
+
+    validate_seed_document(document)
+
+
+def test_validate_seed_document_accepts_a_standard_node_and_supported_by_edge() -> None:
+    """GH #76 AC-BI-001 (Standard portion): a `Standard` node + `SUPPORTED_BY` edge
+    from a Policy is schema-valid -- red before the schema gained `Standard`/
+    `SUPPORTED_BY` (issue #76 Slice 2), green after.
+    """
+    document = copy.deepcopy(_VALID_SEED_DOCUMENT)
+    document["nodes"].append(
+        {
+            "label": "Policy",
+            "id": "pol-1",
+            "properties": {"title": "Access Control Policy", "status": "draft"},
+        }
+    )
+    document["nodes"].append(
+        {
+            "label": "Standard",
+            "id": "std-1",
+            "properties": {
+                "title": "Access Control Standard",
+                "implementation_status": "draft",
+            },
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "GOVERNED_BY",
+            "from": {"label": "Capability", "id": "cap-access-control"},
+            "to": {"label": "Policy", "id": "pol-1"},
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "SUPPORTED_BY",
+            "from": {"label": "Policy", "id": "pol-1"},
+            "to": {"label": "Standard", "id": "std-1"},
+        }
+    )
+
+    validate_seed_document(document)
+
+
+def test_validate_seed_document_accepts_a_control_node_and_implemented_by_edge() -> None:
+    """GH #76 AC-BI-001 (Control portion): a `Control` node + `IMPLEMENTED_BY` edge
+    from a Standard is schema-valid -- red before the schema gained `Control`/
+    `IMPLEMENTED_BY` (issue #76 Slice 3), green after. AC-BI-001 is now fully
+    satisfied: all three governance labels and all three governance edge types
+    are schema-validated.
+    """
+    document = copy.deepcopy(_VALID_SEED_DOCUMENT)
+    document["nodes"].append(
+        {
+            "label": "Policy",
+            "id": "pol-1",
+            "properties": {"title": "Access Control Policy", "status": "draft"},
+        }
+    )
+    document["nodes"].append(
+        {
+            "label": "Standard",
+            "id": "std-1",
+            "properties": {
+                "title": "Access Control Standard",
+                "implementation_status": "draft",
+            },
+        }
+    )
+    document["nodes"].append(
+        {
+            "label": "Control",
+            "id": "ctrl-1",
+            "properties": {
+                "type": "automated",
+                "title": "Automated Access Review Check",
+                "implementation_status": "planned",
+            },
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "GOVERNED_BY",
+            "from": {"label": "Capability", "id": "cap-access-control"},
+            "to": {"label": "Policy", "id": "pol-1"},
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "SUPPORTED_BY",
+            "from": {"label": "Policy", "id": "pol-1"},
+            "to": {"label": "Standard", "id": "std-1"},
+        }
+    )
+    document["edges"].append(
+        {
+            "type": "IMPLEMENTED_BY",
+            "from": {"label": "Standard", "id": "std-1"},
+            "to": {"label": "Control", "id": "ctrl-1"},
+        }
+    )
+
+    validate_seed_document(document)
+
+
+def test_validate_seed_document_rejects_policy_with_confidence_property() -> None:
+    """Design Decision 2 (PLAN.md §3): `confidence` is never accepted on
+    `Policy` at the intake boundary -- `additionalProperties: false` makes
+    submitting one a schema violation, not a silently-dropped field.
+    """
+    document = copy.deepcopy(_VALID_SEED_DOCUMENT)
+    document["nodes"].append(
+        {
+            "label": "Policy",
+            "id": "pol-1",
+            "properties": {
+                "title": "Access Control Policy",
+                "status": "draft",
+                "confidence": 0.9,
+            },
+        }
     )
 
     with pytest.raises(InternalSeedError):
