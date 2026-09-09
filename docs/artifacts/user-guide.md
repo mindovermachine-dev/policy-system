@@ -167,17 +167,6 @@ This runs [`ps-cli/install.sh`](../../ps-cli/install.sh), which installs `ps-cli
 ps-cli --version
 ```
 
-`ps-cli` has no tagged releases yet, so this installs whatever is current on `main` —
-fine for this local-test walkthrough. If you need a reproducible, pinned install
-instead, run the equivalent command yourself against a specific commit SHA:
-
-```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
-```
-
-See [ps-cli](#ps-cli) below for targeting a non-default PS Service instance, contexts,
-credential storage, and the full command reference.
-
 ### 7. Load regulations into the graph
 
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
