@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "ecd2d2790cf5b9214b1e74387d9df4f38124247505dc66fba825e36416caab10",
+  "celex": "32021R0241",
+  "exported_at": "2026-09-10T10:05:36.623221+00:00",
+  "instrument_id": "32021R0241",
+  "jurisdiction": "EU",
+  "native_sha256": "121f207be5425cbbd666d4230e71b64001809f1b40e7ec430f81264487c65141",
+  "schema_version": "2",
+  "short_name": "rrf",
+  "source_type": "external",
+  "title": "Recovery and Resilience Facility Regulation",
+  "version": "1.0"
+}

@@ -74,7 +74,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--short-name", required=True, help="e.g. CRA, GDPR")
+    parser.add_argument(
+        "--short-name",
+        required=True,
+        help="Source graph prefix -- must match the ingested "
+        "'{short_name.lower()}_baseline'/'_native' FalkorDB graphs exactly, e.g. CRA, GDPR",
+    )
+    parser.add_argument(
+        "--catalog-short-name",
+        default=None,
+        help="Display short_name written to manifest.json/catalog.json, if it should "
+        "differ from --short-name (e.g. an ingestion-time slug vs. a human-friendly "
+        "name). Defaults to --short-name.",
+    )
     parser.add_argument("--instrument-id", required=True, help="e.g. 32024R2847")
     parser.add_argument("--version", required=True, help="e.g. 1.0")
     parser.add_argument("--celex", default=None, help="CELEX id (external sources only)")
@@ -135,7 +147,7 @@ def main(
         return 1
 
     descriptor = InstrumentDescriptor(
-        short_name=args.short_name,
+        short_name=args.catalog_short_name or args.short_name,
         instrument_id=args.instrument_id,
         version=args.version,
         celex=args.celex,
@@ -144,8 +156,12 @@ def main(
         jurisdiction=args.jurisdiction,
     )
 
-    baseline_name = baseline_graph_name(descriptor.short_name)
-    native_name = native_graph_name(descriptor.short_name)
+    # Deliberately from args.short_name, not descriptor.short_name -- the source graphs were
+    # ingestion-named and don't move just because --catalog-short-name overrides the manifest's
+    # display value. export_instrument() itself does no graph selection (see its docstring); this
+    # script is the only place these names are resolved.
+    baseline_name = baseline_graph_name(args.short_name)
+    native_name = native_graph_name(args.short_name)
 
     try:
         db = FalkorDB(host=args.host, port=args.port)

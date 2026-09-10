@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "75405193a65db0dd7fcb9dd1e31f87083f53d7cef7c7f08f547ef8843b3891ba",
+  "celex": "32016L2102",
+  "exported_at": "2026-09-10T10:06:00.063585+00:00",
+  "instrument_id": "32016L2102",
+  "jurisdiction": "EU",
+  "native_sha256": "1d624238f339cf151d655ef9974002fec7c90d6fee9f3f3172580568d993eec8",
+  "schema_version": "2",
+  "short_name": "webaccessibility",
+  "source_type": "external",
+  "title": "Web Accessibility Directive",
+  "version": "1.0"
+}

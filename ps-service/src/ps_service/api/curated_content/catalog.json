@@ -1,29 +1,56 @@
 [
   {
-    "instrument_id": "CRA-1.0",
-    "celex": "32024R2847",
-    "title": "Cyber Resilience Act",
-    "source_type": "external",
+    "celex": "32016L2102",
+    "instrument_id": "32016L2102",
     "jurisdiction": "EU",
-    "short_name": "CRA",
+    "short_name": "webaccessibility",
+    "source_type": "external",
+    "title": "Web Accessibility Directive",
     "version": "1.0"
   },
   {
-    "instrument_id": "GDPR-1.0",
     "celex": "32016R0679",
-    "title": "General Data Protection Regulation",
-    "source_type": "external",
+    "instrument_id": "32016R0679",
     "jurisdiction": "EU",
-    "short_name": "GDPR",
+    "short_name": "gdpr",
+    "source_type": "external",
+    "title": "General Data Protection Regulation (GDPR)",
     "version": "1.0"
   },
   {
-    "instrument_id": "NIS2-1.0",
-    "celex": "32022L2555",
-    "title": "NIS2 Directive",
-    "source_type": "external",
+    "celex": "32021R0241",
+    "instrument_id": "32021R0241",
     "jurisdiction": "EU",
-    "short_name": "NIS2",
+    "short_name": "rrf",
+    "source_type": "external",
+    "title": "Recovery and Resilience Facility Regulation",
+    "version": "1.0"
+  },
+  {
+    "celex": "32022L2555",
+    "instrument_id": "32022L2555",
+    "jurisdiction": "EU",
+    "short_name": "nis2",
+    "source_type": "external",
+    "title": "NIS 2 Directive",
+    "version": "1.0"
+  },
+  {
+    "celex": "32023R2854",
+    "instrument_id": "32023R2854",
+    "jurisdiction": "EU",
+    "short_name": "dataact",
+    "source_type": "external",
+    "title": "Data Act",
+    "version": "1.0"
+  },
+  {
+    "celex": "32024R2847",
+    "instrument_id": "32024R2847",
+    "jurisdiction": "EU",
+    "short_name": "cra",
+    "source_type": "external",
+    "title": "Cyber Resilience Act",
     "version": "1.0"
   }
 ]

@@ -12,3 +12,7 @@ ps-service/src/ps_service/mcp_interface/ps-domain-concepts.md
 # independently formatted.
 ps-service/src/ps_service/api/schemas/internal_regulation_intake_v1.schema.json
 ps-cli/src/ps_cli/schemas/internal_regulation_intake_v1.schema.json
+# Curated content exports: baseline_sha256/native_sha256 in each manifest.json
+# hash these files as exported, so they can't be independently formatted.
+curated-content/**/baseline.json
+curated-content/**/native.json

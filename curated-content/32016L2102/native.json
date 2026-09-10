@@ -1,0 +1,1922 @@
+{
+  "edges": [
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_1",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#001.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_1",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#001.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_1",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#001.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_1",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#001.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_1",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#001.005",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.005",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_10",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#010.006",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_11",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#011.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_11",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#011.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_11",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#011.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_12",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#012.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_12",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#012.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_12",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#012.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_5",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#005.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_5",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#005.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_5",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#005.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_5",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#005.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_6",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#006.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_6",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#006.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_6",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#006.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_6",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#006.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.005",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_7",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#007.006",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.003",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.004",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.005",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.006",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_8",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#008.007",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_9",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#009.001",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "32016L2102#art_9",
+      "source_label": "ARTICLE",
+      "target_id": "32016L2102#009.002",
+      "target_label": "PARAGRAPH"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_1",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_10",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_11",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_12",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_13",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_14",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_15",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_2",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_3",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_4",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_5",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_6",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_7",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_8",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#art_9",
+      "target_label": "ARTICLE"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_1",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_10",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_11",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_12",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_13",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_14",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_15",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_16",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_17",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_18",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_19",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_2",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_20",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_21",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_22",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_23",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_24",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_25",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_26",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_27",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_28",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_29",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_3",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_30",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_31",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_32",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_33",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_34",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_35",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_36",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_37",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_38",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_39",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_4",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_40",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_41",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_42",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_43",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_44",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_45",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_46",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_47",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_48",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_49",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_5",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_50",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_51",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_52",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_53",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_54",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_55",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_56",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_6",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_7",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_8",
+      "target_label": "RECITAL"
+    },
+    {
+      "properties": {},
+      "relationship_type": "HAS",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "32016L2102#rct_9",
+      "target_label": "RECITAL"
+    }
+  ],
+  "nodes": [
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 1",
+        "heading": "Subject matter and scope",
+        "id": "32016L2102#art_1",
+        "order": 57,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 10",
+        "heading": "Exercise of the delegation",
+        "id": "32016L2102#art_10",
+        "order": 66,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 11",
+        "heading": "Committee procedure",
+        "id": "32016L2102#art_11",
+        "order": 67,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 12",
+        "heading": "Transposition",
+        "id": "32016L2102#art_12",
+        "order": 68,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 13",
+        "heading": "Review",
+        "id": "32016L2102#art_13",
+        "order": 69,
+        "text": "The Commission shall carry out a review of the application of this Directive by 23 June 2022. That review shall take into account the Member States' reports on the outcome of the monitoring provided for in Article 8 and the use of the enforcement procedure provided for in Article 9. It shall also include a review of technological advances that could make accessibility easier for some types of content excluded from the scope of this Directive. The findings of that review shall be made public in an accessible format."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 14",
+        "heading": "Entry into force",
+        "id": "32016L2102#art_14",
+        "order": 70,
+        "text": "This Directive shall enter into force on the twentieth day following that of its publication in the Official Journal of the European Union."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 15",
+        "heading": "Addressees",
+        "id": "32016L2102#art_15",
+        "order": 71,
+        "text": "This Directive is addressed to the Member States."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 2",
+        "heading": "Minimum harmonisation",
+        "id": "32016L2102#art_2",
+        "order": 58,
+        "text": "Member States may maintain or introduce measures in conformity with Union law which go beyond the minimum requirements for accessibility of websites and mobile applications established by this Directive."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 3",
+        "heading": "Definitions",
+        "id": "32016L2102#art_3",
+        "order": 59,
+        "text": "For the purposes of this Directive, the following definitions apply: (1) ‘public sector body’ means the State, regional or local authorities, bodies governed by public law, as defined in point (4) of Article 2(1) of Directive 2014/24/EU, or associations formed by one or more such authorities or one or more such bodies governed by public law, if those associations are established for the specific purpose of meeting needs in the general interest, not having an industrial or commercial character; (2) ‘mobile application’ means application software designed and developed, by or on behalf of public sector bodies, for use by the general public on mobile devices such as smartphones and tablets. It does not include the software that controls those devices (mobile operating systems) or hardware; (3) ‘standard’ means a standard as defined in point (1) of Article 2 of Regulation (EU) No 1025/2012; (4) ‘European standard’ means a European standard as defined in point (1)(b) of Article 2 of Regulation (EU) No 1025/2012; (5) ‘harmonised standard’ means a harmonised standard as defined in point (1)(c) of Article 2 of Regulation (EU) No 1025/2012; (6) ‘time-based media’ means media of the following types: audio-only, video-only, audio-video, audio and/or video combined with interaction; (7) ‘items in heritage collections’ means privately or publicly owned goods presenting an historical, artistic, archaeological, aesthetic, scientific or technical interest and that are part of collections preserved by cultural institutions such as libraries, archives and museums; (8) ‘measurement data’ means the quantified results of the monitoring activity carried out in order to verify the compliance of the websites and mobile applications of public sector bodies with the accessibility requirements set out in Article 4. It covers both quantitative information about the sample of websites and mobile applications tested (number of websites and applications with, potentially, the number of visitors or users, etc.) and quantitative information about the level of accessibility."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 4",
+        "heading": "Requirements for the accessibility of websites and mobile applications",
+        "id": "32016L2102#art_4",
+        "order": 60,
+        "text": "Member States shall ensure that public sector bodies take the necessary measures to make their websites and mobile applications more accessible by making them perceivable, operable, understandable and robust."
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 5",
+        "heading": "Disproportionate burden",
+        "id": "32016L2102#art_5",
+        "order": 61,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 6",
+        "heading": "Presumption of conformity with the accessibility requirements",
+        "id": "32016L2102#art_6",
+        "order": 62,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 7",
+        "heading": "Additional measures",
+        "id": "32016L2102#art_7",
+        "order": 63,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 8",
+        "heading": "Monitoring and reporting",
+        "id": "32016L2102#art_8",
+        "order": 64,
+        "text": ""
+      }
+    },
+    {
+      "label": "ARTICLE",
+      "properties": {
+        "citation_ref": "Art. 9",
+        "heading": "Enforcement procedure",
+        "id": "32016L2102#art_9",
+        "order": 65,
+        "text": ""
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 1(1)",
+        "id": "32016L2102#001.001",
+        "order": 1,
+        "text": "1. In order to improve the functioning of the internal market, this Directive aims to approximate the laws, regulations and administrative provisions of the Member States relating to the accessibility requirements of the websites and mobile applications of public sector bodies, thereby enabling those websites and mobile applications to be more accessible to users, in particular to persons with disabilities."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 1(2)",
+        "id": "32016L2102#001.002",
+        "order": 2,
+        "text": "2. This Directive lays down the rules requiring Member States to ensure that websites, independently of the device used for access thereto, and mobile applications of public sector bodies meet the accessibility requirements set out in Article 4."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 1(3)",
+        "id": "32016L2102#001.003",
+        "order": 3,
+        "text": "3. This Directive does not apply to the following websites and mobile applications: (a) websites and mobile applications of public service broadcasters and their subsidiaries, and of other bodies or their subsidiaries fulfilling a public service broadcasting remit; (b) websites and mobile applications of NGOs that do not provide services that are essential to the public, or services that specifically address the needs of, or are meant for, persons with disabilities."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 1(4)",
+        "id": "32016L2102#001.004",
+        "order": 4,
+        "text": "4. This Directive does not apply to the following content of websites and mobile applications: (a) office file formats published before 23 September 2018, unless such content is needed for active administrative processes relating to the tasks performed by the public sector body concerned; (b) pre-recorded time-based media published before 23 September 2020; (c) live time-based media; (d) online maps and mapping services, as long as essential information is provided in an accessible digital manner for maps intended for navigational use; (e) third-party content that is neither funded nor developed by, nor under the control of, the public sector body concerned; (f) reproductions of items in heritage collections that cannot be made fully accessible because of either: (i) the incompatibility of accessibility requirements with either the preservation of the item concerned or the authenticity of the reproduction (e.g. contrast); or (ii) the unavailability of automated and cost-efficient solutions that would easily extract the text of manuscripts or other items in heritage collections and transform it into content compatible with the accessibility requirements; (g) content of extranets and intranets, that is to say, websites that are only available for a closed group of people and not to the general public as such, published before 23 September 2019, until such websites undergo a substantial revision; (h) content of websites and mobile applications qualifying as archives, meaning that they only contain content that is neither needed for active administrative processes nor updated or edited after 23 September 2019."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 1(5)",
+        "id": "32016L2102#001.005",
+        "order": 5,
+        "text": "5. Member States may exclude from the application of this Directive websites and mobile applications of schools, kindergartens or nurseries, except for the content thereof relating to essential online administrative functions."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 5(1)",
+        "id": "32016L2102#005.001",
+        "order": 1,
+        "text": "1. Member States shall ensure that public sector bodies apply the accessibility requirements set out in Article 4 to the extent that those requirements do not impose a disproportionate burden on the public sector bodies for the purposes of that Article."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 5(2)",
+        "id": "32016L2102#005.002",
+        "order": 2,
+        "text": "2. In order to assess the extent to which compliance with the accessibility requirements set out in Article 4 imposes a disproportionate burden, Member States shall ensure that the public sector body concerned takes account of relevant circumstances, including the following: (a) the size, resources and nature of the public sector body concerned; and (b) the estimated costs and benefits for the public sector body concerned in relation to the estimated benefits for persons with disabilities, taking into account the frequency and duration of use of the specific website or mobile application."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 5(3)",
+        "id": "32016L2102#005.003",
+        "order": 3,
+        "text": "3. Without prejudice to paragraph 1 of this Article, the public sector body concerned shall perform the initial assessment of the extent to which compliance with the accessibility requirements set out in Article 4 imposes a disproportionate burden."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 5(4)",
+        "id": "32016L2102#005.004",
+        "order": 4,
+        "text": "4. Where a public sector body avails itself of the derogation provided for in paragraph 1 of this Article for a specific website or mobile application after conducting an assessment as referred to in paragraph 2 of this Article, it shall explain, in the accessibility statement referred to in Article 7, the parts of the accessibility requirements that could not be complied with and shall, where appropriate, provide accessible alternatives."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 6(1)",
+        "id": "32016L2102#006.001",
+        "order": 1,
+        "text": "1. Content of websites and mobile applications that meets harmonised standards or parts thereof the references to which have been published by the Commission in the Official Journal of the European Union in accordance with Regulation (EU) No 1025/2012 shall be presumed to be in conformity with the accessibility requirements set out in Article 4 that are covered by those standards or by parts thereof."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 6(2)",
+        "id": "32016L2102#006.002",
+        "order": 2,
+        "text": "2. Where no references to the harmonised standards referred to in paragraph 1 of this Article have been published, content of mobile applications that meets the technical specifications or parts thereof shall be presumed to be in conformity with the accessibility requirements set out in Article 4 that are covered by those technical specifications or by parts thereof. The Commission shall adopt implementing acts establishing the technical specifications referred to in the first subparagraph of this paragraph. Those technical specifications shall meet the accessibility requirements set out in Article 4 and shall ensure at least a level of accessibility equivalent to that ensured by European standard EN 301 549 V1.1.2 (2015-04). The implementing acts referred to in the second subparagraph of this paragraph shall be adopted in accordance with the examination procedure referred to in Article 11(3). The first such implementing act shall be adopted, where no references to the harmonised standards referred to in paragraph 1 of this Article have been published, by 23 December 2018."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 6(3)",
+        "id": "32016L2102#006.003",
+        "order": 3,
+        "text": "3. Where no references to the harmonised standards referred to in paragraph 1 of this Article have been published, content of websites that fulfils the relevant requirements of European standard EN 301 549 V1.1.2 (2015-04) or parts thereof shall be presumed to be in conformity with the accessibility requirements set out in Article 4 that are covered by those relevant requirements or by parts thereof. Where no references to the harmonised standards referred to in paragraph 1 of this Article have been published, and in the absence of the technical specifications referred to in paragraph 2 of this Article, content of mobile applications that fulfils the relevant requirements of European standard EN 301 549 V1.1.2 (2015-04) or parts thereof shall be presumed to be in conformity with the accessibility requirements set out in Article 4 that are covered by those relevant requirements or by parts thereof."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 6(4)",
+        "id": "32016L2102#006.004",
+        "order": 4,
+        "text": "4. The Commission is empowered to adopt delegated acts in accordance with Article 10 in order to amend paragraph 3 of this Article by updating the reference to European standard EN 301 549 V1.1.2 (2015-04) so as to make reference to a more recent version of that standard, or to a European standard replacing it, where that version or standard meets the accessibility requirements set out in Article 4 and ensures at least a level of accessibility equivalent to that ensured by European standard EN 301 549 V1.1.2 (2015-04)."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(1)",
+        "id": "32016L2102#007.001",
+        "order": 1,
+        "text": "1. Member States shall ensure that public sector bodies provide and regularly update a detailed, comprehensive and clear accessibility statement on the compliance of their websites and mobile applications with this Directive. For websites, the accessibility statement shall be provided in an accessible format, using the model accessibility statement referred to in paragraph 2, and shall be published on the relevant website. For mobile applications, the accessibility statement shall be provided in an accessible format, using the model accessibility statement referred to in paragraph 2, and shall be available on the website of the public sector body that developed the mobile application concerned, or alongside other information available when downloading the application. The statement shall include the following: (a) an explanation concerning those parts of the content that are not accessible, and the reasons for that inaccessibility and, where appropriate, the accessible alternatives provided for; (b) a description of, and a link to, a feedback mechanism enabling any person to notify the public sector body concerned of any failure of its website or mobile application to comply with the accessibility requirements set out in Article 4 and to request the information excluded pursuant to Article 1(4) and Article 5; and (c) a link to the enforcement procedure set out in Article 9 to which recourse may be had in the event of an unsatisfactory response to the notification or the request. Member States shall ensure that public sector bodies give an adequate response to the notification or request within a reasonable period of time."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(2)",
+        "id": "32016L2102#007.002",
+        "order": 2,
+        "text": "2. The Commission shall adopt implementing acts establishing a model accessibility statement. Those implementing acts shall be adopted in accordance with the advisory procedure referred to in Article 11(2). By 23 December 2018, the Commission shall adopt the first such implementing act."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(3)",
+        "id": "32016L2102#007.003",
+        "order": 3,
+        "text": "3. Member States shall take measures to facilitate the application of the accessibility requirements set out in Article 4 to other types of websites or mobile applications apart from those referred to in Article 1(2) and, in particular, to websites or mobile applications covered by existing national laws on accessibility."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(4)",
+        "id": "32016L2102#007.004",
+        "order": 4,
+        "text": "4. Member States shall promote and facilitate training programmes, relating to the accessibility of websites and mobile applications for relevant stakeholders and staff of public sector bodies, designed to train them how to create, manage and update the accessible content of websites and mobile applications."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(5)",
+        "id": "32016L2102#007.005",
+        "order": 5,
+        "text": "5. Member States shall take the necessary measures to raise awareness of the accessibility requirements set out in Article 4, of their benefits to users and to owners of websites and mobile applications, and of the possibility of giving feedback in the case of any failure to comply with the requirements of this Directive, as set out in this Article."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 7(6)",
+        "id": "32016L2102#007.006",
+        "order": 6,
+        "text": "6. For the purposes of the monitoring and reporting referred to in Article 8, the Commission shall facilitate cooperation at Union level between Member States, and between Member States and relevant stakeholders, with a view to the exchange of best practices between them and to reviewing the monitoring methodology referred to in Article 8(2), market and technological developments and progress in accessibility for websites and mobile applications."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(1)",
+        "id": "32016L2102#008.001",
+        "order": 1,
+        "text": "1. Member States shall periodically monitor the compliance of websites and mobile applications of public sector bodies with the accessibility requirements set out in Article 4 on the basis of the monitoring methodology provided for in paragraph 2 of this Article."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(2)",
+        "id": "32016L2102#008.002",
+        "order": 2,
+        "text": "2. The Commission shall adopt implementing acts establishing a methodology for monitoring the conformity of websites and mobile applications with the accessibility requirements set out in Article 4. That methodology shall be transparent, transferable, comparable, reproducible and easy to use. Those implementing acts shall be adopted in accordance with the examination procedure referred to in Article 11(3). By 23 December 2018, the Commission shall adopt the first such implementing act."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(3)",
+        "id": "32016L2102#008.003",
+        "order": 3,
+        "text": "3. The monitoring methodology referred to in paragraph 2 may take into account expert analysis and shall include: (a) the periodicity of the monitoring, as well as the sampling of the websites and mobile applications that are to be subject to monitoring; (b) at website level, the sampling of web pages and of the content on those pages; (c) at mobile application level, the content to be tested, taking into account the moment of the initial release of the application and of subsequent functionality updates; (d) a description of the way in which compliance or non-compliance with the accessibility requirements set out in Article 4 is to be sufficiently demonstrated, directly referencing, when appropriate, the relevant descriptions in the harmonised standard or, in the absence thereof, in the technical specifications referred to in Article 6(2), or in the European standard referred to in Article 6(3); (e) in the event of deficiencies being identified, a mechanism to provide data and information on compliance with the accessibility requirements set out in Article 4 in a format which can be used by public sector bodies to correct those deficiencies; and (f) appropriate arrangements, including where necessary examples and guidance, for automatic, manual and usability tests, in combination with the sampling settings, in a way which is compatible with the periodicity of the monitoring and reporting."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(4)",
+        "id": "32016L2102#008.004",
+        "order": 4,
+        "text": "4. By 23 December 2021, and every three years thereafter, Member States shall submit to the Commission a report on the outcome of the monitoring including the measurement data. That report shall be drawn up on the basis of the arrangements for reporting referred to in paragraph 6 of this Article. The report shall also cover information on the use of the enforcement procedure set out in Article 9."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(5)",
+        "id": "32016L2102#008.005",
+        "order": 5,
+        "text": "5. In relation to the measures adopted pursuant to Article 7, the first report shall also cover the following: (a) a description of the mechanisms set up by Member States for consulting with relevant stakeholders on the accessibility of websites and mobile applications; (b) procedures to make public any developments in accessibility policy relating to websites and mobile applications; (c) experiences and findings from the implementation of the rules on conformity with the accessibility requirements set out in Article 4; and (d) information on training and awareness-raising activities. Where significant changes have been made in relation to the elements referred to in the first subparagraph, Member States shall include in their subsequent reports information concerning those changes."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(6)",
+        "id": "32016L2102#008.006",
+        "order": 6,
+        "text": "6. The content of all the reports, which need not list the websites, mobile applications or public sector bodies examined, shall be made public in an accessible format. The Commission shall adopt implementing acts establishing the arrangements for reporting by Member States to the Commission. Those implementing acts shall be adopted in accordance with the examination procedure referred to in Article 11(3). By 23 December 2018, the Commission shall adopt the first such implementing act."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 8(7)",
+        "id": "32016L2102#008.007",
+        "order": 7,
+        "text": "7. By 23 September 2018, Member States shall inform the Commission of the body designated to perform the monitoring and reporting functions."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 9(1)",
+        "id": "32016L2102#009.001",
+        "order": 1,
+        "text": "1. Member States shall ensure the availability of an adequate and effective enforcement procedure to guarantee compliance with this Directive, in relation to the requirements set out in Articles 4 and 5 and Article 7(1). In particular, Member States shall ensure that an enforcement procedure, such as the possibility of contacting an ombudsman, is in place to guarantee an effective handling of notifications or requests received as provided for in point (b) of Article 7(1) and to review the assessment referred to in Article 5."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 9(2)",
+        "id": "32016L2102#009.002",
+        "order": 2,
+        "text": "2. By 23 September 2018, Member States shall inform the Commission of the body responsible for the enforcement of this Directive."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(1)",
+        "id": "32016L2102#010.001",
+        "order": 1,
+        "text": "1. The power to adopt delegated acts is conferred on the Commission subject to the conditions laid down in this Article."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(2)",
+        "id": "32016L2102#010.002",
+        "order": 2,
+        "text": "2. The power to adopt delegated acts referred to in Article 6(4) shall be conferred on the Commission for an indeterminate period of time from 23 June 2017."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(3)",
+        "id": "32016L2102#010.003",
+        "order": 3,
+        "text": "3. The delegation of power referred to in Article 6(4) may be revoked at any time by the European Parliament or by the Council. A decision to revoke shall put an end to the delegation of the power specified in that decision. It shall take effect on the day following the publication of the decision in the Official Journal of the European Union or at a later date specified therein. It shall not affect the validity of any delegated acts already in force."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(4)",
+        "id": "32016L2102#010.004",
+        "order": 4,
+        "text": "4. Before adopting a delegated act, the Commission shall consult experts designated by each Member State in accordance with the principles laid down in the Interinstitutional Agreement of 13 April 2016 on Better Law-Making."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(5)",
+        "id": "32016L2102#010.005",
+        "order": 5,
+        "text": "5. As soon as it adopts a delegated act, the Commission shall notify it simultaneously to the European Parliament and to the Council."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 10(6)",
+        "id": "32016L2102#010.006",
+        "order": 6,
+        "text": "6. A delegated act adopted pursuant to Article 6(4) shall enter into force only if no objection has been expressed either by the European Parliament or the Council within a period of two months of notification of that act to the European Parliament and the Council or if, before the expiry of that period, the European Parliament and the Council have both informed the Commission that they will not object. That period shall be extended by two months at the initiative of the European Parliament or of the Council."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 11(1)",
+        "id": "32016L2102#011.001",
+        "order": 1,
+        "text": "1. The Commission shall be assisted by a committee. That committee shall be a committee within the meaning of Regulation (EU) No 182/2011."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 11(2)",
+        "id": "32016L2102#011.002",
+        "order": 2,
+        "text": "2. Where reference is made to this paragraph, Article 4 of Regulation (EU) No 182/2011 shall apply."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 11(3)",
+        "id": "32016L2102#011.003",
+        "order": 3,
+        "text": "3. Where reference is made to this paragraph, Article 5 of Regulation (EU) No 182/2011 shall apply."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 12(1)",
+        "id": "32016L2102#012.001",
+        "order": 1,
+        "text": "1. Member States shall bring into force the laws, regulations and administrative provisions necessary to comply with this Directive by 23 September 2018. They shall immediately inform the Commission thereof. When Member States adopt those measures, they shall contain a reference to this Directive or shall be accompanied by such a reference on the occasion of their official publication. The methods of making such reference shall be laid down by Member States."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 12(2)",
+        "id": "32016L2102#012.002",
+        "order": 2,
+        "text": "2. Member States shall communicate to the Commission the text of the main measures of national law which they adopt in the field covered by this Directive."
+      }
+    },
+    {
+      "label": "PARAGRAPH",
+      "properties": {
+        "citation_ref": "Art. 12(3)",
+        "id": "32016L2102#012.003",
+        "order": 3,
+        "text": "3. Member States shall apply those measures as follows: (a) to websites of public sector bodies not published before 23 September 2018: from 23 September 2019; (b) to websites of public sector bodies not covered by point (a): from 23 September 2020; (c) to mobile applications of public sector bodies: from 23 June 2021."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 1",
+        "id": "32016L2102#rct_1",
+        "order": 1,
+        "text": "(1) The trend towards a digital society provides users with new ways of accessing information and services. The providers of information and services, such as public sector bodies, rely increasingly on the internet in order to produce, collect and provide a wide range of information and services online which are essential to the public."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 10",
+        "id": "32016L2102#rct_10",
+        "order": 10,
+        "text": "(10) Approximation of national measures should also allow Union public sector bodies and enterprises to obtain economic and social benefits from extending the provision of online or mobile services to include more citizens and customers. This should increase the potential of the internal market for products and services relating to the accessibility of websites and mobile applications. The resulting market growth should allow undertakings to contribute to economic growth and job creation within the Union. Strengthening the internal market should make investment in the Union more attractive. Public sector bodies would benefit from cheaper provision of web accessibility-related products and services."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 11",
+        "id": "32016L2102#rct_11",
+        "order": 11,
+        "text": "(11) Citizens would benefit from wider access to public sector services through websites and mobile applications and would receive services and information facilitating their daily lives and the enjoyment of their rights across the Union, in particular their right to move and reside freely within the territory of the Union, their freedom of establishment and their freedom to provide services."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 12",
+        "id": "32016L2102#rct_12",
+        "order": 12,
+        "text": "(12) By respectively ratifying and concluding the United Nations Convention on the Rights of Persons with Disabilities, adopted on 13 December 2006 (‘the UN Convention’), the majority of Member States and the Union have committed themselves to taking appropriate measures to ensure access for persons with disabilities, on an equal basis with others, to, inter alia, information and communication technologies and systems, to develop, promulgate and monitor the implementation of minimum standards and guidelines for the accessibility of facilities and services open or provided to the public, and to promote access for persons with disabilities to new information and communications technologies and systems, including the internet, and have undertaken to refrain from engaging in any act or practice that is inconsistent with that Convention and to ensure that public authorities and institutions act in conformity with it. The UN Convention also stipulates that the design of products, environments, programmes and services should enable their use by all people, to the greatest extent possible, without the need for adaptation or specialised design. Such ‘universal design’ should not exclude assistive devices for particular groups of persons with disabilities, where this is needed. According to the UN Convention, persons with disabilities include those having long-term physical, mental, intellectual or sensory impairments which may, in conjunction with other barriers, hinder their full and effective participation in society on an equal basis with others."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 13",
+        "id": "32016L2102#rct_13",
+        "order": 13,
+        "text": "(13) The Commission communication of 15 November 2010 entitled ‘European Disability Strategy 2010-2020: A Renewed Commitment to a Barrier-Free Europe’ builds on the UN Convention and aims to eliminate barriers that prevent persons with disabilities from participating in society on an equal basis. It sets out actions to be taken in several priority areas, including accessibility of information and communications technologies and systems, and its objective is to ensure accessibility to goods, services (including public services) and assistive devices for people with disabilities."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 14",
+        "id": "32016L2102#rct_14",
+        "order": 14,
+        "text": "(14) Regulations (EU) No 1303/2013 (3) and (EU) No 1304/2013 (4) of the European Parliament and of the Council contain provisions on the accessibility of information and communication technology (ICT). They do not, however, address the specificities of the accessibility of websites or of mobile applications."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 15",
+        "id": "32016L2102#rct_15",
+        "order": 15,
+        "text": "(15) Horizon 2020 — The Framework Programme for Research and Innovation, established by Regulation (EU) No 1291/2013 of the European Parliament and of the Council (5), supports research on, and the development of, technological solutions to accessibility problems."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 16",
+        "id": "32016L2102#rct_16",
+        "order": 16,
+        "text": "(16) In its communication of 15 December 2010 entitled ‘The European eGovernment Action Plan 2011-2015 — Harnessing ICT to promote smart, sustainable & innovative Government’, the Commission called for action to develop eGovernment services that ensure inclusiveness and accessibility. This includes measures to reduce the gap in ICT usage and to promote the use of ICT to overcome exclusion, thus ensuring that all users are able to make the most of the opportunities presented. In its communication of 19 April 2016 entitled ‘EU eGovernment Action Plan 2016-2020 — Accelerating the digital transformation of government’, the Commission reiterates the importance of inclusiveness and accessibility."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 17",
+        "id": "32016L2102#rct_17",
+        "order": 17,
+        "text": "(17) In the Digital Agenda for Europe, the Commission announced that public sector websites should be fully accessible by 2015, thereby reflecting the Riga Ministerial Declaration of 11 June 2006."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 18",
+        "id": "32016L2102#rct_18",
+        "order": 18,
+        "text": "(18) In the Digital Agenda for Europe, the Commission stressed that concerted actions were needed to ensure that new electronic content was fully available to persons with disabilities, in order to provide Europeans with a better quality of life through, for instance, easier access to public services and cultural content. It also encouraged the facilitation of the Memorandum of Understanding on digital access for persons with disabilities."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 19",
+        "id": "32016L2102#rct_19",
+        "order": 19,
+        "text": "(19) Content of websites and mobile applications includes textual as well as non-textual information, downloadable documents and forms, and two-way interaction such as the processing of digital forms and the completion of authentication, identification and payment processes."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 2",
+        "id": "32016L2102#rct_2",
+        "order": 2,
+        "text": "(2) In the context of this Directive, accessibility should be understood as principles and techniques to be observed when designing, constructing, maintaining, and updating websites and mobile applications in order to make them more accessible to users, in particular persons with disabilities."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 20",
+        "id": "32016L2102#rct_20",
+        "order": 20,
+        "text": "(20) The accessibility requirements set out in this Directive should not apply to content which is to be found exclusively on mobile devices, or to user agents for mobile devices, which are developed for closed groups of users or for specific use within certain environments and which are not available to and used by large parts of the public."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 21",
+        "id": "32016L2102#rct_21",
+        "order": 21,
+        "text": "(21) This Directive is without prejudice to Directive 2014/24/EU of the European Parliament and of the Council (6) and in particular Article 42 thereof, and Directive 2014/25/EU of the European Parliament and of the Council (7) and in particular Article 60 thereof, which require that the technical specifications for all procurements which are intended for use by natural persons, whether the general public or staff of the contracting authority, shall, except in duly justified cases, be drawn up so as to take into account accessibility criteria for persons with disabilities or design for all users."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 22",
+        "id": "32016L2102#rct_22",
+        "order": 22,
+        "text": "(22) Given the lack of automated or efficient and easy-to-implement means to make some types of published content accessible, and in order to limit the scope of this Directive to content of websites and mobile applications effectively under the control of public sector bodies, this Directive provides for the temporary or permanent exclusion from its scope of some types of content of websites or mobile applications. Those exclusions should be reconsidered in the context of the review of this Directive, in the light of future technological advances."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 23",
+        "id": "32016L2102#rct_23",
+        "order": 23,
+        "text": "(23) The right of persons with disabilities and of the elderly to participate and be integrated in the social and cultural life of the Union is inextricably linked to the provision of accessible audiovisual media services. However, that right may be better developed in the context of Union sector-specific legislation or legislation focusing on accessibility that also applies to private broadcasters in order to guarantee conditions of fair competition without prejudice to the public interest role performed by the audiovisual media services. This Directive should consequently not apply to the websites and mobile applications of public service broadcasters."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 24",
+        "id": "32016L2102#rct_24",
+        "order": 24,
+        "text": "(24) Nothing in this Directive is intended to restrict the freedom of expression and the freedom and pluralism of the media as they are guaranteed in the Union and in the Member States, in particular under Article 11 of the Charter of Fundamental Rights of the European Union (‘the Charter’)."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 25",
+        "id": "32016L2102#rct_25",
+        "order": 25,
+        "text": "(25) Some non-governmental organisations (NGOs), which are voluntary self-governing bodies established to pursue essentially non-profit making objectives, provide services that are not essential to the public, such as services that are not directly mandated by State, regional or local authorities, or services that do not specifically address the needs of persons with disabilities in particular, and could fall within the scope of this Directive. In order to avoid imposing a disproportionate burden on such NGOs, this Directive should not apply to them."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 26",
+        "id": "32016L2102#rct_26",
+        "order": 26,
+        "text": "(26) Office file formats should be understood as documents that are not intended primarily for use on the web and that are included in web pages, such as Adobe Portable Document Format (PDF), Microsoft Office documents or their (open source) equivalents."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 27",
+        "id": "32016L2102#rct_27",
+        "order": 27,
+        "text": "(27) Live time-based media that are kept online or republished after the live broadcast should be considered as pre-recorded time-based media without undue delay from the date of the initial broadcast or republishing of the time-based media, not exceeding the time strictly necessary to make time-based media accessible with priority being given to essential information relating to the health, welfare and safety of the public. That necessary period of time should in principle be no longer than 14 days. In justified cases, such as when it is impossible to procure the relevant services in due time, that period might exceptionally be extended to the shortest time necessary to make the content accessible."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 28",
+        "id": "32016L2102#rct_28",
+        "order": 28,
+        "text": "(28) This Directive, while encouraging public sector bodies to make all content accessible, is not intended to limit the content which public sector bodies place on their websites or in their mobile applications to accessible content alone. Whenever non-accessible content is added, public sector bodies should, to the extent reasonably possible, add accessible alternatives on their websites or in their mobile applications."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 29",
+        "id": "32016L2102#rct_29",
+        "order": 29,
+        "text": "(29) When maps are intended for navigational use, as distinct from geographical description, accessible information may be needed in order to help persons who cannot use visual information or complex navigation functionalities properly, for instance to locate premises or areas where services are provided. An accessible alternative should therefore be provided, such as postal addresses and nearby public transport stops, or the names of places or regions which are often already available for the public sector body in a form that is simple and readable for most users."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 3",
+        "id": "32016L2102#rct_3",
+        "order": 3,
+        "text": "(3) The fast-growing market for making digital products and services more accessible comprises a range of economic operators, such as those developing websites or software tools to create, manage and test web pages or mobile applications, those developing user agents such as web browsers and related assistive technologies, those implementing certification services and those providing training."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 30",
+        "id": "32016L2102#rct_30",
+        "order": 30,
+        "text": "(30) Embedded content, such as embedded images or videos, should be covered by this Directive. However, websites and mobile applications are sometimes created into which additional content may be subsequently incorporated, for example an email program, a blog, an article that allows users to add comments, or applications supporting user-contributed content. Another example would be a page, such as a portal or news site, composed of content aggregated from multiple contributors, or sites that automatically insert content from other sources over time, such as when advertisements are inserted dynamically. Such third-party content, provided that it is neither funded nor developed by the public sector body concerned nor under its control, should be excluded from the scope of this Directive. Such content should, in principle, not be used if it hinders or decreases the functionality of the public service offered on the website or mobile application concerned. Where the purpose of content of websites or mobile applications of public sector bodies is to hold consultations or to organise forum discussions, that content cannot be considered as third-party content and should therefore be accessible, except in the case of user-contributed content which is not under the control of the public sector body concerned."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 31",
+        "id": "32016L2102#rct_31",
+        "order": 31,
+        "text": "(31) Some accessibility requirements for websites or mobile applications should still be complied with as regards the metadata linked to the reproduction of items in heritage collections."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 32",
+        "id": "32016L2102#rct_32",
+        "order": 32,
+        "text": "(32) This Directive should not require Member States to make the content of archived websites or mobile applications accessible if it is no longer updated or edited and if it is not needed in order to carry out administrative processes. For the purposes of this Directive, purely technical maintenance should not be considered to constitute updating or editing of a website or mobile application."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 33",
+        "id": "32016L2102#rct_33",
+        "order": 33,
+        "text": "(33) Essential online administrative functions of schools, kindergartens or nurseries should be made accessible. When that essential content is provided in an accessible manner via another website, it should not need to be made accessible again on the website of the establishment concerned."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 34",
+        "id": "32016L2102#rct_34",
+        "order": 34,
+        "text": "(34) Member States should be able to extend the application of this Directive to other types of websites and mobile applications, in particular intranet or extranet websites and mobile applications not covered by this Directive which are designed for and used by a limited number of persons in the workplace or in education, and to maintain or introduce measures in conformity with Union law which go beyond the minimum requirements for accessibility of websites and mobile applications. Member States should also be encouraged to extend the application of this Directive to private entities that offer facilities and services which are open or provided to the public, including in the healthcare, childcare, social inclusion and social security areas, as well as in the transport sector and the electricity, gas, heat, water, electronic communication and postal services, with particular attention being paid to those services referred to in Articles 8 to 13 of Directive 2014/25/EU."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 35",
+        "id": "32016L2102#rct_35",
+        "order": 35,
+        "text": "(35) Although this Directive does not apply to the websites and mobile applications of Union institutions, those institutions are encouraged to comply with the accessibility requirements set out in this Directive."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 36",
+        "id": "32016L2102#rct_36",
+        "order": 36,
+        "text": "(36) The accessibility requirements set out in this Directive are intended to be technology-neutral. They describe what must be achieved in order for the user to be able to perceive, operate, interpret and understand a website, a mobile application and related content. They do not specify what technology should be selected for a particular website, online information or mobile application. As such, they do not hamper innovation."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 37",
+        "id": "32016L2102#rct_37",
+        "order": 37,
+        "text": "(37) The four principles of accessibility are: perceivability, meaning that information and user interface components must be presentable to users in ways they can perceive; operability, meaning that user interface components and navigation must be operable; understandability, meaning that information and the operation of the user interface must be understandable; and robustness, meaning that content must be robust enough to be interpreted reliably by a wide variety of user agents, including assistive technologies. Those principles of accessibility are translated into testable success criteria, such as those forming the basis of the European standard EN 301 549 V1.1.2 ‘Accessibility requirements suitable for public procurement of ICT products and services in Europe’ (2015-04) (European standard EN 301 549 V1.1.2 (2015-04)), via harmonised standards and a common methodology to test the conformity of content on websites and mobile applications with those principles. That European standard was adopted on the basis of mandate M/376 issued by the Commission to the European standardisation organisations. Pending publication of the references to harmonised standards, or of parts thereof, in the Official Journal of the European Union, the relevant clauses of European standard EN 301 549 V1.1.2 (2015-04) should be considered as the minimum means of putting those principles into practice."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 38",
+        "id": "32016L2102#rct_38",
+        "order": 38,
+        "text": "(38) If the accessibility requirements set out in this Directive are not applicable, then in accordance with Council Directive 2000/78/EC (8), the UN Convention and other relevant legislation, the requirements of ‘reasonable accommodation’ will still apply and should be provided for where needed, in particular in the workplace and in education."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 39",
+        "id": "32016L2102#rct_39",
+        "order": 39,
+        "text": "(39) Public sector bodies should apply the accessibility requirements set out in this Directive to the extent that they do not impose a disproportionate burden on them. This means that, in justified cases, it might not be reasonably possible for a public sector body to make specific content fully accessible. However, that public sector body should still make that content as accessible as possible and make other content fully accessible. Exceptions to compliance with the accessibility requirements due to the disproportionate burden that they impose should not go beyond what is strictly necessary in order to limit that burden with respect to the particular content concerned in each individual case. Measures that would impose a disproportionate burden should be understood as measures that would impose an excessive organisational or financial burden on a public sector body, or would jeopardise the body's capacity to either fulfil its purpose or to publish information needed for or relevant to its tasks and services, while taking into account the likely resulting benefit or detriment for citizens, in particular persons with disabilities. Only legitimate reasons should be taken into account in any assessment of the extent to which the accessibility requirements cannot be met because they would impose a disproportionate burden. Lack of priority, time or knowledge should not be considered as legitimate reasons. Likewise, there should not be any legitimate reasons for not procuring or developing software systems to manage content on websites and mobile applications in an accessible manner, since sufficient and advisory techniques are available to make those systems meet the accessibility requirements set out in this Directive."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 4",
+        "id": "32016L2102#rct_4",
+        "order": 4,
+        "text": "(4) As underlined in the Commission communication of 19 May 2010 entitled ‘A Digital Agenda for Europe’, public authorities should play their part in promoting markets for online content. Governments can stimulate content markets by making public sector information available under transparent, effective and non-discriminatory terms. This is an important source of potential growth of innovative online services."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 40",
+        "id": "32016L2102#rct_40",
+        "order": 40,
+        "text": "(40) Interoperability relating to accessibility should maximise the compatibility of content with current and future user agents and assistive technologies. More specifically, the content of websites and mobile applications should provide user agents with a common internal coding of natural language, structures, relations, and sequences, as well as data of any embedded user-interface components. Interoperability thus benefits the users, allowing them to employ their user agents ubiquitously to access websites and mobile applications; they might also benefit from greater choice and reduced prices across the Union. Interoperability would also benefit the suppliers and buyers of products and services relating to accessibility of websites and mobile applications."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 41",
+        "id": "32016L2102#rct_41",
+        "order": 41,
+        "text": "(41) This Directive lays down accessibility requirements for the websites and mobile applications of public sector bodies. In order to facilitate the conformity of such websites and mobile applications with those requirements, it is necessary to provide for a presumption of conformity for the websites and mobile applications concerned that meet harmonised standards or parts thereof drawn up and published in the Official Journal of the European Union in accordance with Regulation (EU) No 1025/2012 of the European Parliament and of the Council (9), for the purpose of expressing detailed specifications in relation to those requirements. Pursuant to that Regulation, Member States and the European Parliament should be able to object to any harmonised standard which, in their view, does not entirely satisfy the accessibility requirements laid down in this Directive."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 42",
+        "id": "32016L2102#rct_42",
+        "order": 42,
+        "text": "(42) The European standardisation organisations have adopted European standard EN 301 549 V1.1.2 (2015-04), specifying the functional accessibility requirements for ICT products and services, including web content, which could be used in public procurement or to support other policies and legislation. The presumption of conformity with the accessibility requirements laid down in this Directive should be based on clauses 9, 10 and 11 of European standard EN 301 549 V1.1.2 (2015-04). Technical specifications adopted on the basis of this Directive should further detail European standard EN 301 549 V1.1.2 (2015-04) in relation to mobile applications."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 43",
+        "id": "32016L2102#rct_43",
+        "order": 43,
+        "text": "(43) The technical specifications and standards developed in relation to the accessibility requirements set out in this Directive should, moreover, take into account the conceptual and technical specificities of mobile devices."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 44",
+        "id": "32016L2102#rct_44",
+        "order": 44,
+        "text": "(44) An accessibility statement should be provided by public sector bodies on the compliance of their websites and mobile applications with the accessibility requirements laid down by this Directive. That accessibility statement should include, where appropriate, the accessible alternatives provided for."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 45",
+        "id": "32016L2102#rct_45",
+        "order": 45,
+        "text": "(45) Mobile applications are available from a variety of sources, including private application stores. Information regarding the accessibility of the mobile applications of public sector bodies downloaded from third-party sources should be provided alongside the description of the mobile application which is presented to users before they download the mobile application. This does not require major platform providers to change their application distribution mechanisms, but instead imposes on the public sector body the requirement to make the accessibility statement available using existing or future technologies."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 46",
+        "id": "32016L2102#rct_46",
+        "order": 46,
+        "text": "(46) A feedback mechanism should be set up to enable any person to notify the public sector body concerned of any failures of the website or mobile applications to comply with the accessibility requirements set out in this Directive and to request information excluded. Such requests for information could concern content that is excluded from the scope of this Directive or otherwise exempted from compliance with the accessibility requirements set out in this Directive, such as office file formats, pre-recorded time-based media or the content of archived websites. By using the feedback mechanism linked to an enforcement procedure, it should be possible for users of websites or mobile applications of public sector bodies to ask for the requisite information, including services and documents. In response to a legitimate and reasonable request, the public sector body concerned should provide information in an adequate and appropriate manner within a reasonable period of time."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 47",
+        "id": "32016L2102#rct_47",
+        "order": 47,
+        "text": "(47) Member States should take the necessary measures to raise awareness of, and promote web training programmes relating to, the accessibility of websites and mobile applications, for relevant stakeholders and in particular staff responsible for the accessibility of websites or mobile applications. Relevant stakeholders should be consulted or involved in preparing the content of the accessibility-related training and awareness-raising schemes."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 48",
+        "id": "32016L2102#rct_48",
+        "order": 48,
+        "text": "(48) It is important that Member States, in close cooperation with the Commission, should promote the use of authoring tools that allow better implementation of the accessibility requirements set out in this Directive. Such promotion could take passive forms, such as publishing a list of compatible authoring tools without a requirement to use those tools, or active forms, such as the requirement to use compatible authoring tools or to fund their development."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 49",
+        "id": "32016L2102#rct_49",
+        "order": 49,
+        "text": "(49) In order to ensure the proper implementation of this Directive, and in particular the implementation of the rules on conformity with accessibility requirements, it is of the utmost importance for the Commission and the Member States to consult with relevant stakeholders on a regular basis. Relevant stakeholders within the meaning of this Directive should be understood as including organisations representing the interests of persons with disabilities and of the elderly, social partners, industry involved in the creation of accessibility software relating to websites and mobile applications, and civil society."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 5",
+        "id": "32016L2102#rct_5",
+        "order": 5,
+        "text": "(5) Several Member States have adopted measures based on internationally used guidelines for the design of accessible websites, but those measures often relate to different versions or compliance levels of those guidelines, or have introduced technical differences in respect of accessible websites at national level."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 50",
+        "id": "32016L2102#rct_50",
+        "order": 50,
+        "text": "(50) Conformity with the accessibility requirements set out in this Directive should be periodically monitored. A harmonised monitoring methodology would provide for a description of the way of verifying, on a uniform basis in all Members States, the degree of compliance with the accessibility requirements, the collection of representative samples and the periodicity of the monitoring. Member States should report periodically on the outcome of the monitoring and at least once on the list of measures taken in application of this Directive."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 51",
+        "id": "32016L2102#rct_51",
+        "order": 51,
+        "text": "(51) The monitoring methodology to be established by the Commission should be transparent, transferable, comparable and reproducible. The reproducibility of the monitoring methodology should be maximised while taking into account the fact that human factors, such as testing by users, might have an influence on that reproducibility. To improve comparability of data between Member States, the monitoring methodology should describe the way in which the outcomes of different tests need to be or can be presented. In order not to divert resources from the task of making content more accessible, the monitoring methodology should be easy to use."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 52",
+        "id": "32016L2102#rct_52",
+        "order": 52,
+        "text": "(52) In order not to hinder innovation as regards ways of measuring the accessibility of websites and mobile applications, and as long as it does not hinder the comparability of data across the Union, Member States should be able to use more advanced monitoring technologies based on the monitoring methodology to be established by the Commission."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 53",
+        "id": "32016L2102#rct_53",
+        "order": 53,
+        "text": "(53) In order to avoid systematic recourse to court proceedings, provision should be made for the right to have recourse to an adequate and effective procedure to ensure compliance with this Directive. This is without prejudice to the right to an effective remedy as set out in Article 47 of the Charter. That procedure should be understood to include the right to submit complaints to any existing national authority competent to adjudicate upon those complaints."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 54",
+        "id": "32016L2102#rct_54",
+        "order": 54,
+        "text": "(54) In order to ensure the proper application of the presumption of conformity with the accessibility requirements laid down by this Directive, the power to adopt acts in accordance with Article 290 of the Treaty on the Functioning of the European Union should be delegated to the Commission in respect of amending this Directive by updating the references to European standard EN 301 549 V1.1.2 (2015-04). It is of particular importance that the Commission carry out appropriate consultations during its preparatory work, including at expert level, and that those consultations be conducted in accordance with the principles laid down in the Interinstitutional Agreement of 13 April 2016 on Better Law-Making (10). In particular, to ensure equal participation in the preparation of delegated acts, the European Parliament and the Council receive all documents at the same time as Member States' experts, and their experts systematically have access to meetings of Commission expert groups dealing with the preparation of delegated acts."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 55",
+        "id": "32016L2102#rct_55",
+        "order": 55,
+        "text": "(55) In order to ensure uniform conditions for the implementation of the relevant provisions of this Directive, implementing powers should be conferred on the Commission. The examination procedure should be used in order to establish: technical specifications for the accessibility requirements; the methodology that Member States should use for monitoring the conformity of the websites and mobile applications concerned with those requirements; and the arrangements for reporting by Member States to the Commission on the outcome of the monitoring. The advisory procedure should be used for the adoption of the implementing acts establishing a model accessibility statement, which does not have any impact on the nature and scope of the obligations stemming from this Directive but serves to facilitate the application of the rules which it lays down. Those powers should be exercised in accordance with Regulation (EU) No 182/2011 of the European Parliament and the Council (11)."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 56",
+        "id": "32016L2102#rct_56",
+        "order": 56,
+        "text": "(56) Since the objective of this Directive, namely the establishment of a harmonised market for the accessibility of the websites and mobile applications of public sector bodies, cannot be sufficiently achieved by the Member States, because it requires the harmonisation of different rules currently existing in their respective legal systems, but can rather be better achieved at Union level, the Union may adopt measures, in accordance with the principle of subsidiarity as set out in Article 5 of the Treaty on European Union. In accordance with the principle of proportionality, as set out in that Article, this Directive does not go beyond what is necessary in order to achieve that objective,"
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 6",
+        "id": "32016L2102#rct_6",
+        "order": 6,
+        "text": "(6) Suppliers of accessible websites, mobile applications and related software and technologies include a large number of small and medium-sized enterprises (SMEs). Such suppliers, and SMEs in particular, are discouraged from entering into business ventures outside their national markets. Due to the differences between Member States in accessibility specifications and regulations, suppliers' competitiveness and growth are hampered by the additional costs they would incur in the development and marketing of cross-border web accessibility-related products and services."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 7",
+        "id": "32016L2102#rct_7",
+        "order": 7,
+        "text": "(7) Due to limited competition, buyers of websites, mobile applications and related products and services are faced with high prices in respect of the provision of services or dependence on a single supplier. Suppliers often favour variations of proprietary ‘standards’, hindering subsequent scope for interoperability of user agents and Union-wide ubiquitous access to the content of websites and mobile applications. Fragmentation among national regulations reduces the benefits that could result from sharing experiences with national and international peers in responding to societal and technological developments."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 8",
+        "id": "32016L2102#rct_8",
+        "order": 8,
+        "text": "(8) In a harmonised framework, the design and development industry for websites and mobile applications should face fewer barriers to operating in the internal market, while costs for public sector bodies and others procuring products and services relating to the accessibility of websites and mobile applications should be reduced."
+      }
+    },
+    {
+      "label": "RECITAL",
+      "properties": {
+        "citation_ref": "Recital 9",
+        "id": "32016L2102#rct_9",
+        "order": 9,
+        "text": "(9) This Directive aims to ensure that the websites and mobile applications of public sector bodies are made more accessible on the basis of common accessibility requirements. The approximation of national measures at Union level, based on the agreed accessibility requirements for the websites and mobile applications of public sector bodies, is necessary in order to put an end to fragmentation of the internal market. It would reduce uncertainty for developers and would foster interoperability. The use of accessibility requirements which are technology-neutral will not hamper innovation, and may even stimulate it."
+      }
+    },
+    {
+      "label": "RegulatoryInstrument",
+      "properties": {
+        "celex": "32016L2102",
+        "effective_date": "2018-09-23",
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+        "instrument_type": "directive",
+        "jurisdiction": "EU",
+        "source_type": "external",
+        "status": "active",
+        "title": "DIRECTIVE (EU) 2016/2102 OF THE EUROPEAN PARLIAMENT AND OF THE COUNCIL of 26 October 2016 on the accessibility of the websites and mobile applications of public sector bodies (Text with EEA relevance)",
+        "version": "1.0"
+      }
+    }
+  ]
+}

@@ -1,0 +1,1082 @@
+{
+  "edges": [
+    {
+      "properties": {
+        "source_ref": "Art. 7(6)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_commission_c5ad62",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 10(6)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_european_parliament_or_the_council_45638d",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(3)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_member_states_ce72be",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 4"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_public_sector_bodies_428bef",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(4)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_public_sector_body_514e3e",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(2)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_public_sector_body_concerned_5f8031",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_the_commission_fca2cd",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(6)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_the_content_of_all_the_reports_989c8e",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "DEFINES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "role_the_technical_specifications_568051",
+      "target_label": "Role"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 10(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_10.4",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 10(6)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_10.6",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 12(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 12(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 12(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1c",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 12(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 12(3)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 13"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 13"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 13"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 13"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#4",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 4"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_4.1",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.1",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(3)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.4a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 5(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.4b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 6(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2c",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1c",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1d",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1e",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(3)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.4",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(5)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.5",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 7(6)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.6",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.1",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2#3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4#2",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(4)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4#3",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(5)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.5",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(6)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.6",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 8(7)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.7",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 9(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.1a",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 9(1)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.1b",
+      "target_label": "Requirement"
+    },
+    {
+      "properties": {
+        "source_ref": "Art. 9(2)"
+      },
+      "relationship_type": "EXPRESSES",
+      "source_id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+      "source_label": "RegulatoryInstrument",
+      "target_id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.2",
+      "target_label": "Requirement"
+    }
+  ],
+  "nodes": [
+    {
+      "label": "RegulatoryInstrument",
+      "properties": {
+        "celex": "32016L2102",
+        "effective_date": "2018-09-23",
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0",
+        "instrument_type": "directive",
+        "jurisdiction": "EU",
+        "source_type": "external",
+        "status": "active",
+        "title": "DIRECTIVE (EU) 2016/2102 OF THE EUROPEAN PARLIAMENT AND OF THE COUNCIL of 26 October 2016 on the accessibility of the websites and mobile applications of public sector bodies (Text with EEA relevance)",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_10.4",
+        "role_id": "role_commission_c5ad62",
+        "text": "Before adopting a delegated act, the Commission shall consult experts designated by each Member State in accordance with the principles laid down in the Interinstitutional Agreement of 13 April 2016 on Better Law-Making.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.93,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_10.6",
+        "role_id": "role_european_parliament_or_the_council_45638d",
+        "text": "A delegated act adopted pursuant to Article 6(4) shall enter into force only if no objection has been expressed within a period of two months of notification of that act to the European Parliament and the Council, or if, before the expiry of that period, the European Parliament and the Council have both informed the Commission that they will not object.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1a",
+        "role_id": "role_member_states_ce72be",
+        "text": "bring into force the laws, regulations and administrative provisions necessary to comply with this Directive by 23 September 2018",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.96,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1b",
+        "role_id": "role_member_states_ce72be",
+        "text": "immediately inform the Commission thereof",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.1c",
+        "role_id": "role_member_states_ce72be",
+        "text": "when adopting those measures, ensure that they contain a reference to this Directive or are accompanied by such a reference on the occasion of their official publication",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.2",
+        "role_id": "role_member_states_ce72be",
+        "text": "communicate to the Commission the text of the main measures of national law which they adopt in the field covered by this Directive",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.94,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_12.3",
+        "role_id": "role_member_states_ce72be",
+        "text": "shall apply those measures as follows: (a) to websites of public sector bodies not published before 23 September 2018: from 23 September 2019; (b) to websites of public sector bodies not covered by point (a): from 23 September 2020; (c) to mobile applications of public sector bodies: from 23 June 2021.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1",
+        "role_id": "role_commission_c5ad62",
+        "text": "carry out a review of the application of this Directive by 23 June 2022",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#2",
+        "role_id": "role_commission_c5ad62",
+        "text": "take into account the Member States' reports on the outcome of the monitoring provided for in Article 8 and the use of the enforcement procedure provided for in Article 9 in that review",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#3",
+        "role_id": "role_commission_c5ad62",
+        "text": "include a review of technological advances that could make accessibility easier for some types of content excluded from the scope of this Directive",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_13.1#4",
+        "role_id": "role_commission_c5ad62",
+        "text": "make the findings of that review public in an accessible format",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_4.1",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "take the necessary measures to make their websites and mobile applications more accessible by making them perceivable, operable, understandable and robust",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.1",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "apply the accessibility requirements set out in Article 4 to the extent that those requirements do not impose a disproportionate burden on the public sector bodies for the purposes of that Article",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.93,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.2",
+        "role_id": "role_public_sector_body_concerned_5f8031",
+        "text": "takes account of relevant circumstances, including the size, resources and nature of the public sector body concerned; and the estimated costs and benefits for the public sector body concerned in relation to the estimated benefits for persons with disabilities, taking into account the frequency and duration of use of the specific website or mobile application",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.3",
+        "role_id": "role_public_sector_body_concerned_5f8031",
+        "text": "perform the initial assessment of the extent to which compliance with the accessibility requirements set out in Article 4 imposes a disproportionate burden",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.4a",
+        "role_id": "role_public_sector_body_514e3e",
+        "text": "Where a public sector body avails itself of the derogation provided for in paragraph 1 of this Article for a specific website or mobile application after conducting an assessment as referred to in paragraph 2 of this Article, it shall explain, in the accessibility statement referred to in Article 7, the parts of the accessibility requirements that could not be complied with.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.94,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_5.4b",
+        "role_id": "role_public_sector_body_514e3e",
+        "text": "Where a public sector body avails itself of the derogation provided for in paragraph 1 of this Article for a specific website or mobile application after conducting an assessment as referred to in paragraph 2 of this Article, it shall, where appropriate, provide accessible alternatives.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2",
+        "role_id": "role_the_commission_fca2cd",
+        "text": "shall adopt implementing acts establishing the technical specifications referred to in the first subparagraph of this paragraph",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2a",
+        "role_id": "role_the_technical_specifications_568051",
+        "text": "shall meet the accessibility requirements set out in Article 4 and shall ensure at least a level of accessibility equivalent to that ensured by European standard EN 301 549 V1.1.2 (2015-04)",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.94,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2b",
+        "role_id": "role_the_technical_specifications_568051",
+        "text": "shall meet the accessibility requirements set out in Article 4",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.94,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_6.2c",
+        "role_id": "role_the_technical_specifications_568051",
+        "text": "shall ensure at least a level of accessibility equivalent to that ensured by European standard EN 301 549 V1.1.2 (2015-04)",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "provide and regularly update a detailed, comprehensive and clear accessibility statement on the compliance of their websites and mobile applications with this Directive",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1#2",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "give an adequate response to the notification or request within a reasonable period of time",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1a",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "provide the accessibility statement for websites in an accessible format, using the model accessibility statement referred to in paragraph 2, and publish it on the relevant website",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1b",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "provide the accessibility statement for mobile applications in an accessible format, using the model accessibility statement referred to in paragraph 2, and make it available on the website of the public sector body that developed the mobile application concerned, or alongside other information available when downloading the application",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.96,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1c",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "include in the accessibility statement an explanation concerning those parts of the content that are not accessible, and the reasons for that inaccessibility and, where appropriate, the accessible alternatives provided for",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.96,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1d",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "include in the accessibility statement a description of, and a link to, a feedback mechanism enabling any person to notify the public sector body concerned of any failure of its website or mobile application to comply with the accessibility requirements set out in Article 4 and to request the information excluded pursuant to Article 1(4) and Article 5",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.1e",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "include in the accessibility statement a link to the enforcement procedure set out in Article 9 to which recourse may be had in the event of an unsatisfactory response to the notification or the request",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.3",
+        "role_id": "role_member_states_ce72be",
+        "text": "take measures to facilitate the application of the accessibility requirements set out in Article 4 to other types of websites or mobile applications apart from those referred to in Article 1(2) and, in particular, to websites or mobile applications covered by existing national laws on accessibility",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.4",
+        "role_id": "role_member_states_ce72be",
+        "text": "shall promote and facilitate training programmes, relating to the accessibility of websites and mobile applications for relevant stakeholders and staff of public sector bodies, designed to train them how to create, manage and update the accessible content of websites and mobile applications.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.5",
+        "role_id": "role_member_states_ce72be",
+        "text": "Member States shall take the necessary measures to raise awareness of the accessibility requirements set out in Article 4, of their benefits to users and to owners of websites and mobile applications, and of the possibility of giving feedback in the case of any failure to comply with the requirements of this Directive, as set out in this Article.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.73,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_7.6",
+        "role_id": "role_commission_c5ad62",
+        "text": "The Commission shall facilitate cooperation at Union level between Member States, and between Member States and relevant stakeholders, with a view to the exchange of best practices between them and to reviewing the monitoring methodology referred to in Article 8(2), market and technological developments and progress in accessibility for websites and mobile applications.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.1",
+        "role_id": "role_public_sector_bodies_428bef",
+        "text": "The compliance of websites and mobile applications with the accessibility requirements set out in Article 4 shall be periodically monitored on the basis of the monitoring methodology provided for in paragraph 2 of this Article.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.99,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2",
+        "role_id": "role_commission_c5ad62",
+        "text": "The Commission shall adopt implementing acts establishing a methodology for monitoring the conformity of websites and mobile applications with the accessibility requirements set out in Article 4.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.92,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2#2",
+        "role_id": "role_commission_c5ad62",
+        "text": "The methodology shall be transparent, transferable, comparable, reproducible and easy to use.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.2#3",
+        "role_id": "role_commission_c5ad62",
+        "text": "By 23 December 2018, the Commission shall adopt the first such implementing act.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4",
+        "role_id": "role_member_states_ce72be",
+        "text": "By 23 December 2021, and every three years thereafter, submit to the Commission a report on the outcome of the monitoring including the measurement data.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.91,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4#2",
+        "role_id": "role_member_states_ce72be",
+        "text": "Draw up that report on the basis of the arrangements for reporting referred to in paragraph 6 of this Article.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.94,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.4#3",
+        "role_id": "role_member_states_ce72be",
+        "text": "Ensure that the report also covers information on the use of the enforcement procedure set out in Article 9.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.89,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.5",
+        "role_id": "role_member_states_ce72be",
+        "text": "include in their subsequent reports information concerning significant changes made in relation to the elements referred to in the first subparagraph",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.6",
+        "role_id": "role_the_content_of_all_the_reports_989c8e",
+        "text": "The content of all the reports shall be made public in an accessible format.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_8.7",
+        "role_id": "role_member_states_ce72be",
+        "text": "By 23 September 2018, inform the Commission of the body designated to perform the monitoring and reporting functions.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.97,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.1a",
+        "role_id": "role_member_states_ce72be",
+        "text": "shall ensure the availability of an adequate and effective enforcement procedure to guarantee compliance with this Directive, in relation to the requirements set out in Articles 4 and 5 and Article 7(1).",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.95,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.1b",
+        "role_id": "role_member_states_ce72be",
+        "text": "shall ensure that an enforcement procedure, such as the possibility of contacting an ombudsman, is in place to guarantee an effective handling of notifications or requests received as provided for in point (b) of Article 7(1) and to review the assessment referred to in Article 5.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Requirement",
+      "properties": {
+        "confidence": 0.98,
+        "id": "directive_eu_2016_2102_of_the_32016l2102-1.0_req_art_9.2",
+        "role_id": "role_member_states_ce72be",
+        "text": "By 23 September 2018, inform the Commission of the body responsible for the enforcement of this Directive.",
+        "type": "requirement"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.73,
+        "id": "role_commission_c5ad62",
+        "name": "Commission"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.93,
+        "id": "role_european_parliament_or_the_council_45638d",
+        "name": "European Parliament or the Council"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.98,
+        "id": "role_member_states_ce72be",
+        "name": "Member States"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.99,
+        "id": "role_public_sector_bodies_428bef",
+        "name": "public sector bodies"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.97,
+        "id": "role_public_sector_body_514e3e",
+        "name": "public sector body"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.93,
+        "id": "role_public_sector_body_concerned_5f8031",
+        "name": "public sector body concerned"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.97,
+        "id": "role_the_commission_fca2cd",
+        "name": "The Commission"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.98,
+        "id": "role_the_content_of_all_the_reports_989c8e",
+        "name": "The content of all the reports"
+      }
+    },
+    {
+      "label": "Role",
+      "properties": {
+        "confidence": 0.95,
+        "id": "role_the_technical_specifications_568051",
+        "name": "The technical specifications"
+      }
+    }
+  ]
+}

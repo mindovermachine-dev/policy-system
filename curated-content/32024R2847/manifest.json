@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "caee2a33877b249db311b471bce9ffbc1e54a52e9add62d5e7344d7388c8b746",
+  "celex": "32024R2847",
+  "exported_at": "2026-09-10T09:57:50.225111+00:00",
+  "instrument_id": "32024R2847",
+  "jurisdiction": "EU",
+  "native_sha256": "12fb12f107632f9b19ce4bc3e5f0828fa95b572535cfc83300fc4699cdf7ec63",
+  "schema_version": "2",
+  "short_name": "cra",
+  "source_type": "external",
+  "title": "Cyber Resilience Act",
+  "version": "1.0"
+}
