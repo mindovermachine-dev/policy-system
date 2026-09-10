@@ -1283,7 +1283,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_I",
       "target_label": "ANNEX"
@@ -1291,7 +1291,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_II",
       "target_label": "ANNEX"
@@ -1299,7 +1299,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_III",
       "target_label": "ANNEX"
@@ -1307,7 +1307,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_IV",
       "target_label": "ANNEX"
@@ -1315,7 +1315,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_V",
       "target_label": "ANNEX"
@@ -1323,7 +1323,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_VI",
       "target_label": "ANNEX"
@@ -1331,7 +1331,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#anx_VII",
       "target_label": "ANNEX"
@@ -1339,7 +1339,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_I",
       "target_label": "CHAPTER"
@@ -1347,7 +1347,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_II",
       "target_label": "CHAPTER"
@@ -1355,7 +1355,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_III",
       "target_label": "CHAPTER"
@@ -1363,7 +1363,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_IV",
       "target_label": "CHAPTER"
@@ -1371,7 +1371,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_V",
       "target_label": "CHAPTER"
@@ -1379,7 +1379,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_VI",
       "target_label": "CHAPTER"
@@ -1387,7 +1387,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_VII",
       "target_label": "CHAPTER"
@@ -1395,7 +1395,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#cpt_VIII",
       "target_label": "CHAPTER"
@@ -1403,7 +1403,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_1",
       "target_label": "RECITAL"
@@ -1411,7 +1411,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_10",
       "target_label": "RECITAL"
@@ -1419,7 +1419,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_11",
       "target_label": "RECITAL"
@@ -1427,7 +1427,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_12",
       "target_label": "RECITAL"
@@ -1435,7 +1435,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_13",
       "target_label": "RECITAL"
@@ -1443,7 +1443,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_14",
       "target_label": "RECITAL"
@@ -1451,7 +1451,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_15",
       "target_label": "RECITAL"
@@ -1459,7 +1459,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_16",
       "target_label": "RECITAL"
@@ -1467,7 +1467,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_17",
       "target_label": "RECITAL"
@@ -1475,7 +1475,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_18",
       "target_label": "RECITAL"
@@ -1483,7 +1483,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_19",
       "target_label": "RECITAL"
@@ -1491,7 +1491,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_2",
       "target_label": "RECITAL"
@@ -1499,7 +1499,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_20",
       "target_label": "RECITAL"
@@ -1507,7 +1507,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_21",
       "target_label": "RECITAL"
@@ -1515,7 +1515,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_22",
       "target_label": "RECITAL"
@@ -1523,7 +1523,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_23",
       "target_label": "RECITAL"
@@ -1531,7 +1531,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_24",
       "target_label": "RECITAL"
@@ -1539,7 +1539,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_25",
       "target_label": "RECITAL"
@@ -1547,7 +1547,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_26",
       "target_label": "RECITAL"
@@ -1555,7 +1555,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_27",
       "target_label": "RECITAL"
@@ -1563,7 +1563,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_28",
       "target_label": "RECITAL"
@@ -1571,7 +1571,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_29",
       "target_label": "RECITAL"
@@ -1579,7 +1579,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_3",
       "target_label": "RECITAL"
@@ -1587,7 +1587,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_30",
       "target_label": "RECITAL"
@@ -1595,7 +1595,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_31",
       "target_label": "RECITAL"
@@ -1603,7 +1603,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_32",
       "target_label": "RECITAL"
@@ -1611,7 +1611,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_33",
       "target_label": "RECITAL"
@@ -1619,7 +1619,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_34",
       "target_label": "RECITAL"
@@ -1627,7 +1627,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_35",
       "target_label": "RECITAL"
@@ -1635,7 +1635,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_36",
       "target_label": "RECITAL"
@@ -1643,7 +1643,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_37",
       "target_label": "RECITAL"
@@ -1651,7 +1651,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_38",
       "target_label": "RECITAL"
@@ -1659,7 +1659,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_39",
       "target_label": "RECITAL"
@@ -1667,7 +1667,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_4",
       "target_label": "RECITAL"
@@ -1675,7 +1675,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_40",
       "target_label": "RECITAL"
@@ -1683,7 +1683,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_41",
       "target_label": "RECITAL"
@@ -1691,7 +1691,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_42",
       "target_label": "RECITAL"
@@ -1699,7 +1699,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_43",
       "target_label": "RECITAL"
@@ -1707,7 +1707,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_44",
       "target_label": "RECITAL"
@@ -1715,7 +1715,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_45",
       "target_label": "RECITAL"
@@ -1723,7 +1723,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_46",
       "target_label": "RECITAL"
@@ -1731,7 +1731,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_47",
       "target_label": "RECITAL"
@@ -1739,7 +1739,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_48",
       "target_label": "RECITAL"
@@ -1747,7 +1747,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_49",
       "target_label": "RECITAL"
@@ -1755,7 +1755,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_5",
       "target_label": "RECITAL"
@@ -1763,7 +1763,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_50",
       "target_label": "RECITAL"
@@ -1771,7 +1771,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_51",
       "target_label": "RECITAL"
@@ -1779,7 +1779,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_52",
       "target_label": "RECITAL"
@@ -1787,7 +1787,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_53",
       "target_label": "RECITAL"
@@ -1795,7 +1795,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_54",
       "target_label": "RECITAL"
@@ -1803,7 +1803,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_55",
       "target_label": "RECITAL"
@@ -1811,7 +1811,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_56",
       "target_label": "RECITAL"
@@ -1819,7 +1819,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_57",
       "target_label": "RECITAL"
@@ -1827,7 +1827,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_58",
       "target_label": "RECITAL"
@@ -1835,7 +1835,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_59",
       "target_label": "RECITAL"
@@ -1843,7 +1843,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_6",
       "target_label": "RECITAL"
@@ -1851,7 +1851,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_60",
       "target_label": "RECITAL"
@@ -1859,7 +1859,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_61",
       "target_label": "RECITAL"
@@ -1867,7 +1867,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_62",
       "target_label": "RECITAL"
@@ -1875,7 +1875,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_63",
       "target_label": "RECITAL"
@@ -1883,7 +1883,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_64",
       "target_label": "RECITAL"
@@ -1891,7 +1891,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_65",
       "target_label": "RECITAL"
@@ -1899,7 +1899,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_66",
       "target_label": "RECITAL"
@@ -1907,7 +1907,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_67",
       "target_label": "RECITAL"
@@ -1915,7 +1915,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_68",
       "target_label": "RECITAL"
@@ -1923,7 +1923,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_69",
       "target_label": "RECITAL"
@@ -1931,7 +1931,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_7",
       "target_label": "RECITAL"
@@ -1939,7 +1939,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_70",
       "target_label": "RECITAL"
@@ -1947,7 +1947,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_71",
       "target_label": "RECITAL"
@@ -1955,7 +1955,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_72",
       "target_label": "RECITAL"
@@ -1963,7 +1963,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_73",
       "target_label": "RECITAL"
@@ -1971,7 +1971,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_74",
       "target_label": "RECITAL"
@@ -1979,7 +1979,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_75",
       "target_label": "RECITAL"
@@ -1987,7 +1987,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_8",
       "target_label": "RECITAL"
@@ -1995,7 +1995,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+      "source_id": "RRF-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32021R0241#rct_9",
       "target_label": "RECITAL"
@@ -4293,7 +4293,7 @@
       "properties": {
         "celex": "32021R0241",
         "effective_date": "2021-02-19",
-        "id": "regulation_eu_2021_241_of_the_32021r0241-1.0",
+        "id": "RRF-1.0",
         "instrument_type": "regulation",
         "jurisdiction": "EU",
         "source_type": "external",

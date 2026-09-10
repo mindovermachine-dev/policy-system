@@ -1,10 +1,10 @@
 {
-  "baseline_sha256": "75405193a65db0dd7fcb9dd1e31f87083f53d7cef7c7f08f547ef8843b3891ba",
+  "baseline_sha256": "1c17517d710c366a2e645c53a451618941456ec2a508f821b78098d90bd4312e",
   "celex": "32016L2102",
   "exported_at": "2026-09-10T10:06:00.063585+00:00",
-  "instrument_id": "32016L2102",
+  "instrument_id": "WEBACCESSIBILITY-1.0",
   "jurisdiction": "EU",
-  "native_sha256": "1d624238f339cf151d655ef9974002fec7c90d6fee9f3f3172580568d993eec8",
+  "native_sha256": "1c72a0d0f95cebef13aab8dbdad8a8707afa7a86508a1770583e424a2b12a278",
   "schema_version": "2",
   "short_name": "webaccessibility",
   "source_type": "external",

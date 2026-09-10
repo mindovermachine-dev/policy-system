@@ -1,10 +1,10 @@
 {
-  "baseline_sha256": "ecd2d2790cf5b9214b1e74387d9df4f38124247505dc66fba825e36416caab10",
+  "baseline_sha256": "c122fdc8a7d04998f7f27a32984cb3442f6d5384332730fb39e136440828e902",
   "celex": "32021R0241",
   "exported_at": "2026-09-10T10:05:36.623221+00:00",
-  "instrument_id": "32021R0241",
+  "instrument_id": "RRF-1.0",
   "jurisdiction": "EU",
-  "native_sha256": "121f207be5425cbbd666d4230e71b64001809f1b40e7ec430f81264487c65141",
+  "native_sha256": "b333829ae21119128c1db75c83fad6e5db23cbc41bbe41a60beec8da5ac0bc53",
   "schema_version": "2",
   "short_name": "rrf",
   "source_type": "external",

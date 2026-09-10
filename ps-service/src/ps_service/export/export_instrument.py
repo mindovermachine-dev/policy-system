@@ -6,10 +6,13 @@
 instrument directory (`curated-content/{instrument_id}/`) plus a
 regenerated `catalog.json` (D1). Fixed orchestration order (D7,
 CHANGES2.md §3.9): embeddings are backfilled onto the live baseline graph
-first, then both graphs are serialized to JSON, then the manifest is
-written, then `catalog.json` is regenerated from every manifest now on disk
-(never just this one instrument's) -- so a re-export never drops another
-instrument's catalog entry.
+first, then both graphs are serialized to JSON, then the serialized baseline
+is checked against `descriptor.instrument_id` (a caller-supplied id that
+doesn't match the source graph's own `RegulatoryInstrument.id` would export
+an artifact restore can never load -- caught here instead), then the
+manifest is written, then `catalog.json` is regenerated from every manifest
+now on disk (never just this one instrument's) -- so a re-export never drops
+another instrument's catalog entry.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from typing import TYPE_CHECKING, Literal
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export import catalog_writer
 from ps_service.export.embeddings import backfill_capability_embeddings
+from ps_service.export.errors import ExportInstrumentIdMismatchError
 from ps_service.export.models import InstrumentManifest
 from ps_service.export.serialize import checksum_bytes, serialize_graph, to_json_bytes
 
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
     from ps_service.export.falkordb_connection import (
         _GraphQueryHandle,  # pyright: ignore[reportPrivateUsage]
     )
+    from ps_service.export.models import SerializedGraph
     from ps_service.llm_interface.client import EmbeddingCaller
     from ps_service.logging.emitter import LogEmitter
 
@@ -77,6 +82,32 @@ def _read_all_manifests(curated_content_dir: Path) -> list[InstrumentManifest]:
     ]
 
 
+def _validate_instrument_id(
+    descriptor: InstrumentDescriptor, baseline_graph: SerializedGraph
+) -> None:
+    """Raise if `descriptor.instrument_id` doesn't match the baseline graph's own id.
+
+    Restore (`ps_service.restore.restore_instrument`) resolves a manifest's
+    `instrument_id` against the artifact's own `RegulatoryInstrument.id` and
+    rejects a mismatch as `content_validation` failed -- checked here, at
+    export time, so a caller-supplied `--instrument-id` that doesn't match
+    the source graph (e.g. a CELEX passed where the graph's real id is
+    `{short_name}-{version}`) is caught before anything is written to disk,
+    not discovered later at restore time.
+    """
+    regulatory_instrument_ids = [
+        node.properties.get("id")
+        for node in baseline_graph.nodes
+        if node.label == "RegulatoryInstrument"
+    ]
+    if descriptor.instrument_id not in regulatory_instrument_ids:
+        raise ExportInstrumentIdMismatchError(
+            f"--instrument-id {descriptor.instrument_id!r} does not match the source baseline "
+            f"graph's own RegulatoryInstrument.id ({regulatory_instrument_ids!r}). Pass "
+            f"--instrument-id matching the graph's actual id -- restore requires these to be equal."
+        )
+
+
 def export_instrument(
     descriptor: InstrumentDescriptor,
     *,
@@ -108,7 +139,10 @@ def export_instrument(
         emitter=emitter,
     )
 
-    baseline_bytes = to_json_bytes(serialize_graph(baseline_graph))
+    baseline_serialized = serialize_graph(baseline_graph)
+    _validate_instrument_id(descriptor, baseline_serialized)
+
+    baseline_bytes = to_json_bytes(baseline_serialized)
     native_bytes = to_json_bytes(serialize_graph(native_graph))
 
     manifest = InstrumentManifest(

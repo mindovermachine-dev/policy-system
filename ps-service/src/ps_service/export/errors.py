@@ -19,3 +19,14 @@ class ExportSourceGraphError(Exception):
     (`MERGE (n:{label} {id: ...})`), so this signals a genuinely
     out-of-contract graph, never silently coerced to "pick one label".
     """
+
+
+class ExportInstrumentIdMismatchError(Exception):
+    """Raised when instrument_id does not match the baseline graph's own RegulatoryInstrument.id.
+
+    Restore (`ps_service.restore.restore_instrument`) requires a manifest's
+    `instrument_id` to equal the artifact's own `RegulatoryInstrument.id` --
+    a mismatch here would export an artifact `catalog restore` can never
+    load (`content_validation` failure). Caught here, at export time,
+    instead of silently writing a broken artifact to disk.
+    """

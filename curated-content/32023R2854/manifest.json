@@ -1,10 +1,10 @@
 {
-  "baseline_sha256": "f5ebe349a83b18c40a144d7612021b5c273718d21276f013f5aa75f9d943afd6",
+  "baseline_sha256": "a9f6551ee413a03675a296216792042dd4d96f203bc69a375847859150f66cac",
   "celex": "32023R2854",
   "exported_at": "2026-09-10T10:05:51.144322+00:00",
-  "instrument_id": "32023R2854",
+  "instrument_id": "DATAACT-1.0",
   "jurisdiction": "EU",
-  "native_sha256": "b6a73cc998714397d0aed802b087552b3fbfb542300b70acf0205099f2ad4611",
+  "native_sha256": "c792a60096d63beea400ee3ba301fab2edf8ffd8f529647a3b1f1f19172c06ac",
   "schema_version": "2",
   "short_name": "dataact",
   "source_type": "external",

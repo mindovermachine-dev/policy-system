@@ -2187,7 +2187,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_I",
       "target_label": "CHAPTER"
@@ -2195,7 +2195,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_II",
       "target_label": "CHAPTER"
@@ -2203,7 +2203,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_III",
       "target_label": "CHAPTER"
@@ -2211,7 +2211,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_IV",
       "target_label": "CHAPTER"
@@ -2219,7 +2219,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_IX",
       "target_label": "CHAPTER"
@@ -2227,7 +2227,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_V",
       "target_label": "CHAPTER"
@@ -2235,7 +2235,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_VI",
       "target_label": "CHAPTER"
@@ -2243,7 +2243,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_VII",
       "target_label": "CHAPTER"
@@ -2251,7 +2251,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_VIII",
       "target_label": "CHAPTER"
@@ -2259,7 +2259,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_X",
       "target_label": "CHAPTER"
@@ -2267,7 +2267,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#cpt_XI",
       "target_label": "CHAPTER"
@@ -2275,7 +2275,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_1",
       "target_label": "RECITAL"
@@ -2283,7 +2283,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_10",
       "target_label": "RECITAL"
@@ -2291,7 +2291,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_100",
       "target_label": "RECITAL"
@@ -2299,7 +2299,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_101",
       "target_label": "RECITAL"
@@ -2307,7 +2307,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_102",
       "target_label": "RECITAL"
@@ -2315,7 +2315,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_103",
       "target_label": "RECITAL"
@@ -2323,7 +2323,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_104",
       "target_label": "RECITAL"
@@ -2331,7 +2331,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_105",
       "target_label": "RECITAL"
@@ -2339,7 +2339,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_106",
       "target_label": "RECITAL"
@@ -2347,7 +2347,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_107",
       "target_label": "RECITAL"
@@ -2355,7 +2355,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_108",
       "target_label": "RECITAL"
@@ -2363,7 +2363,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_109",
       "target_label": "RECITAL"
@@ -2371,7 +2371,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_11",
       "target_label": "RECITAL"
@@ -2379,7 +2379,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_110",
       "target_label": "RECITAL"
@@ -2387,7 +2387,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_111",
       "target_label": "RECITAL"
@@ -2395,7 +2395,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_112",
       "target_label": "RECITAL"
@@ -2403,7 +2403,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_113",
       "target_label": "RECITAL"
@@ -2411,7 +2411,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_114",
       "target_label": "RECITAL"
@@ -2419,7 +2419,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_115",
       "target_label": "RECITAL"
@@ -2427,7 +2427,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_116",
       "target_label": "RECITAL"
@@ -2435,7 +2435,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_117",
       "target_label": "RECITAL"
@@ -2443,7 +2443,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_118",
       "target_label": "RECITAL"
@@ -2451,7 +2451,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_119",
       "target_label": "RECITAL"
@@ -2459,7 +2459,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_12",
       "target_label": "RECITAL"
@@ -2467,7 +2467,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_120",
       "target_label": "RECITAL"
@@ -2475,7 +2475,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_13",
       "target_label": "RECITAL"
@@ -2483,7 +2483,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_14",
       "target_label": "RECITAL"
@@ -2491,7 +2491,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_15",
       "target_label": "RECITAL"
@@ -2499,7 +2499,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_16",
       "target_label": "RECITAL"
@@ -2507,7 +2507,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_17",
       "target_label": "RECITAL"
@@ -2515,7 +2515,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_18",
       "target_label": "RECITAL"
@@ -2523,7 +2523,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_19",
       "target_label": "RECITAL"
@@ -2531,7 +2531,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_2",
       "target_label": "RECITAL"
@@ -2539,7 +2539,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_20",
       "target_label": "RECITAL"
@@ -2547,7 +2547,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_21",
       "target_label": "RECITAL"
@@ -2555,7 +2555,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_22",
       "target_label": "RECITAL"
@@ -2563,7 +2563,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_23",
       "target_label": "RECITAL"
@@ -2571,7 +2571,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_24",
       "target_label": "RECITAL"
@@ -2579,7 +2579,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_25",
       "target_label": "RECITAL"
@@ -2587,7 +2587,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_26",
       "target_label": "RECITAL"
@@ -2595,7 +2595,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_27",
       "target_label": "RECITAL"
@@ -2603,7 +2603,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_28",
       "target_label": "RECITAL"
@@ -2611,7 +2611,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_29",
       "target_label": "RECITAL"
@@ -2619,7 +2619,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_3",
       "target_label": "RECITAL"
@@ -2627,7 +2627,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_30",
       "target_label": "RECITAL"
@@ -2635,7 +2635,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_31",
       "target_label": "RECITAL"
@@ -2643,7 +2643,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_32",
       "target_label": "RECITAL"
@@ -2651,7 +2651,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_33",
       "target_label": "RECITAL"
@@ -2659,7 +2659,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_34",
       "target_label": "RECITAL"
@@ -2667,7 +2667,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_35",
       "target_label": "RECITAL"
@@ -2675,7 +2675,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_36",
       "target_label": "RECITAL"
@@ -2683,7 +2683,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_37",
       "target_label": "RECITAL"
@@ -2691,7 +2691,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_38",
       "target_label": "RECITAL"
@@ -2699,7 +2699,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_39",
       "target_label": "RECITAL"
@@ -2707,7 +2707,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_4",
       "target_label": "RECITAL"
@@ -2715,7 +2715,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_40",
       "target_label": "RECITAL"
@@ -2723,7 +2723,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_41",
       "target_label": "RECITAL"
@@ -2731,7 +2731,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_42",
       "target_label": "RECITAL"
@@ -2739,7 +2739,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_43",
       "target_label": "RECITAL"
@@ -2747,7 +2747,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_44",
       "target_label": "RECITAL"
@@ -2755,7 +2755,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_45",
       "target_label": "RECITAL"
@@ -2763,7 +2763,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_46",
       "target_label": "RECITAL"
@@ -2771,7 +2771,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_47",
       "target_label": "RECITAL"
@@ -2779,7 +2779,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_48",
       "target_label": "RECITAL"
@@ -2787,7 +2787,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_49",
       "target_label": "RECITAL"
@@ -2795,7 +2795,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_5",
       "target_label": "RECITAL"
@@ -2803,7 +2803,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_50",
       "target_label": "RECITAL"
@@ -2811,7 +2811,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_51",
       "target_label": "RECITAL"
@@ -2819,7 +2819,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_52",
       "target_label": "RECITAL"
@@ -2827,7 +2827,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_53",
       "target_label": "RECITAL"
@@ -2835,7 +2835,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_54",
       "target_label": "RECITAL"
@@ -2843,7 +2843,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_55",
       "target_label": "RECITAL"
@@ -2851,7 +2851,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_56",
       "target_label": "RECITAL"
@@ -2859,7 +2859,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_57",
       "target_label": "RECITAL"
@@ -2867,7 +2867,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_58",
       "target_label": "RECITAL"
@@ -2875,7 +2875,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_59",
       "target_label": "RECITAL"
@@ -2883,7 +2883,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_6",
       "target_label": "RECITAL"
@@ -2891,7 +2891,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_60",
       "target_label": "RECITAL"
@@ -2899,7 +2899,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_61",
       "target_label": "RECITAL"
@@ -2907,7 +2907,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_62",
       "target_label": "RECITAL"
@@ -2915,7 +2915,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_63",
       "target_label": "RECITAL"
@@ -2923,7 +2923,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_64",
       "target_label": "RECITAL"
@@ -2931,7 +2931,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_65",
       "target_label": "RECITAL"
@@ -2939,7 +2939,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_66",
       "target_label": "RECITAL"
@@ -2947,7 +2947,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_67",
       "target_label": "RECITAL"
@@ -2955,7 +2955,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_68",
       "target_label": "RECITAL"
@@ -2963,7 +2963,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_69",
       "target_label": "RECITAL"
@@ -2971,7 +2971,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_7",
       "target_label": "RECITAL"
@@ -2979,7 +2979,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_70",
       "target_label": "RECITAL"
@@ -2987,7 +2987,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_71",
       "target_label": "RECITAL"
@@ -2995,7 +2995,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_72",
       "target_label": "RECITAL"
@@ -3003,7 +3003,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_73",
       "target_label": "RECITAL"
@@ -3011,7 +3011,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_74",
       "target_label": "RECITAL"
@@ -3019,7 +3019,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_75",
       "target_label": "RECITAL"
@@ -3027,7 +3027,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_76",
       "target_label": "RECITAL"
@@ -3035,7 +3035,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_77",
       "target_label": "RECITAL"
@@ -3043,7 +3043,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_78",
       "target_label": "RECITAL"
@@ -3051,7 +3051,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_79",
       "target_label": "RECITAL"
@@ -3059,7 +3059,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_8",
       "target_label": "RECITAL"
@@ -3067,7 +3067,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_80",
       "target_label": "RECITAL"
@@ -3075,7 +3075,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_81",
       "target_label": "RECITAL"
@@ -3083,7 +3083,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_82",
       "target_label": "RECITAL"
@@ -3091,7 +3091,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_83",
       "target_label": "RECITAL"
@@ -3099,7 +3099,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_84",
       "target_label": "RECITAL"
@@ -3107,7 +3107,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_85",
       "target_label": "RECITAL"
@@ -3115,7 +3115,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_86",
       "target_label": "RECITAL"
@@ -3123,7 +3123,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_87",
       "target_label": "RECITAL"
@@ -3131,7 +3131,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_88",
       "target_label": "RECITAL"
@@ -3139,7 +3139,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_89",
       "target_label": "RECITAL"
@@ -3147,7 +3147,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_9",
       "target_label": "RECITAL"
@@ -3155,7 +3155,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_90",
       "target_label": "RECITAL"
@@ -3163,7 +3163,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_91",
       "target_label": "RECITAL"
@@ -3171,7 +3171,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_92",
       "target_label": "RECITAL"
@@ -3179,7 +3179,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_93",
       "target_label": "RECITAL"
@@ -3187,7 +3187,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_94",
       "target_label": "RECITAL"
@@ -3195,7 +3195,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_95",
       "target_label": "RECITAL"
@@ -3203,7 +3203,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_96",
       "target_label": "RECITAL"
@@ -3211,7 +3211,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_97",
       "target_label": "RECITAL"
@@ -3219,7 +3219,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_98",
       "target_label": "RECITAL"
@@ -3227,7 +3227,7 @@
     {
       "properties": {},
       "relationship_type": "HAS",
-      "source_id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+      "source_id": "DATAACT-1.0",
       "source_label": "RegulatoryInstrument",
       "target_id": "32023R2854#rct_99",
       "target_label": "RECITAL"
@@ -6925,7 +6925,7 @@
       "properties": {
         "celex": "32023R2854",
         "effective_date": "2025-09-12",
-        "id": "regulation_eu_2023_2854_of_the_32023r2854-1.0",
+        "id": "DATAACT-1.0",
         "instrument_type": "regulation",
         "jurisdiction": "EU",
         "source_type": "external",

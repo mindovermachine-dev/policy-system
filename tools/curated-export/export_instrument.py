@@ -17,7 +17,7 @@ design, so it never needs one). Run it against an already-ingested source,
 e.g.:
 
     uv run tools/curated-export/export_instrument.py \\
-        --short-name CRA --instrument-id 32024R2847 --version "1.0" \\
+        --short-name CRA --instrument-id CRA-1.0 --version "1.0" \\
         --celex 32024R2847 --title "Cyber Resilience Act" \\
         --source-type external --jurisdiction EU
 
@@ -87,7 +87,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "differ from --short-name (e.g. an ingestion-time slug vs. a human-friendly "
         "name). Defaults to --short-name.",
     )
-    parser.add_argument("--instrument-id", required=True, help="e.g. 32024R2847")
+    parser.add_argument(
+        "--instrument-id",
+        required=True,
+        help="Must equal the source baseline graph's own RegulatoryInstrument.id -- "
+        "normally '{short_name}-{version}', e.g. CRA-1.0. NOT the CELEX: restore "
+        "rejects an artifact whose manifest instrument_id doesn't match the graph's "
+        "own id (checked here too, before anything is written).",
+    )
     parser.add_argument("--version", required=True, help="e.g. 1.0")
     parser.add_argument("--celex", default=None, help="CELEX id (external sources only)")
     parser.add_argument("--title", required=True, help="Human-readable instrument title")
