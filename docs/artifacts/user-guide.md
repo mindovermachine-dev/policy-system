@@ -217,9 +217,13 @@ plugin and custom connectors from Anthropic's cloud, so it can never reach the
 URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
 unreachable; that is expected.
 
-**For local test, register PS Service as a local MCP server instead.** Claude Desktop
-launches local servers over stdio, so `mcp-remote` bridges to the HTTP endpoint on your
-laptop. Requires [Node.js](https://nodejs.org/) (`node --version`).
+**For local test, register PS Service as a local MCP server instead, under the name
+`policy-system-graph-local`.** Claude Desktop launches local servers over stdio, so
+`mcp-remote` bridges to the HTTP endpoint on your laptop. The `-local` suffix is
+deliberate: the plugin's own connector is already named `policy-system-graph`, and two
+connectors sharing one name lets the unreachable hosted one shadow the working local one
+in a chat's toolset. The `ps-qna` skill accepts either name. Requires
+[Node.js](https://nodejs.org/) (`node --version`).
 
 In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Developer** →
 **Edit Config**, and add an `mcpServers` key alongside whatever is already there:
@@ -227,7 +231,7 @@ In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Develope
 ```json
 {
   "mcpServers": {
-    "policy-system-graph": {
+    "policy-system-graph-local": {
       "command": "npx",
       "args": ["-y", "mcp-remote@latest", "http://localhost:8000/mcp/", "--transport", "http-only"]
     }
@@ -235,9 +239,11 @@ In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Develope
 }
 ```
 
-Quit Claude Desktop fully (⌘Q) and relaunch. `policy-system-graph` should appear under
-the **+** button → **Connectors** → **Manage connectors**, exposing one tool, `cypher`.
-If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why.
+Quit Claude Desktop fully (⌘Q) and relaunch. `policy-system-graph-local` should appear
+under the **+** button → **Connectors** → **Manage connectors**, exposing one tool,
+`cypher`. If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why. Tools bind
+when a conversation starts, so open a **new** chat after relaunching — an existing chat
+won't pick the connector up.
 
 > [!NOTE]
 > Do **not** use **Settings → Connectors → Add custom connector** for a local instance.

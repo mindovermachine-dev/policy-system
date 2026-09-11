@@ -491,17 +491,19 @@ tracked as issue #39's Group 3 / issue #65.
 
 ### Claude Desktop (alternative to Claude Code)
 
-Install the `policy-system` plugin and point its `policy-system-graph`
-connector at the `/mcp/` endpoint above — see
-[the user guide's Local Test walkthrough, step 8](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin),
-which wires up the `ps-qna` skill together with its MCP connector.
+Install the `policy-system` plugin, then register the `/mcp/` endpoint
+above as a local MCP server named `policy-system-graph-local` in
+`claude_desktop_config.json` (an `mcp-remote` stdio→HTTP bridge) — see
+[the user guide's Local Test walkthrough, step 8](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin).
+The plugin's own `policy-system-graph` connector targets a hosted PS
+Service and is evaluated from Anthropic's cloud, so it can never reach
+`localhost`; the `ps-qna` skill recognises both names and uses whichever
+is reachable.
 
-Do **not** register a second MCP server under the name
-`policy-system-graph` in `claude_desktop_config.json`. The name belongs to
-the plugin connector; a local stdio server squatting on it will shadow the
-plugin and serve `ps-qna` a `cypher` tool with no `psdomain://concepts`
-resource behind it, which the skill reports as an unreachable connector.
-For raw local graph access without standing up PS Service, call
+Do **not** reuse the name `policy-system-graph` for the local server. Two
+connectors under one name let the unreachable hosted one shadow the working
+local one in a chat's toolset, which the skill reports as an unreachable
+connector. For raw local graph access without standing up PS Service, call
 `tools/graph-query/ps.py` from a shell instead.
 
 ## Coding Standards

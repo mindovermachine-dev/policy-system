@@ -29,14 +29,27 @@ and a falsification report (attempts made, landed or missed, per
 
 1. If the user hasn't provided a question, ask for one before doing
    anything else.
-2. Fetch the `psdomain://concepts` MCP resource via the
-   `policy-system-graph` connector supplied by this plugin — this is the
-   only source of truth for entities, relationships, and vocabulary this
-   refinement grounds against. A connector that exposes a `cypher` tool but
-   serves no `psdomain://concepts` resource is **not** this plugin's
-   connector, whatever it is named — report it as unreachable (see the
-   error-state table under Process step 5) rather than proceeding against
-   it. **Always refetch it now, this session, this turn** — never
+2. Fetch the `psdomain://concepts` MCP resource via the PS Service
+   connector — this is the only source of truth for entities,
+   relationships, and vocabulary this refinement grounds against. Two
+   connector names are recognised, and exactly one of them is expected to
+   be present in any given session:
+   - `policy-system-graph` — the connector this plugin declares, pointing
+     at a hosted PS Service.
+   - `policy-system-graph-local` — a user-registered local MCP server
+     bridging to a PS Service running on the same machine (local test;
+     see the user guide's step 8).
+
+   Use whichever is present; if both are, prefer `policy-system-graph`
+   and fall back to `policy-system-graph-local` only if the former is
+   unreachable. Any other name is not a PS Service connector. A connector
+   that exposes a `cypher` tool but serves no `psdomain://concepts`
+   resource is **not** a PS Service connector either, whatever it is
+   named — report it as unreachable (see the error-state table under
+   Process step 5) rather than proceeding against it. From here on,
+   "the PS Service connector" means the one selected here.
+
+   **Always refetch the resource now, this session, this turn** — never
    rely on a copy remembered from a prior turn or a prior session, and
    never assume the schema is unchanged since last time. If the resource
    fetch itself fails, report that distinctly (see the error-state table
@@ -135,12 +148,12 @@ and a falsification report (attempts made, landed or missed, per
    restart from scratch. Only continue to step 5 once approved.
 5. **Freehand retrieval.** Write ad hoc Cypher against the graph to answer
    the approved question — genuinely freehand, not assembled from a
-   template library. Execute it by calling the plugin's own `cypher` MCP
-   tool on the `policy-system-graph` connector this plugin declares —
-   the same connector the On Load resource fetch succeeded against.
-   **Never** a subprocess, a repo-local script, or any other spawned
-   external binary, and never a similarly-named connector that could not
-   serve `psdomain://concepts`. Show the
+   template library. Execute it by calling the `cypher` MCP tool on the
+   PS Service connector selected at On Load (`policy-system-graph` or
+   `policy-system-graph-local`) — the same connector the On Load resource
+   fetch succeeded against. **Never** a subprocess, a repo-local script,
+   or any other spawned external binary, and never a similarly-named
+   connector that could not serve `psdomain://concepts`. Show the
    query before or alongside its results — never hide what was actually
    run.
 
@@ -264,14 +277,15 @@ and a falsification report (attempts made, landed or missed, per
 - Freehand retrieval only: never route through `ps query template` or
   `ps query catalog`; only the plugin's `cypher` MCP tool is used for
   execution.
-- The skill reaches PS Service exclusively through the plugin's declared
-  MCP connector (`policy-system-graph`) — never a direct graph connection,
-  a repo-local script, or a spawned external binary, regardless of what
-  might be available in a local checkout. The connector name alone is not
-  proof of identity: only a connector that served `psdomain://concepts` at
-  On Load counts as the plugin's. A locally-registered MCP server squatting
-  on the same name is exactly the spawned-binary path this guardrail
-  forbids.
+- The skill reaches PS Service exclusively through a recognised MCP
+  connector — `policy-system-graph` (declared by this plugin) or
+  `policy-system-graph-local` (user-registered local bridge) — never a
+  direct graph connection, a repo-local script, or a spawned external
+  binary, regardless of what might be available in a local checkout. The
+  connector name alone is not proof of identity: only a connector that
+  served `psdomain://concepts` at On Load counts. A connector under any
+  other name, or one that merely offers a `cypher` tool without that
+  resource, is exactly the spawned-binary path this guardrail forbids.
 - Ground every Cypher clause in the fetched `psdomain://concepts`
   resource's actual property names, node labels, and edge directions —
   never invent one.
