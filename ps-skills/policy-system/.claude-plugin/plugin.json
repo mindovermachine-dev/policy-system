@@ -3,7 +3,7 @@
   "displayName": "Policy System",
   "description": "Ask compliance questions against the Policy System knowledge graph (ps-qna skill) via PS Service's remote MCP connector.",
   "version": "0.1.0",
-  "author": { "name": "Cartman ApS" },
+  "author": { "name": "Mind Over Machine" },
   "repository": "https://github.com/mindovermachine-dev/policy-system",
   "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#policy-system-plugin-ps-qna",
   "keywords": ["compliance", "policy", "cypher", "mcp"],
