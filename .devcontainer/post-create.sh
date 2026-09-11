@@ -5,6 +5,12 @@
 # If auth is missing we warn and exit 0 so the container still comes up usable.
 set -uo pipefail
 
+# Optional per-developer setup, kept outside the repo on the host home mount
+# (/localhome). No-op for anyone who doesn't have the file.
+if [ -x /localhome/.devcontainer-local/post-create.sh ]; then
+  bash /localhome/.devcontainer-local/post-create.sh
+fi
+
 if ! gh auth status >/dev/null 2>&1; then
   cat >&2 <<'MSG'
 
