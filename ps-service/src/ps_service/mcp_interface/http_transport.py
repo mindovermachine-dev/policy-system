@@ -1,9 +1,9 @@
 """Streamable HTTP ASGI transport for MCP Interface (issue #39).
 
-Wraps `mcp_server.server` -- the same MCPServer instance the stdio
-entrypoint (`mcp_server.main()`) uses -- in the MCP SDK's own Streamable
-HTTP Starlette sub-app, so the `cypher` tool and the `psdomain://concepts`
-resource are reachable from a client on a different machine
+Wraps `mcp_server.server` -- the MCPServer instance `mcp_server.py`
+defines -- in the MCP SDK's own Streamable HTTP Starlette sub-app, so the
+`cypher` tool and the `psdomain://concepts` resource are reachable from a
+client on a different machine
 (AC-BI-001/002/003), mounted into the same FastAPI app
 `ps_service.main.create_app` builds -- never a second process or port. No
 real per-user authentication is wired here (Group 3, AC-BI-007..011, is

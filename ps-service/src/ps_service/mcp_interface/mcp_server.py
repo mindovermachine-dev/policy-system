@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""MCP stdio server: in-process read-only Cypher access to the policy_system graph.
+"""MCP server definition: in-process read-only Cypher access to the policy_system graph.
 
-Also serves the ps-domain-concepts resource, for clients (e.g. Claude
-Desktop) with no shell. Calls ps_service.query_engine.execute_cypher_query
-IN-PROCESS. The write-clause guard and all execution live in Query Engine
-and are never duplicated here. No network transport, no auth, no
-result-size cap (issue #39).
+Defines the `cypher` tool and the `psdomain://concepts` resource on a
+single `MCPServer` instance. Calls
+ps_service.query_engine.execute_cypher_query IN-PROCESS; the write-clause
+guard and all execution live in Query Engine and are never duplicated here.
 
-This module's own source stays stdio-only: the Streamable HTTP transport
-(issue #39) lives in the sibling `http_transport.py` module, which calls
+This module defines the server surface only -- it binds no transport and
+no auth of its own. The Streamable HTTP transport (issue #39) is the sole
+transport and lives in the sibling `http_transport.py` module, which calls
 `server.streamable_http_app(...)` on the `server` object defined below
 from outside this file -- see `tests/mcp_interface/test_scope_guard.py`
-for the guards this keeps intact.
+for the guards this keeps intact. MCP's stdio transport was removed once
+the plugin model made the HTTP endpoint the only supported client path.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING
 from mcp.server import MCPServer
 
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
-from ps_service.logging import bind_run_context, configure, emit_log_entry
+from ps_service.logging import bind_run_context, emit_log_entry
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
@@ -208,13 +209,3 @@ def read_domain_concepts() -> str:
         raise McpResourceUnavailableError(
             "the ps-domain-concepts resource is currently unavailable"
         ) from exc
-
-
-def main() -> None:
-    """Install the process-wide default LogEmitter, then serve MCP over stdio."""
-    configure()
-    server.run()
-
-
-if __name__ == "__main__":
-    main()

@@ -95,7 +95,7 @@
 
 - Use **Pydantic** for fixed-shape domain entities that cross component boundaries — the PS Conceptual Model types (Role, Requirement, Obligation, Capability, Policy, Standard, Control; see `docs/artifacts/ps-domain-concepts.md`) — and for any REST/MCP API request/response payloads.
 - Pydantic is also the default for LLM-structured-extraction outputs (LLM Interface, Domain Mapper) — pass a Pydantic model as the response schema rather than hand-parsing LLM text.
-- Do **not** model raw Cypher query results as per-entity Pydantic models — their shape depends on the query. Use a single generic envelope instead: `QueryResult(columns: list[str], rows: list[list[Any]], row_count: int)`, matching the shape the existing `tools/graph-query/mcp_server.py` prototype already returns.
+- Do **not** model raw Cypher query results as per-entity Pydantic models — their shape depends on the query. Use a single generic envelope instead: `QueryResult(columns: list[str], rows: list[list[Any]], row_count: int)`, matching the shape `ps_service.query_engine` returns.
 - At a trust boundary (MCP tool args, REST payloads), a Pydantic model is a validation control, not just a modeling convenience — use `Field()` constraints (`min_length`, `pattern`, etc.) on anything that flows into query construction, file paths, or a further LLM call. Static typing (see Types Handling) catches shape mismatches at dev-time; it does not validate values at runtime.
 
 ### Query Safety

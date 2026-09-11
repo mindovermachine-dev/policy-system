@@ -42,7 +42,7 @@ inventory:
 
   - id: cspell
     name: Run cspell
-    command: cspell "**/*.md"
+    command: npx --no-install cspell "**/*.md"
 
   - id: install-actionlint
     name: Install actionlint
@@ -65,11 +65,11 @@ inventory:
 
   - id: markdownlint
     name: Run markdownlint
-    command: markdownlint-cli2 "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
+    command: npx --no-install markdownlint-cli2 "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
 
   - id: prettier
     name: Run prettier
-    command: prettier --check .
+    command: npx --no-install prettier --check .
 
   - id: ruff-check
     name: Run ruff lint
@@ -100,17 +100,16 @@ inventory:
     command: uv run ruff check --fix .
 
   - id: "install-lint-tools"
-    name: "Install linting and checker tools"
+    name: "Install linting and checker tools (npm ci)"
+    # prettier/markdownlint-cli2/cspell/@cspell/dict-da-dk are pinned in
+    # package.json + package-lock.json and installed into ./node_modules. Every
+    # invocation goes through `npx --no-install` so it resolves from there.
+    # Deliberately NOT `npm install -g`: nvm scopes globals to a single Node
+    # minor, so a Node point-release bump silently removes them (that broke the
+    # pre-commit hook once). The cSpell VSCode extension also resolves
+    # .cspell.jsonc's "import" entries from ./node_modules.
     command: |
-      npm install -g prettier markdownlint-cli2 cspell @cspell/dict-da-dk
-
-  - id: "install-workspace-npm-deps"
-    name: "Install workspace npm dependencies for editor tooling"
-    # The cSpell VSCode extension resolves .cspell.jsonc's "import" entries
-    # (e.g. @cspell/dict-da-dk) via Node module resolution from the workspace
-    # root, not the global npm install above. Keep both in sync.
-    command: |
-      npm install
+      npm ci
 
   - id: verify-uv
     name: Verify uv is available at the pinned version
@@ -124,9 +123,9 @@ inventory:
   - id: verify-lint-tools
     name: Verify linting tools are available
     command: |
-      command -v cspell
-      command -v markdownlint-cli2
-      command -v prettier
+      test -x node_modules/.bin/cspell
+      test -x node_modules/.bin/markdownlint-cli2
+      test -x node_modules/.bin/prettier
 
   - id: version-txt
     name: Generate version.txt
@@ -136,12 +135,12 @@ inventory:
   - id: "fix-markdown"
     name: "Fix all fixable markdown issues"
     command: |
-      markdownlint-cli2 --fix "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
+      npx --no-install markdownlint-cli2 --fix "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
 
   - id: "fix-prettier"
     name: "Fix all fixable prettier issues"
     command: |
-      prettier --write .
+      npx --no-install prettier --write .
 
 waves:
   - id: post-create
@@ -156,7 +155,7 @@ waves:
       - safe-repo
       - repo-gitconfig
       - install-actionlint
-      - install-workspace-npm-deps
+      - install-lint-tools
       - verify-lint-tools
       - verify-uv
 

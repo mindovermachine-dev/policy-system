@@ -463,16 +463,20 @@ fails fast with `ingestion_config_incomplete` before doing any I/O.
 ### MCP Streamable HTTP endpoint
 
 MCP Interface's `server` (the `cypher` tool, the `psdomain://concepts`
-resource) is reachable two ways: MCP's stdio transport (a locally-spawned
-child process, used by the Claude Desktop setup below) and, as of issue #39,
-a Streamable HTTP transport mounted at `/mcp` inside the same FastAPI app
-that already serves `/health`/`/ready`/REST — same process, same port, no
-separate service to start. Once PS Service is running (see above), the
-endpoint is:
+resource) is reachable one way: the Streamable HTTP transport from
+issue #39, mounted at `/mcp` inside the same FastAPI app that already
+serves `/health`/`/ready`/REST — same process, same port, no separate
+service to start. MCP's stdio transport was removed once the `policy-system` plugin
+made this endpoint the only supported client path. Once PS Service is
+running (see above), the endpoint is:
 
 ```text
-http://127.0.0.1:8000/mcp
+http://127.0.0.1:8000/mcp/
 ```
+
+Note the trailing slash: the MCP app is mounted at `/mcp` with
+`streamable_http_path="/"`, so `/mcp` answers with a `307` redirect and
+`/mcp/` is the real endpoint.
 
 There is no real authentication on this endpoint yet — the only supported
 local, no-credential path is the opt-in local-test bypass from issue #67
@@ -487,35 +491,18 @@ tracked as issue #39's Group 3 / issue #65.
 
 ### Claude Desktop (alternative to Claude Code)
 
-Requires the same FalkorDB setup and data load as above. Claude Desktop has
-no shell, so retrieval goes through `tools/graph-query/mcp_server.py` (MCP)
-instead of `ps.py` directly — `uv sync` as above already installs `mcp`,
-part of the repo-root `pyproject.toml`'s dependencies. This is an unrelated,
-purely local dev prototype (talks directly to a local FalkorDB) — not the
-`/mcp` Streamable HTTP endpoint documented above.
+Install the `policy-system` plugin and point its `policy-system-graph`
+connector at the `/mcp/` endpoint above — see
+[the user guide's Local Test walkthrough, step 8](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin),
+which wires up the `ps-qna` skill together with its MCP connector.
 
-1. Add to `claude_desktop_config.json` (macOS:
-   `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`):
-
-   ```json
-   {
-     "mcpServers": {
-       "policy-system-graph": {
-         "command": "/absolute/path/to/.venv/bin/python3",
-         "args": ["/absolute/path/to/tools/graph-query/mcp_server.py"]
-       }
-     }
-   }
-   ```
-
-   Non-default host/port/graph: set `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT`/`PS_FALKORDB_GRAPH` in an `"env"` block.
-
-2. Restart Claude Desktop.
-3. Install the `policy-system` plugin instead of uploading a skill by hand —
-   see [the user guide's Local Test walkthrough, step 8](./docs/artifacts/user-guide.md#8-install-the-policy-system-plugin),
-   which wires up the `ps-qna` skill together with its own MCP connector in
-   one step.
-4. Ask a question (see above). If it doesn't auto-engage, say "Use the Policy Question skill" first.
+Do **not** register a second MCP server under the name
+`policy-system-graph` in `claude_desktop_config.json`. The name belongs to
+the plugin connector; a local stdio server squatting on it will shadow the
+plugin and serve `ps-qna` a `cypher` tool with no `psdomain://concepts`
+resource behind it, which the skill reports as an unreachable connector.
+For raw local graph access without standing up PS Service, call
+`tools/graph-query/ps.py` from a shell instead.
 
 ## Coding Standards
 

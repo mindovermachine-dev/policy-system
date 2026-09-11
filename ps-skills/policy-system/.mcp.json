@@ -2,10 +2,7 @@
   "mcpServers": {
     "policy-system-graph": {
       "type": "http",
-      "url": "${user_config.ps_service_url}",
-      "headers": {
-        "Authorization": "Bearer ${user_config.operator_token}"
-      }
+      "url": "http://localhost:8000/mcp/"
     }
   }
 }

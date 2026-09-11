@@ -87,8 +87,10 @@ State which cap applies, and why, before running attempt 1.
    step exists to avoid.
 2. **Execute each query** by calling the plugin's own `cypher` MCP tool on
    the `policy-system-graph` connector — the same connector the invoking
-   skill's own retrieval step already uses. Never a subprocess, a
-   repo-local script, or any other spawned external binary. Show every
+   skill's own retrieval step already used, and the one that served
+   `psdomain://concepts` at its On Load. Never a subprocess, a repo-local
+   script, any other spawned external binary, or a similarly-named
+   connector that could not serve that resource. Show every
    query run, not just the ones that land. Apply the invoking skill's same
    named error-state distinctions (unreachable/unauthenticated,
    throttled, rejected, or no data) to any non-success result here too —

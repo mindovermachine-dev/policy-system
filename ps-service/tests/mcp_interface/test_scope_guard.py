@@ -1,16 +1,18 @@
 """AC-015 scope guards for `mcp_server.py` (PLAN_REVIEWED.md §6, Batch 6; §9).
 
-These prove -- structurally, by parsing the module's AST -- that the MCP
-surface stays stdio-only with no auth, no network transport, and no query
-timeout / result-size cap. They inspect `ast.Call` / `ast.keyword` /
-`ast.Constant` nodes and MUST NOT substring-scan the source: a bare scan
-false-fails on the `cypher` docstring's `CREATE/MERGE/...` clause list and on
-the module docstring's "no query timeout / result-size cap" phrasing (F-03,
-Residual risk 6).
+These prove -- structurally, by parsing the module's AST -- that
+`mcp_server.py` stays a pure surface definition: it binds no transport and
+no auth of its own. Transport belongs to the sibling `http_transport.py`
+module and auth is not wired anywhere yet, so neither may leak back into
+this module. They inspect `ast.Call` / `ast.keyword` / `ast.Constant`
+nodes and MUST NOT substring-scan the source: a bare scan false-fails on
+the `cypher` docstring's `CREATE/MERGE/...` clause list (F-03, Residual
+risk 6).
 
 These guards describe `mcp_server.py`'s own source only (`inspect.getsource`
-against that one module). Issue #39's Streamable HTTP transport lives in
-the sibling `ps_service.mcp_interface.http_transport` module, out of this
+against that one module). Issue #39's Streamable HTTP transport -- now the
+only transport, since MCP's stdio entrypoint was removed -- lives in the
+sibling `ps_service.mcp_interface.http_transport` module, out of this
 file's AST entirely, so it neither triggers nor is covered by these
 assertions.
 """

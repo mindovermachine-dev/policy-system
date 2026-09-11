@@ -1,7 +1,7 @@
 """Tests for `ps_service.mcp_interface.http_transport` (issue #39, Slice 3).
 
 Proves `build_streamable_http_app` wraps the *same* `mcp_server.server`
-instance the stdio entrypoint uses in a real Streamable HTTP ASGI app: the
+instance `mcp_server.py` defines in a real Streamable HTTP ASGI app: the
 `cypher` tool and the `psdomain://concepts` resource are reachable over real
 JSON-RPC-over-HTTP, not a reimplementation. Driven end-to-end through
 `TestClient` -- a real ASGI request/response cycle, headers included -- per

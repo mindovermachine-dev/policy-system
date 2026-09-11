@@ -221,7 +221,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
 
     Since issue #39, `build_streamable_http_app(host=config.host)` builds MCP
     Interface's Streamable HTTP ASGI sub-app (wrapping the same
-    `mcp_server.server` singleton the stdio entrypoint uses), mounted
+    `mcp_server.server` singleton `mcp_interface` defines), mounted
     unconditionally at `MCP_HTTP_MOUNT_PATH` (`/mcp`) alongside the REST
     router — the same process/port, never a second service (AC-BI-002).
     Because Starlette does not propagate a mounted sub-app's own `lifespan`

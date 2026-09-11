@@ -16,14 +16,6 @@
     },
     "ghcr.io/devcontainers/features/node:1": {
       "version": "24"
-    },
-    "ghcr.io/devcontainers-extra/features/npm-packages:1": {
-      "packages": [
-        "cspell",
-        "@cspell/dict-da-dk",
-        "markdownlint-cli2",
-        "prettier"
-      ]
     }
   },
   "postCreateCommand": "gh ext install devx-cafe/gh-insitu && gh insitu run post-create",

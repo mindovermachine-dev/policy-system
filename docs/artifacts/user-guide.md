@@ -182,44 +182,20 @@ Until something is seeded, the system answers questions with an explicit "graph 
 ### 8. Install the Policy System plugin
 
 In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add
-this repo (`https://github.com/mindovermachine-dev/policy-system`) as a marketplace and click "Sync", then install `policy-system`.
-
-Claude Desktop prompts for the plugin's two `userConfig` fields
-(defined in `ps-skills/policy-system/.claude-plugin/plugin.json`):
-
-| Field | Required | Purpose |
-| --- | --- | --- |
-| `ps_service_url` | Yes | Full URL to PS Service's MCP endpoint. Defaults to `http://localhost:8000/mcp` — correct for this walkthrough's local-test deployment unchanged. |
-| `operator_token` | No | Individual-operator bearer credential, forwarded as `Authorization: Bearer <token>`. Leave blank for a local-test deployment. |
-
-Point the connector at your local deployment when prompted for the endpoint URL (or accept
-the default, which already matches):
+this repo:
 
 ```text
-http://localhost:8000/mcp
+URL:  `https://github.com/mindovermachine-dev/policy-system`
 ```
 
-A local-test deployment runs with authentication disabled, so there is nothing to log into.
-That mode is opt-in via `PS_SERVICE_LOCAL_TEST_BYPASS=true`, refuses to bind anything but
-loopback, and warns on every startup — it is for evaluation only.
+**You must also add PS Service as a connector.** 
 
-> ✅ **Verified end-to-end.** The plugin's files (`plugin.json`, `.mcp.json`,
-> `skills/ps-qna/SKILL.md`, the marketplace manifest) have been installed against a real
-> Claude Desktop/Code instance and confirmed working. See
-> [9. Ask a question](#9-ask-a-question) below for the smoke-test runbook that was run.
-> Remote MCP transport with per-user authentication is tracked separately on
-> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39). The local-test
-> bypass mode described above is implemented
-> ([#67](https://github.com/mindovermachine-dev/policy-system/issues/67)) — set
-> `PS_SERVICE_LOCAL_TEST_BYPASS=true` on a loopback-bound instance to run under it. Full
-> per-user authentication remains required for any non-local deployment; it is deferred,
-> not dropped, and stays tracked on
-> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39)/[#58](https://github.com/mindovermachine-dev/policy-system/issues/58)
-> (not [#65](https://github.com/mindovermachine-dev/policy-system/issues/65), which is only
-> the now-deprioritized credential-flow spike). **Known limitation relevant to this step:**
-> `operator_token` is accepted and forwarded, but PS Service does not yet validate it — do
-> not expect real per-user auth enforcement, only that a local-test-bypass deployment
-> answers questions with the field left blank.
+In Claude Desktop: **Settings** → **Connectors** → **Add custom connector**, with:
+
+```text
+Name: policy-system-graph
+URL:  http://localhost:8000/mcp/
+```
 
 ### 9. Ask a question
 
@@ -234,117 +210,11 @@ cannot answer, it says so rather than filling the gap from model recall.
 
 If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
 
-#### Smoke-test runbook (human-run)
-
-> ✅ **This runbook is human-run and has been executed end-to-end** against a real machine
-> — a working Claude Desktop install, a local `kind` cluster with Policy System deployed,
-> and a live Claude Desktop turn against that deployment — confirming steps 1-9 all work.
-
-To run the smoke test yourself:
-
-1. Complete steps 1-8 above against a real machine: a working Claude Desktop install, a
-   local `kind` cluster with Policy System deployed, and CRA content seeded via
-   `ps-cli catalog restore CRA-1.0` (step 7 — already proven to work).
-2. Install the `policy-system` plugin per step 8, pointing `ps_service_url` at
-   `http://localhost:8000/mcp` (the default) and leaving `operator_token` blank, since the
-   local-test deployment runs under `PS_SERVICE_LOCAL_TEST_BYPASS=true` with no credential
-   validation.
-3. In Claude Desktop, ask exactly the question from step 9 above: _"What obligations does
-   the Cyber Resilience Act place on manufacturers, and which of our policies cover
-   them?"_ — reusing the CRA content step 7 already seeded, no new fixture data needed.
-4. Confirm the `ps-qna` skill engages (automatically, or by asking for it by name), that it
-   issues a Cypher query over the `policy-system-graph` MCP connector rather than answering
-   from model recall, and that the answer cites what it retrieved from the graph (e.g.
-   `source_ref`s pointing at the restored CRA content).
-5. If it fails, check [Troubleshooting (Local Test)](#troubleshooting-local-test) below —
-   in particular "Plugin installed but no cypher tool" for connector/endpoint issues.
-
-**Do not expect real per-user authentication enforcement during this smoke test.**
-`operator_token` exists in `plugin.json` and is forwarded as a bearer header by
-`.mcp.json`, but PS Service does not yet validate it server-side (tracked on
-[#39](https://github.com/mindovermachine-dev/policy-system/issues/39) Group 3 /
-[#58](https://github.com/mindovermachine-dev/policy-system/issues/58)) — a passing smoke
-test here demonstrates the plugin/connector/skill mechanics work, not that per-user auth is
-enforced.
-
-### Troubleshooting (Local Test)
-
-| Symptom                                | Check                                                                                                                                            |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Service unreachable                    | `ps-cli health` — reports reachability, health, readiness, and which dependency (if any) is unhealthy                                            |
-| Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
-| `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — FalkorDB is unreachable; check `ps-cli health`'s `unhealthy_dependencies` for LLM Interface/Cellar-ELI issues, which no longer affect `/ready` itself |
-| Answers say "not present in the graph" | Step 7 — the graph is probably empty; re-check `catalog restore`'s per-stage output, or `ps-cli health`, for a failure you may have missed. `ps-cli regulations list` does **not** reflect graph state — see [Command reference](#command-reference). |
-| Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
-
----
-
-## Ollama / Local Model Support
-
-> [!NOTE]
-> Ollama is the **local-test** profile's default LLM provider (`llm.provider=ollama`) — no
-> API key needed, and it runs entirely on your machine. The production profile
-> (`values-prod.yaml`) defaults to `llm.provider=azure` instead — see the
-> [Helm Chart Values Reference](./helm-chart-values-reference.md) for switching providers.
-
-### Podman host networking
-
-If Ollama runs on your Podman host (not in-cluster), PS Service's pods cannot resolve
-`host.containers.internal` on their own — Podman only injects that hostname into the kind
-node container's own `/etc/hosts`, not into a Pod's separate network namespace. Look up
-your Podman network's gateway IP and pass it along:
-
-```bash
-podman network inspect podman --format '{{(index .Subnets 0).Gateway}}'
-# commonly 10.88.0.1 on a default rootful install
-```
-
-```bash
-helm install policy-system ./charts/policy-system \
-  --set llm.provider=ollama \
-  --set psService.ollamaHostGatewayIP=10.88.0.1 \
-  --wait
-```
-
-Without `psService.ollamaHostGatewayIP` set, `/ready` will likely never turn healthy under
-the Ollama provider, since PS Service can't reach the LLM.
-
-`psService.ollamaHostGatewayIP` and `llm.ollama.apiBase` are documented in the
-[Helm Chart Values Reference](./helm-chart-values-reference.md#ollama-values).
-
----
-
-## Policy System plugin (ps-qna)
-
-> ✅ **Built and verified end-to-end.** The plugin lives at `ps-skills/policy-system/`
-> (skill: `skills/ps-qna/SKILL.md`; connector: `.mcp.json`; metadata and `userConfig`:
-> `.claude-plugin/plugin.json`), installable via the repo-root marketplace manifest
-> `.claude-plugin/marketplace.json` ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)).
-> It has been installed into a real Claude Desktop/Code instance and confirmed working end
-> to end — see [7. Install the Policy System plugin](#7-install-the-policy-system-plugin)
-> and its [smoke-test runbook](#smoke-test-runbook-human-run) for details. Remote MCP
-> transport with per-user authentication remains tracked separately on
-> [#39](https://github.com/mindovermachine-dev/policy-system/issues/39).
-
-Installing the plugin in Claude Desktop, pointing its MCP connector (`policy-system-graph`)
-at a Policy System deployment via the `ps_service_url` userConfig field, and asking
-compliance questions grounded in the knowledge graph are all covered in
-[Local Test](#local-test) steps 7-8 above — that is the canonical walkthrough; this section
-just points at it rather than duplicating it.
-
 ---
 
 ## ps-cli
 
-`ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
-regulations from Cellar/ELI, ingest internal policies, and check service health and
-readiness.
-
-### Install
-
-Installed as [step 6](#6-install-ps-cli) of the [Local Test](#local-test) walkthrough
-above. The rest of this section covers targeting a non-default PS Service instance,
-credential storage, and the full command reference.
+`ps-cli` is a command-line client for Policy System.
 
 ### Configuring which PS Service instance ps-cli targets
 
@@ -353,14 +223,6 @@ credential storage, and the full command reference.
 Out of the box, `ps-cli` targets `http://127.0.0.1:8000`, matching PS Service's own
 default. Point it elsewhere with the `PS_CLI_SERVICE_URL` env var, or a `ps-cli.toml`
 (`service_url = "..."`) in your current directory:
-
-```bash
-PS_CLI_SERVICE_URL=http://127.0.0.1:9000 ps-cli regulations list
-```
-
-This is all you need for a single environment. It keeps working unchanged even after
-you start using named contexts below — `ps-cli` only looks for a context configuration
-if one exists.
 
 #### Multiple named targets (contexts)
 

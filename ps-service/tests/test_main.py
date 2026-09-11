@@ -1535,8 +1535,8 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
 
     Extends `test_main_integration.py`'s own (#67)
     `test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_credential`
-    -- which drives `mcp_server.cypher()` in-process, i.e. as the stdio
-    transport would -- to the new mounted Streamable HTTP transport
+    -- which drives `mcp_server.cypher()` in-process, bypassing transport
+    entirely -- to the mounted Streamable HTTP transport
     specifically: the *same* fake-FalkorDB shape and the *same* final
     principal assertion, but the tool call itself now goes through a real
     JSON-RPC `initialize` -> `notifications/initialized` -> `tools/call`

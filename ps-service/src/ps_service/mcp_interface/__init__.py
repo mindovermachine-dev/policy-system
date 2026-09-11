@@ -1,9 +1,10 @@
 """ps_service.mcp_interface -- package front door.
 
 Re-exports the component's sanitised boundary exception types and the
-injectable `HandleMcpToolCall` core. The `mcp_server` stdio wiring
-(`cypher` tool, `psdomain://concepts` resource, `main()`) is imported
-from `ps_service.mcp_interface.mcp_server` directly.
+injectable `HandleMcpToolCall` core. The `mcp_server` surface definition
+(`cypher` tool, `psdomain://concepts` resource) is imported from
+`ps_service.mcp_interface.mcp_server` directly; its Streamable HTTP
+transport lives in `ps_service.mcp_interface.http_transport`.
 """
 
 from __future__ import annotations

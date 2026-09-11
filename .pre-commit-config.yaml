@@ -9,6 +9,10 @@ repos:
         args: [--check]
   - repo: local
     hooks:
+      # Node tools (markdownlint-cli2/prettier/cspell) are pinned in package.json and
+      # resolved from ./node_modules via `npx --no-install` (run `npm ci` once).
+      # Never rely on npm globals: nvm scopes them to one Node minor, so any Node
+      # bump silently drops them.
       - id: basedpyright
         name: basedpyright (strict)
         entry: uv run basedpyright
@@ -17,18 +21,18 @@ repos:
         pass_filenames: false # project-wide check, not per-file
       - id: markdownlint
         name: markdownlint-cli2
-        entry: markdownlint-cli2 --no-globs
+        entry: npx --no-install markdownlint-cli2 --no-globs
         language: system
         files: \.md$
         exclude: (^|/)(node_modules|\.venv|tmp|background|dist|spikes|docs|tools|test-data|\.orchestrator)/|^CLAUDE\.md$|^\.github/agents/|^ps-service/src/ps_service/mcp_interface/ps-domain-concepts\.md$
       - id: prettier
         name: prettier --check
-        entry: prettier --check
+        entry: npx --no-install prettier --check
         language: system
         files: \.(json|jsonc|ya?ml|md|mdx|js|jsx|ts|tsx|css|scss|html)$
       - id: cspell
         name: cspell
-        entry: cspell --no-must-find-files
+        entry: npx --no-install cspell --no-must-find-files
         language: system
         files: \.md$
       - id: actionlint
