@@ -18,7 +18,7 @@ falkordb:
 psService:
   image:
     repository: ghcr.io/mindovermachine-dev/ps-service
-    tag: "0.8.0"
+    tag: "0.10.0"
   service:
     # NodePort (local-test/kind default) vs ClusterIP (prod, no kind-specific
     # mechanism — see values-prod.yaml). Port is named "http" and serves both
