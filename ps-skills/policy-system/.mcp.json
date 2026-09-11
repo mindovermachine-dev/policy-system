@@ -2,7 +2,7 @@
   "mcpServers": {
     "policy-system-graph": {
       "type": "http",
-      "url": "http://localhost:8000/mcp/"
+      "url": "https://ps.example.com/mcp/"
     }
   }
 }

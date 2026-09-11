@@ -2,7 +2,7 @@
   "name": "policy-system",
   "displayName": "Policy System",
   "description": "Ask compliance questions against the Policy System knowledge graph (ps-qna skill) via PS Service's remote MCP connector.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": { "name": "Mind Over Machine" },
   "repository": "https://github.com/mindovermachine-dev/policy-system",
   "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#policy-system-plugin-ps-qna",

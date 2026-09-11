@@ -210,14 +210,39 @@ this repo:
 URL:  `https://github.com/mindovermachine-dev/policy-system`
 ```
 
-**You must also add PS Service as a connector.** 
+This installs the `ps-qna` skill. The plugin also declares a `policy-system-graph` MCP
+connector, but that half is for a **hosted** PS Service — Claude Desktop evaluates
+plugin and custom connectors from Anthropic's cloud, so it can never reach the
+`localhost:8000` instance you deployed in step 5. Until a hosted instance exists its
+URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
+unreachable; that is expected.
 
-In Claude Desktop: **Settings** → **Connectors** → **Add custom connector**, with:
+**For local test, register PS Service as a local MCP server instead.** Claude Desktop
+launches local servers over stdio, so `mcp-remote` bridges to the HTTP endpoint on your
+laptop. Requires [Node.js](https://nodejs.org/) (`node --version`).
 
-```text
-Name: policy-system-graph
-URL:  http://localhost:8000/mcp/
+In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Developer** →
+**Edit Config**, and add an `mcpServers` key alongside whatever is already there:
+
+```json
+{
+  "mcpServers": {
+    "policy-system-graph": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "http://localhost:8000/mcp/", "--transport", "http-only"]
+    }
+  }
+}
 ```
+
+Quit Claude Desktop fully (⌘Q) and relaunch. `policy-system-graph` should appear under
+the **+** button → **Connectors** → **Manage connectors**, exposing one tool, `cypher`.
+If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why.
+
+> [!NOTE]
+> Do **not** use **Settings → Connectors → Add custom connector** for a local instance.
+> That path insists on HTTPS because it connects from Anthropic's servers, not your
+> machine — `localhost` is unreachable from there regardless of TLS.
 
 ### 9. Ask a question
 
