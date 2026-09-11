@@ -462,8 +462,10 @@ fails fast with `ingestion_config_incomplete` before doing any I/O.
 
 ### MCP Streamable HTTP endpoint
 
-MCP Interface's `server` (the `cypher` tool, the `psdomain://concepts`
-resource) is reachable one way: the Streamable HTTP transport from
+MCP Interface's `server` (the `cypher` and `domain_concepts` tools, the
+`psdomain://concepts` resource — the tool serves the same text as the
+resource, for hosts such as Claude Desktop that let the model call tools
+but not read resources) is reachable one way: the Streamable HTTP transport from
 issue #39, mounted at `/mcp` inside the same FastAPI app that already
 serves `/health`/`/ready`/REST — same process, same port, no separate
 service to start. MCP's stdio transport was removed once the `policy-system` plugin

@@ -29,11 +29,16 @@ and a falsification report (attempts made, landed or missed, per
 
 1. If the user hasn't provided a question, ask for one before doing
    anything else.
-2. Fetch the `psdomain://concepts` MCP resource via the PS Service
-   connector — this is the only source of truth for entities,
-   relationships, and vocabulary this refinement grounds against. Two
-   connector names are recognised, and exactly one of them is expected to
-   be present in any given session:
+2. Fetch the domain concepts by calling the `domain_concepts` MCP tool on
+   the PS Service connector. It returns `ps-domain-concepts.md` verbatim —
+   the same text the connector's `psdomain://concepts` resource serves —
+   and is the only source of truth for entities, relationships, and
+   vocabulary this refinement grounds against. Call the tool rather than
+   reading the resource: some hosts (Claude Desktop among them) expose MCP
+   tools to the model but not resources. "The fetched domain concepts"
+   below always means this tool's output. Two connector names are
+   recognised, and exactly one of them is expected to be present in any
+   given session:
    - `policy-system-graph` — the connector this plugin declares, pointing
      at a hosted PS Service.
    - `policy-system-graph-local` — a user-registered local MCP server
@@ -43,31 +48,32 @@ and a falsification report (attempts made, landed or missed, per
    Use whichever is present; if both are, prefer `policy-system-graph`
    and fall back to `policy-system-graph-local` only if the former is
    unreachable. Any other name is not a PS Service connector. A connector
-   that exposes a `cypher` tool but serves no `psdomain://concepts`
-   resource is **not** a PS Service connector either, whatever it is
-   named — report it as unreachable (see the error-state table under
-   Process step 5) rather than proceeding against it. From here on,
-   "the PS Service connector" means the one selected here.
+   that exposes a `cypher` tool but no `domain_concepts` tool is **not** a
+   PS Service connector either, whatever it is named — report it as
+   unreachable (see the error-state table under Process step 5) rather
+   than proceeding against it. From here on, "the PS Service connector"
+   means the one selected here.
 
-   **Always refetch the resource now, this session, this turn** — never
-   rely on a copy remembered from a prior turn or a prior session, and
-   never assume the schema is unchanged since last time. If the resource
-   fetch itself fails, report that distinctly (see the error-state table
-   under Process step 5) before attempting anything else — do not fall
-   back to memorized domain vocabulary.
+   **Always refetch the domain concepts now, this session, this turn** —
+   never rely on a copy remembered from a prior turn or a prior session,
+   and never assume the schema is unchanged since last time. If the tool
+   call itself fails, or returns a string beginning `error:`, report that
+   distinctly (see the error-state table under Process step 5) before
+   attempting anything else — do not fall back to memorized domain
+   vocabulary.
 
 ## Core Principles
 
 - Socratic method: one targeted question at a time; wait for the answer.
 - Every narrowing move must tie back to a real entity/edge in the fetched
-  `psdomain://concepts` resource — never invent or assume vocabulary the
-  model doesn't have.
+  domain concepts — never invent or assume vocabulary the model doesn't
+  have.
 - Adjust friction to the user: fewer questions when intent is already
   clear, more when the question is genuinely ambiguous.
 - Narrow until answerable, not until trivial — stop as soon as the mapping
   to entities/edges is unambiguous.
 - Retrieval is genuinely freehand: write ad hoc Cypher grounded in the
-  fetched resource's actual property names and edge directions — never
+  fetched domain concepts' actual property names and edge directions — never
   route through `ps query template`/`ps query catalog`, and never invent a
   property or relationship the model doesn't have (mirrors README D10).
 
@@ -117,14 +123,14 @@ and a falsification report (attempts made, landed or missed, per
      theme-filter answer (no traversal) is acceptable, rather than forcing
      a fake edge to something that doesn't exist yet. Before concluding
      there's no anchor at all, check whether the classification layer
-     (PracticeArea, RiskPath — see the fetched resource's Document
+     (PracticeArea, RiskPath — see the fetched domain concepts' Document
      Purpose section) has a real matching category (e.g. RiskPath.
      risk_type) that could anchor the question instead of a bare
      keyword filter on Capability/Obligation text.
    - Whether the question implies comparing or matching entities across a
      layer the model deliberately keeps non-convergent (Role, Standard,
      Control — check the concept's own Identity note in the fetched
-     resource). If so, confirm with the user whether relocating the
+     domain concepts). If so, confirm with the user whether relocating the
      comparison to the nearest convergent layer (typically Obligation or
      Capability) satisfies their intent — state explicitly that the
      comparison is being relocated, not answered directly at the layer
@@ -150,10 +156,10 @@ and a falsification report (attempts made, landed or missed, per
    the approved question — genuinely freehand, not assembled from a
    template library. Execute it by calling the `cypher` MCP tool on the
    PS Service connector selected at On Load (`policy-system-graph` or
-   `policy-system-graph-local`) — the same connector the On Load resource
-   fetch succeeded against. **Never** a subprocess, a repo-local script,
-   or any other spawned external binary, and never a similarly-named
-   connector that could not serve `psdomain://concepts`. Show the
+   `policy-system-graph-local`) — the same connector the On Load
+   `domain_concepts` call succeeded against. **Never** a subprocess, a
+   repo-local script, or any other spawned external binary, and never a
+   similarly-named connector that offers no `domain_concepts` tool. Show the
    query before or alongside its results — never hide what was actually
    run.
 
@@ -184,9 +190,9 @@ and a falsification report (attempts made, landed or missed, per
    | Successful execution with zero rows, or an explicit "graph is unseeded" signal          | "the graph does not contain this information"                | State plainly that the information is not present — do not fabricate, round up, extrapolate, or fill the gap with assumed domain knowledge.                                                                                                                                                                               |
    | Successful execution, rows returned                                                     | —                                                            | Proceed to step 6 (construct the answer).                                                                                                                                                                                                                                                                                 |
 
-   This same distinction applies to the On Load resource fetch (step 2 of
-   On Load, above) — an unreachable/unauthenticated or throttled resource
-   fetch is reported the same way, before any narrowing begins.
+   This same distinction applies to the On Load `domain_concepts` call
+   (step 2 of On Load, above) — an unreachable/unauthenticated or
+   throttled call is reported the same way, before any narrowing begins.
 
 6. **Construct the answer.** Build a plain-English answer directly from the
    retrieved rows. State only what the data supports; do not round up,
@@ -203,8 +209,8 @@ and a falsification report (attempts made, landed or missed, per
    `Standard`, or `Control` are involved, or the user asked for deeper
    scrutiny), and fold its Output shape into step 8 below. Falsification's
    result (landed vs. none landed) is this skill's verification signal for
-   the answer. The `psdomain://concepts` resource fetched during On Load
-   is still valid for this step — do not refetch it.
+   the answer. The domain concepts fetched during On Load are still valid
+   for this step — do not refetch them.
 8. **Output**, in this shape:
 
    ```text
@@ -215,8 +221,8 @@ and a falsification report (attempts made, landed or missed, per
 
    Live: queried PS Service's MCP connector in this exchange; no vendored
    or cached copy of the graph or domain-concepts content was used —
-   the psdomain://concepts resource and all retrieval results above were
-   fetched fresh this session.
+   the domain concepts and all retrieval results above were fetched fresh
+   this session.
 
    Status: <Verified — survived falsification | Falsification landed a
    contradiction>. Falsification ran under a max_falsification_attempts
@@ -282,12 +288,13 @@ and a falsification report (attempts made, landed or missed, per
   `policy-system-graph-local` (user-registered local bridge) — never a
   direct graph connection, a repo-local script, or a spawned external
   binary, regardless of what might be available in a local checkout. The
-  connector name alone is not proof of identity: only a connector that
-  served `psdomain://concepts` at On Load counts. A connector under any
-  other name, or one that merely offers a `cypher` tool without that
-  resource, is exactly the spawned-binary path this guardrail forbids.
-- Ground every Cypher clause in the fetched `psdomain://concepts`
-  resource's actual property names, node labels, and edge directions —
+  connector name alone is not proof of identity: only a connector whose
+  `domain_concepts` tool answered at On Load counts. A connector under any
+  other name, or one that merely offers a `cypher` tool without
+  `domain_concepts`, is exactly the spawned-binary path this guardrail
+  forbids.
+- Ground every Cypher clause in the fetched domain concepts' actual
+  property names, node labels, and edge directions —
   never invent one.
 - Only read-only Cypher is ever authored. The Query Engine rejects writes
   and schema changes server-side — if a query is rejected for this reason,

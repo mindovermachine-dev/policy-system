@@ -240,8 +240,8 @@ In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Develope
 ```
 
 Quit Claude Desktop fully (⌘Q) and relaunch. `policy-system-graph-local` should appear
-under the **+** button → **Connectors** → **Manage connectors**, exposing one tool,
-`cypher`. If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why. Tools bind
+under the **+** button → **Connectors** → **Manage connectors**, exposing two tools,
+`domain_concepts` and `cypher`. If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why. Tools bind
 when a conversation starts, so open a **new** chat after relaunching — an existing chat
 won't pick the connector up.
 

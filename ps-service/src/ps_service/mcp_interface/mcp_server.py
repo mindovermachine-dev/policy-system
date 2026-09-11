@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """MCP server definition: in-process read-only Cypher access to the policy_system graph.
 
-Defines the `cypher` tool and the `psdomain://concepts` resource on a
-single `MCPServer` instance. Calls
+Defines the `cypher` and `domain_concepts` tools and the
+`psdomain://concepts` resource on a single `MCPServer` instance. Calls
 ps_service.query_engine.execute_cypher_query IN-PROCESS; the write-clause
 guard and all execution live in Query Engine and are never duplicated here.
 
@@ -53,6 +53,7 @@ _COMPONENT = "mcp_interface"
 _ACTION = "handle_mcp_tool_call"
 _DEFAULT_GRAPH_NAME = "policy_system"
 _DOMAIN_CONCEPTS_URI = "psdomain://concepts"
+_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL = "the ps-domain-concepts resource is currently unavailable"
 _GRAPH_UNAVAILABLE_DETAIL = "the policy graph database is not reachable"
 _GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
 
@@ -86,8 +87,9 @@ server = MCPServer(
     name="policy-system-graph",
     instructions=(
         "Read-only Cypher access to the policy_system compliance graph. "
-        "Ground every query in the ps-domain-concepts resource's actual node labels, "
-        "properties, and edge directions -- never invent one. "
+        "Call the domain_concepts tool first (the same text as the psdomain://concepts "
+        "resource) and ground every query in its actual node labels, properties, and "
+        "edge directions -- never invent one. "
         "Write clauses are rejected before execution and returned as an 'error:' line."
     ),
 )
@@ -189,6 +191,21 @@ def cypher(query: str) -> dict[str, object] | str:
     )
 
 
+@server.tool()
+def domain_concepts() -> str:
+    """Return the PS compliance-graph vocabulary and schema (ps-domain-concepts.md) verbatim.
+
+    The same text the `psdomain://concepts` resource serves, exposed as a
+    tool because some MCP hosts (Claude Desktop among them) let the model
+    call tools but not read resources. Takes no parameters. Returns a
+    string beginning `error: ` when the backing file cannot be read.
+    """
+    try:
+        return read_domain_concepts()
+    except McpResourceUnavailableError as exc:
+        return f"error: {exc}"
+
+
 @server.resource(
     _DOMAIN_CONCEPTS_URI,
     name="ps-domain-concepts",
@@ -206,6 +223,4 @@ def read_domain_concepts() -> str:
     try:
         return _domain_concepts_path().read_text(encoding="utf-8")
     except OSError as exc:
-        raise McpResourceUnavailableError(
-            "the ps-domain-concepts resource is currently unavailable"
-        ) from exc
+        raise McpResourceUnavailableError(_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL) from exc

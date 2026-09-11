@@ -34,12 +34,12 @@ The invoking skill must supply, verbatim:
 - The constructed answer
 - The retrieved data / query the answer was built from
 
-The `psdomain://concepts` MCP resource the invoking skill already fetched
-during its own On Load step remains valid here — **do not refetch it for
-this step.** One fetch per session/exchange is sufficient; refetching per
-falsification attempt would add nothing and would muddy the invoking
-skill's "queried live in this exchange" claim with redundant resource
-fetches.
+The domain concepts the invoking skill already fetched during its own On
+Load step (via the `domain_concepts` tool) remain valid here — **do not
+refetch them for this step.** One fetch per session/exchange is
+sufficient; refetching per falsification attempt would add nothing and
+would muddy the invoking skill's "queried live in this exchange" claim
+with redundant fetches.
 
 Never invoke this against an answer the user hasn't already seen as a
 first-pass construction — falsification is what turns that first-pass
@@ -53,7 +53,7 @@ Before running any attempt, set `max_falsification_attempts`:
 - **5** — if the supplied Entities list includes `Policy`, `Standard`, or
   `Control`, or the user explicitly asked for deeper scrutiny on this
   question. These three are the customer-governed layer: the fetched
-  `psdomain://concepts` resource describes them (unlike
+  domain concepts describe them (unlike
   `RegulatoryInstrument`/`Requirement`, which are ingested and read-only
   once created) as "created by policy managers through governance
   workflows" and actively revised — data this pipeline doesn't control
@@ -88,10 +88,10 @@ State which cap applies, and why, before running attempt 1.
 2. **Execute each query** by calling the `cypher` MCP tool on the PS
    Service connector the invoking skill selected at On Load
    (`policy-system-graph` or `policy-system-graph-local`) — the same
-   connector its own retrieval step already used, and the one that served
-   `psdomain://concepts` at its On Load. Never a subprocess, a repo-local
-   script, any other spawned external binary, or a similarly-named
-   connector that could not serve that resource. Show every
+   connector its own retrieval step already used, and the one whose
+   `domain_concepts` tool answered at its On Load. Never a subprocess, a
+   repo-local script, any other spawned external binary, or a
+   similarly-named connector that offers no `domain_concepts` tool. Show every
    query run, not just the ones that land. Apply the invoking skill's same
    named error-state distinctions (unreachable/unauthenticated,
    throttled, rejected, or no data) to any non-success result here too —
@@ -142,7 +142,7 @@ weigh a 1-attempt clean run against a 5-attempt one appropriately.
   this step's own falsification creativity, not evidence the answer is
   correct — flag this pattern back to whoever is reviewing run logs rather
   than treating a clean streak as validation.
-- Ground every Cypher clause in the fetched `psdomain://concepts`
-  resource's actual property names, node labels, and edge directions —
+- Ground every Cypher clause in the fetched domain concepts' actual
+  property names, node labels, and edge directions —
   never invent one, same discipline as the invoking skill's own retrieval
   step.
