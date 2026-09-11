@@ -148,6 +148,28 @@ open http://localhost:3001/login
 
 `localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
 
+> [!TIP]
+> **Updating to the latest version.** The chart is installed from your local checkout
+> and pins the `ps-service` image version in `values.yaml`, so a new release is picked
+> up by pulling the repo and upgrading the existing Helm release — not by re-running
+> `helm install`:
+>
+> ```bash
+> git pull
+>
+> helm upgrade policy-system ./charts/policy-system --reset-values --wait
+>
+> kubectl get pods -l app.kubernetes.io/component=ps-service \
+>   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
+> ```
+>
+> The `IMAGE` column should show the tag pinned in `charts/policy-system/values.yaml`.
+> `--reset-values` matters: Helm otherwise carries forward any `--set` from a previous
+> install or upgrade, so a tag you once pinned by hand would silently win over the
+> chart's new default. Your graph data is kept — FalkorDB persists to a
+> `PersistentVolumeClaim` (see [Operations: Backup & Restore](#operations-backup--restore)),
+> so regulations loaded in step 7 do not need to be re-seeded.
+
 ### 6. Install ps-cli
 
 `ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
