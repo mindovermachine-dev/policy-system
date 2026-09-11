@@ -138,9 +138,9 @@ helm install policy-system ./charts/policy-system --wait # This step can take a 
 
 kubectl get pods    # ps-service and falkordb should both be in "Running" state
 
-curl http://localhost:8000/health
+curl http://127.0.0.1:8000/health
 
-curl http://localhost:8000/ready
+curl http://127.0.0.1:8000/ready
 
 open http://localhost:3001/login
 
@@ -213,7 +213,7 @@ URL:  `https://github.com/mindovermachine-dev/policy-system`
 This installs the `ps-qna` skill. The plugin also declares a `policy-system-graph` MCP
 connector, but that half is for a **hosted** PS Service — Claude Desktop evaluates
 plugin and custom connectors from Anthropic's cloud, so it can never reach the
-`localhost:8000` instance you deployed in step 5. Until a hosted instance exists its
+`127.0.0.1:8000` instance you deployed in step 5. Until a hosted instance exists its
 URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
 unreachable; that is expected.
 
@@ -233,7 +233,7 @@ In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Develope
   "mcpServers": {
     "policy-system-graph-local": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "http://localhost:8000/mcp/", "--transport", "http-only"]
+      "args": ["-y", "mcp-remote@latest", "http://127.0.0.1:8000/mcp/", "--transport", "http-only"]
     }
   }
 }
