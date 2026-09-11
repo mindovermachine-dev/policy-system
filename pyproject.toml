@@ -24,7 +24,17 @@ testpaths = ["ps-service/tests", "ps-cli/tests"]
 # via its full filesystem path without touching sys.path or requiring a unique basename --
 # pytest's own documented recommendation for exactly this multi-package-without-__init__.py
 # shape. No per-file renames needed as a workaround.
-addopts = ["--import-mode=importlib"]
+# Default marker deselection: a bare `pytest` is the fast, hermetic suite. The five markers
+# below are environment-dependent (network, FalkorDB, LLM credentials, a container runtime)
+# and are not self-skipping -- without this, a bare run in an environment lacking them hangs
+# through ~100 tests' connection timeouts rather than failing fast. Explicit `-m` on the
+# command line replaces this default (pytest's `-m` is single-valued and CLI args come after
+# addopts), so `-m container_image` / `-m cellar_live` etc. still select exactly those tests.
+addopts = [
+    "--import-mode=importlib",
+    "-m",
+    "not integration and not llm_live and not cellar_live and not falkordb_live and not container_image",
+]
 markers = [
     "integration: subprocess-based tests that spawn a real process (slower, environment-dependent)",
     "llm_live: hits the live, configured LLM Provider over the network via LiteLLM (slow, costs tokens, requires real provider credentials)",

@@ -45,6 +45,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # every other reference flows through the `image_ref` fixture.
 _DEFAULT_LOCAL_TAG = "ps-service:local-test"
 
+# The packaged `catalog.json` the Dockerfile's allow-listed build context (`ps-service/src`)
+# carries into the image -- the source of truth `GET /catalog` must serve from inside it.
+_PACKAGED_CATALOG_JSON = _REPO_ROOT / "ps-service/src/ps_service/api/curated_content/catalog.json"
+
 # `docker` first so CI (which has docker, not podman) needs no environment override; the
 # `PS_CONTAINER_CLI` variable wins over both when set.
 _CLI_CANDIDATES = ("docker", "podman")
@@ -702,7 +706,16 @@ def test_get_catalog_serves_real_packaged_content_from_inside_the_built_image(
     body = response.json()
     assert body["instruments"], "GET /catalog returned an empty listing from inside the image"
     instrument_ids = {item["instrument_id"] for item in body["instruments"]}
-    assert instrument_ids == {"CRA-1.0", "GDPR-1.0", "NIS2-1.0"}
+    # The expectation is the packaged copy itself, not a hardcoded id list: every curation
+    # run rewrites `catalog.json` (see `curated_content/__init__.py`), so a literal here would
+    # go stale on the next export while the image stayed correct. Comparing against the file
+    # the Dockerfile packages is the actual MA3 proof -- the image serves *these* bytes.
+    packaged_ids = {
+        item["instrument_id"]
+        for item in json.loads(_PACKAGED_CATALOG_JSON.read_text(encoding="utf-8"))
+    }
+    assert packaged_ids, "packaged catalog.json is empty -- nothing to prove against"
+    assert instrument_ids == packaged_ids
 
 
 def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_unreachable(

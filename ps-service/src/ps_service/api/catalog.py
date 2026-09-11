@@ -50,7 +50,7 @@ class CatalogEntry:
     Attributes:
         celex: The 10-character CELEX identifier, e.g. ``"32024R2847"``.
         title: The human-readable instrument title.
-        short_name: Internal short name driving graph naming, e.g. ``"CRA"``.
+        short_name: Internal short name driving graph naming, e.g. ``"cra"``.
         version: Internal catalog version forming the RegulatoryInstrument id
             ``f"{short_name}-{version}"``.
     """
@@ -72,7 +72,7 @@ class CuratedInstrumentEntry:
     :class:`CatalogEntry` view from this.
 
     Attributes:
-        instrument_id: The curated directory id, e.g. ``"CRA-1.0"`` (D1).
+        instrument_id: The curated directory id, e.g. ``"32024R2847"`` (D1).
         celex: The 10-character CELEX identifier, or ``None`` for an
             ``internal``-sourced instrument (no CELEX applies, D15).
         title: The human-readable instrument title.
@@ -80,7 +80,7 @@ class CuratedInstrumentEntry:
             (a project-authored source, D15).
         jurisdiction: ``"EU"`` for an external regulation, or ``None`` for an
             internal source with no jurisdiction concept.
-        short_name: Internal short name driving graph naming, e.g. ``"CRA"``.
+        short_name: Internal short name driving graph naming, e.g. ``"cra"``.
         version: Internal catalog version forming the RegulatoryInstrument id
             ``f"{short_name}-{version}"``.
     """
