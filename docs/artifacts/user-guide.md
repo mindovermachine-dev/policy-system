@@ -172,58 +172,19 @@ ps-cli --version
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
 ```bash
-ps-cli catalog list                    # curated instruments available to restore (id, title, source_type/jurisdiction)
-ps-cli catalog restore <instrument_id> # e.g. `ps-cli catalog restore CRA-1.0` — the id `catalog list` just printed
-ps-cli regulations list                # confirm what landed (CELEX + title)
+ps-cli catalog list         # curated instruments available to restore
+
+ps-cli catalog restore <id> # e.g. `ps-cli catalog 32024R2847` just printed
 ```
 
-`catalog restore` takes the instrument's id as a positional argument, not a `--instrument`
-flag. Curated instruments are pre-ingested graphs published in the `curated-content` git
-folder and restored as a data load, seconds rather than minutes, with no LLM provider or
-extraction run. Regulations outside the curated set are still ingested live with
-`ps-cli regulations ingest <celex>`, which does require a configured LLM provider.
-
-If `ps-cli` was installed via `uv tool install` with no local checkout, fetch
-`curated-content/` before running `catalog list`/`catalog restore` — e.g.
-`git clone --depth 1 --filter=blob:none --sparse https://github.com/mindovermachine-dev/policy-system && cd policy-system && git sparse-checkout set curated-content`,
-then either run `ps-cli` from inside that clone or set `PS_CLI_CURATED_REPO_PATH` to its
-`curated-content` path.
-
-Until something is seeded, the system answers questions with an explicit "graph is unseeded"
-error rather than an empty result.
-
-> ℹ️ **Curated content ships as an empty scaffold today.** The `curated-content/` folder,
-> its export/restore mechanism, `ps-cli`'s `catalog list`/`catalog restore` commands, and
-> the unseeded-graph error above are all implemented ([#66](https://github.com/mindovermachine-dev/policy-system/issues/66)) — verified end to end against a real PS Service/FalkorDB with no LLM
-> provider configured, including a real question answered correctly over the MCP transport
-> against restored content. What is **not** yet done is populating `curated-content/` with
-> real per-instrument artifacts for CRA/GDPR/NIS2 and the internal Engineering Practices
-> baseline — a one-time project-maintainer step, run once per instrument via
-> `tools/curated-export/export_instrument.py` against an already-ingested source, tracked
-> separately from this issue. Until that lands, `catalog list` returns no instruments on a
-> plain checkout of this repository.
-
-> ℹ️ **Loading an internal policy/standard (Policy Managers, pending [#54](https://github.com/mindovermachine-dev/policy-system/issues/54)).**
-> `ps-cli internal ingest <file>` will take a JSON file you (or your own AI assistant)
-> prepared from your organization's internal policies/SoPs — see the
-> [Internal-Regulation Intake Format](./internal-regulation-intake-format.md) for exactly
-> what to produce. Point `ps-cli` at the right context first (see
-> [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
-> below) — this command is not yet implemented.
+Until something is seeded, the system answers questions with an explicit "graph is unseeded" error rather than an empty result.
 
 ### 8. Install the Policy System plugin
 
-The plugin lives in this repo at `ps-skills/policy-system/` — a `ps-qna` skill plus a
-bundled MCP connector (`.mcp.json`), installable via the repo-root marketplace manifest
-`.claude-plugin/marketplace.json`.
+In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add
+this repo (`https://github.com/mindovermachine-dev/policy-system`) as a marketplace and click "Sync", then install `policy-system`.
 
-In Claude Desktop: **+** next to the prompt box → **Plugins** → **Add plugin**, then add
-this repo (`https://github.com/mindovermachine-dev/policy-system`) as a marketplace and
-install `policy-system`.
-
-One install brings both the `ps-qna` skill and its MCP connector — the skill arrives
-already wired to the transport it needs, with no separate connector setup and no
-credential pasting. Claude Desktop prompts for the plugin's two `userConfig` fields
+Claude Desktop prompts for the plugin's two `userConfig` fields
 (defined in `ps-skills/policy-system/.claude-plugin/plugin.json`):
 
 | Field | Required | Purpose |
@@ -313,7 +274,7 @@ enforced.
 | Service unreachable                    | `ps-cli health` — reports reachability, health, readiness, and which dependency (if any) is unhealthy                                            |
 | Pods stuck `Pending`                   | `podman machine` sizing — the control plane plus both containers need ~8 GB                                                                      |
 | `/ready` returns unhealthy             | `kubectl logs deploy/ps-service` — FalkorDB is unreachable; check `ps-cli health`'s `unhealthy_dependencies` for LLM Interface/Cellar-ELI issues, which no longer affect `/ready` itself |
-| Answers say "not present in the graph" | Step 7 — the graph is probably empty; run `ps-cli regulations list`                                                                                  |
+| Answers say "not present in the graph" | Step 7 — the graph is probably empty; re-check `catalog restore`'s per-stage output, or `ps-cli health`, for a failure you may have missed. `ps-cli regulations list` does **not** reflect graph state — see [Command reference](#command-reference). |
 | Plugin installed but no cypher tool    | The MCP connector's endpoint URL, and whether `/ready` is green                                                                                  |
 
 ---
@@ -479,7 +440,7 @@ Global flags, usable before or after any subcommand:
 | --- | --- | --- |
 | `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
 | `ps-cli check` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
-| `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). No FalkorDB/LLM dependency. |
+| `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). Static, PS Service-packaged data — does **not** reflect what's actually restored/ingested into the graph, and has no FalkorDB/LLM dependency. Tracked for removal: [#78](https://github.com/mindovermachine-dev/policy-system/issues/78). |
 | `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli internal ingest <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
 | `ps-cli catalog list` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
