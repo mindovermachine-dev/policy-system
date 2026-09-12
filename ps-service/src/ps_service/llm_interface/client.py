@@ -15,6 +15,7 @@ import litellm
 
 if TYPE_CHECKING:
     from litellm.types.utils import EmbeddingResponse, ModelResponse
+    from pydantic import BaseModel
 
 
 class CompletionCaller(Protocol):
@@ -24,6 +25,21 @@ class CompletionCaller(Protocol):
         self, *, model: str, messages: list[dict[str, str]], timeout: float
     ) -> ModelResponse:
         """Invoke the completion transport."""
+        ...
+
+
+class StructuredCompletionCaller(Protocol):
+    """The transport seam `route_structured_completion` calls through."""
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, str]],
+        timeout: float,
+        response_format: type[BaseModel],
+    ) -> ModelResponse:
+        """Invoke the schema-constrained completion transport."""
         ...
 
 
@@ -46,6 +62,26 @@ def default_completion_caller(
     """
     response = litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # litellm: untyped re-export, no py.typed
         model=model, messages=messages, timeout=timeout
+    )
+    # completion()'s static return type is ModelResponse | CustomStreamWrapper; the stream
+    # branch only occurs when stream=True is passed, which this wrapper never does.
+    return cast("ModelResponse", response)
+
+
+def default_structured_completion_caller(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    timeout: float,
+    response_format: type[BaseModel],
+) -> ModelResponse:
+    """Call the real `litellm.completion` with a provider-enforced response schema.
+
+    Credentials are resolved by LiteLLM from its own provider env vars — never passed
+    explicitly here, per L2 Configuration & Secrets.
+    """
+    response = litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # litellm: untyped re-export, no py.typed
+        model=model, messages=messages, timeout=timeout, response_format=response_format
     )
     # completion()'s static return type is ModelResponse | CustomStreamWrapper; the stream
     # branch only occurs when stream=True is passed, which this wrapper never does.

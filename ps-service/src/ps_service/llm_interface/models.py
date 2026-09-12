@@ -26,6 +26,14 @@ class CompletionResult(BaseModel):
     model: str  # the model id the provider actually served (response.model)
 
 
+class StructuredCompletionResult[T: BaseModel](BaseModel):
+    """The parsed payload and served model id returned by `route_structured_completion`."""
+
+    model_config = ConfigDict(frozen=True)
+    parsed: T
+    model: str  # the model id the provider actually served (response.model)
+
+
 class EmbeddingResult(BaseModel):
     """The vector and served model id returned by `route_embedding`."""
 

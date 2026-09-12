@@ -735,19 +735,21 @@ None — shared infrastructure utility.
 | Path | Purpose | Implements |
 |---|---|---|
 | `ps-service/src/ps_service/llm_interface/__init__.py` | Package front door — re-exports only | — |
-| `ps-service/src/ps_service/llm_interface/client.py` | `CompletionCaller`/`EmbeddingCaller` DI seams; `default_completion_caller`/`default_embedding_caller`, the real `litellm.completion`/`litellm.embedding` callers | — |
+| `ps-service/src/ps_service/llm_interface/client.py` | `CompletionCaller`/`EmbeddingCaller`/`StructuredCompletionCaller` DI seams; `default_completion_caller`/`default_embedding_caller`/`default_structured_completion_caller`, the real `litellm.completion`/`litellm.embedding` callers | — |
 | `ps-service/src/ps_service/llm_interface/completion.py` | `route_completion` | RouteCompletion |
+| `ps-service/src/ps_service/llm_interface/structured_completion.py` | `route_structured_completion` | RouteStructuredCompletion |
 | `ps-service/src/ps_service/llm_interface/embedding.py` | `route_embedding` | RouteEmbedding |
 | `ps-service/src/ps_service/llm_interface/connectivity.py` | `check_connectivity` | CheckConnectivity |
-| `ps-service/src/ps_service/llm_interface/models.py` | `ChatMessage`, `CompletionResult`, `EmbeddingResult` | — |
-| `ps-service/src/ps_service/llm_interface/errors.py` | `LlmProviderError` | — |
-| `ps-service/src/ps_service/llm_interface/_logging_support.py` | Shared `_log` helper for `route_completion`/`route_embedding` | — |
+| `ps-service/src/ps_service/llm_interface/models.py` | `ChatMessage`, `CompletionResult`, `EmbeddingResult`, `StructuredCompletionResult` | — |
+| `ps-service/src/ps_service/llm_interface/errors.py` | `LlmProviderError`, `LlmResponseSchemaError` | — |
+| `ps-service/src/ps_service/llm_interface/_logging_support.py` | Shared `_log` helper for `route_completion`/`route_embedding`/`route_structured_completion` | — |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | RouteCompletion | Route a chat completion request from a consuming component to the configured LLM Provider via LiteLLM | No (internal call) | n/a | LLM Provider is configured (LiteLLM routing config present) | None beyond returning the completion | Network call to LLM Provider; potential cost/quota consumption | LLM Provider (via LiteLLM) | Bounded by provider latency; no target set | No (chat completions are not guaranteed deterministic) | Provider errors (rate limit, timeout, auth failure) surface as a typed error to the caller; retry policy is provider-config-driven, not hardcoded |
+| RouteStructuredCompletion | Route a chat completion whose response the provider must shape to a caller-supplied Pydantic model | No (internal call) | n/a | LLM Provider is configured (LiteLLM routing config present) and the model supports provider-enforced response schemas (`litellm.utils.supports_response_schema`) — otherwise the call fails fast without contacting the provider | None beyond returning the validated instance | Network call to LLM Provider; potential cost/quota consumption | LLM Provider (via LiteLLM) | Bounded by provider latency; no target set | No (chat completions are not guaranteed deterministic) | Provider errors surface as `LlmProviderError` (and mark LLM Interface unhealthy); a non-conforming or unparseable response surfaces as `LlmResponseSchemaError` with the provider text reachable only via `__cause__`, leaving health untouched; an unsupported model raises `LlmProviderError` before any call is made |
 | RouteEmbedding | Route an embedding request from a consuming component to the configured LLM Provider via LiteLLM | No (internal call) | n/a | LLM Provider is configured (LiteLLM routing config present) | None beyond returning the embedding vector | Network call to LLM Provider; potential cost/quota consumption | LLM Provider (via LiteLLM) | Bounded by provider latency; no target set | Yes (embeddings are deterministic for a fixed model/input, unlike chat completions) | Provider errors (rate limit, timeout, auth failure) surface as a typed error to the caller; retry policy is provider-config-driven, not hardcoded |
 | CheckConnectivity | Confirm the configured LLM Provider is reachable for both completion and embedding — Process Harness's `/ready` startup probe (issue #22) | No (internal call) | n/a | `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` are expected to be configured — raises if either is unset, treating LLM Interface as hard-required regardless of those fields' own optionality elsewhere | Records the outcome in Dependency Health | One real (minimal) completion call and one real (minimal) embedding call; potential cost/quota consumption | LLM Provider (via LiteLLM) | Bounded by provider latency; no target set | No | Raises `LlmProviderError` for an unconfigured model or a failed call; never called on every `/ready` poll — see Process Harness |
 

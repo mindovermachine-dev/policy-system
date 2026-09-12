@@ -8,6 +8,14 @@ AC-004/AC-005's tests (`test_route_completion_logs_run_id.py`,
 `test_route_embedding_logs_run_id.py`), which must read back the JSON lines
 a real `LogEmitter` wrote to assert the bound `run_id` was baked into the
 entry.
+
+The `emitter` fixture below is the throwaway-emitter pattern already
+duplicated in `test_route_completion_mocked.py` and
+`test_route_completion_live_provider.py`; `test_route_structured_completion_mocked.py`
+is the third occurrence, so per the same DRY rule it is extracted here
+instead of duplicated again. The two existing modules keep their local
+copies untouched — a module-level fixture shadows a conftest one of the
+same name, so nothing there needs to change.
 """
 
 from __future__ import annotations
@@ -25,6 +33,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ps_service.logging.emitter import TextSink
+
+
+@pytest.fixture
+def emitter(tmp_path: Path) -> Iterator[LogEmitter]:
+    """A real `LogEmitter` writing to a per-test tmp path.
+
+    A `route_*` action's `log` call needs a live emitter (or a configured
+    process default) or it raises `LoggingLifecycleError`; tests that don't
+    assert on log content only need a throwaway emitter to satisfy that.
+    """
+    log_emitter = LogEmitter(EmitterConfig(log_path=tmp_path / "test.jsonl"))
+    yield log_emitter
+    log_emitter.stop()
 
 
 class MakeEmitter(Protocol):
