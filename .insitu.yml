@@ -84,6 +84,11 @@ inventory:
     command: uv run basedpyright
     timeout: 10m
 
+  - id: pytest
+    name: Run the default (hermetic) pytest suite
+    command: uv run pytest -q
+    timeout: 10m
+
   - id: pip-audit
     name: Audit locked dependencies for known CVEs
     timeout: 10m
@@ -183,6 +188,7 @@ waves:
       - ruff-check
       - ruff-format
       - basedpyright
+      - pytest
       - pip-audit
 
   - id: "fix-all"

@@ -39,8 +39,18 @@ jobs:
         env:
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
-          echo "git-tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
-          echo "image-tag=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          image_tag="${TAG_NAME#v}"
+          if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null; then
+            git_tag="$TAG_NAME"
+          elif git rev-parse -q --verify "refs/tags/$image_tag" >/dev/null; then
+            git_tag="$image_tag"
+          else
+            echo "Neither tag '$TAG_NAME' nor '$image_tag' exists in this checkout" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Neither tag '$TAG_NAME' nor '$image_tag' exists in this checkout"
+            exit 1
+          fi
+          echo "git-tag=$git_tag" >> "$GITHUB_OUTPUT"
+          echo "image-tag=$image_tag" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag is on main branch
         env:
@@ -151,3 +161,26 @@ jobs:
             "$IMAGE:build-arm64"
       - name: Record the published manifest list
         run: docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: Create the GitHub Release
+    needs: [verify-tag-on-main, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install gh-tt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh extension install devx-cafe/gh-tt --pin dc445201
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify-tag-on-main.outputs.git-tag }}
+        run: scripts/release/create-github-release.sh "$RELEASE_TAG"

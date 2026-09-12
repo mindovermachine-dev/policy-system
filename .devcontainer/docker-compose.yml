@@ -1,6 +1,10 @@
 services:
   app:
     image: mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+    # tini as PID 1 reaps orphaned children (e.g. git's detached auto-maintenance
+    # process) so they don't pile up as unreapable zombies and exhaust the
+    # container's PID cgroup -- see .orchestrator/tracker/issue-79-lockstep-release/RESUME.md.
+    init: true
     volumes:
       - ../..:/workspaces:cached
     command: sleep infinity

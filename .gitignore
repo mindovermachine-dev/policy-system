@@ -130,6 +130,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!scripts/release/lib/
 lib64/
 parts/
 sdist/

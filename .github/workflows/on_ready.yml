@@ -31,10 +31,23 @@ jobs:
         with:
           verify: gh insitu run trunk-worthy
 
+  lint-commit-header:
+    name: Lint the ready HEAD commit header
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Lint commit header
+        run: scripts/release/lint-commit-header.sh --header "$(git log -1 --format=%s)"
+
   merge-to-trunk:
     name: Merge to trunk
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, lint-commit-header]
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions:

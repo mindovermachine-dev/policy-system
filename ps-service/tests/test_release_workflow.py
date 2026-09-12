@@ -47,7 +47,11 @@ _README_PATH = _REPO_ROOT / "README.md"
 _GATE_JOB = "verify-tag-on-main"
 _BUILD_JOB = "build"
 _PUBLISH_JOB = "publish"
+_GITHUB_RELEASE_JOB = "github-release"
 _RELEASE_JOBS = (_GATE_JOB, _BUILD_JOB, _PUBLISH_JOB)
+_GH_TT_EXTENSION = "devx-cafe/gh-tt"
+_GH_TT_PIN = "dc445201"
+_CREATE_GITHUB_RELEASE_SCRIPT = "scripts/release/create-github-release.sh"
 
 _RESOLVE_TAG_STEP_ID = "resolve-tag"
 _IMAGE_REFERENCE = "ghcr.io/mindovermachine-dev/ps-service"
@@ -416,40 +420,189 @@ def test_image_tag_is_derived_from_the_gated_tag_by_one_expression() -> None:
     )
 
 
-def test_release_tag_is_normalised_by_stripping_a_leading_v(tmp_path: Path) -> None:
-    """AC-BI-001: the resolve-tag snippet is **executed**, not just read.
+def _build_tagged_repo(tmp_path: Path, git: str, tags: tuple[str, ...]) -> Path:
+    """Build a throwaway `git init -b main` repo with one commit and the given tags (X-05)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "GIT_AUTHOR_NAME": "Seed Author",
+        "GIT_AUTHOR_EMAIL": "seed@example.invalid",
+        "GIT_COMMITTER_NAME": "Seed Author",
+        "GIT_COMMITTER_EMAIL": "seed@example.invalid",
+    }
 
-    `v1.2.3` and `1.2.3` must publish the identical `:1.2.3`; a pre-release prefix such as
-    `rc1.2.3` must survive untouched (FLAWS F-07d).
+    def _git(*args: str) -> None:
+        subprocess.run(  # noqa: S603 - `git` is a shutil.which-resolved absolute path; args are test literals
+            [git, "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_BASH_TIMEOUT_SECONDS,
+            env=environment,
+        )
+
+    subprocess.run(  # noqa: S603 - `git` is a shutil.which-resolved absolute path; args are test literals
+        [git, "init", "-q", "-b", "main", str(repo)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=_BASH_TIMEOUT_SECONDS,
+        env=environment,
+    )
+    _git("commit", "-q", "--allow-empty", "-m", "seed")
+    for tag in tags:
+        _git("tag", tag)
+    return repo
+
+
+def _run_resolve_tag_snippet(
+    bash: str,
+    snippet: str,
+    *,
+    cwd: Path,
+    tag_name: str,
+    output_file: Path,
+    summary_file: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the `resolve-tag` step's `run:` body in `cwd`, capturing outputs and summary."""
+    output_file.touch()
+    summary_file.touch()
+    return subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path, the snippet is read from the repo's own workflow (see docstring)
+        [bash, "-c", snippet],
+        capture_output=True,
+        text=True,
+        timeout=_BASH_TIMEOUT_SECONDS,
+        cwd=cwd,
+        env={
+            "TAG_NAME": tag_name,
+            "GITHUB_OUTPUT": str(output_file),
+            "GITHUB_STEP_SUMMARY": str(summary_file),
+            "PATH": "/usr/bin:/bin",
+        },
+        check=False,
+    )
+
+
+def test_resolve_tag_prefers_the_raw_tag_and_falls_back_to_the_bare_tag(tmp_path: Path) -> None:
+    """X-05: the raw tag wins when it exists; otherwise the bare (`v`-stripped) tag is used.
+
+    `v1.2.3` and `1.2.3` must resolve to the identical `git-tag`/`image-tag` pair; a
+    pre-release prefix such as `rc1.2.3` must survive untouched; and when both the raw and
+    bare tags exist (`v2.0.0`), the raw tag is preferred as `git-tag` (FLAWS F-07d).
     """
     bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is not available on this machine")
+    git = shutil.which("git")
+    if bash is None or git is None:
+        pytest.skip("bash/git are not available on this machine")
+
+    repo = _build_tagged_repo(tmp_path, git, ("1.2.3", "rc1.2.3", "v2.0.0"))
 
     step = _step_with_id(_job(_GATE_JOB), _RESOLVE_TAG_STEP_ID)
     assert step is not None, f"the gate job has no step with `id: {_RESOLVE_TAG_STEP_ID}`"
     snippet = str(step["run"])
 
-    for tag_name, expected_image_tag in (
-        ("v1.2.3", "1.2.3"),
-        ("1.2.3", "1.2.3"),
-        ("rc1.2.3", "rc1.2.3"),
+    for tag_name, expected_git_tag, expected_image_tag in (
+        ("v1.2.3", "1.2.3", "1.2.3"),
+        ("1.2.3", "1.2.3", "1.2.3"),
+        ("rc1.2.3", "rc1.2.3", "rc1.2.3"),
+        ("v2.0.0", "v2.0.0", "2.0.0"),
     ):
         output_file = tmp_path / f"{tag_name}.env"
-        output_file.touch()
-        subprocess.run(  # noqa: S603 - bash is a shutil.which-resolved absolute path, the snippet is read from the repo's own workflow (see docstring)
-            [bash, "-c", snippet],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_BASH_TIMEOUT_SECONDS,
-            env={"TAG_NAME": tag_name, "GITHUB_OUTPUT": str(output_file), "PATH": "/usr/bin:/bin"},
+        summary_file = tmp_path / f"{tag_name}.summary.md"
+        result = _run_resolve_tag_snippet(
+            bash,
+            snippet,
+            cwd=repo,
+            tag_name=tag_name,
+            output_file=output_file,
+            summary_file=summary_file,
         )
 
+        assert result.returncode == 0, f"{tag_name}: {result.stdout}{result.stderr}"
         assert output_file.read_text(encoding="utf-8").splitlines() == [
-            f"git-tag={tag_name}",
+            f"git-tag={expected_git_tag}",
             f"image-tag={expected_image_tag}",
         ]
+
+
+def test_resolve_tag_fails_naming_both_candidates_when_neither_tag_exists(
+    tmp_path: Path,
+) -> None:
+    """X-05: neither `v9.9.9` nor `9.9.9` exists, so the step fails naming both."""
+    bash = shutil.which("bash")
+    git = shutil.which("git")
+    if bash is None or git is None:
+        pytest.skip("bash/git are not available on this machine")
+
+    repo = _build_tagged_repo(tmp_path, git, ("1.2.3", "rc1.2.3", "v2.0.0"))
+
+    step = _step_with_id(_job(_GATE_JOB), _RESOLVE_TAG_STEP_ID)
+    assert step is not None, f"the gate job has no step with `id: {_RESOLVE_TAG_STEP_ID}`"
+    snippet = str(step["run"])
+
+    output_file = tmp_path / "v9.9.9.env"
+    summary_file = tmp_path / "v9.9.9.summary.md"
+    result = _run_resolve_tag_snippet(
+        bash,
+        snippet,
+        cwd=repo,
+        tag_name="v9.9.9",
+        output_file=output_file,
+        summary_file=summary_file,
+    )
+
+    assert result.returncode == 1
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "v9.9.9" in summary
+    assert "9.9.9" in summary
+    assert output_file.read_text(encoding="utf-8") == ""
+
+
+# --------------------------------------------------------------------------------------
+# `github-release` job (S10, X-02) -- created after `publish`, invokes create-github-release.sh
+# --------------------------------------------------------------------------------------
+
+
+def test_github_release_job_needs_publish_and_declares_contents_write() -> None:
+    """X-02: `github-release` needs both the gate (for `git-tag`) and `publish`, write-scoped."""
+    job = _job(_GITHUB_RELEASE_JOB)
+
+    assert _needs(job) == [_GATE_JOB, _PUBLISH_JOB]
+    assert _mapping(job, "permissions") == {"contents": "write"}
+
+
+def test_github_release_job_checks_out_full_history_for_the_note_baseline() -> None:
+    """X-02: `actions/checkout@v6` with `fetch-depth: 0` -- `gh tt semver note` needs history."""
+    checkouts = _steps_using(_job(_GITHUB_RELEASE_JOB), "actions/checkout")
+
+    assert len(checkouts) == 1, f"expected exactly one checkout step, found {len(checkouts)}"
+    assert _mapping(checkouts[0], "with").get("fetch-depth") == 0
+
+
+def test_github_release_job_installs_pinned_gh_tt_with_the_workflow_token() -> None:
+    """X-02/X-13: `gh extension install devx-cafe/gh-tt --pin dc445201`, workflow token only."""
+    steps = _steps_running(_job(_GITHUB_RELEASE_JOB), _GH_TT_EXTENSION)
+
+    assert len(steps) == 1, f"expected exactly one gh-tt install step, found {len(steps)}"
+    tokens = _tokens(str(steps[0]["run"]))
+    assert _GH_TT_EXTENSION in tokens
+    assert "--pin" in tokens
+    assert _GH_TT_PIN in tokens
+    assert _mapping(steps[0], "env").get("GH_TOKEN") == "${{ secrets.GITHUB_TOKEN }}"
+
+
+def test_github_release_step_invokes_the_script_with_the_workflow_token() -> None:
+    """X-02/X-15: the script runs with the resolved git tag and the workflow token."""
+    steps = _steps_running(_job(_GITHUB_RELEASE_JOB), _CREATE_GITHUB_RELEASE_SCRIPT)
+
+    assert len(steps) == 1, f"expected exactly one step running the script, found {len(steps)}"
+    tokens = _tokens(str(steps[0]["run"]))
+    assert tokens == [_CREATE_GITHUB_RELEASE_SCRIPT, "$RELEASE_TAG"]
+
+    env = _mapping(steps[0], "env")
+    assert env.get("GH_TOKEN") == "${{ secrets.GITHUB_TOKEN }}"
+    assert env.get("RELEASE_TAG") == f"${{{{ needs.{_GATE_JOB}.outputs.git-tag }}}}"
 
 
 # --------------------------------------------------------------------------------------

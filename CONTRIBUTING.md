@@ -24,12 +24,13 @@ Note: We are in the transition from prototype to full implementation and the ins
 - [Coding Standards](#coding-standards)
 - [Testing](#testing)
 - [Releasing](#releasing)
-  - [One-time setup](#one-time-setup)
-  - [Cutting a release](#cutting-a-release)
-  - [The first release in a fresh repository](#the-first-release-in-a-fresh-repository)
+  - [How the bump is decided](#how-the-bump-is-decided)
+  - [What gets synced](#what-gets-synced)
+  - [Push races self-heal](#push-races-self-heal)
   - [Verifying a release](#verifying-a-release)
   - [Prereleases](#prereleases)
-  - [Releasing ps-cli](#releasing-ps-cli)
+  - [Manually re-running a release](#manually-re-running-a-release)
+  - [ps-cli is released the same way](#ps-cli-is-released-the-same-way)
 - [Delivery Process](#delivery-process)
 - [Reporting Issues](#reporting-issues)
 - [Discussions](#discussions)
@@ -63,6 +64,12 @@ for |`. Point it at a modern interpreter in your shell profile:
    gh tt workon -t "<issue title>"
    ```
 
+   The issue title must carry a conventional-commit type (`feat: ...`, `fix: ...`,
+   etc. -- see [Releasing](#releasing) for the full allow-list): `gh tt deliver`
+   (step 5) uses the issue title verbatim as the squashed `ready/*` commit's header,
+   and that header is what the automated release job reads to classify the commit and
+   decide whether/how to bump the version.
+
 3. Make your changes. Run tests (see [Testing](#testing) below).
 
 4. Commit and push your progress to the issue branch as you go:
@@ -82,8 +89,8 @@ for |`. Point it at a modern interpreter in your shell profile:
 
    Pushing a `ready/*` branch triggers `on_ready.yml`: it runs the
    `trunk-worthy` check suite, then auto-merges to `main` -- no manual Pull
-   Request needed for this path. See [Releasing](#releasing) below for how
-   `gh tt` is also used to cut `ps-service` and `ps-cli` releases.
+   Request needed for this path. Once merged, `ps-service` and `ps-cli`
+   releases are cut automatically -- see [Releasing](#releasing) below.
 
 After cloning, also run these once:
 
@@ -333,8 +340,8 @@ is still planned, not yet implemented.
 
 #### Run from a repo checkout (local development)
 
-For repo-local development, or before a `ps-cli-v*` tag exists to install
-from, invoke it as a module, from the repo root, with PS Service already
+For repo-local development, or before an installable `ps-cli` release exists,
+invoke it as a module, from the repo root, with PS Service already
 running (previous section) — this path stays fully supported alongside the
 installed one described in the [user guide](./docs/artifacts/user-guide.md#ps-cli):
 
@@ -551,49 +558,52 @@ uv run ruff check . && uv run ruff format --check . && uv run basedpyright && \
 
 ## Releasing
 
-A release is cut by pushing a semver git tag to `main`. That tag push — nothing
-else — triggers `.github/workflows/on_semver.yml`, which builds the `ps-service`
-image on native amd64 and arm64 runners, smoke-tests both, and publishes a
-multi-arch manifest list to `ghcr.io/mindovermachine-dev/ps-service` under the
-release tag and `latest`. Merging to `main` does not publish anything.
+A release is cut automatically. The `release` job in
+`.github/workflows/on_main.yml` runs on every push to `main`, except a push whose
+head commit message starts with `chore(release):` (that guard stops the job from
+releasing off its own release commit). It classifies the commits landed since the
+last release tag, computes the next version, writes it into the synced files below,
+and commits/tags/pushes the result as `github-actions[bot]` — no one runs a release
+command by hand.
 
-Versions are stored as git tags. There is no version file to keep in sync, so the
-current version is always whatever `git tag` says.
+### How the bump is decided
 
-### One-time setup
+The job reads each commit's conventional-commit header
+(`type(scope)!: description`) and classifies it:
 
-Same `gh-tt` extension used for day-to-day contribution (see
-[Getting Started](#getting-started) above) — nothing extra to install for
-releasing.
+- `feat!` (or any type with `!` after it), or a `BREAKING CHANGE:` /
+  `BREAKING-CHANGE:` footer in the body → **major**
+- `feat` → **minor**
+- `fix` or `perf` → **patch**
+- `docs`, `chore`, `ci`, `test`, `refactor`, `style`, `build` → no bump on their own
+- a header that doesn't parse as one of those ten allowed types (`feat fix perf docs
+chore ci test refactor style build`) is warned about in the job summary and does
+  not bump
 
-### Cutting a release
+When several commits landed since the last tag, the highest bump among them wins.
 
-```bash
-git checkout main
-git pull --tags                     # tags are the state; a stale checkout bumps from the wrong base
-gh tt semver                        # the current version
-gh tt semver bump --minor --no-run  # preview: prints the git tag command, changes nothing
-gh tt semver bump --minor           # creates the annotated tag locally
-git push origin <new-tag>           # publishes
-```
+### What gets synced
 
-Use `--major` for breaking changes, `--minor` for new features, `--patch` for
-fixes. The bump size is a deliberate choice, not derived from commit messages.
+The computed version is written into every version-lockstep file, in one commit:
 
-Until it is pushed, the tag is local and can be removed with `git tag -d <tag>`.
-Pushing is the irreversible step.
+- `ps-service/pyproject.toml` — `[project] version`
+- `ps-cli/pyproject.toml` — `[project] version`
+- `charts/policy-system/Chart.yaml` — `version` and `appVersion`
+- `charts/policy-system/values.yaml` — `psService.image.tag` only (the sibling
+  `falkordb.image.tag` is never touched)
+- `ps-skills/policy-system/.claude-plugin/plugin.json` — `version`
 
-The tag must point at a commit that is an ancestor of `main`. The `verify-tag-on-main`
-job checks this and fails the release if it does not hold, so a tag cut from a
-feature branch never publishes.
+`uv.lock` is re-locked in the same commit so it stays consistent with the two
+`pyproject.toml` bumps. The commit, the annotated tag, and the push all land
+atomically.
 
-### The first release in a fresh repository
+### Push races self-heal
 
-`bump` needs a preceding tag to work from. Seed one:
-
-```bash
-gh tt semver init --tag 0.1.0
-```
+Because the release lands by pushing to `main`, a release push can be rejected if
+another push to `main` won the race first. That is expected, not an incident: the
+next push to `main` — typically the very commit that won the race — recomputes the
+version from the now-current tag state and releases normally. Nothing needs to be
+retried, force-pushed, or fixed by hand.
 
 ### Verifying a release
 
@@ -606,55 +616,30 @@ and `linux/arm64`. The package also carries `build-amd64` and `build-arm64`
 staging tags — these are the per-architecture images the manifest list points at,
 and they are expected.
 
+The tag itself must point at a commit that is an ancestor of `main`; the
+`verify-tag-on-main` job checks this and fails the release if it does not hold.
+
 ### Prereleases
 
-`gh tt semver bump --pre` produces a semver 2.0 prerelease tag such as
-`1.2.4-pre.1`. That form matches neither trigger pattern in `on_semver.yml`, so
-pushing it publishes nothing and reports no error. Prereleases are not supported
-by the release pipeline today.
+Prerelease-form tags (semver 2.0, e.g. `1.2.4-pre.1`) are never produced by the
+automated flow and are not supported by the release pipeline.
 
-### Releasing ps-cli
+### Manually re-running a release
 
-`ps-cli` has its own release story, separate from the `ps-service` container
-release above — it is not built or published by `on_semver.yml`, and the two
-must not be confused.
+`.github/workflows/on_semver.yml` also accepts a `workflow_dispatch` run against an
+existing tag, taking either a bare (`0.12.0`) or `v`-prefixed (`v0.12.0`) tag as
+input. This re-runs the image build/publish/GitHub-release steps for a tag that
+already exists — it does not cut a new version.
 
-**Tag format**: `ps-cli-v<major>.<minor>.<patch>` (e.g. `ps-cli-v0.1.1`) —
-deliberately prefixed, not bare semver, so it cannot collide with or
-accidentally fire `on_semver.yml`'s tag triggers, which are `ps-service`-only.
-Like the `ps-service` convention, a `ps-cli-v*` tag should be cut from a
-commit that is an ancestor of `main`. Unlike `ps-service`, this discipline is
-**not CI-enforced today** — `on_semver.yml` doesn't watch the `ps-cli-v*`
-tag namespace at all, so there is no automated ancestry gate for it. This is
-a known gap, not an oversight to be silently worked around.
+### ps-cli is released the same way
 
-**Before tagging**: bump `ps-cli/pyproject.toml`'s `[project] version` field
-to match the tag you're about to cut, in the same commit/PR. Unlike
-`ps-service` (which has no version file and treats the git tag as
-authoritative), `ps-cli`'s `pyproject.toml` version is what `hatchling` bakes
-into the built wheel's distribution metadata — it's what
-`importlib.metadata.version("ps-cli")` reports after `uv tool install`, and
-what `ps-cli --version` prints. If the tag and `pyproject.toml` drift apart,
-the installed CLI reports the wrong version.
+`ps-cli` is released in lockstep with `ps-service` by the same automated job — its
+`pyproject.toml` version is one of the synced fields above. The separate CLI tag
+procedure is retired: there is no independent tag or release step for `ps-cli`
+anymore.
 
-**Cutting the tag**:
-
-```bash
-git tag -a ps-cli-v<X.Y.Z> -m "ps-cli <X.Y.Z>"
-git push origin ps-cli-v<X.Y.Z>
-```
-
-**Force-move protection: tags are not protected today.** Verified live:
-`gh api repos/mindovermachine-dev/policy-system/rulesets` returns `[]`, and
-`gh api repos/mindovermachine-dev/policy-system/tags/protection` returns
-`404 Not Found`. Any tag on this repository, `ps-cli-v*` included, can
-currently be force-moved by anyone with push access — there is no ruleset
-stopping a bare `git tag -f` + `git push -f --tags` from re-pointing an
-existing tag afterward.
-
-**Commit-SHA-pin alternative**: because tags aren't protected, an operator
-who needs install-time integrity beyond "trust the tag" should install
-against the exact commit SHA the tag points at instead of the tag name:
+An operator who needs install-time integrity beyond "trust the tag" can still
+install against the exact commit SHA a release points at instead of the tag name:
 
 ```bash
 uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
@@ -669,6 +654,9 @@ A commit SHA cannot be silently re-pointed the way a tag can.
   `gh tt deliver` carries it through to the squashed `ready/*` commit.
 - Ensure all checks pass before running `gh tt deliver` (see
   [Getting Started](#getting-started) above).
+- Every release adds a `chore(release)` commit to `main` (see
+  [Releasing](#releasing) above), so a `ready/**` branch already in flight when
+  that happens may need a rebase before its own `gh tt deliver`.
 
 ## Reporting Issues
 

@@ -150,9 +150,10 @@ open http://localhost:3001/login
 
 > [!TIP]
 > **Updating to the latest version.** The chart is installed from your local checkout
-> and pins the `ps-service` image version in `values.yaml`, so a new release is picked
-> up by pulling the repo and upgrading the existing Helm release — not by re-running
-> `helm install`:
+> and pins the `ps-service` image version in `values.yaml`. That pin is maintained
+> automatically by the release job — it always equals `Chart.yaml`'s `appVersion` —
+> so you never edit it by hand; a new release is picked up by pulling the repo and
+> upgrading the existing Helm release — not by re-running `helm install`:
 >
 > ```bash
 > git pull
