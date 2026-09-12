@@ -17,7 +17,7 @@ first place — this page is the values reference for that walkthrough, step 5 o
 | Key | Default (local-test) | Purpose |
 | --- | --- | --- |
 | `psService.image.repository` | `ghcr.io/mindovermachine-dev/ps-service` | PS Service image. |
-| `psService.image.tag` | _(current release)_ | PS Service image tag — the current release, maintained automatically by the release job; pin a release, don't track `latest`. |
+| `psService.image.tag` | `""` (falls back to `Chart.appVersion`) | PS Service image tag. Empty by default — the chart's own `appVersion` (kept in lockstep with the image by the release job) is used unless you pin an explicit tag with `--set`/`-f`. |
 | `psService.service.type` | `NodePort` (`ClusterIP` in prod) | PS Service Service type. `NodePort` is what `deploy/kind/cluster.yaml`'s `extraPortMappings` targets locally; prod has no kind-specific reachability mechanism, so it's `ClusterIP`-only there. |
 | `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
 | `psService.companyMerge.similarityThreshold` | `0.85` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. |

@@ -1,6 +1,6 @@
 """Commit + tag + atomic push, and the D-03 push-race contract (AC-BI-015/016/017/019).
 
-`publish-release.sh` commits exactly the six version-file paths S7's `sync-version-files.sh`
+`publish-release.sh` commits exactly the five version-file paths S7's `sync-version-files.sh`
 writes as `chore(release): <release_version>`, tags HEAD through
 `${PS_RELEASE_GH:-gh} tt semver bump --<bump_size>` (which runs the real `git tag -a`, PLAN A-03),
 asserts the tag resolves to that commit, then pushes both refs to `origin` in one atomic
@@ -30,7 +30,6 @@ EXPECTED_VERSION_FILE_PATHS = [
     "ps-cli/pyproject.toml",
     "uv.lock",
     "charts/policy-system/Chart.yaml",
-    "charts/policy-system/values.yaml",
     "ps-skills/policy-system/.claude-plugin/plugin.json",
 ]
 
@@ -90,7 +89,7 @@ def test_tag_points_at_the_release_commit(release_fixture: ReleaseFixture) -> No
     assert tag_commit == release_fixture.work.head()
 
 
-def test_commit_touches_exactly_the_six_version_paths(release_fixture: ReleaseFixture) -> None:
+def test_commit_touches_exactly_the_five_version_paths(release_fixture: ReleaseFixture) -> None:
     release_fixture.commit("feat(release): automate lockstep versioning - resolves #79")
     _sync_and_verify(release_fixture, RELEASE_VERSION)
 

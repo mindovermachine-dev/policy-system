@@ -162,6 +162,27 @@ jobs:
       - name: Record the published manifest list
         run: docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Checkout the release commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify-tag-on-main.outputs.git-tag }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+
+      - name: Log in to the GHCR chart registry
+        env:
+          HELM_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$HELM_REGISTRY_PASSWORD" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Package the Helm chart
+        run: helm package charts/policy-system --version "$IMAGE_TAG" --app-version "$IMAGE_TAG" --destination /tmp/chart-dist
+
+      - name: Push the chart to GHCR as an OCI artifact
+        run: helm push /tmp/chart-dist/policy-system-*.tgz oci://ghcr.io/mindovermachine-dev/charts
+
   github-release:
     name: Create the GitHub Release
     needs: [verify-tag-on-main, publish]

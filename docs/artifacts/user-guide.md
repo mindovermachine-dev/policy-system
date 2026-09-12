@@ -134,7 +134,8 @@ brew install helm
 ```
 
 ```bash
-helm install policy-system ./charts/policy-system --wait # This step can take a few minutes to complete as the container images are downloaded.
+helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
+  --version <X> --wait # X = the release version, e.g. 0.12.0. This step can take a few minutes to complete as the container images are downloaded.
 
 kubectl get pods    # ps-service and falkordb should both be in "Running" state
 
@@ -149,25 +150,22 @@ open http://localhost:3001/login
 `localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
 
 > [!TIP]
-> **Updating to the latest version.** The chart is installed from your local checkout
-> and pins the `ps-service` image version in `values.yaml`. That pin is maintained
-> automatically by the release job — it always equals `Chart.yaml`'s `appVersion` —
-> so you never edit it by hand; a new release is picked up by pulling the repo and
-> upgrading the existing Helm release — not by re-running `helm install`:
+> **Updating to the latest version.** The chart is installed straight from GHCR as an
+> OCI artifact — no repo checkout or repo sync needed to upgrade. Re-run the same
+> command with the new release version:
 >
 > ```bash
-> git pull
->
-> helm upgrade policy-system ./charts/policy-system --reset-values --wait
+> helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
+>   --version <new-X> --wait
 >
 > kubectl get pods -l app.kubernetes.io/component=ps-service \
 >   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
 > ```
 >
-> The `IMAGE` column should show the tag pinned in `charts/policy-system/values.yaml`.
-> `--reset-values` matters: Helm otherwise carries forward any `--set` from a previous
-> install or upgrade, so a tag you once pinned by hand would silently win over the
-> chart's new default. Your graph data is kept — FalkorDB persists to a
+> The chart's `psService.image.tag` defaults to empty and falls back to `Chart.appVersion`
+> (see the [Helm Chart Values Reference](./helm-chart-values-reference.md)), so the chart
+> version and the image version can never disagree — there is no tag to hand-pin and no
+> flag needed to reset one. Your graph data is kept — FalkorDB persists to a
 > `PersistentVolumeClaim` (see [Operations: Backup & Restore](#operations-backup--restore)),
 > so regulations loaded in step 7 do not need to be re-seeded.
 

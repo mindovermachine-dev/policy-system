@@ -2,11 +2,12 @@
 
 `sync-version-files.sh` writes `release_version` into the version-lockstep fields across four
 files (`ps-service/pyproject.toml`, `ps-cli/pyproject.toml`, `charts/policy-system/Chart.yaml`
-(`version` + `appVersion`), `charts/policy-system/values.yaml` (`psService.image.tag` only)) and
-`ps-skills/policy-system/.claude-plugin/plugin.json` -- re-locking `uv.lock` for the two uv
-workspace members along the way (PLAN A-13). `falkordb.image.tag`, a sibling top-level block in
-`values.yaml`, must never change (PLAN A-20). `verify-version-files.sh` reads all of the above
-back and fails, naming every offender, when any field does not equal `release_version`.
+(`version` + `appVersion`)) and `ps-skills/policy-system/.claude-plugin/plugin.json` -- re-locking
+`uv.lock` for the two uv workspace members along the way (PLAN A-13). `charts/policy-system/
+values.yaml` is no longer synced here (issue #80 AC-BI-012 amendment): its `psService.image.tag`
+defaults to empty and falls back to `Chart.yaml`'s `appVersion` via the chart template instead.
+`verify-version-files.sh` reads all of the above back and fails, naming every offender, when any
+field does not equal `release_version`.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
 SUBPROCESS_TIMEOUT_SECONDS = 60.0
 
 CHART_RELATIVE_PATH = "charts/policy-system/Chart.yaml"
-VALUES_RELATIVE_PATH = "charts/policy-system/values.yaml"
 PLUGIN_RELATIVE_PATH = "ps-skills/policy-system/.claude-plugin/plugin.json"
 
 
@@ -81,28 +81,11 @@ def test_sync_writes_all_five_fields_and_uv_lock(release_fixture: ReleaseFixture
     assert chart["version"] == release_version
     assert chart["appVersion"] == release_version
 
-    values = yaml.safe_load((work_dir / VALUES_RELATIVE_PATH).read_text(encoding="utf-8"))
-    assert values["psService"]["image"]["tag"] == release_version
-
     plugin = json.loads((work_dir / PLUGIN_RELATIVE_PATH).read_text(encoding="utf-8"))
     assert plugin["version"] == release_version
 
     lock_versions = _lock_versions(work_dir / "uv.lock", ("ps-service", "ps-cli"))
     assert lock_versions == {"ps-service": release_version, "ps-cli": release_version}
-
-
-def test_falkordb_image_tag_is_untouched(release_fixture: ReleaseFixture) -> None:
-    values_path = release_fixture.work.path / VALUES_RELATIVE_PATH
-    original_falkordb_tag = yaml.safe_load(values_path.read_text(encoding="utf-8"))["falkordb"][
-        "image"
-    ]["tag"]
-
-    release_fixture.run_script("sync-version-files.sh", "0.12.0")
-
-    updated_falkordb_tag = yaml.safe_load(values_path.read_text(encoding="utf-8"))["falkordb"][
-        "image"
-    ]["tag"]
-    assert updated_falkordb_tag == original_falkordb_tag
 
 
 def test_each_file_changes_exactly_one_line(release_fixture: ReleaseFixture) -> None:
@@ -114,7 +97,6 @@ def test_each_file_changes_exactly_one_line(release_fixture: ReleaseFixture) -> 
         "ps-service/pyproject.toml": 1,
         "ps-cli/pyproject.toml": 1,
         CHART_RELATIVE_PATH: 2,  # `version:` + `appVersion:` -- two distinct fields, PLAN A-20
-        VALUES_RELATIVE_PATH: 1,
         PLUGIN_RELATIVE_PATH: 1,
     }
     for path, expected in expected_lines_changed.items():

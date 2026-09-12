@@ -8,6 +8,9 @@
 # as sync-version-files.sh). Exit 0 iff every field below reads back as <release_version>;
 # otherwise exit 1, logging each mismatched field (event=field_stale) and printing every
 # offender with its actual value. Exit 2 on a usage error.
+#
+# `charts/policy-system/values.yaml` is deliberately NOT checked (issue #80 AC-BI-012 amendment)
+# -- see sync-version-files.sh's header for why.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +25,6 @@ readonly USAGE="usage: $(basename "$0") <release_version>"
 readonly PS_SERVICE_PYPROJECT_PATH="ps-service/pyproject.toml"
 readonly PS_CLI_PYPROJECT_PATH="ps-cli/pyproject.toml"
 readonly CHART_YAML_PATH="charts/policy-system/Chart.yaml"
-readonly VALUES_YAML_PATH="charts/policy-system/values.yaml"
 readonly PLUGIN_JSON_PATH="ps-skills/policy-system/.claude-plugin/plugin.json"
 
 # read_pyproject_version <path>: the `[project]` `version = "..."` value.
@@ -36,29 +38,6 @@ read_chart_field() {
   local field_name="$1"
   local path="$2"
   sed -nE "s/^${field_name}: \"?([^\"]*)\"?\$/\1/p" "$path" | head -n1
-}
-
-# read_values_ps_service_image_tag <path>: `psService.image.tag`, via the same block-tracking
-# state machine sync-version-files.sh writes with (read-only here).
-read_values_ps_service_image_tag() {
-  local path="$1"
-  awk '
-    BEGIN { in_ps_service = 0; in_image = 0 }
-    {
-      if ($0 ~ /^[A-Za-z]/) {
-        in_ps_service = ($0 ~ /^psService:/) ? 1 : 0
-        in_image = 0
-      } else if (in_ps_service && $0 ~ /^  [A-Za-z]/) {
-        in_image = ($0 ~ /^  image:/) ? 1 : 0
-      }
-      if (in_ps_service && in_image && $0 ~ /^    tag: /) {
-        line = $0
-        sub(/^    tag: "/, "", line)
-        sub(/"$/, "", line)
-        print line
-      }
-    }
-  ' "$path"
 }
 
 # read_plugin_json_version <path>: the single `"version": "..."` field.
@@ -88,10 +67,6 @@ collect_stale_fields() {
   actual="$(read_chart_field appVersion "$CHART_YAML_PATH")"
   [[ "$actual" == "$release_version" ]] ||
     printf '%s:appVersion=%s\n' "$CHART_YAML_PATH" "$actual"
-
-  actual="$(read_values_ps_service_image_tag "$VALUES_YAML_PATH")"
-  [[ "$actual" == "$release_version" ]] ||
-    printf '%s:psService.image.tag=%s\n' "$VALUES_YAML_PATH" "$actual"
 
   actual="$(read_plugin_json_version "$PLUGIN_JSON_PATH")"
   [[ "$actual" == "$release_version" ]] ||

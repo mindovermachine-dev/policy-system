@@ -30,9 +30,10 @@ Fixture layout under `tmp_path` (CHANGES X-06 recipe):
 
 The seeded `work/` tree holds a minimal offline uv workspace (root `pyproject.toml`, two
 dependency-free hatchling members `ps-service` and `ps-cli` at `0.11.0`, a `uv.lock`) plus real
-copies of `charts/policy-system/Chart.yaml`, `charts/policy-system/values.yaml` and
-`ps-skills/policy-system/.claude-plugin/plugin.json`, so `sed`/`awk` patterns are exercised on
-the true file shapes.
+copies of `charts/policy-system/Chart.yaml` and `ps-skills/policy-system/.claude-plugin/
+plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes. `charts/policy-
+system/values.yaml` is no longer a synced file (issue #80 AC-BI-012 amendment) and is not seeded
+here.
 """
 
 from __future__ import annotations
@@ -61,7 +62,6 @@ SEED_HEADER = "chore: seed"
 MINI_WORKSPACE_MEMBERS = ("ps-service", "ps-cli")
 REAL_VERSION_FILES = (
     Path("charts/policy-system/Chart.yaml"),
-    Path("charts/policy-system/values.yaml"),
     Path("ps-skills/policy-system/.claude-plugin/plugin.json"),
 )
 

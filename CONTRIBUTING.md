@@ -13,6 +13,7 @@ Note: We are in the transition from prototype to full implementation and the ins
   - [Create a virtual environment and install dependencies](#create-a-virtual-environment-and-install-dependencies)
   - [Start PS Service (process harness)](#start-ps-service-process-harness)
   - [Run PS Service as a container](#run-ps-service-as-a-container)
+  - [Install the Helm chart (development)](#install-the-helm-chart-development)
   - [Use ps-cli](#use-ps-cli)
     - [Run from a repo checkout (local development)](#run-from-a-repo-checkout-local-development)
   - [Configure the LLM Interface](#configure-the-llm-interface)
@@ -323,6 +324,30 @@ Clean up with:
 podman rm -f ps-service falkordb && podman network rm ps-net
 ```
 
+### Install the Helm chart (development)
+
+For repo-local development or testing a chart change before it's released, install
+straight from a checkout — this path stays fully supported alongside the `oci://`
+path documented in the
+[user guide](docs/artifacts/user-guide.md#5-deploy-policy-system):
+
+```bash
+helm install policy-system ./charts/policy-system --wait
+```
+
+This renders `psService.image.tag`'s default (empty, falling back to `Chart.yaml`'s
+`appVersion`) the same way the published OCI chart does — see the
+[Helm Chart Values Reference](docs/artifacts/helm-chart-values-reference.md).
+
+Pulling the published chart anonymously
+(`helm show chart oci://ghcr.io/mindovermachine-dev/charts/policy-system`) only works
+once the GHCR chart package has been made public. That is a one-time manual step, the
+same as for the `ps-service` image (see
+["Run PS Service as a container"](#run-ps-service-as-a-container) above): until a
+human flips its visibility to public from the package's Settings → Danger Zone in the
+GHCR web UI (`https://github.com/orgs/mindovermachine-dev/packages`, find the
+`charts/policy-system` package), an anonymous pull/show fails with `unauthorized`.
+
 ### Use ps-cli
 
 `ps-cli` is a thin operator client for PS Service's REST API — this is the
@@ -605,8 +630,6 @@ The computed version is written into every version-lockstep file, in one commit:
 - `ps-service/pyproject.toml` — `[project] version`
 - `ps-cli/pyproject.toml` — `[project] version`
 - `charts/policy-system/Chart.yaml` — `version` and `appVersion`
-- `charts/policy-system/values.yaml` — `psService.image.tag` only (the sibling
-  `falkordb.image.tag` is never touched)
 - `ps-skills/policy-system/.claude-plugin/plugin.json` — `version`
 
 `uv.lock` is re-locked in the same commit so it stays consistent with the two

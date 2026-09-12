@@ -1,6 +1,8 @@
 suite: ps-service deployment
 templates:
   - ps-service-deployment.yaml
+chart:
+  appVersion: 9.9.9
 tests:
   # --- S7: FalkorDB DNS + LLM env wiring (AC-BI-007, AC-BI-003) ---
 
@@ -127,3 +129,19 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].securityContext.runAsNonRoot
           value: true
+
+  # --- S1/S2: psService.image.tag fallback (AC-BI-001, AC-BI-002) ---
+
+  - it: image falls back to Chart.AppVersion when tag is empty
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:9.9.9
+
+  - it: explicit tag override still wins over Chart.AppVersion
+    set:
+      psService.image.tag: "1.2.3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:1.2.3

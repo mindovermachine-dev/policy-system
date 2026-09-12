@@ -725,8 +725,12 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     freshly built one) or sourcing the tarball from anywhere else breaks this vector.
     """
     publish = _job(_PUBLISH_JOB)
-    pushes = _steps_running(publish, "push")
-    assert len(pushes) == 1, f"expected exactly one registry-push step, found {len(pushes)}"
+    pushes = [
+        step
+        for step in _steps_running(publish, "push")
+        if "docker" in _tokens(str(step.get("run", "")))
+    ]
+    assert len(pushes) == 1, f"expected exactly one image-push step, found {len(pushes)}"
 
     assert _effective_tokens(publish, pushes[0]) == [
         "for",

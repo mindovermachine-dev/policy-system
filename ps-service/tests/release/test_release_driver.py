@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from conftest import ReleaseFixture
 
 CHART_RELATIVE_PATH = "charts/policy-system/Chart.yaml"
-VALUES_RELATIVE_PATH = "charts/policy-system/values.yaml"
 PLUGIN_RELATIVE_PATH = "ps-skills/policy-system/.claude-plugin/plugin.json"
 
 
@@ -87,10 +86,6 @@ def test_feat_commit_leaves_five_fields_synced_to_next_minor(
     chart = yaml.safe_load((work_dir / CHART_RELATIVE_PATH).read_text("utf-8"))
     assert chart["version"] == expected_release_version
     assert chart["appVersion"] == expected_release_version
-
-    values = yaml.safe_load((work_dir / VALUES_RELATIVE_PATH).read_text("utf-8"))
-    assert values["psService"]["image"]["tag"] == expected_release_version
-    assert values["falkordb"]["image"]["tag"] == "latest"
 
     plugin = json.loads((work_dir / PLUGIN_RELATIVE_PATH).read_text("utf-8"))
     assert plugin["version"] == expected_release_version

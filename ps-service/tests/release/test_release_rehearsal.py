@@ -201,7 +201,7 @@ def test_release_rehearsal_on_a_clone_of_this_repo(tmp_path: Path) -> None:
     ).stdout.strip()
     assert tag_commit == head_after_release, "the new tag must point at the release commit (HEAD)"
 
-    # All six version-lockstep fields equal the computed release version (AC-BI-012).
+    # All five version-lockstep fields equal the computed release version (AC-BI-012).
     ps_service_pyproject = tomllib.loads(
         (work / "ps-service" / "pyproject.toml").read_text(encoding="utf-8")
     )
@@ -217,11 +217,6 @@ def test_release_rehearsal_on_a_clone_of_this_repo(tmp_path: Path) -> None:
     )
     assert chart["version"] == expected_release_version
     assert chart["appVersion"] == expected_release_version
-
-    values = yaml.safe_load(
-        (work / "charts" / "policy-system" / "values.yaml").read_text(encoding="utf-8")
-    )
-    assert values["psService"]["image"]["tag"] == expected_release_version
 
     plugin = json.loads(
         (work / "ps-skills" / "policy-system" / ".claude-plugin" / "plugin.json").read_text(

@@ -63,6 +63,18 @@ inventory:
     name: Verify GitHub action refs resolve
     command: ./.github/scripts/verify-action-refs.sh
 
+  - id: install-helm
+    name: Install Helm + helm-unittest plugin
+    command: |
+      if ! command -v helm >/dev/null 2>&1; then
+        dir=/usr/local/bin
+        [ -w "$dir" ] || dir="$HOME/.local/bin"
+        mkdir -p "$dir"
+        curl -sSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+          | DESIRED_VERSION=v3.18.4 HELM_INSTALL_DIR="$dir" USE_SUDO=false bash
+      fi
+      helm plugin list | grep -q unittest || helm plugin install https://github.com/helm-unittest/helm-unittest
+
   - id: markdownlint
     name: Run markdownlint
     command: npx --no-install markdownlint-cli2 "**/*.md" "!**/.venv/**" "!**/.orchestrator/**" "!CLAUDE.md" "!.github/agents/**"
@@ -95,6 +107,14 @@ inventory:
     command: |
       uv export --no-emit-workspace --format requirements-txt --no-hashes \
         | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off
+
+  - id: helm-lint
+    name: Lint the Helm chart
+    command: helm lint charts/policy-system
+
+  - id: helm-unittest
+    name: Run helm-unittest against the Helm chart
+    command: helm unittest charts/policy-system
 
   - id: sync-dev-group
     name: Sync uv dev dependency group
@@ -160,6 +180,7 @@ waves:
       - safe-repo
       - repo-gitconfig
       - install-actionlint
+      - install-helm
       - install-lint-tools
       - verify-lint-tools
       - verify-uv
@@ -173,6 +194,7 @@ waves:
       - repo-gitconfig
       - install-lint-tools
       - install-actionlint
+      - install-helm
       - sync-dev-group
       - version-txt
 
@@ -190,6 +212,8 @@ waves:
       - basedpyright
       - pytest
       - pip-audit
+      - helm-lint
+      - helm-unittest
 
   - id: "fix-all"
     name: "Fix anything that can be fixed automatically"

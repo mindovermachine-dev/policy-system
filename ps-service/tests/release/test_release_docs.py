@@ -112,13 +112,13 @@ def test_contributing_releasing_describes_automated_flow() -> None:
     assert "push" in releasing.lower() and "main" in releasing
     assert "github-actions[bot]" in releasing
 
-    # The synced version fields (PLAN S7/AC-BI-012).
+    # The synced version fields (PLAN S7/AC-BI-012, amended by issue #80: `values.yaml` is no
+    # longer synced -- its `psService.image.tag` falls back to `Chart.yaml`'s `appVersion`).
     for synced_field in (
         "ps-service/pyproject.toml",
         "ps-cli/pyproject.toml",
         "Chart.yaml",
         "appVersion",
-        "values.yaml",
         "plugin.json",
     ):
         assert synced_field in releasing, f"missing synced field {synced_field!r}"
@@ -136,7 +136,7 @@ def test_contributing_has_no_manual_release_instructions() -> None:
     `git push origin <tag>` (the retired manual flow) -- prose MAY still explain that
     the automated job runs `gh tt semver bump --<size>` internally. Nowhere in the file
     may it claim there is no version file / nothing to keep in sync -- that was true of
-    the old tag-only scheme and is false now that five files/six fields are synced.
+    the old tag-only scheme and is false now that four files/five fields are synced.
     """
     text = CONTRIBUTING_PATH.read_text(encoding="utf-8")
 
@@ -224,27 +224,38 @@ def test_contributing_delivery_process_mentions_rebase_after_release_commit() ->
     assert "rebase" in delivery_process.lower()
 
 
-def test_user_guide_tip_states_pin_is_maintained_by_release_job_and_equals_app_version() -> None:
-    """AC-BI-029: the `values.yaml` image pin is maintained automatically by the release job.
+def test_user_guide_tip_uses_oci_install_with_no_git_pull() -> None:
+    """AC-BI-010 (GH issue #80, supersedes #79's AC-BI-029 for this tip).
 
-    It equals `Chart.yaml`'s `appVersion`; the `git pull` and
-    `helm upgrade ... --reset-values --wait` commands are retained unchanged.
+    §5's install command and the "Updating to the latest version" tip both use the
+    `oci://` form with `--version`; neither contains a `git pull` step, a
+    `--reset-values` flag, nor the retired "pinned by hand" hand-pin caveat -- the
+    chart's `psService.image.tag` now falls back to `Chart.appVersion` on its own, so
+    there is nothing left to hand-pin or reset.
     """
     deploy_section = _section(
         USER_GUIDE_PATH.read_text(encoding="utf-8"), "5. Deploy Policy System"
     )
+
+    assert "oci://ghcr.io/mindovermachine-dev/charts/policy-system" in deploy_section
+    assert "--version" in deploy_section
+    assert "git pull" not in deploy_section
+    assert "--reset-values" not in deploy_section
+    assert "pinned by hand" not in deploy_section.lower()
+
     tip_text = deploy_section[deploy_section.index("Updating to the latest version") :]
 
-    assert "release job" in tip_text.lower()
-    assert "appVersion" in tip_text
-    assert "git pull" in tip_text
-    assert "helm upgrade policy-system ./charts/policy-system --reset-values --wait" in tip_text
+    assert "oci://ghcr.io/mindovermachine-dev/charts/policy-system" in tip_text
+    assert "--version" in tip_text
 
 
-def test_values_reference_image_tag_row_has_no_literal_version() -> None:
-    """AC-BI-030: the `psService.image.tag` row's Default column names the release job.
+def test_values_reference_image_tag_row_documents_the_appversion_fallback() -> None:
+    """AC-BI-011 (GH issue #80, supersedes #79's AC-BI-030 for this row).
 
-    It must not show a literal version number.
+    The `psService.image.tag` row states the default is empty and falls back to
+    `Chart.appVersion` -- the release job no longer writes this field at all (it only
+    keeps `Chart.yaml`'s `appVersion` in lockstep), so the row must not claim the
+    field is "maintained" by anything, and must never show a literal version number.
     """
     lines = VALUES_REFERENCE_PATH.read_text(encoding="utf-8").splitlines()
     matching_rows = [line for line in lines if "psService.image.tag" in line]
@@ -253,4 +264,5 @@ def test_values_reference_image_tag_row_has_no_literal_version() -> None:
     row = matching_rows[0]
 
     assert re.search(r"\d+\.\d+\.\d+", row) is None, row
-    assert "release job" in row.lower()
+    assert "appVersion" in row
+    assert '""' in row or "empty" in row.lower()

@@ -27,7 +27,7 @@ spec:
       {{- end }}
       containers:
         - name: ps-service
-          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag }}"
+          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
           securityContext:
             # Matches the non-root `ps` user (uid/gid 10001) Dockerfile:46-47
             # creates specifically for this Kubernetes runAsUser.

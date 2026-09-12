@@ -5,11 +5,11 @@
 #
 # Must run with the repository working-tree root as the current directory (same convention as
 # sync-version-files.sh/verify-version-files.sh), after those two scripts have already synced and
-# verified the six version-file paths -- this script only commits, tags and pushes them.
+# verified the five version-file paths -- this script only commits, tags and pushes them.
 #
 # 1. Exports GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL to the D-06 bot identity for the
 #    whole script, so both the release commit and the annotated tag's tagger use it (PLAN A-04).
-# 2. Commits exactly the six version-file paths S7 writes, as `chore(release): <release_version>`.
+# 2. Commits exactly the five version-file paths S7 writes, as `chore(release): <release_version>`.
 # 3. Runs `${PS_RELEASE_GH:-gh} tt semver bump --<bump_size>`, which tags HEAD (PLAN A-03).
 # 4. Asserts the tag resolves to the release commit: `git rev-list -n 1 <release_version> == HEAD`
 #    (defense in depth before pushing, AC-BI-015).
@@ -34,17 +34,18 @@ export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
-# The six version-file paths S7's sync-version-files.sh writes (PLAN A-18/A-20, IMPL_SLICE_4).
+# The five version-file paths S7's sync-version-files.sh writes (PLAN A-18/A-20, IMPL_SLICE_4).
+# `charts/policy-system/values.yaml` is deliberately excluded (issue #80 AC-BI-012 amendment) --
+# it is no longer synced, see sync-version-files.sh's header.
 readonly VERSION_FILE_PATHS=(
   "ps-service/pyproject.toml"
   "ps-cli/pyproject.toml"
   "uv.lock"
   "charts/policy-system/Chart.yaml"
-  "charts/policy-system/values.yaml"
   "ps-skills/policy-system/.claude-plugin/plugin.json"
 )
 
-# commit_release_files <release_version>: stage exactly the six version-file paths and commit.
+# commit_release_files <release_version>: stage exactly the five version-file paths and commit.
 commit_release_files() {
   local release_version="$1"
   git add -- "${VERSION_FILE_PATHS[@]}"
