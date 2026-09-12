@@ -6,7 +6,7 @@ description: >-
   testable AC from multiple perspectives.
 metadata:
   author: platform
-  version: "4.0.0"
+  version: "4.1.0"
   tags: [gh-issue, backlog-item, interactive]
   copyright: "© 2026 Cartman ApS. All rights reserved."
 ---
@@ -439,15 +439,36 @@ Take the **highest single factor** as the T-shirt size.
 
 ### Step 2: Classify
 
-Determine the change type (used for branch prefix):
+Pick the conventional-commit **type** and **scope** for the issue. `gh tt deliver`
+squashes the branch into a ready commit whose header is `<issue title> - resolves #N`,
+and `scripts/release/lint-commit-header.sh` rejects the delivery unless that header parses
+as `type(scope)!: description`. The type also decides the release bump
+(`scripts/release/bump-from-commits.sh`), so choose it by what ships, not by how the work
+was requested.
 
-| Type               | Branch Prefix  |
-| ------------------ | -------------- |
-| New Feature        | `feature/`     |
-| Bug Fix            | `bugfix/`      |
-| Design             | `feature/`     |
-| Regulatory         | `feature/`     |
-| System Improvement | `improvement/` |
+| Type       | Use when                                                           | Release bump |
+| ---------- | ------------------------------------------------------------------ | ------------ |
+| `feat`     | New user-visible capability or endpoint                            | minor        |
+| `fix`      | Wrong behaviour corrected                                          | patch        |
+| `perf`     | Same behaviour, better cost/latency                                | patch        |
+| `refactor` | Code change with no behaviour change (incl. removals of dead code) | none         |
+| `docs`     | Documentation, ADRs, recorded decisions                            | none         |
+| `test`     | Tests only (flake fixes, validation experiments)                   | none         |
+| `build`    | Build system, dependencies, packaging                              | none         |
+| `ci`       | Workflows and pipeline scripts                                     | none         |
+| `chore`    | Anything else (spikes, housekeeping)                               | none         |
+| `style`    | Formatting only                                                    | none         |
+
+Append `!` after the scope for a breaking change (major bump). No other type parses —
+in particular do not use a container name (`company_merge:`) or `revert` as the type.
+
+**Scope** is the container, module, or area the change lands in, e.g. `ps-cli`,
+`ps-service`, `release`, `helm`, `domain_mapper`, `company_merge`, `change_monitor`,
+`mcp_interface`, `llm_interface`, `ingestion`. Multiple scopes may be separated by
+`/` (`domain_mapper/company_merge`); parentheses are not allowed inside the scope.
+
+**Required output:** `Type:` and `Scope:` (scope may be omitted only when the change
+is genuinely cross-cutting).
 
 ---
 
@@ -455,7 +476,11 @@ Determine the change type (used for branch prefix):
 
 Present the complete issue, following `.github/ISSUE_TEMPLATE/standard-mom.md`:
 
-**Title:** [concise, 5-10 words]
+**Title:** `<type>(<scope>): <description>` — type and scope from Phase 3 Step 2,
+description concise (5-10 words), imperative, lower-case first letter, no trailing
+period. Example: `feat(ps-cli): add kgraph list to show ingested RegulatoryInstruments`.
+The title becomes the ready commit header verbatim, so it must already be a valid
+conventional-commit header.
 
 ## Problem
 
@@ -512,7 +537,14 @@ or a note that the user proceeded without a strong justification (Phase 1 Step 3
 
 1. Serialize the confirmed content from Phase 4 as GitHub-flavored Markdown, preserving
    section headers, group headers, and `AC-BI-###` IDs exactly as confirmed.
-2. Create the issue:
+2. Lint the title as the ready commit header it will become; fix the title and re-run
+   until it exits 0 before creating anything:
+
+   ```bash
+   scripts/release/lint-commit-header.sh --header "<title> - resolves #0"
+   ```
+
+3. Create the issue:
 
    ```bash
    gh issue create \
@@ -522,7 +554,7 @@ or a note that the user proceeded without a strong justification (Phase 1 Step 3
      --assignee @me
    ```
 
-3. If `github.project` is configured in `system-config.md`, add the issue to that
+4. If `github.project` is configured in `system-config.md`, add the issue to that
    project and set Status = Backlog.
 
 Execution should be silent unless:
@@ -546,3 +578,7 @@ Execution should be silent unless:
 8. **Standard-mom headers only** — `Problem`, `Solution`, `Value`, `Deliverables`,
    `Discussion` (optional), `Acceptance criteria`, `Size`, `Related`. Do not introduce
    `Background`/`Scope` or any tracker-specific structure.
+9. **Title is a conventional-commit header** — `type(scope): description` with one of the
+   ten types from Phase 3 Step 2; lint it with `scripts/release/lint-commit-header.sh`
+   before `gh issue create`. A non-conforming title fails at `gh tt deliver`, not at
+   creation.
