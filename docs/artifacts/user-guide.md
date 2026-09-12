@@ -181,12 +181,24 @@ readiness. It's a distributed client, installable independently of this repo lik
 curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
 ```
 
-This runs [`ps-cli/install.sh`](../../ps-cli/install.sh), which installs `ps-cli` via
-`uv tool install` and puts it on `PATH` through `uv`'s tool-install shims. Verify:
+This runs [`ps-cli/install.sh`](../../ps-cli/install.sh), which resolves the **latest
+non-prerelease GitHub Release** of `ps-cli`, downloads its wheel, verifies the wheel's
+SHA-256 against the release's `SHA256SUMS` asset, then installs it via `uv tool install`
+and puts it on `PATH` through `uv`'s tool-install shims. Verify:
 
 ```bash
 ps-cli --version
 ```
+
+To install a specific version instead of the latest, set `PS_CLI_VERSION`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | PS_CLI_VERSION=1.2.3 bash
+```
+
+There is no separate upgrade command — re-run `install.sh` (with or without
+`PS_CLI_VERSION`) whenever a newer release is available; re-running is the documented
+upgrade path and installs over whatever version is currently on `PATH`.
 
 ### 7. Load regulations into the graph
 

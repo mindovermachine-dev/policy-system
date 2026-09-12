@@ -677,14 +677,22 @@ already exists — it does not cut a new version.
 procedure is retired: there is no independent tag or release step for `ps-cli`
 anymore.
 
-An operator who needs install-time integrity beyond "trust the tag" can still
-install against the exact commit SHA a release points at instead of the tag name:
+A contributor who needs `ps-cli` built from a branch or commit that has no release
+yet — before it's merged to `main`, for example — uses `PS_CLI_REF` with
+[`install.sh`](../../ps-cli/install.sh) instead of installing a release wheel:
 
 ```bash
-uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<commit-sha>#subdirectory=ps-cli"
+curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | PS_CLI_REF=<branch-or-sha> bash
 ```
 
-A commit SHA cannot be silently re-pointed the way a tag can.
+This is `install.sh`'s developer path: it skips release resolution and checksum
+verification entirely and installs directly via
+`uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<branch-or-sha>#subdirectory=ps-cli"`.
+Unlike the raw `git+` command, `PS_CLI_REF` accepts either a branch name or a commit
+SHA — a SHA pins the exact commit the way a tag cannot.
+
+See also [Run from a repo checkout](#run-from-a-repo-checkout-local-development)
+above for invoking `ps-cli` as a module without installing it at all.
 
 ## Delivery Process
 

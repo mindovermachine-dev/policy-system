@@ -34,6 +34,8 @@ import re
 import shlex
 import shutil
 import subprocess
+import tomllib
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -70,6 +72,15 @@ _SHELL_VARIABLE = re.compile(r"\$(\w+)|\$\{(\w+)\}")
 _ROUTE_AROUND_THE_GATE = ("always(", "failure(", "cancelled(")
 
 _BASH_TIMEOUT_SECONDS = 10.0
+
+# Slice 1 (issue #81): the `github-release` job builds and uploads the ps-cli wheel.
+_UV_BUILD_STEP_TOKENS = ["uv", "build", "--package", "ps-cli", "--out-dir", "dist"]
+_WHEEL_GLOB_TOKEN = "dist/ps_cli-*.whl"
+_SHA256SUMS_FILENAME = "SHA256SUMS"
+_RELEASE_TAG_SHELL_VARIABLE = "$RELEASE_TAG"
+_WHEEL_NAME_PATTERN = re.compile(r"^ps_cli-\d+\.\d+\.\d+-py3-none-any\.whl$")
+_PS_CLI_PYPROJECT_PATH = _REPO_ROOT / "ps-cli" / "pyproject.toml"
+_UV_BUILD_TIMEOUT_SECONDS = 120.0
 
 
 # --------------------------------------------------------------------------------------
@@ -603,6 +614,134 @@ def test_github_release_step_invokes_the_script_with_the_workflow_token() -> Non
     env = _mapping(steps[0], "env")
     assert env.get("GH_TOKEN") == "${{ secrets.GITHUB_TOKEN }}"
     assert env.get("RELEASE_TAG") == f"${{{{ needs.{_GATE_JOB}.outputs.git-tag }}}}"
+
+
+# --------------------------------------------------------------------------------------
+# ps-cli wheel build + upload (issue #81, Slice 1, X-02) -- after create-github-release.sh
+# --------------------------------------------------------------------------------------
+
+
+def test_github_release_checkout_is_pinned_to_the_release_tag_commit() -> None:
+    """CHANGES.md X-02: the checkout is pinned to the release commit, like `publish`'s own pin.
+
+    Without a `ref:`, a `workflow_dispatch` re-run could build the wheel from whatever
+    `main` HEAD is at re-run time instead of the tagged release commit (AC-BI-002).
+    """
+    checkouts = _steps_using(_job(_GITHUB_RELEASE_JOB), "actions/checkout")
+
+    assert len(checkouts) == 1, f"expected exactly one checkout step, found {len(checkouts)}"
+    assert _mapping(checkouts[0], "with").get("ref") == (
+        f"${{{{ needs.{_GATE_JOB}.outputs.git-tag }}}}"
+    ), "the checkout must be pinned to the release tag commit, matching `publish`'s own pin"
+
+
+def test_github_release_job_builds_the_wheel_after_creating_the_release() -> None:
+    """Slice 1 (AC-BI-002): `uv build --package ps-cli` runs after `create-github-release.sh`.
+
+    The wheel must be built only once the release exists; ordering is asserted by list
+    index, not by trusting the steps happen to be adjacent in the file.
+    """
+    steps = _steps(_job(_GITHUB_RELEASE_JOB))
+
+    create_indices = [
+        index
+        for index, step in enumerate(steps)
+        if _CREATE_GITHUB_RELEASE_SCRIPT in _tokens(str(step.get("run", "")))
+    ]
+    build_indices = [
+        index
+        for index, step in enumerate(steps)
+        if _tokens(str(step.get("run", ""))) == _UV_BUILD_STEP_TOKENS
+    ]
+
+    assert len(create_indices) == 1, (
+        f"expected exactly one create-release step, found {len(create_indices)}"
+    )
+    assert len(build_indices) == 1, (
+        f"expected exactly one `uv build` step, found {len(build_indices)}"
+    )
+    assert build_indices[0] > create_indices[0], (
+        "`uv build --package ps-cli` must run after `create-github-release.sh`"
+    )
+
+
+def test_github_release_job_uploads_wheel_and_sha256sums_with_the_release_token() -> None:
+    """Slice 1 (AC-BI-001/AC-BI-002): `gh release upload` ships the wheel + SHA256SUMS.
+
+    Token vector, not substring match: the release tag, the wheel glob, and the checksum
+    file must all be arguments of the same `gh release upload` invocation, authenticated
+    only by the workflow's own `GITHUB_TOKEN`.
+    """
+    job = _job(_GITHUB_RELEASE_JOB)
+    uploads = [
+        step
+        for step in _steps(job)
+        if _tokens(str(step.get("run", "")))[:3] == ["gh", "release", "upload"]
+    ]
+    assert len(uploads) == 1, f"expected exactly one `gh release upload` step, found {len(uploads)}"
+
+    tokens = _tokens(str(uploads[0]["run"]))
+    assert _RELEASE_TAG_SHELL_VARIABLE in tokens, (
+        f"upload step must reference $RELEASE_TAG: {tokens}"
+    )
+    assert _WHEEL_GLOB_TOKEN in tokens, f"upload step must upload the wheel glob: {tokens}"
+    assert _SHA256SUMS_FILENAME in tokens, f"upload step must upload SHA256SUMS: {tokens}"
+
+    env = _mapping(uploads[0], "env") or _mapping(job, "env")
+    assert env.get("GH_TOKEN") == "${{ secrets.GITHUB_TOKEN }}", (
+        "`gh release upload` must authenticate with the workflow's own GITHUB_TOKEN"
+    )
+    referenced = set(_SECRET_REFERENCE.findall(yaml.safe_dump(uploads[0])))
+    assert referenced == {"GITHUB_TOKEN"}, f"secrets referenced by the upload step: {referenced}"
+
+
+def test_github_release_job_permissions_stay_contents_write_only() -> None:
+    """Slice 1 (AC-BI-002): adding the build/upload steps must not widen the job's token scope."""
+    assert _mapping(_job(_GITHUB_RELEASE_JOB), "permissions") == {"contents": "write"}
+
+
+def test_uv_build_produces_the_wheel_naming_pattern_and_matching_metadata_version(
+    tmp_path: Path,
+) -> None:
+    """Slice 1: a real local `uv build` rehearsal proves the artifact shape the CI step relies on.
+
+    Not a YAML assertion -- this runs the exact command the new CI step runs and inspects
+    the real wheel it produces, so the naming pattern and METADATA `Version` the later
+    `install.sh` work depends on are proven against real bytes, not assumed from the issue text.
+    """
+    uv = shutil.which("uv")
+    assert uv is not None, "uv must be on PATH to rehearse the release build"
+
+    result = subprocess.run(  # noqa: S603 - `uv` is a shutil.which-resolved absolute path; args are literals
+        [uv, "build", "--package", "ps-cli", "--out-dir", str(tmp_path)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=_UV_BUILD_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert result.returncode == 0, f"uv build failed: {result.stdout}{result.stderr}"
+
+    wheels = [path for path in tmp_path.iterdir() if _WHEEL_NAME_PATTERN.match(path.name)]
+    assert len(wheels) == 1, (
+        f"expected exactly one wheel matching {_WHEEL_NAME_PATTERN.pattern!r}, "
+        f"found {[path.name for path in tmp_path.iterdir()]}"
+    )
+
+    pyproject = tomllib.loads(_PS_CLI_PYPROJECT_PATH.read_text(encoding="utf-8"))
+    expected_version = pyproject["project"]["version"]
+
+    with zipfile.ZipFile(wheels[0]) as archive:
+        metadata_name = next(
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        metadata = archive.read(metadata_name).decode("utf-8")
+
+    version_lines = [line for line in metadata.splitlines() if line.startswith("Version:")]
+    assert version_lines == [f"Version: {expected_version}"], (
+        f"wheel METADATA Version must equal pyproject.toml's version ({expected_version}): "
+        f"{version_lines}"
+    )
 
 
 # --------------------------------------------------------------------------------------

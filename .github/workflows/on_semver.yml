@@ -194,6 +194,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ needs.verify-tag-on-main.outputs.git-tag }}
 
       - name: Install gh-tt
         env:
@@ -205,3 +206,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.verify-tag-on-main.outputs.git-tag }}
         run: scripts/release/create-github-release.sh "$RELEASE_TAG"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.12.4"
+
+      - name: Build the ps-cli wheel
+        run: uv build --package ps-cli --out-dir dist
+
+      - name: Generate SHA256SUMS
+        run: sha256sum dist/ps_cli-*.whl > SHA256SUMS
+
+      - name: Upload the wheel and SHA256SUMS to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify-tag-on-main.outputs.git-tag }}
+        run: gh release upload "$RELEASE_TAG" dist/ps_cli-*.whl SHA256SUMS

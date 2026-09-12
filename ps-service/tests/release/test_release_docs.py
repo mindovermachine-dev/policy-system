@@ -249,6 +249,54 @@ def test_user_guide_tip_uses_oci_install_with_no_git_pull() -> None:
     assert "--version" in tip_text
 
 
+def test_user_guide_section_6_documents_pinning_and_rerun_upgrade_path() -> None:
+    """AC-BI-010 (GH issue #81).
+
+    §6 states the installer resolves the latest release, shows `PS_CLI_VERSION=X`
+    for pinning a specific version, and names re-running the script as the
+    documented upgrade path.
+    """
+    section = _section(USER_GUIDE_PATH.read_text(encoding="utf-8"), "6. Install ps-cli")
+
+    assert "PS_CLI_VERSION" in section
+    assert any(re.search(r"PS_CLI_VERSION\s*=", block) for block in _fenced_code_blocks(section)), (
+        "no fenced code block shows a PS_CLI_VERSION=... assignment example"
+    )
+
+    lowered = section.lower()
+    assert "re-run" in lowered or "rerun" in lowered
+    assert "upgrade" in lowered
+
+
+def test_contributing_has_no_commit_sha_git_plus_install_instruction() -> None:
+    """AC-BI-011 (GH issue #81).
+
+    No fenced code block instructs a human to install against a raw
+    `<commit-sha>` via `git+...#subdirectory=ps-cli` -- that path is retired in
+    favor of `PS_CLI_REF`.
+    """
+    text = CONTRIBUTING_PATH.read_text(encoding="utf-8")
+
+    for code_block in _fenced_code_blocks(text):
+        assert re.search(r"git\+.*@<commit-sha>#subdirectory=ps-cli", code_block) is None, (
+            f"retired <commit-sha> git+ install instruction survives in a code block:\n{code_block}"
+        )
+
+
+def test_contributing_documents_ps_cli_ref_dev_path() -> None:
+    """AC-BI-011 (GH issue #81).
+
+    The section that used to hold the `<commit-sha>` instruction now documents
+    `PS_CLI_REF` as the developer install path, so the removal isn't a silent
+    deletion with nothing replacing it.
+    """
+    section = _section(
+        CONTRIBUTING_PATH.read_text(encoding="utf-8"), "ps-cli is released the same way"
+    )
+
+    assert "PS_CLI_REF" in section
+
+
 def test_values_reference_image_tag_row_documents_the_appversion_fallback() -> None:
     """AC-BI-011 (GH issue #80, supersedes #79's AC-BI-030 for this row).
 
