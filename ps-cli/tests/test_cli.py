@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import keyring.errors
 import pytest
 
+from ps_cli import cli
 from ps_cli.cli import run
 from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
@@ -55,6 +56,10 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `check_health()` to be called."""
         raise AssertionError("check_health must not be called in this test")
 
+    def get_service_version(self) -> str:
+        """Fail: this test's fake does not expect `get_service_version()` to be called."""
+        raise AssertionError("get_service_version must not be called in this test")
+
     def check_readiness(self) -> ReadinessResult:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")
@@ -82,6 +87,41 @@ class _UnusedPsServiceClientMethods:
     def run_change_check(self) -> ChangeCheckResult:
         """Fail: this test's fake does not expect `run_change_check()` to be called."""
         raise AssertionError("run_change_check must not be called in this test")
+
+
+def _fake_installed_version(name: str) -> str:
+    """Return a fixed "1.4.0" regardless of `name` -- a typed stand-in for `installed_
+    version` (mirrors `ps-service/tests/test_main.py`'s own `fake_installed_version`
+    pattern; a bare `lambda` here fails `basedpyright` strict's unknown-parameter-type
+    checks, since `importlib.metadata.version`'s parameter type cannot be inferred from
+    an unannotated lambda).
+    """
+    del name
+    return "1.4.0"
+
+
+class _FakeVersionClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in with a scripted get_service_version()."""
+
+    def __init__(self, service_version: str) -> None:
+        """Store the version string this fake's get_service_version() returns."""
+        self._service_version = service_version
+
+    def get_service_version(self) -> str:
+        """Return the scripted service version string."""
+        return self._service_version
+
+
+class _FakeVersionErrorClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose get_service_version() always raises."""
+
+    def __init__(self, error: PsCliError) -> None:
+        """Store the PsCliError this fake's get_service_version() raises."""
+        self._error = error
+
+    def get_service_version(self) -> str:
+        """Raise the scripted PsCliError."""
+        raise self._error
 
 
 class _FakeSuccessClient(_UnusedPsServiceClientMethods):
@@ -178,15 +218,144 @@ def test_run_with_no_command_prints_help_and_returns_zero(
     assert "usage: ps-cli" in captured.out
 
 
-def test_run_with_version_flag_prints_version_and_returns_zero(
-    capsys: pytest.CaptureFixture[str],
+def test_run_version_prints_two_lines_and_returns_zero_when_versions_match(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`ps-cli --version` prints the installed version and returns 0 -- no subcommand needed."""
-    exit_code = run(["--version"])
+    """`ps-cli --version` prints client then service version lines and returns 0.
+
+    Supersedes the old `test_run_with_version_flag_prints_version_and_returns_zero`,
+    which called `run(["--version"])` with `client=None` -- now that `--version`
+    resolves a client and calls `get_service_version()` (AC-BI-005/007), that would
+    silently perform a real network call on every test run instead of testing what
+    its name promised (PLAN.md §5 Slice 5, flagged as a decided fold-in, not a silent
+    drop, in §7 Risk 6).
+    """
+    monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
+    fake_client = _FakeVersionClient("1.4.0")
+
+    exit_code = run(["--version"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out.strip() != ""
+    assert captured.out == "PS-CLI Client Version: 1.4.0\nPS-Service Version: 1.4.0\n"
+    assert captured.err == ""
+
+
+def test_run_version_reports_unavailable_with_error_msg_when_service_client_raises(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-008: a `PsCliError` from `get_service_version()` reports "unavailable (.msg)".
+
+    Uses `.msg` verbatim, never `str(error)` (which would add the `❌`/`💡` decoration --
+    `errors.py`'s `PsCliError.__str__`) -- and prints to stdout, not stderr, per D7/CHANGES.md
+    X-06 (user-confirmed, closed).
+    """
+    fake_client = _FakeVersionErrorClient(
+        PsCliError(
+            msg="Could not reach PS Service at http://x.",
+            hint="check PS_CLI_SERVICE_URL / ps-cli.toml, and that ps-service is running",
+        )
+    )
+
+    exit_code = run(["--version"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    lines = captured.out.splitlines()
+    assert lines[1] == "PS-Service Version: unavailable (Could not reach PS Service at http://x.)"
+    assert captured.err == ""
+
+
+def test_run_version_reports_unavailable_when_config_resolution_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-BI-008: `_resolve_client`'s own `load_config()` failure is caught the same way.
+
+    Reuses this file's own broken-`targets.toml` fixture (`current_context` naming a
+    context absent from `[contexts]`, e.g. `test_run_config_set_context_never_constructs_
+    ps_service_client`) -- `client=None` forces a real `_resolve_client(args, None)` call.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    (tmp_path / "targets.toml").write_text(
+        'current_context = "missing"\n\n[contexts]\ndev = "http://127.0.0.1:8000"\n'
+    )
+
+    exit_code = run(["--version"], client=None)
+
+    assert exit_code == 0
+
+
+def test_run_version_with_unreachable_real_service_returns_zero_without_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-008's real-network proof, mirroring `test_run_with_unreachable_real_service_
+    returns_one_without_crashing`'s exact bind-then-close-socket pattern -- but `--version`
+    returns 0, not 1, and the failure is reported on stdout, not stderr.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
+
+    exit_code = run(["--version"], client=None)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Could not reach PS Service at" in captured.out.splitlines()[1]
+    assert "Traceback" not in captured.out
+    assert "Traceback" not in captured.err
+    assert captured.err == ""
+
+
+def test_run_version_prints_client_version_line_even_when_service_is_unavailable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The client-version line is unconditional, printed before the service lookup is even
+    attempted -- so it still appears as the first stdout line when the service is unreachable.
+    """
+    fake_client = _FakeVersionErrorClient(PsCliError(msg="Could not reach PS Service at http://x."))
+
+    exit_code = run(["--version"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    lines = captured.out.splitlines()
+    assert lines[0].startswith("PS-CLI Client Version: ")
+
+
+def test_run_version_warns_on_stderr_when_client_and_service_versions_differ(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-009: a version mismatch prints exactly one `warning: ...` line to stderr.
+
+    Only the success path can trigger this (not the "unavailable" path, D6) -- stdout
+    still carries its normal two lines, and exit code stays 0.
+    """
+    monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
+    fake_client = _FakeVersionClient("2.0.0")
+
+    exit_code = run(["--version"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == "PS-CLI Client Version: 1.4.0\nPS-Service Version: 2.0.0\n"
+    assert captured.err == (
+        "warning: ps-cli client version (1.4.0) does not match ps-service version (2.0.0)\n"
+    )
+
+
+def test_run_version_emits_no_warning_when_versions_match(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Negative case for AC-BI-009: matching versions print nothing to stderr."""
+    monkeypatch.setattr(cli, "installed_version", _fake_installed_version)
+    fake_client = _FakeVersionClient("1.4.0")
+
+    run(["--version"], client=fake_client)
+
+    assert capsys.readouterr().err == ""
 
 
 def test_main_module_only_imports_and_conditionally_calls_main() -> None:
@@ -1288,3 +1457,69 @@ def test_run_check_prints_run_id_and_returns_zero_end_to_end(
     assert lines[0] == "run_id: sweep-1"
     assert "CRA-1.0: amendment_reingested (-> CRA-1.0 (superseded))" in lines
     assert "GDPR-1.0: current" in lines
+
+
+# --- issue #82 Slice 8: `--version --context` (AC-BI-006, AC-BI-007) --------------------
+
+
+def test_parser_version_flag_accepts_context_before_and_after() -> None:
+    """`--version` and `--context` compose in either order (both are top-level shared flags).
+
+    Direct parse-level proof: no existing test exercises `--context` alongside
+    `--version` specifically, only alongside a subcommand.
+    """
+    after = build_parser().parse_args(["--version", "--context", "dev"])
+    before = build_parser().parse_args(["--context", "dev", "--version"])
+
+    assert after.context == "dev"
+    assert after.version is True
+    assert before.context == "dev"
+    assert before.version is True
+
+
+def test_ac_bi_006_version_context_flag_targets_the_named_contexts_url_for_one_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--version --context dev` queries `dev`'s URL for this invocation only.
+
+    No implementation change needed for this slice (PLAN.md §5 Slice 8) --
+    `_report_service_version` already threads `args`/`client` through the
+    existing `_resolve_client`, unchanged. Mirrors `test_ac_bi_006_context_param_
+    overrides_for_one_call_only_not_persisted`'s style, adapted to prove the
+    property through `--version`'s own printed output rather than a second
+    `load_config()` call: bind-then-close two separate local sockets (`dev`'s and
+    `prod`'s freed ports), `use-context prod`, then `run(["--version", "--context",
+    "dev"])` with `client=None` -- the "unavailable" line's embedded URL must
+    contain `dev`'s port, not `prod`'s.
+    """
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    dev_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    dev_probe.bind(("127.0.0.1", 0))
+    dev_port = dev_probe.getsockname()[1]
+    dev_probe.close()
+
+    prod_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    prod_probe.bind(("127.0.0.1", 0))
+    prod_port = prod_probe.getsockname()[1]
+    prod_probe.close()
+
+    run(
+        ["config", "set-context", "dev", "--url", f"http://127.0.0.1:{dev_port}"],
+        client=uncallable_client,
+    )
+    run(
+        ["config", "set-context", "prod", "--url", f"http://127.0.0.1:{prod_port}"],
+        client=uncallable_client,
+    )
+    run(["config", "use-context", "prod"], client=uncallable_client)
+
+    exit_code = run(["--version", "--context", "dev"], client=None)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    service_line = captured.out.splitlines()[1]
+    assert f":{dev_port}" in service_line
+    assert f":{prod_port}" not in service_line

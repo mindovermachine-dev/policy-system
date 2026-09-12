@@ -69,6 +69,10 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `check_health()` to be called."""
         raise AssertionError("check_health must not be called in this test")
 
+    def get_service_version(self) -> str:
+        """Fail: this test's fake does not expect `get_service_version()` to be called."""
+        raise AssertionError("get_service_version must not be called in this test")
+
     def check_readiness(self) -> ReadinessResult:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")

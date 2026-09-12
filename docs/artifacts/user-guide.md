@@ -186,9 +186,14 @@ non-prerelease GitHub Release** of `ps-cli`, downloads its wheel, verifies the w
 SHA-256 against the release's `SHA256SUMS` asset, then installs it via `uv tool install`
 and puts it on `PATH` through `uv`'s tool-install shims. Verify:
 
-```bash
-ps-cli --version
 ```
+$ ps-cli --version
+PS-CLI Client Version: 1.4.0
+PS-Service Version: 1.4.0
+```
+
+If PS Service isn't reachable yet, the second line reports `unavailable (...)`
+instead and `ps-cli --version` still exits 0.
 
 To install a specific version instead of the latest, set `PS_CLI_VERSION`:
 
@@ -360,7 +365,7 @@ Global flags, usable before or after any subcommand:
 | --- | --- |
 | `-v`, `--verbose` | Print the failure site (file:line) on error. |
 | `--context <name>` | Use this named context's PS Service URL for this invocation only. Never persisted. |
-| `--version` | Print version information and exit. |
+| `--version` | Print PS-CLI client and PS Service versions and exit. |
 
 | Command | Arguments | Description |
 | --- | --- | --- |

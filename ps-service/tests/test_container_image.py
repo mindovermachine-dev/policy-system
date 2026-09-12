@@ -26,6 +26,7 @@ import shutil
 import socket
 import subprocess
 import time
+import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -551,13 +552,21 @@ def smoke_service(
 def test_health_returns_200_alive_through_the_published_port(
     smoke_service: _RunningService,
 ) -> None:
-    """A (AC-BI-007, AC-BI-008): `/health` answers 200 `alive` from outside the container."""
+    """A (AC-BI-007, AC-BI-008): `/health` answers 200 `alive` from outside the container.
+
+    AC-BI-002 (built-image half): `version` must match `ps-service/pyproject.toml`'s own
+    declared `[project] version` -- the real, non-editable wheel install baked into the image
+    (see CHANGES.md C-02) carries hatchling-stamped metadata equal to that source-tree value.
+    """
     response = httpx.get(f"{smoke_service.base_url}/health", timeout=_HTTP_TIMEOUT_SECONDS)
 
     assert response.status_code == _HTTP_OK, (
         f"/health answered {response.status_code} through the published port: {response.text}"
     )
-    assert response.json() == {"status": "alive"}
+    with (_REPO_ROOT / "ps-service/pyproject.toml").open("rb") as pyproject_file:
+        expected_version = tomllib.load(pyproject_file)["project"]["version"]
+    assert response.json()["status"] == "alive"
+    assert response.json()["version"] == expected_version
 
 
 def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(

@@ -181,6 +181,20 @@ def _parse_readiness_body(payload: object) -> ReadinessResult:
     return ReadinessResult(status=status, unhealthy_dependencies=cast("list[str]", unhealthy_items))
 
 
+def _parse_service_version_body(payload: object) -> str:
+    """Parse a `GET /health` 200 response body into its `version` string.
+
+    Raises `PsCliError` (generic, defensive — D7) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    version = body.get("version")
+    if not isinstance(version, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return version
+
+
 def _parse_stage_outcome(payload: object) -> StageOutcome:
     """Parse one raw JSON object into a `StageOutcome`.
 
@@ -391,6 +405,10 @@ class PsServiceClientProtocol(Protocol):
         """`GET /health`: whether the ASGI server is accepting connections."""
         ...
 
+    def get_service_version(self) -> str:
+        """`GET /health`: PS Service's installed package version."""
+        ...
+
     def check_readiness(self) -> ReadinessResult:
         """`GET /ready`: readiness plus any currently-unhealthy dependency names."""
         ...
@@ -465,6 +483,21 @@ class PsServiceClient:
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
         return _parse_health_body(response.json())
+
+    def get_service_version(self) -> str:
+        """`GET /health`: PS Service's installed package version.
+
+        Raises `PsCliError` if PS Service cannot be reached (connection refused
+        or a connect timeout) or if the response body does not match the
+        expected shape.
+        """
+        try:
+            response = self._client.get(_HEALTH_PATH)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        return _parse_service_version_body(response.json())
 
     def check_readiness(self) -> ReadinessResult:
         """`GET /ready`: readiness plus any currently-unhealthy dependency names.

@@ -833,6 +833,60 @@ class TestCheckHealth:
         assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
 
+def _service_version_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/health"
+    assert request.method == "GET"
+    return httpx.Response(200, json={"status": "alive", "version": "1.4.0"})
+
+
+class TestGetServiceVersion:
+    """Slice 2 (issue #82): PsServiceClient.get_service_version()."""
+
+    def test_get_service_version_returns_version_string_on_success(self) -> None:
+        """A 200 GET /health body's `version` field is returned as-is."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_service_version_handler)
+        )
+
+        version = client.get_service_version()
+
+        assert version == "1.4.0"
+
+    def test_get_service_version_raises_ps_cli_error_on_connect_failure(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_service_version()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert "http://127.0.0.1:8000" in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            ["not", "a", "dict"],
+            {"status": "alive"},
+            {"version": 123},
+        ],
+    )
+    def test_get_service_version_raises_generic_error_on_malformed_body(self, body: object) -> None:
+        """A malformed /health body raises the generic PsCliError, not a new exception type."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_service_version()
+
+        assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
+
+
 _READY_BODY_HEALTHY: dict[str, object] = {"status": "ready", "unhealthy_dependencies": []}
 _READY_BODY_NOT_READY: dict[str, object] = {
     "status": "not_ready",

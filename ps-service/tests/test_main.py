@@ -12,7 +12,9 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import tomllib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
@@ -33,7 +35,6 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
-    from pathlib import Path
 
     import httpx
     from starlette.applications import Starlette
@@ -131,7 +132,47 @@ def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) 
     response = TestClient(app).get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "alive"}
+    assert response.json()["status"] == "alive"
+
+
+def test_health_returns_version_field_from_installed_metadata(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-001: `/health`'s `version` field comes from `installed_version("ps-service")`.
+
+    Monkeypatches `ps_service.main.installed_version` (mirrors this file's own
+    `monkeypatch.setattr(main_module, "configure", fake_configure)` convention), proving the
+    field's value flows from that call rather than a hardcoded literal. A named function with
+    an explicit signature is used instead of a bare lambda so `basedpyright --strict` doesn't
+    flag an unknown parameter/return type (`reportUnknownLambdaType`/`reportUnknownArgumentType`).
+    """
+
+    def fake_installed_version(name: str) -> str:
+        return "9.9.9"
+
+    monkeypatch.setattr(main_module, "installed_version", fake_installed_version)
+
+    response = TestClient(app).get("/health")
+
+    assert response.json() == {"status": "alive", "version": "9.9.9"}
+
+
+def test_health_version_matches_ps_service_pyproject_toml_version(app: FastAPI) -> None:
+    """AC-BI-002 (dev-tree-real half): `/health`'s reported version matches
+    `ps-service/pyproject.toml`'s own declared `[project] version`.
+
+    No monkeypatching -- reads `pyproject.toml` directly via `tomllib.load(...)`, proving the
+    real, currently-installed distribution metadata (`importlib.metadata.version("ps-service")`)
+    agrees with the source tree's own declared version.
+    """
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with pyproject_path.open("rb") as pyproject_file:
+        pyproject_data = tomllib.load(pyproject_file)
+    expected_version = pyproject_data["project"]["version"]
+
+    response = TestClient(app).get("/health")
+
+    assert response.json()["version"] == expected_version
 
 
 def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAPI) -> None:
@@ -258,7 +299,7 @@ def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
 @pytest.mark.parametrize(
     ("make_response", "expected_status", "expected_keys"),
     [
-        (_get_bare_health, 200, {"status"}),
+        (_get_bare_health, 200, {"status", "version"}),
         (_get_bare_ready, 503, {"status", "unhealthy_dependencies"}),
         (_get_ready_after_lifespan_startup, 200, {"status", "unhealthy_dependencies"}),
     ],

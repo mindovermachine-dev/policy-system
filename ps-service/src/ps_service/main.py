@@ -12,6 +12,7 @@ Mapper, Company Merge, Query Engine, or Regulatory Change Monitor.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from importlib.metadata import version as installed_version
 from typing import TYPE_CHECKING
 
 import uvicorn
@@ -330,9 +331,12 @@ def create_app(config: ServiceConfig) -> FastAPI:
         """Report liveness: "alive" as soon as the ASGI server accepts connections.
 
         Must never depend on `lifespan` startup progress or check external
-        dependencies — a dependency outage must never fail liveness.
+        dependencies — a dependency outage must never fail liveness. `version`
+        reads this process's own installed distribution metadata
+        (`importlib.metadata.version`) -- no I/O, no network, no dependency
+        call, so it introduces no new liveness risk (AC-BI-001/AC-BI-002).
         """
-        return {"status": "alive"}
+        return {"status": "alive", "version": installed_version("ps-service")}
 
     async def ready() -> JSONResponse:
         """Report "ready" only once startup succeeded AND FalkorDB is currently healthy.

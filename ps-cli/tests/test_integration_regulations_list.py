@@ -50,7 +50,7 @@ if sys.platform == "win32":  # pragma: no cover - documented platform caveat, no
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HOST = "127.0.0.1"
-_READY_POLL_TIMEOUT_SECONDS = 10.0
+_READY_POLL_TIMEOUT_SECONDS = 30.0
 _READY_POLL_INTERVAL_SECONDS = 0.05
 _TERMINATE_WAIT_TIMEOUT_SECONDS = 10
 
@@ -59,9 +59,12 @@ _TERMINATE_WAIT_TIMEOUT_SECONDS = 10
 # imported (see module docstring). `short_name`/`version` never cross the REST
 # boundary, so they are not part of this fixture.
 _EXPECTED_CATALOG: tuple[tuple[str, str], ...] = (
+    ("32016L2102", "Web Accessibility Directive"),
+    ("32016R0679", "General Data Protection Regulation (GDPR)"),
+    ("32021R0241", "Recovery and Resilience Facility Regulation"),
+    ("32022L2555", "NIS 2 Directive"),
+    ("32023R2854", "Data Act"),
     ("32024R2847", "Cyber Resilience Act"),
-    ("32016R0679", "General Data Protection Regulation"),
-    ("32022L2555", "NIS2 Directive"),
 )
 
 

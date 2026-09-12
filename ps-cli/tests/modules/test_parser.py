@@ -210,3 +210,17 @@ def test_build_parser_check_accepts_context_flag_before_and_after() -> None:
 
     assert args_before.context == "prod"
     assert args_after.context == "prod"
+
+
+def test_build_parser_version_help_text_mentions_client_and_service() -> None:
+    """AC-BI-010: `--version`'s help text states it prints both client and service versions.
+
+    Asserts the exact `--version` help sentence appears in `format_help()` (public API)
+    rather than reaching into argparse's private `_actions` list. A weaker substring check
+    (bare `"client"`/`"service"` anywhere in the whole parser's help output) would pass
+    trivially today, since other subcommands' unrelated help text already mentions both
+    words -- pinning the full sentence keeps this test tied to `--version`'s own help.
+    """
+    help_text = build_parser().format_help()
+
+    assert "Print PS-CLI client and PS Service versions and exit." in help_text

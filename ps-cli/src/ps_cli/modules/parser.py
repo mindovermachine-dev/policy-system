@@ -169,7 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[verbose_parent_parser],
     )
     parser.add_argument(
-        "--version", action="store_true", help="Print version information and exit."
+        "--version",
+        action="store_true",
+        help="Print PS-CLI client and PS Service versions and exit.",
     )
     top_level_subparsers = parser.add_subparsers(dest="group", required=False)
 
