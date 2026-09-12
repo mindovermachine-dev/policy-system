@@ -44,4 +44,18 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.READY_PUSHER }}
 
+      # The takt action squashes the PR into `<PR title> - resolves #N` and pushes it to
+      # ready/*, where on_ready.yml's lint-commit-header job would reject a non-conventional
+      # title after the fact. Lint the title first so the PR fails fast, before the ready
+      # branch exists. Same gate as the takt action: only approved reviews and dispatches.
+      - name: Lint PR title as the ready commit header
+        if: github.event_name == 'workflow_dispatch' || github.event.review.state == 'approved'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          title="$(gh pr view "$PR_NUMBER" --json title -q .title | sed -E 's/^\[WIP\][[:space:]]*//')"
+          scripts/release/lint-commit-header.sh --header "$title - resolves #$PR_NUMBER"
+
       - uses: devx-cafe/takt-actions/pr-to-ready@experimental

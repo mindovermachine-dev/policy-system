@@ -23,6 +23,7 @@ readonly EXIT_USAGE=2
 readonly USAGE="usage: $(basename "$0") --header \"<text>\" | --range \"<before>..<after>\""
 
 offending_headers=()
+offending_hints=()
 
 usage_error() {
   local reason="$1"
@@ -40,6 +41,29 @@ lint_one_header() {
   fi
   release_log error header_unparsed sha="$sha" header="$header"
   offending_headers+=("${sha:+$sha }$header")
+  local hint
+  if hint="$(scope_hint_for_header "$header")"; then
+    offending_hints+=("$hint")
+  fi
+}
+
+# scope_hint_for_header <header>: prints a rewrite suggestion when the header's leading
+# token reads like a scope used as the type (`company_merge: ...`, the #32 failure). Only
+# the shape `<word>: <description>` qualifies -- the word must not be an allowed type
+# (that case is a genuine parse failure elsewhere in the header) and must be a single
+# token without spaces or parentheses. Returns 1 when there is nothing to suggest.
+scope_hint_for_header() {
+  local header="$1"
+  if [[ ! "$header" =~ ^([A-Za-z0-9_./-]+):\ (.+)$ ]]; then
+    return 1
+  fi
+  local token="${BASH_REMATCH[1]}"
+  local description="${BASH_REMATCH[2]}"
+  if [[ "$token" =~ ^($CONVENTIONAL_HEADER_TYPES)$ ]]; then
+    return 1
+  fi
+  printf "'%s' is not a type; if it is the scope, write e.g. 'fix(%s): %s'\n" \
+    "$token" "$token" "$description"
 }
 
 # is_known_commit <ref>: true when <ref> resolves to a commit in this checkout.
@@ -77,10 +101,17 @@ report_failure() {
   printf 'Non-conventional commit header(s):\n'
   printf '  %s\n' "${offending_headers[@]}"
   printf 'expected form: %s\n' "$CONVENTIONAL_HEADER_EXPECTED_FORM"
+  local hint
+  for hint in "${offending_hints[@]}"; do
+    printf 'hint: %s\n' "$hint"
+  done
   summary_append "### lint-commit-header: failed"
   summary_append "Non-conventional commit header(s) -- expected form \`$CONVENTIONAL_HEADER_EXPECTED_FORM\`:"
   for offender in "${offending_headers[@]}"; do
     summary_append "- \`$offender\`"
+  done
+  for hint in "${offending_hints[@]}"; do
+    summary_append "- hint: $hint"
   done
   release_log error lint_failed outcome=failed offenders="$offender_count"
 }

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Local mirror of on_ready.yml's `lint-commit-header` job, so a `ready/*` push with a
+# non-conventional header fails here instead of after CI has already run the build.
+# `gh tt deliver` builds the squeezed commit with `git commit-tree` (no commit-msg hook)
+# and then runs `git push`, so pre-push is the only local hook that ever sees that header.
+# Only refs pushed to `refs/heads/ready/*` are linted; issue-branch (`wrapup`) pushes and
+# branch deletions pass through untouched.
+#
+# stdin: one `<local ref> <local sha> <remote ref> <remote sha>` line per ref being pushed.
+
+# Resolved from the hook's own location, not the pushing repo's toplevel, so the hook stays
+# self-contained wherever `core.hooksPath` points at it (the tests point a fixture clone here).
+hooks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+lint="$hooks_dir/../scripts/release/lint-commit-header.sh"
+zero_sha="0000000000000000000000000000000000000000"
+
+status=0
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  [[ "$remote_ref" == refs/heads/ready/* ]] || continue
+  [[ "$local_sha" != "$zero_sha" ]] || continue
+  header="$(git log -1 --format=%s "$local_sha")"
+  if ! "$lint" --header "$header" 2>/dev/null; then
+    echo "pre-push: '$remote_ref' rejected -- fix the header before pushing (see hint above)." >&2
+    status=1
+  fi
+done
+exit "$status"

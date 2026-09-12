@@ -155,3 +155,38 @@ def test_usage_errors_exit_two_and_print_usage(
     run = release_fixture.run_script(LINT_SCRIPT, *argv, expect=2)
 
     assert "usage:" in run.stderr
+
+
+# --- scope-as-type hint (the `company_merge: ...` failure on ready/32) ----------------------
+
+SCOPE_AS_TYPE_HEADER = "company_merge: confirm carry-forward is intended - resolves #32"
+SCOPE_AS_TYPE_HINT = (
+    "'company_merge' is not a type; if it is the scope, write e.g. "
+    "'fix(company_merge): confirm carry-forward is intended - resolves #32'"
+)
+
+
+def test_hints_a_scoped_rewrite_when_the_leading_token_reads_like_a_scope(
+    release_fixture: ReleaseFixture,
+) -> None:
+    run = release_fixture.run_script(LINT_SCRIPT, "--header", SCOPE_AS_TYPE_HEADER, expect=1)
+
+    assert f"hint: {SCOPE_AS_TYPE_HINT}" in run.stdout
+    assert f"- hint: {SCOPE_AS_TYPE_HINT}" in release_fixture.read_summary()
+
+
+def test_hints_fixture_b_slash_separated_pseudo_type_as_a_scope(
+    release_fixture: ReleaseFixture,
+) -> None:
+    run = release_fixture.run_script(LINT_SCRIPT, "--header", FIXTURE_B_HEADER, expect=1)
+
+    assert "hint: 'ps-service/ps-cli' is not a type" in run.stdout
+
+
+def test_no_hint_for_untyped_prose_or_a_typed_header_that_fails_elsewhere(
+    release_fixture: ReleaseFixture,
+) -> None:
+    for header in (FIXTURE_C_HEADER, "feat(a(b)): nested scope"):
+        run = release_fixture.run_script(LINT_SCRIPT, "--header", header, expect=1)
+
+        assert "hint:" not in run.stdout, header

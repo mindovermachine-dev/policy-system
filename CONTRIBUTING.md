@@ -582,6 +582,22 @@ chore ci test refactor style build`) is warned about in the job summary and does
 
 When several commits landed since the last tag, the highest bump among them wins.
 
+### Where a bad header is caught
+
+The same `scripts/release/lint-commit-header.sh` runs at three points, earliest first:
+
+- `.githooks/pre-push` — lints the head commit of any push to `ready/*` on your
+  machine, so `gh tt deliver` fails locally before CI ever runs. Issue-branch
+  (`wrapup`) pushes are not linted; their headers are squashed away.
+- `pr-to-ready.yml` — lints the PR title (as `<title> - resolves #N`) before the
+  takt action squashes it onto a `ready/*` branch.
+- `on_ready.yml` — the CI gate `merge-to-trunk` depends on; the backstop.
+
+When the header's leading token looks like a scope used as a type (`company_merge:
+...`, `ps-service/ps-cli: ...`) the lint prints a `hint:` with the `type(scope): ...`
+rewrite. Since `gh tt deliver` takes the header from the issue title, fix the _issue
+title_ first and deliver again, or the next delivery will fail the same way.
+
 ### What gets synced
 
 The computed version is written into every version-lockstep file, in one commit:
