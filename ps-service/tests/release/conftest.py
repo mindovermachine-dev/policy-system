@@ -31,7 +31,9 @@ Fixture layout under `tmp_path` (CHANGES X-06 recipe):
 The seeded `work/` tree holds a minimal offline uv workspace (root `pyproject.toml`, two
 dependency-free hatchling members `ps-service` and `ps-cli` at `0.11.0`, a `uv.lock`) plus real
 copies of `charts/policy-system/Chart.yaml` and `ps-skills/policy-system/.claude-plugin/
-plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes. `charts/policy-
+plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes. Those two copies'
+version-bearing fields are then normalized to `SEED_TAG`, so the seeded baseline never depends on
+whatever version happens to be checked out on `main` (issue #87). `charts/policy-
 system/values.yaml` is no longer a synced file (issue #80 AC-BI-012 amendment) and is not seeded
 here.
 """
@@ -39,6 +41,7 @@ here.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -63,6 +66,15 @@ MINI_WORKSPACE_MEMBERS = ("ps-service", "ps-cli")
 REAL_VERSION_FILES = (
     Path("charts/policy-system/Chart.yaml"),
     Path("ps-skills/policy-system/.claude-plugin/plugin.json"),
+)
+
+# Mirror `sync-version-files.sh`'s own `sed -E` patterns field-for-field (`scripts/release/
+# sync-version-files.sh:48-49,55`) so a file shape that would make the production script silently
+# no-op also makes fixture seeding fail loudly instead of silently seeding a stale version.
+CHART_VERSION_LINE_PATTERN: re.Pattern[str] = re.compile(r"^version: .*$", re.MULTILINE)
+CHART_APP_VERSION_LINE_PATTERN: re.Pattern[str] = re.compile(r"^appVersion: .*$", re.MULTILINE)
+PLUGIN_VERSION_FIELD_PATTERN: re.Pattern[str] = re.compile(
+    r'^(  "version": ")[^"]*(",)', re.MULTILINE
 )
 
 SEED_IDENTITY: dict[str, str] = {
@@ -442,6 +454,44 @@ def _copy_real_version_files(work_dir: Path) -> None:
         shutil.copyfile(REPO_ROOT / relative, destination)
 
 
+def _normalize_chart_yaml(path: Path) -> None:
+    """Rewrite Chart.yaml's `version`/`appVersion` lines to `SEED_TAG`, byte-identical otherwise."""
+    text = path.read_text(encoding="utf-8")
+    text, version_subs = CHART_VERSION_LINE_PATTERN.subn(f"version: {SEED_TAG}", text)
+    text, app_version_subs = CHART_APP_VERSION_LINE_PATTERN.subn(f'appVersion: "{SEED_TAG}"', text)
+    assert (version_subs, app_version_subs) == (1, 1), (
+        f"expected exactly one `version:` and one `appVersion:` line in {path}, got "
+        f"{version_subs} and {app_version_subs} -- sync-version-files.sh's sed patterns would "
+        "silently no-op against this shape too"
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def _normalize_plugin_json(path: Path) -> None:
+    """Rewrite plugin.json's `"version"` field to `SEED_TAG`, byte-identical otherwise."""
+    text = path.read_text(encoding="utf-8")
+    text, subs = PLUGIN_VERSION_FIELD_PATTERN.subn(rf"\g<1>{SEED_TAG}\g<2>", text)
+    assert subs == 1, (
+        f'expected exactly one `  "version": "..."` line in {path}, got {subs} -- '
+        "sync-version-files.sh's sed pattern would silently no-op against this shape too"
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def _normalize_real_version_files(work_dir: Path) -> None:
+    """Pin the just-copied Chart.yaml/plugin.json version fields to `SEED_TAG`.
+
+    Mirrors `_write_mini_workspace`'s hardcoded `SEED_TAG` for the two synthetic pyproject.toml
+    members, applied to the two real files `_copy_real_version_files` just copied in. The two
+    helpers above (not one generic loop) mirror this file's existing convention of small,
+    single-purpose private helpers, each with a one-line docstring, matching
+    `_write_mini_workspace`/`_copy_real_version_files`/`_lock_mini_workspace`.
+    """
+    chart_path, plugin_path = (work_dir / relative for relative in REAL_VERSION_FILES)
+    _normalize_chart_yaml(chart_path)
+    _normalize_plugin_json(plugin_path)
+
+
 def _lock_mini_workspace(work_dir: Path, uv: Path, environment: Mapping[str, str]) -> None:
     """Create `uv.lock` offline (PLAN A-16) so the seed commit carries a consistent lock."""
     subprocess.run(  # noqa: S603 - `uv` is a shutil.which-resolved absolute path; args are literals
@@ -483,6 +533,7 @@ def release_fixture(tmp_path: Path) -> ReleaseFixture:
 
     _write_mini_workspace(work_dir)
     _copy_real_version_files(work_dir)
+    _normalize_real_version_files(work_dir)
     if uv is not None:
         _lock_mini_workspace(work_dir, uv, environment)
 

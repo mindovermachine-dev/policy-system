@@ -16,20 +16,22 @@ import json
 import re
 import subprocess
 import tomllib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 import yaml
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from conftest import ReleaseFixture
 
 SUBPROCESS_TIMEOUT_SECONDS = 60.0
 
 CHART_RELATIVE_PATH = "charts/policy-system/Chart.yaml"
 PLUGIN_RELATIVE_PATH = "ps-skills/policy-system/.claude-plugin/plugin.json"
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SEED_TAG = "0.11.0"  # mirrors conftest.SEED_TAG; duplicated per this package's REPO_ROOT precedent
 
 
 @pytest.fixture(autouse=True)
@@ -139,3 +141,40 @@ def test_verify_fails_when_a_field_is_stale(release_fixture: ReleaseFixture) -> 
 
     assert PLUGIN_RELATIVE_PATH in result.stderr
     assert "0.11.0" in result.stderr
+
+
+def test_seeded_baseline_holds_seed_tag_in_all_four_lockstep_files(
+    release_fixture: ReleaseFixture,
+) -> None:
+    work_dir = release_fixture.work.path
+
+    assert _pyproject_version(work_dir / "ps-service" / "pyproject.toml") == SEED_TAG
+    assert _pyproject_version(work_dir / "ps-cli" / "pyproject.toml") == SEED_TAG
+
+    chart = yaml.safe_load((work_dir / CHART_RELATIVE_PATH).read_text(encoding="utf-8"))
+    assert chart["version"] == SEED_TAG
+    assert chart["appVersion"] == SEED_TAG
+
+    plugin = json.loads((work_dir / PLUGIN_RELATIVE_PATH).read_text(encoding="utf-8"))
+    assert plugin["version"] == SEED_TAG
+
+
+def test_seeded_chart_and_plugin_preserve_non_version_fields_byte_for_byte(
+    release_fixture: ReleaseFixture,
+) -> None:
+    work_dir = release_fixture.work.path
+
+    real_chart = (REPO_ROOT / CHART_RELATIVE_PATH).read_text(encoding="utf-8")
+    seeded_chart = (work_dir / CHART_RELATIVE_PATH).read_text(encoding="utf-8")
+    version_line = re.compile(r"^(version|appVersion): .*$", re.MULTILINE)
+    assert version_line.sub("", real_chart) == version_line.sub("", seeded_chart), (
+        "every Chart.yaml line other than version/appVersion must be byte-identical to the real "
+        "repo copy"
+    )
+
+    real_plugin = (REPO_ROOT / PLUGIN_RELATIVE_PATH).read_text(encoding="utf-8")
+    seeded_plugin = (work_dir / PLUGIN_RELATIVE_PATH).read_text(encoding="utf-8")
+    version_field = re.compile(r'"version": "[^"]*"')
+    assert version_field.sub("", real_plugin) == version_field.sub("", seeded_plugin), (
+        "every plugin.json field other than version must be byte-identical to the real repo copy"
+    )
