@@ -190,8 +190,11 @@ class _FakeSingleTenantGraph:
         self.calls.append(_RecordedCall(q, params))
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
-        if "MERGE (n:Obligation {id: $id}) SET n += $properties" in q:
-            self._set(self._obligations, params, "text")  # #42: Obligation passthrough
+        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
+            # #42: Obligation passthrough; issue #28 AC-BI-006's fix uses
+            # `ON CREATE SET`, not unconditional `SET` -- a recurring id
+            # must never overwrite the existing node's properties.
+            self._mint(self._obligations, params, "text")
             return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
             self._mint(self._capabilities, params, "name")
@@ -211,20 +214,6 @@ class _FakeSingleTenantGraph:
         node_id = cast("str", params["id"])
         if node_id in table:
             return
-        properties = cast("dict[str, object]", params["properties"])
-        table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
-
-    def _set(
-        self,
-        table: dict[str, list[object]],
-        params: dict[str, object] | None,
-        text_key: str,
-    ) -> None:
-        """Unconditional `MERGE ... SET n += $properties` -- rewrites the row
-        every call (idempotent when the params are identical).
-        """
-        assert params is not None
-        node_id = cast("str", params["id"])
         properties = cast("dict[str, object]", params["properties"])
         table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
 
@@ -389,10 +378,19 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
 ) -> None:
     """The fake `single_tenant_graph`'s accumulated node-id set is IDENTICAL
     after both calls to what it was after the first call alone -- no new
-    node id appears on the second call. Proven both by direct set comparison
-    and by asserting zero `ON CREATE SET` mint calls occur on either call
-    (both resolutions are `match_kind="semantic"` onto pre-existing ids, so
-    neither call ever mints).
+    node id appears on the second call.
+
+    Proven by direct set comparison for both kinds, plus a zero-mint-call
+    check for Capability specifically: `persist_canonical_nodes` only ever
+    issues its `ON CREATE SET` call for a `match_kind="new"` resolution, and
+    both resolutions here are `match_kind="semantic"` onto pre-existing ids,
+    so neither call ever mints one. Obligation has no such call-level
+    signal to check -- since issue #28's AC-BI-006 fix, its `ON CREATE SET`
+    call is issued unconditionally on EVERY run for every baseline
+    Obligation node (unlike Capability's conditional mint), so its presence
+    proves nothing about whether a node was actually created; the direct
+    `obligation_ids()` set comparison above is the real proof that no new
+    Obligation id appeared.
     """
     emitter, _log_path = make_emitter()
     baseline, single_tenant, call_embedding, existing_obligation_id, existing_capability_id = (
@@ -425,7 +423,6 @@ def test_second_call_grows_neither_the_obligation_nor_capability_node_id_set(
 
     assert single_tenant.obligation_ids() == obligation_ids_after_first
     assert single_tenant.capability_ids() == capability_ids_after_first
-    assert not single_tenant.calls_matching("MERGE (n:Obligation {id: $id}) ON CREATE SET")
     assert not single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
 
 

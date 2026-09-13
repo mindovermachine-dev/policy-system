@@ -31,11 +31,11 @@ Fixture layout under `tmp_path` (CHANGES X-06 recipe):
 The seeded `work/` tree holds a minimal offline uv workspace (root `pyproject.toml`, two
 dependency-free hatchling members `ps-service` and `ps-cli` at `0.11.0`, a `uv.lock`) plus real
 copies of `charts/policy-system/Chart.yaml` and `ps-skills/policy-system/.claude-plugin/
-plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes. Those two copies'
-version-bearing fields are then normalized to `SEED_TAG`, so the seeded baseline never depends on
-whatever version happens to be checked out on `main` (issue #87). `charts/policy-
-system/values.yaml` is no longer a synced file (issue #80 AC-BI-012 amendment) and is not seeded
-here.
+plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes -- with their
+version fields immediately reseeded to `SEED_TAG` (see `_copy_real_version_files`), so the
+seeded baseline never depends on whatever version happens to be checked out on `main`
+(issue #87). `charts/policy-system/values.yaml` is no longer a synced file (issue #80 AC-BI-012
+amendment) and is not seeded here.
 """
 
 from __future__ import annotations
@@ -447,11 +447,43 @@ def _write_mini_workspace(work_dir: Path) -> None:
 
 
 def _copy_real_version_files(work_dir: Path) -> None:
-    """Copy the real chart and plugin files so sync patterns meet the true shapes."""
+    """Copy the real chart and plugin files, then reseed their version fields to `SEED_TAG`.
+
+    The copy exists so `sync-version-files.sh`'s `sed`/`awk` patterns are exercised on the true
+    file shapes -- but the *values* it copies in are whatever the live repo's `Chart.yaml` and
+    `plugin.json` currently say, which drift over time (each `chore(release): X.Y.Z` commit
+    bumps them). The tests sync every file to a hardcoded target version and then assert a
+    real diff appeared; if the live repo's current version ever coincides with that target
+    (as happened when the repo was cut to the same version the tests target), the sync becomes
+    a no-op on these two files and the diff-based assertions fail. The mini-workspace's other
+    seeded files avoid this because they are pinned to `SEED_TAG` independently of the live
+    repo. Rewriting these two fields to `SEED_TAG` right after the copy applies the same
+    decoupling here, so the fixture is hermetic and self-consistent regardless of the live
+    repo's current version -- do not remove this rewrite or the tests will intermittently (and
+    silently, until a coincidental version collision) fail again.
+    """
     for relative in REAL_VERSION_FILES:
         destination = work_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / relative, destination)
+    _reseed_chart_yaml(work_dir / REAL_VERSION_FILES[0])
+    _reseed_plugin_json(work_dir / REAL_VERSION_FILES[1])
+
+
+def _reseed_chart_yaml(chart_path: Path) -> None:
+    """Rewrite the copied `Chart.yaml`'s `version`/`appVersion` fields to `SEED_TAG`."""
+    text = chart_path.read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^version:.*$", f"version: {SEED_TAG}", text, count=1)
+    text = re.sub(r"(?m)^appVersion:.*$", f'appVersion: "{SEED_TAG}"', text, count=1)
+    chart_path.write_text(text, encoding="utf-8")
+
+
+def _reseed_plugin_json(plugin_path: Path) -> None:
+    """Rewrite the copied `plugin.json`'s `version` field to `SEED_TAG`."""
+    text = plugin_path.read_text(encoding="utf-8")
+    text, count = re.subn(r'"version":\s*"[^"]*"', f'"version": "{SEED_TAG}"', text, count=1)
+    assert count == 1, f"expected exactly one `version` field in {plugin_path}"
+    plugin_path.write_text(text, encoding="utf-8")
 
 
 def _normalize_chart_yaml(path: Path) -> None:

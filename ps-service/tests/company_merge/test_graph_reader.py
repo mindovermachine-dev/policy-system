@@ -485,12 +485,17 @@ def test_external_baseline_yields_empty_governance_tuples() -> None:
 def test_read_baseline_graph_reads_a_real_persisted_baseline_graph_correctly() -> None:
     """Live smoke test: writes a minimal baseline graph via a direct Cypher
     call against a real, reachable FalkorDB instance, then asserts
-    `read_baseline_graph` reads it back correctly. Requires FalkorDB running
-    at 127.0.0.1:6379.
+    `read_baseline_graph` reads it back correctly. `connect()` here is only
+    scaffolding to reach a real instance -- the subject under test is
+    `read_baseline_graph`, not the connection layer -- so this uses
+    `connect_from_config(load_config())`, the env/config-resolved host
+    convention every other `falkordb_live` test in this suite uses (e.g.
+    `test_live_capstone.py`), rather than a hardcoded literal host/port.
     """
-    from ps_service.company_merge.falkordb_client import connect, select_graph
+    from ps_service.company_merge.falkordb_client import connect_from_config, select_graph
+    from ps_service.config import load_config
 
-    db = connect(host="127.0.0.1", port=6379)
+    db = connect_from_config(load_config())
     graph = select_graph(db, "test_company_merge_graph_reader_live")
 
     graph.query(

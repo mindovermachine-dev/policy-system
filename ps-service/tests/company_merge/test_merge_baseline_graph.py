@@ -206,11 +206,12 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
-        if "MERGE (n:Obligation {id: $id}) SET n += $properties" in q:
-            # #42: Obligation is a passthrough node -- unconditional SET,
-            # keyed on id (which is Role-scoped, so a given id only ever
-            # originates from one Role/regulation and its props are stable).
-            self._set(self._obligations, params, "text")
+        if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:
+            # #42: Obligation is a passthrough node, keyed on id (Role-scoped).
+            # Issue #28 AC-BI-006's fix: `ON CREATE SET`, not unconditional
+            # `SET` -- a recurring id (e.g. a second merge run against a
+            # drifted baseline) must never overwrite the existing node.
+            self._mint(self._obligations, params, "text")
             return _FakeQueryResult([])
         if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
             self._set(self._standards, params, "title")
@@ -358,9 +359,9 @@ def test_everything_new_writes_every_node_type_directly(
 ) -> None:
     """(a) AC-001, "everything is new": an empty existing single-tenant
     graph -> every node type present afterward in the fake single-tenant
-    graph's write log, directly (Obligation via unconditional passthrough
-    SET since #42; Capability via match_kind="new", nothing to converge
-    onto).
+    graph's write log, directly (Obligation via passthrough `ON CREATE SET`
+    since #42/#28 AC-BI-006; Capability via match_kind="new", nothing to
+    converge onto).
     """
     emitter, _log_path = make_emitter()
     baseline = _everything_new_baseline_graph()
@@ -383,7 +384,7 @@ def test_everything_new_writes_every_node_type_directly(
     assert any("MERGE (n:RegulatoryInstrument" in c.query for c in writes)
     assert any("MERGE (n:Role" in c.query for c in writes)
     assert any("MERGE (n:Requirement" in c.query for c in writes)
-    assert any("MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes)
+    assert any("MERGE (n:Obligation {id: $id}) ON CREATE SET" in c.query for c in writes)
     assert any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes)
     assert any("[:HAS]" in c.query for c in writes)
     assert any("[:SATISFIED_BY]" in c.query for c in writes)
@@ -427,10 +428,11 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     name -> same capability_id hash) -> no new Capability node write, and the
     `REQUIRES` edge targets the pre-existing canonical id.
 
-    The Obligation, since #42, is a passthrough node: it is written with an
-    unconditional `SET` under its own baseline-local (Role-scoped) id, and
-    the Role's `HAS` / Requirement's `SATISFIED_BY` edges target that same
-    id -- never a "canonical" id, because there is no Obligation dedup.
+    The Obligation, since #42, is a passthrough node: it is written with
+    `ON CREATE SET` (issue #28 AC-BI-006's fix) under its own baseline-local
+    (Role-scoped) id, and the Role's `HAS` / Requirement's `SATISFIED_BY`
+    edges target that same id -- never a "canonical" id, because there is no
+    Obligation dedup.
     """
     emitter, _log_path = make_emitter()
     role_node_id = "role_manufacturer_abc123"
@@ -482,7 +484,7 @@ def test_capability_dedup_target_reused_obligation_passed_through_at_edge_level(
     assert not any("MERGE (n:Capability {id: $id}) ON CREATE SET" in c.query for c in writes), (
         "no new Capability node should have been minted -- the dedup target was reused"
     )
-    assert any("MERGE (n:Obligation {id: $id}) SET n += $properties" in c.query for c in writes), (
+    assert any("MERGE (n:Obligation {id: $id}) ON CREATE SET" in c.query for c in writes), (
         "the Obligation is written straight through as a passthrough node"
     )
 

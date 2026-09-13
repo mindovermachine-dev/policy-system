@@ -7,14 +7,15 @@
 Own copy of `ps_service.domain_mapper.graph_writer`'s connectivity-wrapping
 shape (PLAN_REVIEWED.md §0.3 -- a deliberate near-duplicate, not a shared
 import): the `_execute_query` dependency-health wrapper, and the
-`MERGE ... SET n += $properties` node-upsert shape for RegulatoryInstrument/Role/
-Requirement, which are never canonically deduped (unconditional `SET`, same
-as #15's own writer).
+`MERGE ... SET n += $properties` node-upsert shape for RegulatoryInstrument
+(and, until issue #28's AC-BI-006 fix below, Role/Requirement/Obligation
+too), which are never canonically deduped (unconditional `SET`, same as
+#15's own writer).
 
 **The one deliberate, load-bearing difference from #15's writer (§6.1)**:
 Capability node upserts use `MERGE (n:Capability {id: $id}) ON CREATE
-SET n += $properties` -- NOT the unconditional `SET` used for Role/
-Requirement/RegulatoryInstrument/Obligation above. `persist_canonical_nodes` is only
+SET n += $properties` -- NOT the unconditional `SET` used for
+RegulatoryInstrument above. `persist_canonical_nodes` is only
 ever called for a `match_kind="new"` `CanonicalResolution` (an exact/
 semantic match writes NOTHING onto the node it resolved to) -- but even so,
 `ON CREATE SET` is what makes "an existing canonical node's properties are
@@ -24,6 +25,25 @@ already equals an existing canonical node's `id`, and that incoming node's
 `properties` dict comes from a *different* regulation's baseline graph and
 could legitimately differ slightly. `ON CREATE SET` makes overwriting it
 structurally impossible, regardless of what a caller passes.
+
+**Issue #28 AC-BI-006 fix**: live verification against the real,
+already-populated `policy_system` graph (IMPL_SLICE_7.md) found that
+re-running `merge_baseline_graph` for CRA/NIS2 (baseline graphs whose
+current content had drifted slightly from what was already merged)
+overwrote 202 pre-existing Role/Requirement/Obligation nodes' properties
+via this module's then-unconditional `SET` -- `confidence` score drift on
+most of them, one Requirement's `text` outright changed. Role/Requirement/
+Obligation are passthrough nodes (never canonically deduped), but their ids
+CAN legitimately recur across separate merge runs of the same or an
+adjacent regulation, exactly like Capability's exact-key match case above --
+so they now use the identical `ON CREATE SET` pattern
+(`_upsert_passthrough_node(..., preserve_existing_properties=True)`),
+making "an existing Role/Requirement/Obligation node's properties are never
+overwritten" the same database-engine guarantee Capability already had,
+rather than an assumption that a recurring id always carries identical
+properties. This does not retroactively repair data already corrupted by
+the old unconditional `SET` -- that is a separate, still-pending,
+explicitly-approved repair step.
 
 **The second, new load-bearing difference (§6.2, B2's fix)**:
 `backfill_canonical_embeddings` writes `MATCH (n:{kind} {id: $id}) WHERE
@@ -41,9 +61,10 @@ to check first.
 **Obligation is a passthrough node (issue #42)**: Obligation identity is
 Role-scoped, so an Obligation is a weak entity of exactly one Role and is
 never deduped across sources. `persist_obligation_passthrough` writes it
-with the same unconditional `MERGE ... SET` shape used for Role/Requirement.
-Only Capability (and, later, internal-SoP-derived Policy) is canonically
-deduped by Company Merge.
+with the same `MERGE ... ON CREATE SET` shape used for Role/Requirement
+since issue #28's AC-BI-006 fix (see above) -- not the unconditional `SET`
+Standard/Control still use below. Only Capability (and, later,
+internal-SoP-derived Policy) is canonically deduped by Company Merge.
 
 **Edge rewiring (`persist_rewired_edges`, PLAN_REVIEWED.md §10 Increment 12,
 §6.2)**: mirrors `domain_mapper.graph_writer._upsert_bare_edge`'s exact
@@ -144,14 +165,33 @@ def _execute_query(
 
 
 def _upsert_passthrough_node(
-    graph: GraphHandle, label: str, node_id: str, properties: dict[str, str | float]
+    graph: GraphHandle,
+    label: str,
+    node_id: str,
+    properties: dict[str, str | float],
+    *,
+    preserve_existing_properties: bool = False,
 ) -> None:
+    """Upsert one passthrough node, keyed on `(label, id)`.
+
+    `preserve_existing_properties=True` issues `MERGE ... ON CREATE SET`
+    instead of an unconditional `SET` -- the identical pattern
+    `persist_canonical_nodes` uses for Capability (see module docstring),
+    now also used for Role/Requirement/Obligation since issue #28's
+    AC-BI-006 fix: their ids can legitimately recur across separate merge
+    runs with slightly different incoming properties, and `ON CREATE SET`
+    makes "an existing node's properties are never overwritten" a
+    database-engine guarantee rather than an assumption. Standard/Control
+    (`persist_standard_and_control_passthrough`) keep the default
+    unconditional `SET` -- out of this fix's scope.
+    """
     # label is always one of this module's own fixed literals (_ROLE_LABEL/
-    # _REQUIREMENT_LABEL) -- never adapter/LLM-sourced -- mirrors
+    # _REQUIREMENT_LABEL/...) -- never adapter/LLM-sourced -- mirrors
     # domain_mapper.graph_writer's own "no allow-list needed" design note.
+    set_clause = "ON CREATE SET" if preserve_existing_properties else "SET"
     _execute_query(
         graph,
-        f"MERGE (n:{label} {{id: $id}}) SET n += $properties",
+        f"MERGE (n:{label} {{id: $id}}) {set_clause} n += $properties",
         params={"id": node_id, "properties": properties},
     )
 
@@ -195,14 +235,19 @@ def persist_role_and_requirement_passthrough(
 ) -> None:
     """Persist one regulation's RegulatoryInstrument/Role/Requirement nodes and provenance edges.
 
-    Writes the `DEFINES`/`EXPRESSES` edges into `single_tenant_graph` with an
-    unconditional `MERGE ... SET`, mirroring #15's own
-    `persist_role_and_requirement_graph` shape exactly (PLAN_REVIEWED.md §6).
-    These node kinds are never canonically deduped -- RegulatoryInstrument has
-    exactly one node per regulation, and Role/Requirement dedup is out of
-    scope (AC-008) -- so there is no "existing wins" concern here, unlike
-    Capability (`persist_canonical_nodes`, below). Obligation is in the same
+    RegulatoryInstrument keeps an unconditional `MERGE ... SET` (mirroring
+    #15's own `persist_role_and_requirement_graph` shape, PLAN_REVIEWED.md
+    §6) -- it has exactly one node per regulation and is always meant to
+    refresh. Role/Requirement dedup is out of scope (AC-008), but their ids
+    CAN legitimately recur across separate merge runs (e.g. re-merging the
+    same regulation against a baseline graph whose content has since
+    drifted) -- since issue #28's AC-BI-006 fix, Role/Requirement writes use
+    `MERGE ... ON CREATE SET` instead, the same "existing wins"
+    database-engine guarantee Capability already had
+    (`persist_canonical_nodes`, below). Obligation is in the same
     passthrough category since #42 -- see `persist_obligation_passthrough`.
+    The `DEFINES`/`EXPRESSES` edge writes themselves keep an unconditional
+    `SET` on their own `source_ref` property -- out of this fix's scope.
 
     Idempotent: re-running with identical input against the same graph issues
     the same calls and leaves the same end state, since every write is a
@@ -220,10 +265,20 @@ def persist_role_and_requirement_passthrough(
         params={"id": regulatory_instrument_id, "properties": regulatory_instrument_properties},
     )
     for role in role_nodes:
-        _upsert_passthrough_node(single_tenant_graph, _ROLE_LABEL, role.id, role.properties)
+        _upsert_passthrough_node(
+            single_tenant_graph,
+            _ROLE_LABEL,
+            role.id,
+            role.properties,
+            preserve_existing_properties=True,
+        )
     for requirement in requirement_nodes:
         _upsert_passthrough_node(
-            single_tenant_graph, _REQUIREMENT_LABEL, requirement.id, requirement.properties
+            single_tenant_graph,
+            _REQUIREMENT_LABEL,
+            requirement.id,
+            requirement.properties,
+            preserve_existing_properties=True,
         )
     for edge in provenance_edges:
         target_label = _ROLE_LABEL if edge.relationship_type == "DEFINES" else _REQUIREMENT_LABEL
@@ -243,12 +298,16 @@ def persist_obligation_passthrough(
 ) -> None:
     """Persist one regulation's Obligation nodes into `single_tenant_graph`.
 
-    Uses the same unconditional `MERGE ... SET` shape as Role/Requirement
-    (issue #42: Obligation is Role-scoped, a weak entity of exactly one Role,
-    never deduped across sources). No `ON CREATE SET` "existing wins" concern
-    -- a given Obligation id can only ever originate from one Role, which
-    originates from one regulation, so re-merging the same regulation is the
-    only way the same id recurs and its properties are identical.
+    Uses the same `MERGE ... ON CREATE SET` shape as Role/Requirement since
+    issue #28's AC-BI-006 fix (issue #42: Obligation is Role-scoped, a weak
+    entity of exactly one Role, never deduped across sources). Re-merging
+    the same regulation against a baseline graph whose content has since
+    drifted is a real, observed way the same Obligation id recurs with
+    DIFFERENT properties (IMPL_SLICE_7.md's live finding: 199 pre-existing
+    Obligation nodes had `confidence` drift after a second live merge run)
+    -- `ON CREATE SET` makes "an existing Obligation's properties are never
+    overwritten" a database-engine guarantee rather than the now-disproven
+    assumption that a recurring id always carries identical properties.
 
     Called by `merge.py` after `persist_role_and_requirement_passthrough`
     and before `persist_rewired_edges`, so the `HAS`/`SATISFIED_BY`/
@@ -256,7 +315,11 @@ def persist_obligation_passthrough(
     """
     for obligation in obligation_nodes:
         _upsert_passthrough_node(
-            single_tenant_graph, _OBLIGATION_LABEL, obligation.id, obligation.properties
+            single_tenant_graph,
+            _OBLIGATION_LABEL,
+            obligation.id,
+            obligation.properties,
+            preserve_existing_properties=True,
         )
 
 

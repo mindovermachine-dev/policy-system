@@ -1,7 +1,14 @@
 """Tests for `ps_service.company_merge.graph_writer.
-persist_role_and_requirement_passthrough` (PLAN_REVIEWED.md §10 Increment
-10): the unconditional-`SET` Regulation/Role/Requirement writer, mirroring
-#15's own `persist_role_and_requirement_graph` shape exactly.
+persist_role_and_requirement_passthrough`/`persist_obligation_passthrough`
+(PLAN_REVIEWED.md §10 Increment 10; issue #28 AC-BI-006 fix): the
+Regulation/Role/Requirement/Obligation writers. RegulatoryInstrument keeps
+an unconditional `SET` (never canonically deduped, always refreshed);
+Role/Requirement/Obligation use `MERGE ... ON CREATE SET`, matching
+Capability's own load-bearing pattern (`persist_canonical_nodes`) exactly,
+since issue #28's live verification (IMPL_SLICE_7.md) found a real,
+pre-existing `policy_system` graph had 202 Role/Requirement/Obligation
+nodes' properties silently overwritten by a second `merge_baseline_graph`
+run against baseline graphs whose content had drifted slightly.
 
 Fakes implement the `GraphHandle`/`GraphQueryResult` Protocols
 (`ps_service.company_merge.falkordb_client`) structurally -- no mocking
@@ -11,9 +18,12 @@ this issue's binding testing convention.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import cast
 
 from ps_service.company_merge.graph_writer import (
+    persist_obligation_passthrough,
     persist_role_and_requirement_passthrough,
 )
 from ps_service.company_merge.models import BaselineNode, ProvenanceEdge
@@ -47,6 +57,51 @@ class _FakeGraph:
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
         return _FakeQueryResult([[0]])
+
+
+_NODE_UPSERT_PATTERN = re.compile(
+    r"^MERGE \(n:(?P<label>\w+) \{id: \$id\}\) (?P<clause>ON CREATE SET|SET) n \+= \$properties$"
+)
+
+
+class _StatefulFakeGraph:
+    """A `GraphHandle` stand-in that actually IMPLEMENTS FalkorDB's own
+    `MERGE ... SET` vs `MERGE ... ON CREATE SET` property-write semantics,
+    unlike `_FakeGraph` above (which only records calls verbatim for
+    query/params assertions).
+
+    Keyed on `(label, id)`: an unconditional `SET` always (over)writes the
+    node's properties; `ON CREATE SET` writes them only the first time a
+    given `(label, id)` is seen, exactly mirroring the database-engine
+    guarantee `persist_canonical_nodes`'s docstring describes for
+    Capability. Used to prove, at the unit level with no real FalkorDB,
+    that a second `persist_*_passthrough` call with DIFFERENT property
+    values never disturbs a pre-existing node -- the real, live AC-BI-006
+    violation this test file's docstring describes (issue #28).
+    """
+
+    def __init__(self) -> None:
+        self._properties_by_label_and_id: dict[tuple[str, str], dict[str, object]] = {}
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        match = _NODE_UPSERT_PATTERN.match(q)
+        if match is None:
+            # Edge/instrument writes this file's tests never assert on the
+            # resulting state of -- record nothing, just succeed.
+            return _FakeQueryResult([[0]])
+        assert params is not None
+        label = match.group("label")
+        node_id = cast("str", params["id"])
+        key = (label, node_id)
+        already_exists = key in self._properties_by_label_and_id
+        if match.group("clause") == "SET" or not already_exists:
+            self._properties_by_label_and_id[key] = dict(
+                cast("dict[str, object]", params["properties"])
+            )
+        return _FakeQueryResult([[0]])
+
+    def properties_of(self, label: str, node_id: str) -> dict[str, object]:
+        return self._properties_by_label_and_id[(label, node_id)]
 
 
 def _role_node() -> BaselineNode:
@@ -105,10 +160,12 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
         "properties": _regulatory_instrument_properties(),
     }
 
-    assert role_call.query == "MERGE (n:Role {id: $id}) SET n += $properties"
+    assert role_call.query == "MERGE (n:Role {id: $id}) ON CREATE SET n += $properties"
     assert role_call.params == {"id": role.id, "properties": role.properties}
 
-    assert requirement_call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
+    assert (
+        requirement_call.query == "MERGE (n:Requirement {id: $id}) ON CREATE SET n += $properties"
+    )
     assert requirement_call.params == {"id": requirement.id, "properties": requirement.properties}
 
     assert defines_call.query == (
@@ -201,3 +258,146 @@ def test_persist_with_no_role_or_requirement_nodes_writes_only_regulation() -> N
 
     assert len(graph.calls) == 1
     assert graph.calls[0].query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
+
+
+def test_persist_role_and_requirement_query_uses_on_create_set() -> None:
+    """Issue #28 AC-BI-006 fix: Role/Requirement writes use `MERGE ... ON
+    CREATE SET`, matching Capability's own load-bearing pattern exactly --
+    NOT the unconditional `SET` RegulatoryInstrument still uses (it is
+    never canonically deduped and is always meant to refresh).
+    """
+    graph = _FakeGraph()
+
+    persist_role_and_requirement_passthrough(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (_role_node(),),
+        (_requirement_node(),),
+        (),
+    )
+
+    _regulatory_instrument_call, role_call, requirement_call = graph.calls
+    assert role_call.query == "MERGE (n:Role {id: $id}) ON CREATE SET n += $properties"
+    assert (
+        requirement_call.query == "MERGE (n:Requirement {id: $id}) ON CREATE SET n += $properties"
+    )
+
+
+def test_persist_role_preserves_pre_existing_properties_on_second_write() -> None:
+    """Reproduces the real, live AC-BI-006 violation (IMPL_SLICE_7.md): a
+    second `merge_baseline_graph` run (e.g. re-merging CRA against a
+    baseline graph whose content has since drifted) must never overwrite a
+    pre-existing Role node's properties -- e.g. `confidence` silently
+    drifting from 0.86 to 0.93, exactly as happened to
+    `role_the_obligations_laid_down_in_this_regulation_5e6f1d` in the real
+    `policy_system` graph.
+    """
+    graph = _StatefulFakeGraph()
+    role_id = "role_the_obligations_laid_down_in_this_regulation_5e6f1d"
+    original_properties: dict[str, str | float] = {"name": "Regulated Entity", "confidence": 0.86}
+    drifted_properties: dict[str, str | float] = {"name": "Regulated Entity", "confidence": 0.93}
+
+    persist_role_and_requirement_passthrough(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (BaselineNode(role_id, original_properties),),
+        (),
+        (),
+    )
+    persist_role_and_requirement_passthrough(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (BaselineNode(role_id, drifted_properties),),
+        (),
+        (),
+    )
+
+    assert graph.properties_of("Role", role_id) == original_properties
+
+
+def test_persist_requirement_preserves_pre_existing_text_on_second_write() -> None:
+    """Reproduces the real, live AC-BI-006 violation for a Requirement node
+    (IMPL_SLICE_7.md): `CRA-1.0_req_art_4.3`'s `confidence` (0.97->0.92) AND
+    `text` (a "Member States " prefix silently added) both changed on a
+    second run against real `policy_system`. A second write with different
+    property values must leave the pre-existing node untouched.
+    """
+    graph = _StatefulFakeGraph()
+    requirement_id = "CRA-1.0_req_art_4.3"
+    original_properties: dict[str, str | float] = {
+        "text": "Ensure conformity of the product.",
+        "type": "requirement",
+        "confidence": 0.97,
+    }
+    drifted_properties: dict[str, str | float] = {
+        "text": "Member States shall ensure conformity of the product.",
+        "type": "requirement",
+        "confidence": 0.92,
+    }
+
+    persist_role_and_requirement_passthrough(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (),
+        (BaselineNode(requirement_id, original_properties),),
+        (),
+    )
+    persist_role_and_requirement_passthrough(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (),
+        (BaselineNode(requirement_id, drifted_properties),),
+        (),
+    )
+
+    assert graph.properties_of("Requirement", requirement_id) == original_properties
+
+
+def test_persist_obligation_query_uses_on_create_set() -> None:
+    """Issue #28 AC-BI-006 fix: Obligation writes use `MERGE ... ON CREATE
+    SET`, matching Role/Requirement/Capability's pattern exactly.
+    """
+    graph = _FakeGraph()
+    obligation = BaselineNode(
+        id="obl_ensure_correct_application_of_the_ce_marking_regime_0579d8",
+        properties={
+            "text": "Ensure correct application of the CE marking regime.",
+            "confidence": 0.88,
+        },
+    )
+
+    persist_obligation_passthrough(graph, (obligation,))
+
+    assert len(graph.calls) == 1
+    assert graph.calls[0].query == "MERGE (n:Obligation {id: $id}) ON CREATE SET n += $properties"
+
+
+def test_persist_obligation_preserves_pre_existing_properties_on_second_write() -> None:
+    """Reproduces the real, live AC-BI-006 violation for Obligation nodes
+    (IMPL_SLICE_7.md): 199 pre-existing Obligation nodes had `confidence`
+    drift between a report's `before`/`after` snapshots (e.g.
+    `obl_ensure_correct_application_of_the_ce_marking_regime_0579d8`,
+    0.88->0.93) after a second `merge_baseline_graph` run. A second write
+    with a different `confidence` value must leave the pre-existing node
+    untouched.
+    """
+    graph = _StatefulFakeGraph()
+    obligation_id = "obl_ensure_correct_application_of_the_ce_marking_regime_0579d8"
+    original_properties: dict[str, str | float] = {
+        "text": "Ensure correct application of the CE marking regime.",
+        "confidence": 0.88,
+    }
+    drifted_properties: dict[str, str | float] = {
+        "text": "Ensure correct application of the CE marking regime.",
+        "confidence": 0.93,
+    }
+
+    persist_obligation_passthrough(graph, (BaselineNode(obligation_id, original_properties),))
+    persist_obligation_passthrough(graph, (BaselineNode(obligation_id, drifted_properties),))
+
+    assert graph.properties_of("Obligation", obligation_id) == original_properties

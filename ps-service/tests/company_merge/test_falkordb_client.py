@@ -8,6 +8,7 @@ own docstring), so its tests are a deliberate near-duplicate too.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -129,9 +130,19 @@ def test_connect_from_config_uses_env_supplied_host_and_port_not_hardcoded_defau
 
 @pytest.mark.falkordb_live
 def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
-    """Real connect to 127.0.0.1:6379 -- requires a reachable FalkorDB
-    instance.
-    """
-    db = connect(host="127.0.0.1", port=6379)
+    """Exercises the raw `connect(host, port)` function itself (not
+    `connect_from_config`, which is covered by the mocked test above) against
+    a real, reachable FalkorDB instance -- requires one to be running.
 
-    check_connectivity(db, host="127.0.0.1", port=6379)
+    Host/port default to `127.0.0.1:6379` but are overridable via
+    `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` so this still passes in
+    environments (e.g. this devcontainer) where FalkorDB is only reachable
+    at a different address, without losing the point of testing `connect()`
+    with literal arguments rather than through the config layer.
+    """
+    host = os.environ.get("PS_FALKORDB_HOST", "127.0.0.1")
+    port = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
+
+    db = connect(host=host, port=port)
+
+    check_connectivity(db, host=host, port=port)

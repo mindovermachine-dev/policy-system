@@ -57,6 +57,15 @@ from typing import cast
 
 import pytest
 
+from company_merge._live_merge_assertions import (
+    _assert_ac001_every_node_type_present,  # pyright: ignore[reportPrivateUsage]
+    _assert_ac006_traversal_reachable,  # pyright: ignore[reportPrivateUsage]
+    _assert_ac008_no_role_or_requirement_dedup,  # pyright: ignore[reportPrivateUsage]
+    _assert_dedup_decisions_correlated,  # pyright: ignore[reportPrivateUsage]
+    _assert_run_id_logged,  # pyright: ignore[reportPrivateUsage]
+    _snapshot_counts,  # pyright: ignore[reportPrivateUsage]
+    _snapshot_embeddings,  # pyright: ignore[reportPrivateUsage]
+)
 from ps_service.company_merge.falkordb_client import (
     GraphHandle,
     connect_from_config,
@@ -87,9 +96,6 @@ _SEED_REQUIREMENT_TEXT = (
 )
 _SEED_ROLE_NAME = "Capstone Seeded Incident Notifier"
 _SEED_SOURCE_REF = "capstone-seed"
-
-_NODE_LABELS = ("RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability")
-_EDGE_TYPES = ("DEFINES", "EXPRESSES", "HAS", "SATISFIED_BY", "REQUIRES")
 
 # Captured at module-import time (collection), before tests/conftest.py's autouse
 # `_isolate_logging` fixture runs `monkeypatch.delenv("PS_LLMINTERFACE_EMBED_MODEL", ...)`
@@ -234,85 +240,6 @@ def _seed_duplicate_obligation(
     )
 
 
-def _snapshot_counts(single_tenant_graph: GraphHandle) -> dict[str, int]:
-    """Per-label node counts + per-relationship-type edge counts -- AC-005's
-    "no growth" proof operates on this whole snapshot, not just a single
-    total.
-    """
-    counts = {
-        label: _count(single_tenant_graph, f"MATCH (n:{label}) RETURN count(n)")
-        for label in _NODE_LABELS
-    }
-    counts.update(
-        {
-            rel: _count(single_tenant_graph, f"MATCH ()-[r:{rel}]->() RETURN count(r)")
-            for rel in _EDGE_TYPES
-        }
-    )
-    return counts
-
-
-def _snapshot_embeddings(single_tenant_graph: GraphHandle) -> dict[str, tuple[float, ...] | None]:
-    """Id -> embedding (or None) for every Obligation/Capability node --
-    AC-005's "zero further embedding-backfill writes" proof compares this
-    whole map before/after the second pass, not just the seeded pair.
-    """
-    embeddings: dict[str, tuple[float, ...] | None] = {}
-    for label in ("Obligation", "Capability"):
-        for node_id, embedding in _query_rows(
-            single_tenant_graph, f"MATCH (n:{label}) RETURN n.id, n.embedding"
-        ):
-            embeddings[cast("str", node_id)] = (
-                tuple(cast("list[float]", embedding)) if embedding is not None else None
-            )
-    return embeddings
-
-
-def _assert_ac001_every_node_type_present(
-    single_tenant_graph: GraphHandle, regulatory_instrument_id: str
-) -> None:
-    assert (
-        _count(
-            single_tenant_graph,
-            "MATCH (n:RegulatoryInstrument {id: $id}) RETURN count(n)",
-            {"id": regulatory_instrument_id},
-        )
-        == 1
-    ), f"{regulatory_instrument_id}: Regulation node missing from {_CAPSTONE_GRAPH_NAME}"
-
-    role_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role) RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    requirement_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement) RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    obligation_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation) "
-        "RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    capability_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)"
-        "-[:REQUIRES]->(:Capability) "
-        "RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    assert role_count > 0, f"{regulatory_instrument_id}: no Role reachable via DEFINES"
-    assert requirement_count > 0, (
-        f"{regulatory_instrument_id}: no Requirement reachable via EXPRESSES"
-    )
-    assert obligation_count > 0, f"{regulatory_instrument_id}: no Obligation reachable via Role HAS"
-    assert capability_count > 0, (
-        f"{regulatory_instrument_id}: no Capability reachable via Obligation REQUIRES"
-    )
-
-
 def _assert_seeded_nodes_present(single_tenant_graph: GraphHandle, seeded: _SeededIds) -> None:
     assert (
         _count(
@@ -437,77 +364,6 @@ def _report_ac003_ac004_mechanism_presence(
     }
 
 
-def _assert_ac006_traversal_reachable(
-    single_tenant_graph: GraphHandle, regulatory_instrument_id: str
-) -> None:
-    has_chain_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:DEFINES]->(:Role)-[:HAS]->(:Obligation)"
-        "-[:REQUIRES]->(:Capability) "
-        "RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    satisfied_chain_count = _count(
-        single_tenant_graph,
-        "MATCH (:RegulatoryInstrument {id: $id})-[:EXPRESSES]->(:Requirement)"
-        "-[:SATISFIED_BY]->(:Obligation) "
-        "RETURN count(*)",
-        {"id": regulatory_instrument_id},
-    )
-    assert has_chain_count > 0, (
-        f"{regulatory_instrument_id}: no live "
-        f"Regulation->DEFINES->Role->HAS->Obligation->REQUIRES->"
-        f"Capability traversal in {_CAPSTONE_GRAPH_NAME}"
-    )
-    assert satisfied_chain_count > 0, (
-        f"{regulatory_instrument_id}: no live "
-        f"Regulation->EXPRESSES->Requirement->SATISFIED_BY->Obligation "
-        f"traversal in {_CAPSTONE_GRAPH_NAME}"
-    )
-
-
-def _assert_run_id_logged(
-    log_entries: list[dict[str, object]], *, action: str, run_id: str, entity_id: str
-) -> None:
-    matches = [
-        entry
-        for entry in log_entries
-        if entry.get("action") == action and entry.get("run_id") == run_id
-    ]
-    assert matches, f"no log entry found for action={action!r} run_id={run_id!r}"
-    assert any(
-        entry.get("entity_id") == entity_id and entry.get("outcome") == "succeeded"
-        for entry in matches
-    ), f"no succeeded entry with entity_id={entity_id!r} for action={action!r} run_id={run_id!r}"
-
-
-def _assert_dedup_decisions_correlated(log_entries: list[dict[str, object]], run_id: str) -> None:
-    matches = [
-        entry
-        for entry in log_entries
-        if entry.get("action") == "dedupe_canonical_nodes" and entry.get("run_id") == run_id
-    ]
-    assert matches, (
-        f"no dedupe_canonical_nodes log entries correlated to run_id={run_id!r} (AC-007)"
-    )
-
-
-def _assert_ac008_no_role_or_requirement_dedup(log_entries: list[dict[str, object]]) -> None:
-    dedup_entries = [
-        entry for entry in log_entries if entry.get("action") == "dedupe_canonical_nodes"
-    ]
-    assert dedup_entries, (
-        "expected at least one dedupe_canonical_nodes log entry across the whole run"
-    )
-    for entry in dedup_entries:
-        entity_id = cast("str", entry.get("entity_id"))
-        assert entity_id.startswith("cap_"), (
-            f"dedupe_canonical_nodes fired for entity_id={entity_id!r}, which is not a "
-            "Capability (cap_*) id -- since #42, Role/Requirement/Obligation dedup is all "
-            "out of scope (AC-008); only Capability is deduped"
-        )
-
-
 @pytest.mark.falkordb_live
 @pytest.mark.llm_live
 @pytest.mark.skipif(
@@ -599,8 +455,12 @@ def test_live_three_regulation_company_merge_capstone_across_cra_gdpr_nis2(
 
     # --- AC-001 / AC-006, per regulation ---
     for fixture in _REGULATIONS:
-        _assert_ac001_every_node_type_present(single_tenant_graph, fixture.regulatory_instrument_id)
-        _assert_ac006_traversal_reachable(single_tenant_graph, fixture.regulatory_instrument_id)
+        _assert_ac001_every_node_type_present(
+            single_tenant_graph, fixture.regulatory_instrument_id, graph_name=_CAPSTONE_GRAPH_NAME
+        )
+        _assert_ac006_traversal_reachable(
+            single_tenant_graph, fixture.regulatory_instrument_id, graph_name=_CAPSTONE_GRAPH_NAME
+        )
 
     for seeded in seeded_by_regulatory_instrument.values():
         _assert_seeded_nodes_present(single_tenant_graph, seeded)

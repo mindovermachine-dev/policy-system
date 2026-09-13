@@ -36,11 +36,12 @@ from typing import TYPE_CHECKING, Protocol
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
+from ps_service.config import load_config
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
 from ps_service.domain_mapper.falkordb_client import (
     GraphHandle,
-    connect,
+    connect_from_config,
     select_graph,
 )
 from ps_service.domain_mapper.identity import obligation_id, role_id
@@ -411,12 +412,17 @@ _GDPR_TEST_GRAPH = "gdpr_baseline_isolation_test"
 
 @pytest.mark.falkordb_live
 def test_baseline_graph_isolation_against_real_falkordb() -> None:
-    """Real connect to 127.0.0.1:6379. Writes a distinguishable node into
-    each of two distinct, test-specific graph names, queries both back,
-    asserts genuine isolation, then deletes both graphs -- in a `finally`
-    block, so no live residue survives even a failing run.
+    """Writes a distinguishable node into each of two distinct,
+    test-specific graph names on a real, reachable FalkorDB instance,
+    queries both back, asserts genuine isolation, then deletes both graphs
+    -- in a `finally` block, so no live residue survives even a failing
+    run. `connect()` here is only scaffolding to reach a real instance --
+    the subject under test is graph isolation, not the connection layer --
+    so this uses `connect_from_config(load_config())`, the env/config-
+    resolved host convention every other `falkordb_live` test in this
+    suite uses, rather than a hardcoded literal host/port.
     """
-    db = connect(host="127.0.0.1", port=6379)
+    db = connect_from_config(load_config())
 
     # Defensive pre-clean, in case a prior failed run left residue.
     existing = set(db.list_graphs())
