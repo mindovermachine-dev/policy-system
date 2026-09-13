@@ -609,6 +609,48 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
     assert error_entries[0]["entity_id"] == _UNIT_IMPORTER.citation_ref
 
 
+def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """AC-BI-002: the outcome="error" log entry's `extra` carries `error_kind`
+    matching the raised `DomainMapperExtractionError`, and the raw LLM
+    payload (or any substring of it) never reaches the logged line -- the
+    catch site must never pass `str(exc)`/the exception's message (which
+    embeds the raw payload) to `emit_log_entry`.
+    """
+    marker = "MARKER_SECRET_PAYLOAD_9f3e7c1b2a"
+    emitter, log_path = make_emitter()
+    native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
+    baseline_graph = _FakeBaselineGraph()
+    adapter = _FakeAdapter((_UNIT_IMPORTER,))
+    call_completion = _scripted_call_completion(
+        {_UNIT_IMPORTER.citation_ref: json.dumps({"requirements": marker})}
+    )
+
+    extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=adapter,
+        native_graph=native_graph,
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    lines = read_lines(log_path)
+    error_entries = [
+        line
+        for line in lines
+        if line.get("component") == "domain_mapper" and line.get("outcome") == "error"
+    ]
+    assert len(error_entries) == 1
+    assert error_entries[0]["error_kind"] == "non_list_requirements"
+
+    raw_log_text = log_path.read_text(encoding="utf-8")
+    assert marker not in raw_log_text
+
+
 def test_extract_roles_and_requirements_propagates_llm_provider_error_and_aborts(
     make_emitter: MakeEmitter,
 ) -> None:

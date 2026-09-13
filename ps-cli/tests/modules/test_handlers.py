@@ -198,6 +198,58 @@ def test_handle_regulations_ingest_prints_run_id_and_stage_summary_on_success(
     assert fake.called_with_celex == "32016R0679"
 
 
+def test_handle_regulations_ingest_surfaces_nonzero_skipped_units(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-003: a stage summary with skipped_units > 0 surfaces the count to the operator."""
+    result = IngestionResult(
+        run_id="run-ingest-002",
+        regulatory_instrument_id="ri-gdpr",
+        source="catalog",
+        stages=[
+            StageOutcome(
+                stage="extraction",
+                status="succeeded",
+                summary={"roles": 2, "requirements": 5, "candidates": 5, "skipped_units": 3},
+            ),
+        ],
+    )
+    fake = _FakeIngestClient(result=result)
+
+    handle_regulations_ingest("32016R0679", fake)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "extraction: succeeded (skipped_units: 3)" in lines
+
+
+def test_handle_regulations_ingest_stage_line_byte_identical_when_no_skipped_units(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-004: skipped_units == 0 (or absent) prints exactly the pre-existing line, unchanged."""
+    result = IngestionResult(
+        run_id="run-ingest-003",
+        regulatory_instrument_id="ri-gdpr",
+        source="catalog",
+        stages=[
+            StageOutcome(
+                stage="extraction",
+                status="succeeded",
+                summary={"roles": 2, "requirements": 5, "candidates": 5, "skipped_units": 0},
+            ),
+            StageOutcome(stage="merge", status="succeeded", summary={"edges": 5}),
+        ],
+    )
+    fake = _FakeIngestClient(result=result)
+
+    handle_regulations_ingest("32016R0679", fake)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "extraction: succeeded" in lines
+    assert "merge: succeeded" in lines
+
+
 def test_handle_regulations_ingest_propagates_ps_cli_error_from_client_uncaught() -> None:
     """A PsCliError from the client (e.g. a 502) propagates uncaught through the handler.
 

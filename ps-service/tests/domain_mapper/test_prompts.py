@@ -102,12 +102,14 @@ def test_parse_extraction_response_malformed_json_raises_typed_error() -> None:
     with pytest.raises(DomainMapperExtractionError) as exc_info:
         parse_extraction_response("{not valid json", _UNIT)
     assert "Art. 13(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "invalid_json"
 
 
 def test_parse_extraction_response_missing_requirements_key_raises_typed_error() -> None:
     with pytest.raises(DomainMapperExtractionError) as exc_info:
         parse_extraction_response(json.dumps({"unexpected": []}), _UNIT)
     assert "Art. 13(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "missing_requirements_key"
 
 
 def test_parse_extraction_response_item_missing_confidence_raises_typed_error() -> None:
@@ -126,6 +128,7 @@ def test_parse_extraction_response_item_missing_confidence_raises_typed_error() 
     with pytest.raises(DomainMapperExtractionError) as exc_info:
         parse_extraction_response(json.dumps(payload), _UNIT)
     assert "Art. 13(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "invalid_requirement_item"
 
 
 def test_parse_extraction_response_item_invalid_type_raises_typed_error() -> None:
@@ -141,14 +144,25 @@ def test_parse_extraction_response_item_invalid_type_raises_typed_error() -> Non
         ]
     }
 
-    with pytest.raises(DomainMapperExtractionError):
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
         parse_extraction_response(json.dumps(payload), _UNIT)
+    assert exc_info.value.error_kind == "invalid_requirement_item"
 
 
 def test_parse_extraction_response_requirements_not_a_list_raises_typed_error() -> None:
     with pytest.raises(DomainMapperExtractionError) as exc_info:
         parse_extraction_response(json.dumps({"requirements": "not-a-list"}), _UNIT)
     assert "Art. 13(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "non_list_requirements"
+
+
+def test_parse_extraction_response_non_object_item_raises_typed_error() -> None:
+    payload = {"requirements": ["not-an-object"]}
+
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_extraction_response(json.dumps(payload), _UNIT)
+    assert "Art. 13(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "non_object_item"
 
 
 # --- parse_obligation_response (Increment 11) -------------------------------

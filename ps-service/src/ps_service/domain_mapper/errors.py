@@ -7,6 +7,16 @@ generic `Exception`/`ValueError` (L1 Error Handling, L2 Error Handling).
 
 from __future__ import annotations
 
+from typing import Literal
+
+type ErrorKind = Literal[
+    "invalid_json",
+    "missing_requirements_key",
+    "non_list_requirements",
+    "non_object_item",
+    "invalid_requirement_item",
+]
+
 
 class DomainMapperExtractionError(Exception):
     """A unit's LLM-driven extraction call did not yield valid `RequirementCandidate`s.
@@ -17,7 +27,25 @@ class DomainMapperExtractionError(Exception):
     `extract_roles_and_requirements`'s own loop, not left to propagate and
     abort the whole call — failure isolation, not a fail-fast infra
     boundary.
+
+    `error_kind` is set (one of `ErrorKind`'s 5 values) on the 5 per-unit
+    response-parsing raise sites in `domain_mapper/prompts.py`; `None` on
+    every other raise site (a precondition/structural failure, not a
+    per-unit LLM-response parse failure).
     """
+
+    def __init__(self, message: str, *, error_kind: ErrorKind | None = None) -> None:
+        """Record the message and, when known, the classified failure kind.
+
+        Args:
+            message: The human-readable failure description (may embed the
+                raw payload/item that failed to parse).
+            error_kind: One of `ErrorKind`'s 5 values, set only at the 5
+                per-unit response-parsing raise sites in `prompts.py`;
+                `None` on every other raise site.
+        """
+        super().__init__(message)
+        self.error_kind = error_kind
 
 
 class DomainMapperDerivationError(Exception):

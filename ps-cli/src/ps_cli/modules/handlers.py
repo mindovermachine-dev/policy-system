@@ -130,9 +130,14 @@ def handle_regulations_ingest(
     reject anyway (L1 "Fail Fast at Boundaries"), enforced at parse time
     rather than re-checked here (PLAN.md §1 D10). On success, prints the run
     id, the regulatory instrument id, and each pipeline stage's name and
-    status (AC-BI-002, AC-BI-010). A `PsCliError` raised by the client (e.g. a
-    structured PS Service failure response) propagates uncaught -- only
-    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
+    status (AC-BI-002, AC-BI-010). When a stage's summary reports
+    `skipped_units > 0` (currently only the extraction stage ever does), that
+    count is appended to the stage's line as `" (skipped_units: {n})"`
+    (issue #63, AC-BI-003) -- when it is zero or absent, the line is
+    byte-identical to before this behavior was added (AC-BI-004). A
+    `PsCliError` raised by the client (e.g. a structured PS Service failure
+    response) propagates uncaught -- only `ps_cli.cli.run()` catches
+    `PsCliError` (PLAN.md §1 D5/D9).
 
     While `ingest_catalog()` blocks (a real ingestion runs for minutes), a
     daemon background thread polls PS Service for the run's
@@ -163,7 +168,11 @@ def handle_regulations_ingest(
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
     for stage in result.stages:
-        print(f"{stage.stage}: {stage.status}")
+        line = f"{stage.stage}: {stage.status}"
+        skipped_units = stage.summary.get("skipped_units", 0)
+        if skipped_units:
+            line += f" (skipped_units: {skipped_units})"
+        print(line)
 
 
 def handle_internal_ingest(

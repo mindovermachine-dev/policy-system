@@ -121,20 +121,23 @@ def parse_extraction_response(text: str, unit: ExtractionUnit) -> list[Requireme
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
         raise DomainMapperExtractionError(
-            f"extraction response for {unit.citation_ref!r} was not valid JSON: {exc}"
+            f"extraction response for {unit.citation_ref!r} was not valid JSON: {exc}",
+            error_kind="invalid_json",
         ) from exc
 
     if not _is_json_object(payload) or "requirements" not in payload:
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} is missing the top-level "
-            f"'requirements' key: {payload!r}"
+            f"'requirements' key: {payload!r}",
+            error_kind="missing_requirements_key",
         )
 
     items = payload["requirements"]
     if not _is_json_array(items):
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} has a non-list 'requirements' "
-            f"value: {items!r}"
+            f"value: {items!r}",
+            error_kind="non_list_requirements",
         )
 
     return [_build_candidate(item, unit) for item in items]
@@ -150,7 +153,8 @@ def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate
     if not isinstance(item, dict):
         raise DomainMapperExtractionError(
             f"extraction response for {unit.citation_ref!r} has a non-object requirement "
-            f"item: {item!r}"
+            f"item: {item!r}",
+            error_kind="non_object_item",
         )
     try:
         return RequirementCandidate.model_validate(
@@ -163,7 +167,9 @@ def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate
         )
     except ValidationError as exc:
         raise DomainMapperExtractionError(
-            f"extraction response for {unit.citation_ref!r} had a malformed requirement item: {exc}"
+            f"extraction response for {unit.citation_ref!r} had a malformed requirement "
+            f"item: {exc}",
+            error_kind="invalid_requirement_item",
         ) from exc
 
 

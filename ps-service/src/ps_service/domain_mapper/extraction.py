@@ -175,10 +175,13 @@ def _extract_all_candidates(
 
     A `DomainMapperExtractionError` from one unit's malformed/unparseable
     LLM response is caught here, logged (`outcome="error"`,
-    `entity_id=unit.citation_ref`), and that unit contributes zero
-    candidates — the loop continues to the next unit. An `LlmProviderError`
-    (a genuine infra failure) is never caught here — it propagates and
-    aborts the whole call.
+    `entity_id=unit.citation_ref`, `extra={"error_kind": exc.error_kind}`),
+    and that unit contributes zero candidates — the loop continues to the
+    next unit. Only `exc.error_kind` (one of `ErrorKind`'s 5 values, or
+    `None`) is ever passed to the logger — never `str(exc)`/`exc.args`,
+    which embed the raw LLM response payload/item that failed to parse. An
+    `LlmProviderError` (a genuine infra failure) is never caught here — it
+    propagates and aborts the whole call.
     """
     candidates: list[RequirementCandidate] = []
     skipped_unit_count = 0
@@ -189,13 +192,14 @@ def _extract_all_candidates(
                     unit, model=model, call_completion=call_completion, emitter=emitter
                 )
             )
-        except DomainMapperExtractionError:
+        except DomainMapperExtractionError as exc:
             skipped_unit_count += 1
             emit_log_entry(
                 component=_COMPONENT,
                 action=_ACTION,
                 entity_id=unit.citation_ref,
                 outcome="error",
+                extra={"error_kind": exc.error_kind},
                 emitter=emitter,
             )
     return candidates, skipped_unit_count
