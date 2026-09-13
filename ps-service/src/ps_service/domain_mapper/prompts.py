@@ -37,6 +37,7 @@ from ps_service.domain_mapper.errors import (
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
+    DefinedTermCandidate,
     ExtractionUnit,
     ObligationAssignment,
     RequirementCandidate,
@@ -170,6 +171,86 @@ def _build_candidate(item: object, unit: ExtractionUnit) -> RequirementCandidate
             f"extraction response for {unit.citation_ref!r} had a malformed requirement "
             f"item: {exc}",
             error_kind="invalid_requirement_item",
+        ) from exc
+
+
+DEFINITIONS_EXTRACTION_SYSTEM_PROMPT = """You extract formally-defined terms from one \
+"Definitions" article/section (or a single paragraph of one) of an EU regulation/directive, \
+for a compliance graph.
+
+For each term this text formally defines (e.g. "'Manufacturer' means..." / "'processing' means \
+..."), extract just the term itself, exactly as named in the defining text (e.g. "Manufacturer", \
+not "manufacturer" or "a Manufacturer").
+
+Do NOT extract:
+- A term that is merely used, but not itself formally defined, in this text.
+- A parenthetical abbreviation alone with no accompanying substantive definition.
+
+Return strict JSON with a top-level "terms" key: {"terms": [str, ...]}. Return {"terms": []} if \
+the text formally defines no terms."""
+
+
+def parse_definitions_response(text: str, unit: ExtractionUnit) -> list[DefinedTermCandidate]:
+    """Parse one definitions unit's raw LLM completion text into `DefinedTermCandidate`s.
+
+    Mirrors `parse_extraction_response`'s exact validation-boundary shape:
+    `citation_ref` is populated from `unit.citation_ref` (the source
+    location the model is never asked to reproduce); `term` alone comes
+    from the LLM's own JSON. Raises `DomainMapperExtractionError`, naming
+    `unit.citation_ref`, on:
+    - malformed JSON (`error_kind="invalid_definitions_json"`),
+    - a response missing the top-level `"terms"` key
+      (`error_kind="missing_terms_key"`),
+    - a non-list `"terms"` value (`error_kind="non_list_terms"`),
+    - any item that is not a non-empty string
+      (`error_kind="invalid_defined_term_item"`).
+    """
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise DomainMapperExtractionError(
+            f"definitions extraction response for {unit.citation_ref!r} was not valid JSON: {exc}",
+            error_kind="invalid_definitions_json",
+        ) from exc
+
+    if not _is_json_object(payload) or "terms" not in payload:
+        raise DomainMapperExtractionError(
+            f"definitions extraction response for {unit.citation_ref!r} is missing the "
+            f"top-level 'terms' key: {payload!r}",
+            error_kind="missing_terms_key",
+        )
+
+    items = payload["terms"]
+    if not _is_json_array(items):
+        raise DomainMapperExtractionError(
+            f"definitions extraction response for {unit.citation_ref!r} has a non-list "
+            f"'terms' value: {items!r}",
+            error_kind="non_list_terms",
+        )
+
+    return [_build_defined_term_candidate(item, unit) for item in items]
+
+
+def _build_defined_term_candidate(item: object, unit: ExtractionUnit) -> DefinedTermCandidate:
+    """Validate one raw JSON item against `DefinedTermCandidate`.
+
+    Raises `DomainMapperExtractionError` (naming `unit.citation_ref`) on a
+    `pydantic.ValidationError` — a non-string item and an empty-string item
+    both fail `DefinedTermCandidate`'s own field validation (pydantic v2's
+    default `str` field does not coerce non-string input), so one
+    `try/except` covers both, unlike `_build_candidate`'s separate
+    `isinstance(item, dict)` pre-check (which has no analogue for a
+    scalar-string item shape).
+    """
+    try:
+        return DefinedTermCandidate.model_validate(
+            {"term": item, "citation_ref": unit.citation_ref}
+        )
+    except ValidationError as exc:
+        raise DomainMapperExtractionError(
+            f"definitions extraction response for {unit.citation_ref!r} had a malformed "
+            f"term item: {exc}",
+            error_kind="invalid_defined_term_item",
         ) from exc
 
 

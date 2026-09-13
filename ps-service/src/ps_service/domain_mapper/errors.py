@@ -15,6 +15,10 @@ type ErrorKind = Literal[
     "non_list_requirements",
     "non_object_item",
     "invalid_requirement_item",
+    "invalid_definitions_json",
+    "missing_terms_key",
+    "non_list_terms",
+    "invalid_defined_term_item",
 ]
 
 
@@ -28,7 +32,7 @@ class DomainMapperExtractionError(Exception):
     abort the whole call — failure isolation, not a fail-fast infra
     boundary.
 
-    `error_kind` is set (one of `ErrorKind`'s 5 values) on the 5 per-unit
+    `error_kind` is set (one of `ErrorKind`'s 9 values) on the 9 per-unit
     response-parsing raise sites in `domain_mapper/prompts.py`; `None` on
     every other raise site (a precondition/structural failure, not a
     per-unit LLM-response parse failure).
@@ -40,7 +44,7 @@ class DomainMapperExtractionError(Exception):
         Args:
             message: The human-readable failure description (may embed the
                 raw payload/item that failed to parse).
-            error_kind: One of `ErrorKind`'s 5 values, set only at the 5
+            error_kind: One of `ErrorKind`'s 9 values, set only at the 9
                 per-unit response-parsing raise sites in `prompts.py`;
                 `None` on every other raise site.
         """

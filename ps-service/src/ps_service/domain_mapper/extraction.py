@@ -8,12 +8,14 @@ building with collision handling (Increment 8).
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.graph_writer import persist_role_and_requirement_graph
 from ps_service.domain_mapper.identity import requirement_id, role_id
 from ps_service.domain_mapper.models import (
+    DefinedTermCandidate,
     ExtractionResult,
     ExtractionUnit,
     RequirementCandidate,
@@ -23,7 +25,9 @@ from ps_service.domain_mapper.models import (
     RoleNode,
 )
 from ps_service.domain_mapper.prompts import (
+    DEFINITIONS_EXTRACTION_SYSTEM_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
+    parse_definitions_response,
     parse_extraction_response,
 )
 from ps_service.llm_interface.completion import route_completion
@@ -37,6 +41,8 @@ if TYPE_CHECKING:
 
 _COMPONENT = "domain_mapper"
 _ACTION = "extract_roles_and_requirements"
+
+_DEFINITIONS_HEADING_PATTERN = re.compile(r"\bdefinitions\b", re.IGNORECASE)
 
 
 class _RegulatoryInstrumentNode(Protocol):
@@ -77,11 +83,18 @@ def extract_roles_and_requirements(
        unit contributes zero candidates — the loop continues. An
        `LlmProviderError` (infra failure) is not caught here; it propagates
        and aborts the whole call.
-    4. `_canonicalize_roles` — deterministic Role dedup.
+    4. `_canonicalize_roles` — deterministic Role dedup. Also resolves each
+       Role's `DEFINES.source_ref` (issue #26) via the `defined_terms` map
+       built by `_build_defined_terms_map` (a dedicated LLM pass over just
+       the definitions-headed units, run before this step), falling back to
+       the first duty occurrence's `unit_citation_ref` when no matching
+       defined term exists (AC-BI-004/008/009).
     5. `_build_requirement_graph` — Requirement nodes + collision
        disambiguation (B2 fix), never raising for a collision.
     6. `persist_role_and_requirement_graph` — validate-then-write.
-    7. Emits one `outcome="collision"` entry per disambiguated id, then one
+    7. Emits one `outcome="collision"` entry per disambiguated id, one
+       `outcome="definitions_fallback"` entry per Role whose `DEFINES.source_ref`
+       fell back to the first duty occurrence (AC-BI-010), then one
        `outcome="succeeded"` entry for the whole call. No `bind_run_context()`
        call here (PLAN_REVIEWED.md §6) — `run_id` is whatever the caller
        already bound, or `None`.
@@ -96,8 +109,12 @@ def extract_roles_and_requirements(
         units, model=model, call_completion=call_completion, emitter=emitter
     )
 
-    role_nodes, role_edges, role_node_ids = _canonicalize_roles(
-        candidates, regulatory_instrument_id
+    defined_terms = _build_defined_terms_map(
+        units, model=model, call_completion=call_completion, emitter=emitter
+    )
+
+    role_nodes, role_edges, role_node_ids, fallback_roles = _canonicalize_roles(
+        candidates, regulatory_instrument_id, defined_terms
     )
     requirement_nodes, requirement_edges, collided_ids = _build_requirement_graph(
         candidates, regulatory_instrument_id, role_node_ids
@@ -119,6 +136,15 @@ def extract_roles_and_requirements(
             action=_ACTION,
             entity_id=collided_id,
             outcome="collision",
+            emitter=emitter,
+        )
+    for role_node_id, role_name in fallback_roles:
+        emit_log_entry(
+            component=_COMPONENT,
+            action=_ACTION,
+            entity_id=role_node_id,
+            outcome="definitions_fallback",
+            extra={"role_name": role_name, "regulatory_instrument_id": regulatory_instrument_id},
             emitter=emitter,
         )
     emit_log_entry(
@@ -177,9 +203,10 @@ def _extract_all_candidates(
     LLM response is caught here, logged (`outcome="error"`,
     `entity_id=unit.citation_ref`, `extra={"error_kind": exc.error_kind}`),
     and that unit contributes zero candidates — the loop continues to the
-    next unit. Only `exc.error_kind` (one of `ErrorKind`'s 5 values, or
-    `None`) is ever passed to the logger — never `str(exc)`/`exc.args`,
-    which embed the raw LLM response payload/item that failed to parse. An
+    next unit. Only `exc.error_kind` (one of `ErrorKind`'s 5
+    duty-extraction-related values, or `None`) is ever passed to the
+    logger — never `str(exc)`/`exc.args`, which embed the raw LLM response
+    payload/item that failed to parse. An
     `LlmProviderError` (a genuine infra failure) is never caught here — it
     propagates and aborts the whole call.
     """
@@ -263,9 +290,163 @@ def _build_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
     ]
 
 
+def _is_definitions_unit(unit: ExtractionUnit) -> bool:
+    r"""AC-BI-002: a pure, case-insensitive, word-boundary filter on `article_heading`.
+
+    Matches "Definitions", "Article 2 — Definitions", "Scope and
+    definitions", etc., via a compiled word-boundary regex
+    (`_DEFINITIONS_HEADING_PATTERN`) rather than a plain substring/casefold
+    check — a substring check would also match "Redefinitions of Scope",
+    where "definitions" is not its own word (no `\b` boundary between "re"
+    and "definitions", both `\w` characters). No new heading-inference
+    logic — reuses the existing `article_heading` field verbatim. Does not
+    touch/reorder `units` itself; callers filter a copy,
+    `_extract_all_candidates`'s own traversal of the full `units` tuple is
+    untouched (AC-BI-002's "without reordering the existing
+    duty-extraction unit traversal").
+    """
+    return bool(_DEFINITIONS_HEADING_PATTERN.search(unit.article_heading))
+
+
+def _normalize_term(text: str) -> str:
+    """Case-insensitive + internal-whitespace-collapsed key (AC-BI-005).
+
+    Used identically on both sides of the match: pooled defined-term keys
+    (`_pool_defined_terms`) and a candidate's `role_name` at lookup time
+    inside `_canonicalize_roles`. Pure string ops only.
+    """
+    return " ".join(text.casefold().split())
+
+
+def _build_definitions_extraction_messages(unit: ExtractionUnit) -> list[ChatMessage]:
+    """System prompt + one user message carrying the unit's own text.
+
+    Identical delimiting shape to `_build_extraction_messages` — the unit
+    text is never interpolated into the system prompt (L2 untrusted-content
+    rule).
+    """
+    user_content = (
+        f"Article heading: {unit.article_heading}\n"
+        f"Citation: {unit.citation_ref}\n\n"
+        "<regulation_text>\n"
+        f"{unit.text}\n"
+        "</regulation_text>"
+    )
+    return [
+        ChatMessage(role="system", content=DEFINITIONS_EXTRACTION_SYSTEM_PROMPT),
+        ChatMessage(role="user", content=user_content),
+    ]
+
+
+def _extract_defined_terms_for_unit(
+    unit: ExtractionUnit,
+    *,
+    model: str,
+    call_completion: CompletionCaller | None = None,
+    emitter: LogEmitter | None = None,
+) -> list[DefinedTermCandidate]:
+    """Call the LLM once for one definitions `ExtractionUnit`.
+
+    Exact DI/parsing-delegation shape as `_extract_candidates_for_unit`: a
+    `DomainMapperExtractionError` from a malformed response propagates
+    unchanged (isolation is `_extract_all_defined_terms`'s job); an
+    `LlmProviderError` from `route_completion` propagates and aborts the
+    whole call.
+    """
+    messages = _build_definitions_extraction_messages(unit)
+    result = route_completion(
+        messages, model=model, call_completion=call_completion, emitter=emitter
+    )
+    return parse_definitions_response(result.text, unit)
+
+
+def _extract_all_defined_terms(
+    definitions_units: tuple[ExtractionUnit, ...],
+    *,
+    model: str,
+    call_completion: CompletionCaller | None,
+    emitter: LogEmitter | None,
+) -> list[DefinedTermCandidate]:
+    """AC-BI-003/AC-BI-007: run the definitions pass over exactly `definitions_units`.
+
+    Zero LLM calls when `definitions_units` is empty (AC-BI-007) — the loop
+    body never executes. Per-unit failure isolation mirrors
+    `_extract_all_candidates` exactly (design decision 4): a
+    `DomainMapperExtractionError` from one unit is caught, logged
+    (`outcome="error"`, `entity_id=unit.citation_ref`,
+    `extra={"error_kind": exc.error_kind}`), and that unit contributes zero
+    terms — the loop continues. An `LlmProviderError` is never caught here.
+    """
+    term_candidates: list[DefinedTermCandidate] = []
+    for unit in definitions_units:
+        try:
+            term_candidates.extend(
+                _extract_defined_terms_for_unit(
+                    unit, model=model, call_completion=call_completion, emitter=emitter
+                )
+            )
+        except DomainMapperExtractionError as exc:
+            emit_log_entry(
+                component=_COMPONENT,
+                action=_ACTION,
+                entity_id=unit.citation_ref,
+                outcome="error",
+                extra={"error_kind": exc.error_kind},
+                emitter=emitter,
+            )
+    return term_candidates
+
+
+def _pool_defined_terms(term_candidates: list[DefinedTermCandidate]) -> dict[str, str]:
+    """AC-BI-005/AC-BI-006: pool defined terms into one normalized-term -> citation_ref map.
+
+    Keys are normalized via `_normalize_term` so `_canonicalize_roles`'s
+    later lookup is a single dict lookup under the same normalization.
+    First occurrence (this list's own order — units traversal order) wins on
+    a duplicate normalized term (design decision 5). Pure, no LLM/IO.
+    """
+    pooled: dict[str, str] = {}
+    for candidate in term_candidates:
+        key = _normalize_term(candidate.term)
+        if key not in pooled:
+            pooled[key] = candidate.citation_ref
+    return pooled
+
+
+def _build_defined_terms_map(
+    units: tuple[ExtractionUnit, ...],
+    *,
+    model: str,
+    call_completion: CompletionCaller | None,
+    emitter: LogEmitter | None,
+) -> dict[str, str]:
+    """Detect qualifying definitions units, run the dedicated LLM pass, pool the results.
+
+    Composes `_is_definitions_unit` (AC-BI-002) + `_extract_all_defined_terms`
+    (AC-BI-003/007) + `_pool_defined_terms` (AC-BI-005/006) into the one call
+    `extract_roles_and_requirements` makes before `_canonicalize_roles`.
+    Not itself pure (issues LLM calls via `_extract_all_defined_terms`) —
+    this is the orchestration-level helper AC-BI-011 explicitly allows
+    ("orchestrated in `extract_roles_and_requirements` (or a new pure helper
+    it calls) BEFORE `_canonicalize_roles`").
+    """
+    definitions_units = tuple(unit for unit in units if _is_definitions_unit(unit))
+    term_candidates = _extract_all_defined_terms(
+        definitions_units, model=model, call_completion=call_completion, emitter=emitter
+    )
+    return _pool_defined_terms(term_candidates)
+
+
 def _canonicalize_roles(
-    candidates: list[RequirementCandidate], regulatory_instrument_id: str
-) -> tuple[tuple[RoleNode, ...], tuple[RoleDefinesEdge, ...], dict[str, str]]:
+    candidates: list[RequirementCandidate],
+    regulatory_instrument_id: str,
+    defined_terms: dict[str, str],
+) -> tuple[
+    tuple[RoleNode, ...],
+    tuple[RoleDefinesEdge, ...],
+    dict[str, str],
+    tuple[tuple[str, str], ...],
+]:
     """PLAN_REVIEWED.md §5.2 step 4 — deterministic Role dedup via `identity.role_id()`, no LLM.
 
     Candidates sharing the same `role_name` collapse onto one Role node
@@ -275,22 +456,42 @@ def _canonicalize_roles(
     order — the caller is responsible for supplying candidates already in
     unit-then-response order) whose `role_name` produces a given `role_id`
     determines that Role's `confidence` and its `DEFINES` edge's
-    `source_ref` (`unit_citation_ref`) — mirrors how `_build_requirement_graph`
-    below treats first occurrence for Requirement-id collisions.
+    `source_ref` — mirrors how `_build_requirement_graph` below treats first
+    occurrence for Requirement-id collisions.
 
-    Returns `(role_nodes, role_edges, role_node_ids)` where `role_node_ids`
-    maps every distinct `role_name` string actually seen to its Role node's
-    id — including a `role_name` spelling that happens to collapse onto an
-    id another spelling already produced — so `_build_requirement_graph`
-    can look up any candidate's `role_name` unconditionally.
+    `defined_terms` is the precomputed, already-normalized (via
+    `_normalize_term`) term -> citation_ref mapping from
+    `_build_defined_terms_map` (AC-BI-011: no LLM/IO call occurs in THIS
+    function — `defined_terms` arrives fully computed). For that FIRST
+    candidate at each new `role_id()`, its `role_name` is normalized via
+    `_normalize_term` and looked up in `defined_terms` (AC-BI-005): a hit
+    sets `RoleDefinesEdge.source_ref` to that term's `citation_ref`
+    (AC-BI-004); a miss falls back to `candidate.unit_citation_ref`,
+    unchanged from prior behaviour (AC-BI-008/AC-BI-009), and records
+    `(node_id, candidate.role_name)` in the returned `fallback_roles` tuple
+    for the orchestrator to log `outcome="definitions_fallback"` against
+    (AC-BI-010) — mirrors `_build_requirement_graph`'s `collided_ids` return
+    exactly: the pure function surfaces WHAT happened, the orchestrator does
+    the logging.
 
-    Pure, no logging/IO — stays cheaply testable with hand-written
-    structural fakes, no emitter involved.
+    Returns `(role_nodes, role_edges, role_node_ids, fallback_roles)` where
+    `role_node_ids` maps every distinct `role_name` string actually seen to
+    its Role node's id — including a `role_name` spelling that happens to
+    collapse onto an id another spelling already produced — so
+    `_build_requirement_graph` can look up any candidate's `role_name`
+    unconditionally.
+
+    Still pure, no logging/IO (AC-BI-011) — no `route_completion`/
+    `emit_log_entry`/`call_completion`/`emitter` identifier appears in this
+    body, and the signature itself carries no such parameter — stays
+    cheaply testable with hand-written structural fakes, no emitter
+    involved.
     """
     role_nodes: list[RoleNode] = []
     role_edges: list[RoleDefinesEdge] = []
     role_node_ids: dict[str, str] = {}
     seen_role_node_ids: set[str] = set()
+    fallback_roles: list[tuple[str, str]] = []
 
     for candidate in candidates:
         node_id = role_id(candidate.role_name, regulatory_instrument_id)
@@ -304,11 +505,15 @@ def _canonicalize_roles(
                 properties={"name": candidate.role_name, "confidence": candidate.confidence},
             )
         )
-        role_edges.append(
-            RoleDefinesEdge(role_node_id=node_id, source_ref=candidate.unit_citation_ref)
-        )
+        matched_citation_ref = defined_terms.get(_normalize_term(candidate.role_name))
+        if matched_citation_ref is not None:
+            source_ref = matched_citation_ref
+        else:
+            source_ref = candidate.unit_citation_ref
+            fallback_roles.append((node_id, candidate.role_name))
+        role_edges.append(RoleDefinesEdge(role_node_id=node_id, source_ref=source_ref))
 
-    return tuple(role_nodes), tuple(role_edges), role_node_ids
+    return tuple(role_nodes), tuple(role_edges), role_node_ids, tuple(fallback_roles)
 
 
 def _build_requirement_graph(

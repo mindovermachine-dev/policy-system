@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
+    DefinedTermCandidate,
     DerivationResult,
     ExtractionResult,
     ExtractionUnit,
@@ -88,6 +89,34 @@ def test_requirement_candidate_rejects_empty_role_name() -> None:
 def test_requirement_candidate_rejects_empty_text() -> None:
     with pytest.raises(ValidationError):
         _candidate(text="")
+
+
+# --- DefinedTermCandidate ------------------------------------------------
+
+
+def _defined_term_candidate(**overrides: object) -> DefinedTermCandidate:
+    fields: dict[str, object] = {
+        "term": "Manufacturer",
+        "citation_ref": "Art. 2(1)",
+    }
+    fields.update(overrides)
+    return DefinedTermCandidate.model_validate(fields)
+
+
+def test_defined_term_candidate_mutation_raises() -> None:
+    candidate = _defined_term_candidate()
+    with pytest.raises(ValidationError):
+        _mutate(candidate, "term", "changed")
+
+
+def test_defined_term_candidate_rejects_empty_term() -> None:
+    with pytest.raises(ValidationError):
+        _defined_term_candidate(term="")
+
+
+def test_defined_term_candidate_rejects_empty_citation_ref() -> None:
+    with pytest.raises(ValidationError):
+        _defined_term_candidate(citation_ref="")
 
 
 # --- ExtractionResult ----------------------------------------------------

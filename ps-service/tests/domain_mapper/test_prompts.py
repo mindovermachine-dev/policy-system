@@ -13,12 +13,14 @@ from ps_service.domain_mapper.errors import (
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
+    DefinedTermCandidate,
     ExtractionUnit,
     ObligationAssignment,
     RequirementCandidate,
 )
 from ps_service.domain_mapper.prompts import (
     parse_capability_response,
+    parse_definitions_response,
     parse_extraction_response,
     parse_obligation_response,
 )
@@ -163,6 +165,70 @@ def test_parse_extraction_response_non_object_item_raises_typed_error() -> None:
         parse_extraction_response(json.dumps(payload), _UNIT)
     assert "Art. 13(1)" in str(exc_info.value)
     assert exc_info.value.error_kind == "non_object_item"
+
+
+# --- parse_definitions_response (Issue #26, Slice 2) ------------------------
+
+_DEFINITIONS_UNIT = ExtractionUnit(
+    citation_ref="Art. 2(1)",
+    text="'Manufacturer' means any natural or legal person who develops or manufactures products.",
+    article_number="2",
+    paragraph_number="1",
+    article_heading="Definitions",
+)
+
+
+def test_parse_definitions_response_valid_json_returns_populated_candidates() -> None:
+    payload = {"terms": ["Manufacturer", "Importer"]}
+
+    candidates = parse_definitions_response(json.dumps(payload), _DEFINITIONS_UNIT)
+
+    assert len(candidates) == 2
+    assert all(isinstance(c, DefinedTermCandidate) for c in candidates)
+    assert [c.term for c in candidates] == ["Manufacturer", "Importer"]
+    assert all(c.citation_ref == "Art. 2(1)" for c in candidates)
+
+
+def test_parse_definitions_response_empty_terms_returns_empty_list() -> None:
+    candidates = parse_definitions_response(json.dumps({"terms": []}), _DEFINITIONS_UNIT)
+    assert candidates == []
+
+
+def test_parse_definitions_response_malformed_json_raises_typed_error() -> None:
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_definitions_response("{not valid json", _DEFINITIONS_UNIT)
+    assert "Art. 2(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "invalid_definitions_json"
+
+
+def test_parse_definitions_response_missing_terms_key_raises_typed_error() -> None:
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_definitions_response(json.dumps({"unexpected": []}), _DEFINITIONS_UNIT)
+    assert "Art. 2(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "missing_terms_key"
+
+
+def test_parse_definitions_response_non_list_terms_raises_typed_error() -> None:
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_definitions_response(json.dumps({"terms": "Manufacturer"}), _DEFINITIONS_UNIT)
+    assert "Art. 2(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "non_list_terms"
+
+
+def test_parse_definitions_response_non_string_term_item_raises_typed_error() -> None:
+    payload = {"terms": [{"name": "Manufacturer"}]}
+
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_definitions_response(json.dumps(payload), _DEFINITIONS_UNIT)
+    assert "Art. 2(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "invalid_defined_term_item"
+
+
+def test_parse_definitions_response_empty_string_term_item_raises_typed_error() -> None:
+    with pytest.raises(DomainMapperExtractionError) as exc_info:
+        parse_definitions_response(json.dumps({"terms": [""]}), _DEFINITIONS_UNIT)
+    assert "Art. 2(1)" in str(exc_info.value)
+    assert exc_info.value.error_kind == "invalid_defined_term_item"
 
 
 # --- parse_obligation_response (Increment 11) -------------------------------

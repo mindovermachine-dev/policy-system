@@ -57,6 +57,25 @@ class RequirementCandidate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class DefinedTermCandidate(BaseModel):
+    """Stage-1b LLM output, one per formally-defined term found in a definitions unit.
+
+    Mirrors `RequirementCandidate`'s validation contract: `citation_ref` is
+    the SOURCE unit's own `citation_ref` (from `ExtractionUnit`, read
+    verbatim, never invented by the LLM — the same never-reconstructed-
+    provenance invariant `ExtractionUnit.citation_ref`'s own docstring
+    states), populated at the parsing boundary
+    (`prompts.py::parse_definitions_response`) exactly like
+    `RequirementCandidate.unit_citation_ref`; `term` alone is the LLM's own
+    JSON output.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    term: str = Field(min_length=1)
+    citation_ref: str = Field(min_length=1)
+
+
 @dataclass(frozen=True, slots=True)
 class RoleNode:
     """A canonicalized Role for `graph_writer.persist_role_and_requirement_graph` to `MERGE`.
@@ -76,9 +95,13 @@ class RoleNode:
 class RoleDefinesEdge:
     """RegulatoryInstrument -[:DEFINES {source_ref}]-> Role.
 
-    `role_node_id` is the target Role's `id`; `source_ref` is the first
-    duty-bearing candidate's `unit_citation_ref` (PLAN_REVIEWED.md §5.2
-    step 4).
+    `role_node_id` is the target Role's `id`. `source_ref` is set by
+    `extraction.py::_canonicalize_roles` (PLAN_REVIEWED.md §5.2 step 4) to
+    one of two outcomes: when the Role's name matches a formally-defined
+    term found by the dedicated definitions pass, `source_ref` is that
+    term's own `citation_ref` — the actual defining text's location; when
+    no such match exists, `source_ref` falls back to the first duty-bearing
+    candidate's `unit_citation_ref`, as before this issue (#26).
     """
 
     role_node_id: str
