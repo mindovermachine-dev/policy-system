@@ -10,6 +10,7 @@ this issue's binding testing convention (§0.3/§0.5).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 import redis.exceptions
@@ -298,6 +299,87 @@ def test_persist_raises_when_role_nodes_collection_is_empty_but_requirement_refe
         )
 
     assert graph.calls == []
+
+
+# --- BASELINE.md row #2 regression: RegulatoryInstrument MERGE idempotency --
+
+
+class _InMemoryRegulatoryInstrumentGraph:
+    """Simulates real FalkorDB `MERGE (n:Label {id: $id}) SET n += $properties`
+    semantics for RegulatoryInstrument nodes -- unlike this file's own
+    `_FakeGraph`, which only records `(query, params)` calls without
+    simulating actual node storage, this fake keeps a real list of node
+    dicts and re-derives the MERGE match on every call by SCANNING for a
+    node whose `id` property currently equals `$id` (mirroring FalkorDB's
+    own by-property match, not a Python-dict keyed-by-the-caller's-intended-
+    id shortcut, which would silently hide this exact bug).
+
+    If `$properties` carries its own `id` key, `node.update(properties)`
+    overwrites the just-matched/created node's `id` in place -- exactly
+    like real `SET n += $properties` would -- so a fix that fails to strip
+    `id` from `properties` before this call reproduces the live
+    `cra_baseline` pollution (repeated calls silently re-home onto a new
+    node every time, never re-matching the previous one).
+    """
+
+    def __init__(self) -> None:
+        self._nodes: list[dict[str, object]] = []
+        self.calls: list[_RecordedCall] = []
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        self.calls.append(_RecordedCall(q, params))
+        if q == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties":
+            assert params is not None
+            match_id = params["id"]
+            properties = cast("dict[str, object]", params["properties"])
+            node = next((n for n in self._nodes if n.get("id") == match_id), None)
+            if node is None:
+                node = {"id": match_id}
+                self._nodes.append(node)
+            node.update(properties)
+            return _FakeQueryResult([])
+        return _FakeQueryResult([[0]])
+
+    def regulatory_instrument_node_count(self) -> int:
+        return len(self._nodes)
+
+    def regulatory_instrument_nodes_with_id(self, node_id: str) -> list[dict[str, object]]:
+        return [n for n in self._nodes if n.get("id") == node_id]
+
+
+def test_persist_regulatory_instrument_merge_is_idempotent_across_repeated_calls() -> None:
+    """BASELINE.md row #2 regression. Live capstone reconnaissance: the
+    native graph's own RegulatoryInstrument node's full property bag
+    (`extraction.py`'s `_read_regulatory_instrument_properties`, `dict(node.
+    properties)`) carries its OWN `id` ("cra-1.0", ingestion's own casing) --
+    different from the caller's `regulatory_instrument_id` ("CRA-1.0",
+    extraction's casing) -- and that whole bag, `id` key included, used to
+    flow unchanged into `regulatory_instrument_properties` here.
+
+    `SET n += $properties` blindly overwriting the just-matched node's `id`
+    broke the MERGE match key for every SUBSEQUENT call: confirmed live,
+    `cra_baseline` ended up with THREE RegulatoryInstrument nodes all at
+    `id: 'cra-1.0'` and ZERO at `id: 'CRA-1.0'` after ~3 calls.
+
+    Calling `persist_role_and_requirement_graph` TWICE in a row with the
+    same `regulatory_instrument_id`, given `regulatory_instrument_properties`
+    whose OWN `id` differs from it, must leave exactly ONE RegulatoryInstrument
+    node in the target graph -- with `id == regulatory_instrument_id` -- not
+    two, and not stuck at the native graph's own casing.
+    """
+    graph = _InMemoryRegulatoryInstrumentGraph()
+    # The native graph's own RegulatoryInstrument node property bag -- its
+    # own `id` ("cra-1.0") differs in casing from the caller's
+    # regulatory_instrument_id ("CRA-1.0") below, exactly like the live bug.
+    native_properties: dict[str, object] = {"id": "cra-1.0", "title": "Cyber Resilience Act"}
+
+    persist_role_and_requirement_graph(graph, "CRA-1.0", native_properties, (), (), (), ())
+    persist_role_and_requirement_graph(graph, "CRA-1.0", native_properties, (), (), (), ())
+
+    assert graph.regulatory_instrument_node_count() == 1
+    matching_nodes = graph.regulatory_instrument_nodes_with_id("CRA-1.0")
+    assert len(matching_nodes) == 1
+    assert matching_nodes[0]["title"] == "Cyber Resilience Act"
 
 
 # --- Dependency health wiring ------------------------------------------------

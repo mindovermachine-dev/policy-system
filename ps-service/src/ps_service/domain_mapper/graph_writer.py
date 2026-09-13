@@ -181,13 +181,42 @@ def persist_role_and_requirement_graph(
     Raises `DomainMapperPersistenceError` (via `_validate_role_references`)
     before any write if a Requirement's `role_id` doesn't resolve within
     this call's own `role_nodes` — see the module docstring's B3 fix (a).
+
+    BASELINE.md row #2 fix: `regulatory_instrument_properties` may itself
+    carry an `id` key — it is `extraction.py`'s `_read_regulatory_
+    instrument_properties`'s `dict(node.properties)`, a whole-bag copy of
+    the NATIVE graph's own RegulatoryInstrument node, whose `id` (e.g.
+    ingestion's own casing, `"cra-1.0"`) can differ from this call's own
+    `regulatory_instrument_id` (e.g. `"CRA-1.0"`). `id` is already fixed by
+    the `MERGE {id: $id}` match clause above and must never be mutated by
+    the following `SET` — `SET n += $properties` including a differing `id`
+    would silently rewrite the just-matched/created node's own match key,
+    breaking every SUBSEQUENT call's `MERGE {id: $id}` from ever re-finding
+    it (each call would then mint a fresh duplicate node instead of
+    upserting one). So `id` is stripped from a local copy before use here,
+    matching this module's own established convention: every OTHER
+    `properties` dict ever passed into a `MERGE ... SET` in this codebase
+    (`_canonicalize_roles`/`_build_requirement_graph`'s Role/Requirement
+    `properties`, and the sibling precedent `ps_service.ingestion.
+    graph_writer.register_regulatory_instrument_version`'s `properties`) is
+    built as an explicit field list that never includes `id` in the first
+    place — this is the one call site that instead forwards a native,
+    unfiltered property bag, so the strip belongs here, at the write
+    boundary, rather than on `_read_regulatory_instrument_properties`'s
+    own documented whole-bag-passthrough contract (AC-BI-010).
     """
     _validate_role_references(role_nodes, requirement_nodes)
 
+    regulatory_instrument_properties_without_id = {
+        key: value for key, value in regulatory_instrument_properties.items() if key != "id"
+    }
     _execute_query(
         graph,
         f"MERGE (n:{_REGULATORY_INSTRUMENT_LABEL} {{id: $id}}) SET n += $properties",
-        params={"id": regulatory_instrument_id, "properties": regulatory_instrument_properties},
+        params={
+            "id": regulatory_instrument_id,
+            "properties": regulatory_instrument_properties_without_id,
+        },
     )
     for role in role_nodes:
         _upsert_node(graph, _ROLE_LABEL, role.id, role.properties)

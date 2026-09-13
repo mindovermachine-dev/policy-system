@@ -342,6 +342,8 @@ _OBLIGATION_C = ObligationNode(
     id="obl_maintain_incident_log_cccccc",
     properties={"text": "Maintain a log of all security incidents.", "confidence": 0.9},
 )
+_HALLUCINATED_CAPABILITY_ID = "cap_accountability_compliance"  # TASK.md:7 — the exact id the
+# live flake observed; matched_existing_id set, absent from the registry, new_name=None.
 
 
 def _capability_match_response(matched_existing_id: str, confidence: float = 0.9) -> str:
@@ -637,6 +639,96 @@ def test_derive_capabilities_dedups_repeated_obligation_node_id_even_when_it_fai
     assert capability_nodes == ()
     assert requires_edges == ()
     assert unmatched_obligation_ids == (_OBLIGATION_A.id,)
+
+
+def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#45 AC-BI-001 + AC-BI-002: a well-formed capability-derivation response whose
+    matched_existing_id names a Capability absent from the registry, with no usable
+    new_name, is the exact hallucination shape TASK.md:7 reports from the live capstone
+    flake -- distinct from issue #64's bad-JSON trigger. Three distinct Obligations
+    processed in order A, C, B: A and B's responses both MINT the identical Capability
+    name (same code-level-convergence technique as
+    test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability),
+    while C -- in between -- gets the hallucinated matched_existing_id. The failure for
+    C neither poisons nor skips the whole-run registry state A built and B consumes: A
+    and B still converge onto ONE shared Capability node with TWO REQUIRES edges, and C
+    alone is surfaced as unmatched with no Capability node or REQUIRES edge of its own --
+    proving _process_obligation's except DomainMapperDerivationError catch
+    (derivation.py:598-609) reaches this specific well-formed-but-unresolvable trigger,
+    not just malformed JSON.
+    """
+    emitter, _log_path = make_emitter()
+    capability_name = "Access Control System"
+    call_completion = _scripted_sequential_call_completion(
+        [
+            _capability_mint_response(capability_name),
+            _capability_match_response(_HALLUCINATED_CAPABILITY_ID),
+            _capability_mint_response(capability_name),
+        ]
+    )
+
+    capability_nodes, requires_edges, unmatched_obligation_ids = _derive_capabilities(
+        (_OBLIGATION_A, _OBLIGATION_C, _OBLIGATION_B),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    # AC-BI-001: the hallucinated-id Obligation surfaces unmatched, nothing else for it.
+    assert unmatched_obligation_ids == (_OBLIGATION_C.id,)
+    assert all(edge.obligation_node_id != _OBLIGATION_C.id for edge in requires_edges)
+    assert _HALLUCINATED_CAPABILITY_ID not in {node.id for node in capability_nodes}
+
+    # AC-BI-002: the rest of the batch is unaffected -- normal return, no exception, A/B
+    # still converge correctly.
+    assert len(capability_nodes) == 1
+    assert capability_nodes[0].id == capability_id(capability_name)
+    assert len(requires_edges) == 2
+    assert {edge.obligation_node_id for edge in requires_edges} == {
+        _OBLIGATION_A.id,
+        _OBLIGATION_B.id,
+    }
+    assert all(edge.capability_node_id == capability_nodes[0].id for edge in requires_edges)
+
+
+def test_derive_capabilities_hallucinated_capability_match_emits_unmatched_log_entry(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#45 AC-BI-003: the hallucinated-id Obligation from the same A/C/B batch as
+    test_derive_capabilities_hallucinated_capability_match_isolated_within_batch emits
+    EXACTLY ONE outcome="unmatched" log entry, keyed by its own entity_id -- and A/B's
+    successful mint/match decisions do not also produce unmatched entries alongside it.
+    Mirrors test_derive_capabilities_emits_unmatched_log_entry's assertion shape
+    (test_derivation.py:555-574), the issue #64 precedent for this exact log-assertion
+    style, extended to a 3-Obligation batch so "exactly one" is actually exercised
+    against a run where other entries could plausibly appear.
+    """
+    emitter, log_path = make_emitter()
+    capability_name = "Access Control System"
+    call_completion = _scripted_sequential_call_completion(
+        [
+            _capability_mint_response(capability_name),
+            _capability_match_response(_HALLUCINATED_CAPABILITY_ID),
+            _capability_mint_response(capability_name),
+        ]
+    )
+
+    _derive_capabilities(
+        (_OBLIGATION_A, _OBLIGATION_C, _OBLIGATION_B),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    lines = read_lines(log_path)
+    unmatched_entries = [line for line in lines if line.get("outcome") == "unmatched"]
+    assert len(unmatched_entries) == 1
+    assert unmatched_entries[0]["entity_id"] == _OBLIGATION_C.id
+    assert unmatched_entries[0]["component"] == "domain_mapper"
+    assert unmatched_entries[0]["action"] == "derive_obligations_and_capabilities"
 
 
 def test_derive_capabilities_propagates_llm_provider_error_and_aborts(
