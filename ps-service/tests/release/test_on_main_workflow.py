@@ -178,9 +178,13 @@ def test_release_job_installs_gh_tt(on_main_workflow: WorkflowFile) -> None:
     assert GH_TT_PIN in tokens
 
 
-def test_stage_concurrency_group_is_unchanged(on_main_workflow: WorkflowFile) -> None:
+def test_on_main_defines_only_lint_and_release_jobs(on_main_workflow: WorkflowFile) -> None:
+    assert set(on_main_workflow.jobs.keys()) == {LINT_JOB, RELEASE_JOB}
+
+
+def test_release_concurrency_group_is_set(on_main_workflow: WorkflowFile) -> None:
     assert on_main_workflow.document.get("concurrency") == {
-        "group": "stage",
+        "group": "release",
         "cancel-in-progress": False,
     }
 
