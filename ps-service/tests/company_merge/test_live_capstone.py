@@ -85,8 +85,9 @@ from ps_service.logging import bind_run_context
 
 _CAPSTONE_GRAPH_NAME = "policy_system_capstone_test"
 _REAL_SINGLE_TENANT_GRAPH_NAME = "policy_system"
-_SIMILARITY_THRESHOLD = 0.90  # user-approved for this run, see task brief -- not read from
-# PS_COMPANYMERGE_SIMILARITY_THRESHOLD/ServiceConfig, passed directly to merge_baseline_graph.
+_SIMILARITY_THRESHOLD = 0.59  # empirically recommended by issue #29's labeled sweep -- not
+# read from PS_COMPANYMERGE_SIMILARITY_THRESHOLD/ServiceConfig, passed directly to
+# merge_baseline_graph.
 _LOG_FILENAME = "company_merge_capstone.jsonl"
 
 _SEED_DUTY_TEXT = "Report the incident to the competent authority without undue delay"

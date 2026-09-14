@@ -21,11 +21,11 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_FALKORDB_PORT")].value
           value: "6379"
 
-  - it: PS_COMPANYMERGE_SIMILARITY_THRESHOLD comes from values, default 0.85
+  - it: PS_COMPANYMERGE_SIMILARITY_THRESHOLD comes from values, default 0.59
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_SIMILARITY_THRESHOLD")].value
-          value: "0.85"
+          value: "0.59"
 
   - it: default (ollama) render has no envFrom
     asserts:

@@ -484,13 +484,17 @@ greater than 0.0 and at most 1.0) it uses when deciding whether two company
 mentions from different regulations refer to the same real-world entity:
 
 ```bash
-PS_COMPANYMERGE_SIMILARITY_THRESHOLD=0.85
+PS_COMPANYMERGE_SIMILARITY_THRESHOLD=0.59
 ```
 
 Unlike `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`, there's no
 provider choice to make here — just the one value. If it's unset, `/ready`
 reports `not_ready` and `POST /ingestions` (`ps-cli regulations ingest`)
 fails fast with `ingestion_config_incomplete` before doing any I/O.
+`0.59` is not an arbitrary starting guess — it's the empirically recommended
+value from issue #29's labeled precision/recall/F1 sweep (see
+`tools/company-merge/company_merge_similarity_sweep.py` and that issue's
+recorded recommendation) rather than an undocumented judgment call.
 
 ### MCP Streamable HTTP endpoint
 

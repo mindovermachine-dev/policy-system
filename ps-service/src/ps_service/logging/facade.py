@@ -117,10 +117,20 @@ def _drain_default_emitter_at_exit() -> None:
 
 
 def reset_for_tests() -> None:
-    """Stop and clear the default emitter so each test starts fresh."""
-    global _default_emitter
+    """Stop and clear the default emitter, and re-arm the atexit guard, so each test starts fresh.
+
+    Resetting `_atexit_registered` alongside `_default_emitter` is required,
+    not optional: leaving it `True` across tests silently defeats the
+    per-process once-only `atexit.register` guarantee `configure()` documents
+    for the *next* real `configure()` call in the suite, which would then
+    observe the guard already set and skip registering — exactly what
+    `test_atexit_drain_hook_registered_once_when_configure_called_multiple_times`
+    (a from-clean-start assertion) needs `reset_for_tests()` to undo.
+    """
+    global _default_emitter, _atexit_registered  # noqa: PLW0603 — mirrors configure()'s module-level singleton reset (see module docstring)
     with _lock:
         emitter, _default_emitter = _default_emitter, None
+        _atexit_registered = False
     if emitter is not None:
         emitter.stop()
 

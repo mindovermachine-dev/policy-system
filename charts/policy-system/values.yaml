@@ -27,7 +27,7 @@ psService:
     type: NodePort
     nodePort: 30800
   companyMerge:
-    similarityThreshold: 0.85
+    similarityThreshold: 0.59
   localTestBypass:
     # Opt-in only — even under the local-test profile this stays off by
     # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
