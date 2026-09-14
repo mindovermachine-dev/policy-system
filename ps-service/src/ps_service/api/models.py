@@ -2,7 +2,7 @@
 
 Per L2 Data Modeling every REST request/response body is a Pydantic model with
 ``Field()`` constraints on any value that reaches query construction, a
-filesystem path, or an LLM call. This module holds the ``GET /regulations``
+filesystem path, or an LLM call. This module holds the ``GET /catalog``
 response shapes and the ``POST /ingestions`` request/response models (a
 ``source``-discriminated union of a catalog request and an internal-document
 request, the accepted-response body, and the structured error body), plus the
@@ -16,33 +16,13 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class RegulationCatalogEntry(BaseModel):
-    """One regulation as returned by ``GET /regulations``."""
-
-    model_config = ConfigDict(frozen=True)
-
-    celex: str = Field(min_length=10, max_length=10)
-    title: str = Field(min_length=1)
-
-
-class RegulationCatalogResponse(BaseModel):
-    """Response body for ``GET /regulations``: the curated catalog plus the request run id."""
-
-    model_config = ConfigDict(frozen=True)
-
-    regulations: list[RegulationCatalogEntry]
-    run_id: str = Field(min_length=1)
-
-
 class CatalogInstrumentEntry(BaseModel):
     """One curated instrument as returned by ``GET /catalog`` (AC-BI-011).
 
-    Unlike :class:`RegulationCatalogEntry` (``GET /regulations``'s narrower,
-    CELEX-only contract, D12), this carries every curated instrument --
-    external and internal -- with no ``celex`` field at all: an internal
-    source (D15) has none, and a client driving ``ps-cli catalog list``
-    never needs it (the CELEX-specific fast path is ``POST /ingestions``'s
-    concern, not this listing's).
+    Carries every curated instrument -- external and internal -- with no
+    ``celex`` field at all: an internal source (D15) has none, and a client
+    driving ``ps-cli catalog list`` never needs it (the CELEX-specific fast
+    path is ``POST /ingestions``'s concern, not this listing's).
     """
 
     model_config = ConfigDict(frozen=True)

@@ -215,7 +215,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
     REST layer's `get_service_config` dependency),
     `register_exception_handlers(app)` installs the `ps_service.api` structured
     4xx/5xx error handlers (AC-BI-009: no stack-trace / path / infra-detail
-    leakage), and the `ps_service.api` REST router (`GET /regulations`, and, in
+    leakage), and the `ps_service.api` REST router (`GET /catalog`, and, in
     later increments, `POST /ingestions`) is mounted via `app.include_router`.
     `/health` and `/ready` stay on `app.add_api_route` — they predate the
     router and carry no request models.

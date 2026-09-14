@@ -1,7 +1,8 @@
 """Tests that `create_app` mounts the REST router without disturbing the harness routes.
 
-Both REST routes are now mounted: `GET /regulations` (Increment 1) and
-`POST /ingestions` (Increment 6).
+`POST /ingestions` is mounted (Increment 6). `GET /regulations` (Increment 1)
+was removed (issue #78) and must be absent from both the OpenAPI schema and
+the live route table.
 """
 
 from __future__ import annotations
@@ -28,18 +29,23 @@ def _make_app() -> FastAPI:
     )
 
 
-def test_create_app_registers_get_regulations_and_post_ingestions() -> None:
-    """AC-BI-001: `create_app` mounts `GET /regulations` and `POST /ingestions`.
+def test_create_app_registers_post_ingestions_and_not_regulations() -> None:
+    """AC-BI-003/004/008: `create_app` mounts `POST /ingestions` and not `GET /regulations`.
 
     Introspects the generated OpenAPI schema rather than walking `app.routes`:
     FastAPI 0.141 includes a sub-router lazily (an opaque `_IncludedRouter`
     entry), so `app.routes` no longer carries a flattened `APIRoute` per
-    mounted path, but the OpenAPI `paths` map still does.
+    mounted path, but the OpenAPI `paths` map still does. The direct HTTP
+    call is the real proof the route is unreachable, not just absent from
+    the schema (AC-BI-003); the schema assertion covers AC-BI-004.
     """
-    schema = _make_app().openapi()
+    app = _make_app()
+    client = TestClient(app)
+    schema = app.openapi()
 
-    assert "get" in schema["paths"]["/regulations"]
     assert "post" in schema["paths"]["/ingestions"]
+    assert "/regulations" not in schema["paths"]
+    assert client.get("/regulations").status_code == 404
 
 
 def test_create_app_still_serves_health_and_ready() -> None:

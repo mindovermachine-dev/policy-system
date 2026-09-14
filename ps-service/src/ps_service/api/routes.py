@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 
-from ps_service.api.catalog import CATALOG, REGULATION_CATALOG, find_by_celex
+from ps_service.api.catalog import CATALOG, find_by_celex
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     ChangeCheckResult,
@@ -40,8 +40,6 @@ from ps_service.api.models import (
     IngestionRequest,
     IngestionStatusResponse,
     InstrumentCheckOutcomeBody,
-    RegulationCatalogEntry,
-    RegulationCatalogResponse,
     RestorationAcceptedResponse,
     RestorationRequest,
     StageOutcome,
@@ -55,26 +53,6 @@ from ps_service.config import (
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
     from ps_service.ingestion.adapters.base import IngestionAdapter
-
-
-async def list_regulations(
-    run_id: Annotated[str, Depends(provide_run_id)],
-) -> RegulationCatalogResponse:
-    """Return the curated EU-regulation catalog (CELEX + title).
-
-    Args:
-        run_id: The request-scoped run id (injected by ``provide_run_id``).
-
-    Returns:
-        The catalog as a :class:`RegulationCatalogResponse`, carrying the run id.
-    """
-    return RegulationCatalogResponse(
-        regulations=[
-            RegulationCatalogEntry(celex=entry.celex, title=entry.title)
-            for entry in REGULATION_CATALOG
-        ],
-        run_id=run_id,
-    )
 
 
 def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAcceptedResponse:
@@ -170,7 +148,7 @@ async def create_ingestion(
 async def list_curated_catalog() -> CuratedCatalogResponse:
     """Return every curated instrument (external and internal), AC-BI-011.
 
-    Unlike ``list_regulations``, this is **not** CELEX-filtered -- it reads
+    This is **not** CELEX-filtered -- it reads
     the full ``catalog.json`` listing (D12's ``load_regulation_catalog()``
     result, unfiltered) so ``ps-cli catalog list`` sees internal-source
     instruments too. Depends on no FalkorDB/LLM fixture at all -- a
@@ -292,11 +270,10 @@ def build_api_router() -> APIRouter:
     """Build the PS Service REST ``APIRouter``.
 
     Returns:
-        An ``APIRouter`` exposing ``GET /regulations``, ``POST /ingestions``,
+        An ``APIRouter`` exposing ``GET /catalog``, ``POST /ingestions``,
         and ``GET /ingestions/{run_id}``.
     """
     router = APIRouter()
-    router.add_api_route("/regulations", list_regulations, methods=["GET"])
     router.add_api_route("/catalog", list_curated_catalog, methods=["GET"])
     router.add_api_route(
         "/ingestions",

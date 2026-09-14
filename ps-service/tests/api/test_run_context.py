@@ -149,10 +149,42 @@ def test_error_body_carries_the_request_run_id() -> None:
     assert fake.recorder.order == ["ingestion", "extraction"]
 
 
-def test_get_regulations_binds_a_fresh_run_id_per_request(client: TestClient) -> None:
-    """AC-BI-010: each request gets its own ``bind_run_context()`` binding, returned in the body."""
-    first = client.get("/regulations")
-    second = client.get("/regulations")
+def test_get_catalog_succeeds_on_two_consecutive_requests(client: TestClient) -> None:
+    """`GET /catalog` is stateless and repeat-request-safe.
+
+    Replaces the deleted `GET /regulations` route's per-request run-id test
+    (issue #78): `list_curated_catalog` takes no `provide_run_id` dependency
+    and has no `run_id` field in its response, so there is nothing
+    per-request to assert differs. Instead this proves the route survives
+    two consecutive calls, returning the same non-empty catalog both times.
+    """
+    first = client.get("/catalog")
+    second = client.get("/catalog")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_instruments = first.json()["instruments"]
+    second_instruments = second.json()["instruments"]
+    assert first_instruments
+    assert first_instruments == second_instruments
+
+
+@pytest.mark.usefixtures("configured_logging")
+def test_two_consecutive_ingestion_requests_get_different_run_ids() -> None:
+    """AC-BI-010/AC-BI-007: each request gets its own ``bind_run_context()`` binding.
+
+    `provide_run_id`'s fresh-id-per-request guarantee is now proven against
+    `POST /ingestions` (the deleted `GET /regulations` route's replacement
+    for this claim, per issue #78's PLAN.md -- `/ingestions` is chosen over
+    `/change-checks`, which also uses `provide_run_id`, because this file
+    already has fake-dependency machinery wired for `/ingestions` and
+    `/change-checks` would require pulling in separate fixture machinery).
+    """
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies)
+
+    first = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+    second = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
 
     assert first.status_code == 200
     assert second.status_code == 200
