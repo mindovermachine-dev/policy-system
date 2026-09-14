@@ -24,8 +24,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for commits ahead of the default branch
+        id: divergence
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ahead=$(git rev-list --count "origin/$DEFAULT_BRANCH..HEAD")
+          echo "Commits ahead of $DEFAULT_BRANCH: $ahead"
+          echo "has_commits=$([ "$ahead" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Set up and verify runner environment
+        # Skip on a branch that's identical to the default branch (e.g. `gh issue
+        # develop` just created it via the API with zero commits) - there's nothing
+        # to check yet. A manual workflow_dispatch always runs regardless.
+        if: github.event_name == 'workflow_dispatch' || steps.divergence.outputs.has_commits == 'true'
         uses: ./.github/actions/prep-runner
         with:
           verify: gh insitu run trunk-worthy
