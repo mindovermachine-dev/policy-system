@@ -8,9 +8,25 @@ properties are never overwritten" a database-engine guarantee.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import cast
 
 from ps_service.company_merge.graph_writer import persist_canonical_nodes
 from ps_service.company_merge.models import BaselineNode, CanonicalResolution
+
+
+def _pop_created_at(params: dict[str, object] | None) -> str:
+    """Pop and validate the non-deterministic `created_at` value out of a
+    mint call's `$properties` dict, so the remaining dict can still be
+    asserted via exact equality (Issue #35, Slice 1 -- PLAN.md §2.2/Slice 1's
+    "Existing-test impact" note).
+    """
+    assert params is not None
+    properties = cast("dict[str, object]", params["properties"])
+    created_at = properties.pop("created_at")
+    assert isinstance(created_at, str)
+    datetime.fromisoformat(created_at)  # round-trips without raising
+    return created_at
 
 
 @dataclass
@@ -57,6 +73,7 @@ def test_new_resolution_mints_node_with_on_create_set_and_embedding() -> None:
     call = graph.calls[0]
     assert call.query == "MERGE (n:Capability {id: $id}) ON CREATE SET n += $properties"
     assert "ON CREATE SET" in call.query
+    _pop_created_at(call.params)
     assert call.params == {
         "id": node.id,
         "properties": {"text": "Do the thing.", "confidence": 0.9, "embedding": [0.1, 0.2, 0.3]},
@@ -78,6 +95,7 @@ def test_new_resolution_with_no_embedding_gets_no_embedding_key() -> None:
 
     assert len(graph.calls) == 1
     call = graph.calls[0]
+    _pop_created_at(call.params)
     # Exact dict equality already proves no "embedding" key is present --
     # a naive "embedding" in properties check would need an unsound cast
     # against call.params's own `dict[str, object]` typing.
@@ -146,10 +164,36 @@ def test_mixed_resolutions_only_write_for_new() -> None:
     )
 
     assert len(graph.calls) == 1
+    _pop_created_at(graph.calls[0].params)
     assert graph.calls[0].params == {
         "id": new_node.id,
         "properties": {"text": "New duty.", "confidence": 0.9, "embedding": [0.5, 0.6]},
     }
+
+
+def test_persist_canonical_nodes_mint_sets_created_at() -> None:
+    """Issue #35, Slice 1 (PLAN.md §2.2): a `match_kind="new"` mint's
+    `$properties` dict always carries a `created_at` key -- an ISO-8601 UTC
+    timestamp that round-trips through `datetime.fromisoformat` -- needed
+    later for AC-BI-006's deterministic winner-selection query; this slice
+    only adds the write.
+    """
+    graph = _FakeGraph()
+    node = _canonical_node()
+    resolution = CanonicalResolution(
+        incoming_id=node.id, canonical_id=node.id, match_kind="new", embedding=None
+    )
+
+    persist_canonical_nodes(graph, (node,), (resolution,), kind="Capability")
+
+    assert len(graph.calls) == 1
+    params = graph.calls[0].params
+    assert params is not None
+    properties = cast("dict[str, object]", params["properties"])
+    assert "created_at" in properties
+    created_at = properties["created_at"]
+    assert isinstance(created_at, str)
+    datetime.fromisoformat(created_at)
 
 
 def test_capability_kind_writes_capability_label() -> None:

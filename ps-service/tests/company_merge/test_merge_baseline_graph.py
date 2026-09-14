@@ -908,6 +908,175 @@ def test_internal_baseline_merges_policy_standard_control_into_single_tenant(
     }
 
 
+def test_capability_near_miss_persists_pending_review_node(make_emitter: MakeEmitter) -> None:
+    """Issue #35, Slice 1 (AC-BI-001/AC-BI-002): a below-threshold near-miss
+    surfaced during the Capability dedup pass is persisted as a
+    `PendingReview` node -- wired at the same call site
+    `_log_dedup_decisions(capability_dedup, ...)` already logs it from
+    (PLAN.md §4.1).
+    """
+    emitter, _log_path = make_emitter()
+    existing_capability_id = "capability_existing_conduct_risk_assessment"
+    existing_capability_name = "Conduct Risk Assessment Capability"
+    incoming_capability_id = "capability_incoming_report_incident"
+    incoming_capability_name = "Report Incident Capability"
+    existing_vector = [1.0, 0.0]
+    incoming_vector = [0.6, 0.8]  # cosine similarity with existing_vector is well below _THRESHOLD
+
+    baseline = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-NM", "title": "Test Regulation"},
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[[incoming_capability_id, incoming_capability_name, 0.8, None]],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+    )
+    single_tenant = _FakeSingleTenantGraph(
+        capability_rows=[[existing_capability_id, existing_capability_name, existing_vector]],
+    )
+    call_embedding = _ScriptedCallEmbedding({incoming_capability_name: incoming_vector})
+
+    merge_baseline_graph(
+        "REG-NM",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
+    assert len(pending_review_writes) == 1
+    params = pending_review_writes[0].params
+    assert params is not None
+    assert params["kind"] == "Capability"
+    assert params["incoming_id"] == incoming_capability_id
+    assert params["incoming_text"] == incoming_capability_name
+    assert params["nearest_existing_id"] == existing_capability_id
+    assert params["nearest_existing_text"] == existing_capability_name
+
+
+def test_policy_near_miss_persists_pending_review_node(make_emitter: MakeEmitter) -> None:
+    """Issue #35, Slice 1: same wiring proof as the Capability case above, but
+    for the Policy pass's own `_log_dedup_decisions(policy_dedup, ...)` call
+    site inside `_finish_policy_pass` (PLAN.md §4.1's second call site).
+    """
+    emitter, _log_path = make_emitter()
+    existing_policy_id = "pol_existing_engineering_practices"
+    existing_policy_title = "Engineering Practices Policy"
+    incoming_policy_id = "pol_incoming_secure_development"
+    incoming_policy_title = "Secure Development Policy"
+    existing_vector = [1.0, 0.0]
+    incoming_vector = [0.6, 0.8]  # cosine similarity with existing_vector is well below _THRESHOLD
+
+    baseline = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "ENGPRAC-NM", "title": "Engineering Practices"},
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+        policy_rows=[[incoming_policy_id, incoming_policy_title, "draft", 0.9]],
+    )
+    single_tenant = _FakeSingleTenantGraph(
+        policy_rows=[[existing_policy_id, existing_policy_title, existing_vector]],
+    )
+    call_embedding = _ScriptedCallEmbedding({incoming_policy_title: incoming_vector})
+
+    merge_baseline_graph(
+        "ENGPRAC-NM",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
+    assert len(pending_review_writes) == 1
+    params = pending_review_writes[0].params
+    assert params is not None
+    assert params["kind"] == "Policy"
+    assert params["incoming_id"] == incoming_policy_id
+    assert params["incoming_text"] == incoming_policy_title
+    assert params["nearest_existing_id"] == existing_policy_id
+    assert params["nearest_existing_text"] == existing_policy_title
+
+
+def test_merge_result_reports_pending_review_count_including_policy_pass(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #35, Slice 5 (AC-BI-010): `MergeResult.pending_review_count` is
+    the run-scoped count of `PendingReview` nodes THIS call actually
+    persisted -- one per `NearMissPair` surfaced by either the Capability or
+    the Policy pass in this run (PLAN.md §5), not "every unresolved review
+    ever" (which would need a fresh graph read this function has no other
+    reason to perform). A below-threshold Capability pair and a
+    below-threshold Policy pair both surface in the same run here, so
+    `pending_review_count == 2`, matching the two `CREATE (r:PendingReview
+    ...)` writes actually issued.
+    """
+    emitter, _log_path = make_emitter()
+    existing_capability_id = "capability_existing_conduct_risk_assessment"
+    existing_capability_name = "Conduct Risk Assessment Capability"
+    incoming_capability_id = "capability_incoming_report_incident"
+    incoming_capability_name = "Report Incident Capability"
+    existing_policy_id = "pol_existing_engineering_practices"
+    existing_policy_title = "Engineering Practices Policy"
+    incoming_policy_id = "pol_incoming_secure_development"
+    incoming_policy_title = "Secure Development Policy"
+    existing_vector = [1.0, 0.0]
+    incoming_vector = [0.6, 0.8]  # cosine similarity with existing_vector is well below _THRESHOLD
+
+    baseline = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-NM-2", "title": "Test Regulation"},
+        role_rows=[],
+        requirement_rows=[],
+        obligation_rows=[],
+        capability_rows=[[incoming_capability_id, incoming_capability_name, 0.8, None]],
+        defines_rows=[],
+        expresses_rows=[],
+        has_rows=[],
+        satisfied_by_rows=[],
+        requires_rows=[],
+        policy_rows=[[incoming_policy_id, incoming_policy_title, "draft", 0.9]],
+    )
+    single_tenant = _FakeSingleTenantGraph(
+        capability_rows=[[existing_capability_id, existing_capability_name, existing_vector]],
+        policy_rows=[[existing_policy_id, existing_policy_title, existing_vector]],
+    )
+    call_embedding = _ScriptedCallEmbedding(
+        {
+            incoming_capability_name: incoming_vector,
+            incoming_policy_title: incoming_vector,
+        }
+    )
+
+    result = merge_baseline_graph(
+        "REG-NM-2",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+    assert result.pending_review_count == 2
+    pending_review_writes = single_tenant.calls_matching("CREATE (r:PendingReview")
+    assert len(pending_review_writes) == 2
+
+
 def test_external_baseline_unaffected_by_policy_pass(make_emitter: MakeEmitter) -> None:
     """S4: an external-sourced baseline (`graph.policy_nodes == ()`) is a
     structural no-op for the whole Policy pass -- `MergeResult.

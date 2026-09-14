@@ -1,25 +1,91 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local mirror of on_ready.yml's `lint-commit-header` job, so a `ready/*` push with a
-# non-conventional header fails here instead of after CI has already run the build.
-# `gh tt deliver` builds the squeezed commit with `git commit-tree` (no commit-msg hook)
-# and then runs `git push`, so pre-push is the only local hook that ever sees that header.
-# Only refs pushed to `refs/heads/ready/*` are linted; issue-branch (`wrapup`) pushes and
-# branch deletions pass through untouched.
+# Local mirrors of two CI gates, so a push fails here instead of after CI has already run:
+#
+# 1. on_ready.yml's `lint-commit-header` job. `gh tt deliver` builds the squeezed commit with
+#    `git commit-tree` (no commit-msg hook) and then runs `git push`, so pre-push is the only
+#    local hook that ever sees that header. Only refs pushed to `refs/heads/ready/*` are
+#    linted; issue-branch (`wrapup`) pushes and branch deletions pass through untouched.
+#
+# 2. trunk-worthy's `ruff-check` and `ruff-format` checks, on the Python files each pushed
+#    ref adds or changes. `.githooks/pre-commit` runs the same two on `git commit`, but git's
+#    rebase merge backend commits in-process and never invokes pre-commit, so a conflict
+#    resolved under `git rebase --continue` (likewise `git commit --no-verify`) reaches
+#    origin unchecked -- wrapup run 34879493653 failed exactly that way. The pushed commit's
+#    tree is extracted with `git archive` and checked there, never the working tree, so a
+#    dirty checkout can neither mask nor cause a failure. The whole tree is extracted (not
+#    only the changed files) because ruff's first-party `src` roots must exist for import
+#    sorting (I001) to classify `ps_cli`/`ps_service` as first-party.
 #
 # stdin: one `<local ref> <local sha> <remote ref> <remote sha>` line per ref being pushed.
+# $1: the remote's name (`origin`), used to find its default branch for brand-new refs.
 
 # Resolved from the hook's own location, not the pushing repo's toplevel, so the hook stays
 # self-contained wherever `core.hooksPath` points at it (the tests point a fixture clone here).
 hooks_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$hooks_dir/.." && pwd)"
 lint="$hooks_dir/../scripts/release/lint-commit-header.sh"
 zero_sha="0000000000000000000000000000000000000000"
+remote_name="${1:-origin}"
+
+# ruff comes from this repository's uv dev group (the same pin pre-commit and CI use), whichever
+# repository is doing the pushing.
+ruff() {
+  uv run --project "$repo_root" ruff "$@"
+}
+
+# The commit the pushed range starts at: the remote's current tip when it has one we know of,
+# else the merge-base with the remote's default branch (a brand-new `ready/*` or issue branch).
+# Prints nothing when neither exists, in which case every Python file in the tree is checked.
+range_base() {
+  local local_sha="$1" remote_sha="$2" default_ref
+  if [[ "$remote_sha" != "$zero_sha" ]] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    printf '%s\n' "$remote_sha"
+    return
+  fi
+  for default_ref in "refs/remotes/$remote_name/HEAD" "refs/remotes/$remote_name/main"; do
+    if git rev-parse -q --verify "$default_ref^{commit}" >/dev/null; then
+      git merge-base "$local_sha" "$default_ref" 2>/dev/null || true
+      return
+    fi
+  done
+}
+
+# Python files the pushed range adds/changes (root-relative paths), one per line.
+changed_python_files() {
+  local local_sha="$1" base="$2"
+  if [[ -n "$base" ]]; then
+    git diff --name-only --diff-filter=ACMR "$base" "$local_sha" -- '*.py' '*.pyi'
+  else
+    git ls-tree -r --name-only "$local_sha" -- '*.py' '*.pyi'
+  fi
+}
+
+check_pushed_python() {
+  local remote_ref="$1" local_sha="$2" remote_sha="$3" base tree status=0
+  local -a files
+  base="$(range_base "$local_sha" "$remote_sha")"
+  mapfile -t files < <(changed_python_files "$local_sha" "$base")
+  [[ ${#files[@]} -gt 0 ]] || return 0
+
+  tree="$(mktemp -d)"
+  trap 'rm -rf "$tree"' RETURN
+  git archive "$local_sha" | tar -x -C "$tree"
+  (cd "$tree" && ruff check --force-exclude "${files[@]}") || status=1
+  (cd "$tree" && ruff format --check --force-exclude "${files[@]}") || status=1
+  if [[ $status -ne 0 ]]; then
+    echo "pre-push: '$remote_ref' rejected -- ruff found problems in ${#files[@]} pushed Python file(s) (see above)." >&2
+    echo "pre-push: fix with \`uv run ruff check --fix\` / \`uv run ruff format\`, amend, and push again." >&2
+  fi
+  return "$status"
+}
 
 status=0
-while read -r _local_ref local_sha remote_ref _remote_sha; do
-  [[ "$remote_ref" == refs/heads/ready/* ]] || continue
+while read -r _local_ref local_sha remote_ref remote_sha; do
   [[ "$local_sha" != "$zero_sha" ]] || continue
+  check_pushed_python "$remote_ref" "$local_sha" "$remote_sha" || status=1
+  [[ "$remote_ref" == refs/heads/ready/* ]] || continue
   header="$(git log -1 --format=%s "$local_sha")"
   if ! "$lint" --header "$header" 2>/dev/null; then
     echo "pre-push: '$remote_ref' rejected -- fix the header before pushing (see hint above)." >&2

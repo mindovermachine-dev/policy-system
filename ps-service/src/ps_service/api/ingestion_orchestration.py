@@ -527,11 +527,19 @@ def _derivation_summary(result: DerivationResult) -> dict[str, int]:
 
 
 def _merge_summary(result: MergeResult) -> dict[str, int]:
-    """Summarise a ``MergeResult`` as small integer counts."""
+    """Summarise a ``MergeResult`` as small integer counts.
+
+    ``pending_reviews`` (issue #35, Slice 5, AC-BI-010) is a NEW, additive key
+    alongside the pre-existing ``near_misses`` -- ``StageOutcome.summary`` is
+    ``dict[str, int]``, and ``ps-cli``'s own summary parsing already iterates
+    ``summary.items()`` generically, so this is backward-compatible by
+    construction (CHANGES.md C2 / PLAN.md §5).
+    """
     return {
         "obligations": len(result.obligation_ids),
         "canonical_capabilities": len(result.capability_canonical_ids),
         "near_misses": len(result.near_misses),
+        "pending_reviews": result.pending_review_count,
     }
 
 

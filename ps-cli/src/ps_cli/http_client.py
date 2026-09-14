@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import sys
-from typing import TYPE_CHECKING, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -19,7 +19,10 @@ from ps_cli.models import (
     ChangeCheckResult,
     IngestionResult,
     InstrumentCheckOutcome,
+    PendingReviewEntry,
+    PendingReviewsResult,
     ReadinessResult,
+    ResolveReviewResult,
     RestorationResult,
     RestorationStageOutcome,
     StageOutcome,
@@ -50,6 +53,7 @@ _RESTORATIONS_PATH = "/restorations"
 _HEALTH_PATH = "/health"
 _READY_PATH = "/ready"
 _CHANGE_CHECKS_PATH = "/change-checks"
+_NEAR_MISSES_PATH = "/near-misses"
 
 # `POST /ingestions` blocks synchronously for the entire real pipeline (Ingestion ->
 # Domain Mapper -> Company Merge, no async job queue, by #51's own design) -- a real CRA
@@ -311,6 +315,84 @@ def _parse_change_check_response(payload: object) -> ChangeCheckResult:
     return ChangeCheckResult(run_id=run_id, instruments=instruments)
 
 
+def _parse_pending_review_entry(payload: object) -> PendingReviewEntry:
+    """Parse one raw JSON object into a `PendingReviewEntry`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    review_id = body.get("id")
+    kind = body.get("kind")
+    incoming_text = body.get("incoming_text")
+    nearest_existing_text = body.get("nearest_existing_text")
+    similarity = body.get("similarity")
+    if (
+        not isinstance(review_id, str)
+        or not isinstance(kind, str)
+        or not isinstance(incoming_text, str)
+        or not isinstance(nearest_existing_text, str)
+        # bool is a subclass of int/float; excluded explicitly so a stray
+        # boolean similarity value fails the shape check rather than
+        # silently coercing (mirrors _parse_stage_outcome's own guard).
+        or not isinstance(similarity, int | float)
+        or isinstance(similarity, bool)
+    ):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return PendingReviewEntry(
+        id=review_id,
+        kind=kind,
+        incoming_text=incoming_text,
+        nearest_existing_text=nearest_existing_text,
+        similarity=float(similarity),
+    )
+
+
+def _parse_pending_reviews_body(payload: object) -> PendingReviewsResult:
+    """Parse a `GET /near-misses` 200 response body into a `PendingReviewsResult`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
+    expected `PendingReviewListResponse` shape.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    reviews_raw = body.get("reviews")
+    if not isinstance(reviews_raw, list):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    review_items = cast("list[object]", reviews_raw)
+    reviews = [_parse_pending_review_entry(item) for item in review_items]
+    return PendingReviewsResult(reviews=reviews)
+
+
+def _parse_resolve_review_response(payload: object) -> ResolveReviewResult:
+    """Parse a `POST /near-misses/{review_id}/resolve` 200 body into a `ResolveReviewResult`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
+    expected `ResolveReviewResponse` shape.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    review_id = body.get("review_id")
+    decision = body.get("decision")
+    winner_id_raw = body.get("winner_id")
+    loser_id_raw = body.get("loser_id")
+    if not isinstance(review_id, str) or not isinstance(decision, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    if winner_id_raw is not None and not isinstance(winner_id_raw, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    if loser_id_raw is not None and not isinstance(loser_id_raw, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return ResolveReviewResult(
+        review_id=review_id,
+        decision=decision,
+        winner_id=winner_id_raw,
+        loser_id=loser_id_raw,
+    )
+
+
 def _raise_from_error_body(response: httpx.Response) -> NoReturn:
     """Parse a non-2xx PS Service response into `PsCliError` per D5's mapping table.
 
@@ -392,6 +474,16 @@ class PsServiceClientProtocol(Protocol):
 
     def run_change_check(self) -> ChangeCheckResult:
         """`POST /change-checks`: sweep tracked instruments, re-ingesting any amendments found."""
+        ...
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """`GET /near-misses`: every unresolved near-miss `PendingReview` (issue #35, AC-BI-003)."""
+        ...
+
+    def resolve_review(
+        self, review_id: str, decision: Literal["keep-separate", "merge"]
+    ) -> ResolveReviewResult:
+        """`POST /near-misses/{review_id}/resolve` (issue #35, AC-BI-004/005/006/007/008/009)."""
         ...
 
 
@@ -615,3 +707,49 @@ class PsServiceClient:
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """`GET /near-misses`: every unresolved near-miss `PendingReview` (issue #35, AC-BI-003).
+
+        Raises `PsCliError` if PS Service cannot be reached (connection refused
+        or a connect timeout) or if the response body does not match the
+        expected shape.
+        """
+        try:
+            response = self._client.get(_NEAR_MISSES_PATH)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        if not response.is_success:
+            _raise_from_error_body(response)
+        return _parse_pending_reviews_body(response.json())
+
+    def resolve_review(
+        self, review_id: str, decision: Literal["keep-separate", "merge"]
+    ) -> ResolveReviewResult:
+        """`POST /near-misses/{review_id}/resolve`: resolve one PendingReview (issue #35).
+
+        `decision="keep-separate"` clears the pending review only
+        (AC-BI-004). `decision="merge"` re-points every edge referencing the
+        loser canonical node onto the deterministically-chosen winner,
+        deletes the loser, and deletes the pending review, atomically
+        (AC-BI-005/006/007). Raises `PsCliError` if PS Service cannot be
+        reached (connection refused or a connect timeout), if it returns a
+        non-2xx response (parsed per D5's error-body mapping -- a not-found,
+        already-resolved, or (merge only) stale `review_id` surfaces as
+        `pending_review_not_found`, AC-BI-008), or if a 200 response body
+        does not match the expected success shape.
+        """
+        try:
+            response = self._client.post(
+                f"{_NEAR_MISSES_PATH}/{review_id}/resolve",
+                json={"decision": decision},
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        if not response.is_success:
+            _raise_from_error_body(response)
+        return _parse_resolve_review_response(response.json())

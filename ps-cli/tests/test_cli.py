@@ -23,7 +23,9 @@ from ps_cli.models import (
     ChangeCheckResult,
     IngestionResult,
     InstrumentCheckOutcome,
+    PendingReviewsResult,
     ReadinessResult,
+    ResolveReviewResult,
     RestorationResult,
     RestorationStageOutcome,
 )
@@ -83,6 +85,18 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `run_change_check()` to be called."""
         raise AssertionError("run_change_check must not be called in this test")
 
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """Fail: this test's fake does not expect `list_pending_reviews()` to be called."""
+        raise AssertionError("list_pending_reviews must not be called in this test")
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Fail: this test's fake does not expect `resolve_review()` to be called."""
+        msg = (
+            f"resolve_review must not be called in this test "
+            f"(review_id={review_id!r}, decision={decision!r})"
+        )
+        raise AssertionError(msg)
+
 
 def _fake_installed_version(name: str) -> str:
     """Return a fixed "1.4.0" regardless of `name` -- a typed stand-in for `installed_
@@ -128,6 +142,135 @@ class _FakeFailingClient(_UnusedPsServiceClientMethods):
             msg="PS Service reported catalog_identifier_not_found: CELEX not found",
             hint="check the CELEX identifier and try again",
         )
+
+
+class _FakeNearMissesSuccessClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose list_pending_reviews() succeeds."""
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """Return an empty-but-valid PendingReviewsResult."""
+        return PendingReviewsResult(reviews=[])
+
+
+class _FakeNearMissesFailingClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose list_pending_reviews() always raises."""
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """Raise a PsCliError, simulating a PS Service failure response."""
+        raise PsCliError(msg="Could not reach PS Service at http://127.0.0.1:8000.")
+
+
+def test_run_near_misses_list_returns_zero_on_success() -> None:
+    """`run(["near-misses", "list"], client=<succeeding fake>)` returns 0 (issue #35, AC-BI-003)."""
+    fake_client = _FakeNearMissesSuccessClient()
+
+    exit_code = run(["near-misses", "list"], client=fake_client)
+
+    assert exit_code == 0
+
+
+def test_run_near_misses_list_returns_one_on_ps_cli_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A `PsCliError` from the client surfaces as exit code 1, per `run()`'s one catch site."""
+    fake_client = _FakeNearMissesFailingClient()
+
+    exit_code = run(["near-misses", "list"], client=fake_client)
+
+    assert exit_code == 1
+    assert "Could not reach PS Service" in capsys.readouterr().err
+
+
+class _FakeNearMissesResolveSuccessClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose resolve_review() succeeds."""
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Return a scripted ResolveReviewResult echoing the given id/decision."""
+        return ResolveReviewResult(
+            review_id=review_id, decision=decision, winner_id=None, loser_id=None
+        )
+
+
+class _FakeNearMissesResolveMergeSuccessClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose resolve_review() succeeds with a merge."""
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Return a scripted ResolveReviewResult with winner/loser ids populated."""
+        return ResolveReviewResult(
+            review_id=review_id,
+            decision=decision,
+            winner_id="capability_winner",
+            loser_id="capability_loser",
+        )
+
+
+class _FakeNearMissesResolveFailingClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose resolve_review() always raises (AC-BI-008)."""
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Raise a PsCliError, simulating a not-found PS Service response."""
+        del review_id, decision
+        raise PsCliError(
+            msg="PS Service reported pending_review_not_found: no unresolved PendingReview"
+        )
+
+
+def test_run_near_misses_resolve_keep_separate_returns_zero_on_success() -> None:
+    """`run(["near-misses", "resolve", ..., "--decision=keep-separate"])` returns 0 (AC-BI-004)."""
+    fake_client = _FakeNearMissesResolveSuccessClient()
+
+    exit_code = run(
+        ["near-misses", "resolve", "review_aaa", "--decision", "keep-separate"],
+        client=fake_client,
+    )
+
+    assert exit_code == 0
+
+
+def test_run_near_misses_resolve_returns_one_on_ps_cli_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-008: a not-found review id's PsCliError surfaces as exit code 1."""
+    fake_client = _FakeNearMissesResolveFailingClient()
+
+    exit_code = run(
+        ["near-misses", "resolve", "review_missing", "--decision", "keep-separate"],
+        client=fake_client,
+    )
+
+    assert exit_code == 1
+    assert "pending_review_not_found" in capsys.readouterr().err
+
+
+def test_run_near_misses_resolve_merge_returns_zero_on_success() -> None:
+    """`run(["near-misses", "resolve", ..., "--decision=merge"])` returns 0 (AC-BI-005/006/007)."""
+    fake_client = _FakeNearMissesResolveMergeSuccessClient()
+
+    exit_code = run(
+        ["near-misses", "resolve", "review_aaa", "--decision", "merge"],
+        client=fake_client,
+    )
+
+    assert exit_code == 0
+
+
+def test_run_near_misses_resolve_rejects_unknown_decision_at_parse_time() -> None:
+    """The parser's `--decision` `choices` rejects any value outside keep-separate/merge.
+
+    Argparse rejects an unknown `choices` value before any dispatch/client
+    call happens (exit code 2, a usage error) -- `_UnusedPsServiceClientMethods`'s
+    bare fake would raise `AssertionError` on any client call, proving none
+    was made.
+    """
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    with pytest.raises(SystemExit) as excinfo:
+        run(
+            ["near-misses", "resolve", "review_aaa", "--decision", "not-a-decision"],
+            client=uncallable_client,
+        )
+
+    assert excinfo.value.code == 2
 
 
 def test_run_formats_ps_cli_error_to_stderr_without_traceback(

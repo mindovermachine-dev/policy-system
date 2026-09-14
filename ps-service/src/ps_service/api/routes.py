@@ -21,6 +21,7 @@ from ps_service.api.change_check_orchestration import (
 from ps_service.api.dependencies import (
     get_service_config,
     provide_change_check_dependencies,
+    provide_near_miss_review_dependencies,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_run_id,
@@ -40,9 +41,17 @@ from ps_service.api.models import (
     IngestionRequest,
     IngestionStatusResponse,
     InstrumentCheckOutcomeBody,
+    PendingReviewListResponse,
+    ResolveReviewRequest,
+    ResolveReviewResponse,
     RestorationAcceptedResponse,
     RestorationRequest,
     StageOutcome,
+)
+from ps_service.api.near_miss_review_orchestration import (
+    NearMissReviewDependencies,
+    run_list_near_misses,
+    run_resolve_near_miss,
 )
 from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
 from ps_service.api.run_status import get_stage
@@ -247,6 +256,70 @@ async def create_change_check(
     return _to_change_check_response(result)
 
 
+async def list_near_misses(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[
+        NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
+    ],
+) -> PendingReviewListResponse:
+    """Return every unresolved `PendingReview` (issue #35, `GET /near-misses`, AC-BI-003).
+
+    Thin route wiring over ``near_miss_review_orchestration.run_list_near_misses``
+    -- opens the single-tenant graph and reads back every unresolved
+    `PendingReview` node, mirroring ``create_restoration``'s "call the
+    orchestration function directly (not ``run_in_threadpool``)" pattern:
+    this is a fast, bounded Cypher read, not a multi-minute pipeline.
+
+    Args:
+        config: The resolved service configuration (injected).
+        dependencies: The near-miss review dependency bundle (injected;
+            overridden in tests).
+
+    Returns:
+        A :class:`PendingReviewListResponse` carrying one entry per
+        unresolved `PendingReview` node.
+    """
+    return run_list_near_misses(config=config, dependencies=dependencies)
+
+
+async def resolve_near_miss(
+    review_id: str,
+    request_body: ResolveReviewRequest,
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[
+        NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
+    ],
+) -> ResolveReviewResponse:
+    """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
+
+    Thin route wiring over `near_miss_review_orchestration.run_resolve_near_miss`
+    -- `decision="keep-separate"` (AC-BI-004) deletes only the
+    `PendingReview` record; `decision="merge"` (AC-BI-005/006/007) re-points
+    every edge referencing the loser canonical node onto the
+    deterministically-chosen winner, deletes the loser, and deletes the
+    `PendingReview` record, atomically. A `review_id` that doesn't exist,
+    was already resolved, or (merge only) references a node a prior merge
+    already deleted, raises `PendingReviewNotFoundError` (-> HTTP 404,
+    AC-BI-008); no graph write happens on that path. Mirrors
+    `list_near_misses`'s "call the orchestration function directly, not
+    `run_in_threadpool`" pattern -- a fast, bounded Cypher operation, not a
+    multi-minute pipeline.
+
+    Args:
+        review_id: The `PendingReview` id to resolve (path parameter).
+        request_body: The resolve decision.
+        config: The resolved service configuration (injected).
+        dependencies: The near-miss review dependency bundle (injected;
+            overridden in tests).
+
+    Returns:
+        A :class:`ResolveReviewResponse` naming the resolved review and decision.
+    """
+    return run_resolve_near_miss(
+        review_id, request_body.decision, config=config, dependencies=dependencies
+    )
+
+
 async def get_ingestion_status(run_id: str) -> IngestionStatusResponse:
     """Return ``run_id``'s currently-executing pipeline stage, best-effort.
 
@@ -291,6 +364,13 @@ def build_api_router() -> APIRouter:
     router.add_api_route(
         "/change-checks",
         create_change_check,
+        methods=["POST"],
+        status_code=status.HTTP_200_OK,
+    )
+    router.add_api_route("/near-misses", list_near_misses, methods=["GET"])
+    router.add_api_route(
+        "/near-misses/{review_id}/resolve",
+        resolve_near_miss,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
     )

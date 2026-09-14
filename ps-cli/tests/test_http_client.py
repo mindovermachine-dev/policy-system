@@ -82,6 +82,206 @@ def _connect_error_handler(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
 
 
+_NEAR_MISSES_BODY = {
+    "reviews": [
+        {
+            "id": "review_aaa",
+            "kind": "Capability",
+            "incoming_text": "Report the incident to the authority.",
+            "nearest_existing_text": "Conduct a risk assessment.",
+            "similarity": 0.62,
+        },
+        {
+            "id": "review_bbb",
+            "kind": "Policy",
+            "incoming_text": "Maintain a data protection policy.",
+            "nearest_existing_text": "Maintain a privacy policy.",
+            "similarity": 0.701,
+        },
+    ]
+}
+
+
+def _near_misses_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/near-misses"
+    return httpx.Response(200, json=_NEAR_MISSES_BODY)
+
+
+class TestListPendingReviews:
+    """Issue #35, Slice 2: PsServiceClient.list_pending_reviews() (AC-BI-003)."""
+
+    def test_parses_a_200_near_misses_response(self) -> None:
+        """A 200 GET /near-misses body parses into PendingReviewEntry list."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_near_misses_handler)
+        )
+
+        result = client.list_pending_reviews()
+
+        assert len(result.reviews) == 2
+        assert result.reviews[0].id == "review_aaa"
+        assert result.reviews[0].kind == "Capability"
+        assert result.reviews[0].incoming_text == "Report the incident to the authority."
+        assert result.reviews[0].nearest_existing_text == "Conduct a risk assessment."
+        assert result.reviews[0].similarity == 0.62
+        assert result.reviews[1].id == "review_bbb"
+
+    def test_empty_reviews_list_parses_to_empty_result(self) -> None:
+        """A 200 body with an empty `reviews` array parses to an empty result, not an error."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses"
+            return httpx.Response(200, json={"reviews": []})
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        result = client.list_pending_reviews()
+
+        assert result.reviews == []
+
+    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.list_pending_reviews()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+
+    def test_malformed_body_raises_ps_cli_error(self) -> None:
+        """A 200 body missing the `reviews` key raises PsCliError, not a KeyError."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses"
+            return httpx.Response(200, json={})
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError):
+            client.list_pending_reviews()
+
+    def test_non_2xx_response_raises_from_error_body(self) -> None:
+        """A non-2xx response is mapped through D5's structured-error-body path."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses"
+            return httpx.Response(
+                500,
+                json={"error": {"code": "internal_error", "message": "boom"}, "run_id": None},
+            )
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.list_pending_reviews()
+
+        assert "internal_error" in excinfo.value.msg
+
+
+class TestResolveReview:
+    """Issue #35, Slice 3: PsServiceClient.resolve_review() (AC-BI-004/008/009)."""
+
+    def test_parses_a_200_keep_separate_response(self) -> None:
+        """A 200 POST /near-misses/{id}/resolve body parses into a ResolveReviewResult."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses/review_aaa/resolve"
+            assert json.loads(request.content) == {"decision": "keep-separate"}
+            return httpx.Response(
+                200,
+                json={
+                    "review_id": "review_aaa",
+                    "decision": "keep-separate",
+                    "winner_id": None,
+                    "loser_id": None,
+                },
+            )
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        result = client.resolve_review("review_aaa", "keep-separate")
+
+        assert result.review_id == "review_aaa"
+        assert result.decision == "keep-separate"
+        assert result.winner_id is None
+        assert result.loser_id is None
+
+    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.resolve_review("review_aaa", "keep-separate")
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+
+    def test_malformed_body_raises_ps_cli_error(self) -> None:
+        """A 200 body missing required keys raises PsCliError, not a KeyError."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses/review_aaa/resolve"
+            return httpx.Response(200, json={})
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError):
+            client.resolve_review("review_aaa", "keep-separate")
+
+    def test_not_found_response_raises_from_error_body(self) -> None:
+        """AC-BI-008: a 404 pending_review_not_found response maps through D5's error path."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses/review_missing/resolve"
+            return httpx.Response(
+                404,
+                json={
+                    "error": {
+                        "code": "pending_review_not_found",
+                        "message": "no unresolved PendingReview with id 'review_missing'",
+                        "failing_stage": None,
+                    },
+                    "run_id": None,
+                },
+            )
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.resolve_review("review_missing", "keep-separate")
+
+        assert "pending_review_not_found" in excinfo.value.msg
+        assert "review_missing" in excinfo.value.msg
+
+    def test_parses_a_200_merge_response(self) -> None:
+        """Issue #35 Slice 4: a 200 POST .../resolve merge body parses winner/loser ids."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/near-misses/review_aaa/resolve"
+            assert json.loads(request.content) == {"decision": "merge"}
+            return httpx.Response(
+                200,
+                json={
+                    "review_id": "review_aaa",
+                    "decision": "merge",
+                    "winner_id": "capability_winner",
+                    "loser_id": "capability_loser",
+                },
+            )
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        result = client.resolve_review("review_aaa", "merge")
+
+        assert result.review_id == "review_aaa"
+        assert result.decision == "merge"
+        assert result.winner_id == "capability_winner"
+        assert result.loser_id == "capability_loser"
+
+
 _INGESTION_SUCCESS_BODY = {
     "run_id": "run-ingest-001",
     "regulatory_instrument_id": "ri-gdpr",

@@ -11,4 +11,8 @@ set -euo pipefail
 # `gh insitu run trunk-worthy` runs the same tools unscoped (whole repo) in CI
 # on push/PR (on_dev.yml, on_ready.yml) as a backstop against anything this
 # staged-file scoping misses.
+# This hook only fires on `git commit`: git's rebase merge backend commits
+# in-process, so `git rebase --continue` (and `--no-verify`) skip it entirely.
+# `.githooks/pre-push` re-runs ruff-check/ruff-format on every pushed commit
+# range to close that gap before CI sees it.
 uv run pre-commit run

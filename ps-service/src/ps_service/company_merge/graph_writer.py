@@ -94,6 +94,7 @@ canonical_id` entries.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 import redis.exceptions
@@ -385,6 +386,17 @@ def persist_canonical_nodes(
     embedding is filled in later, either later in the same run or via a
     future run's `backfill_canonical_embeddings` call.
 
+    `$properties` also always carries `"created_at": datetime.now(UTC).isoformat()`
+    (issue #35, near-miss review workflow, PLAN.md §2.2) -- added
+    unconditionally at mint time, alongside the conditional `embedding` key
+    above. Since this write already goes through `MERGE ... ON CREATE SET`,
+    this is free: `created_at` is set exactly once, at genuine mint time,
+    never touched again on a re-run against the same id -- the same
+    guarantee `ON CREATE SET` already gives every other property here. This
+    is needed later for AC-BI-006's deterministic "earlier-created wins"
+    winner-selection query (`resolve --decision=merge`, a later slice); this
+    slice only adds the write.
+
     `incoming_nodes`/`resolutions` are guaranteed 1:1 by construction
     (`dedup.dedupe_canonical_nodes` builds exactly one `CanonicalResolution`
     per incoming node, `incoming_id` set to that node's own `id`) -- no
@@ -398,6 +410,7 @@ def persist_canonical_nodes(
             continue
         node = nodes_by_id[resolution.incoming_id]
         properties: CanonicalNodeProperties = dict(node.properties)
+        properties["created_at"] = datetime.now(UTC).isoformat()
         if resolution.embedding is not None:
             properties["embedding"] = list(resolution.embedding)
         _execute_query(

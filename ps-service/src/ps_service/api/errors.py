@@ -100,6 +100,24 @@ class RequestBodyTooLargeError(ApiError):
     """
 
 
+class PendingReviewNotFoundError(ApiError):
+    """A `POST /near-misses/{review_id}/resolve` review id doesn't exist or was already resolved.
+
+    A `PendingReview` node no longer existing IS "already resolved" in this
+    design (issue #35, PLAN.md §2.1): a resolved review's node is deleted
+    outright, never soft-status-changed, so a genuinely nonexistent id and
+    an already-resolved one collapse to the same not-found condition
+    (AC-BI-008). Raised by `api.near_miss_review_orchestration.
+    run_resolve_near_miss` as the API-boundary translation of `ps_service.
+    company_merge.pending_review.resolve_review`'s `None` return --
+    mirrors `RestoreArtifactRejectedError`'s own "API-boundary translation
+    of a lower-layer condition" pattern; `ps_service.company_merge` never
+    raises or imports this type (M6 layering stays one-directional: `api`
+    imports `company_merge` function-locally, never the reverse). Handled
+    as HTTP 404; `str(exc)` is domain-level and surfaced verbatim.
+    """
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

@@ -60,6 +60,7 @@ from typing import TYPE_CHECKING
 from ps_service.company_merge import dedup, graph_reader, graph_writer
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.models import MergeResult
+from ps_service.company_merge.pending_review import persist_pending_reviews
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
@@ -166,6 +167,10 @@ def _finish_policy_pass(
         embeddings=policy_dedup.embedding_backfills,
     )
     _log_dedup_decisions(policy_dedup, emitter=emitter)
+    # issue #35, Slice 1 (AC-BI-001/AC-BI-002): persist a PendingReview node
+    # for every Policy near-miss, at the same point its own decision is
+    # already logged -- never logged without also being persisted.
+    persist_pending_reviews(single_tenant_graph, policy_dedup.near_misses, kind="Policy")
 
 
 def merge_baseline_graph(
@@ -281,6 +286,17 @@ def merge_baseline_graph(
     )
 
     _log_dedup_decisions(capability_dedup, emitter=emitter)
+    # issue #35, Slice 1 (AC-BI-001/AC-BI-002): persist a PendingReview node
+    # for every Capability near-miss, at the same point its own decision is
+    # already logged -- never logged without also being persisted.
+    persist_pending_reviews(single_tenant_graph, capability_dedup.near_misses, kind="Capability")
+
+    # issue #35, Slice 5 (AC-BI-010): the run-scoped PendingReview count --
+    # exactly the number of persist_pending_reviews CREATE writes issued
+    # above (both call sites), across whichever pass(es) ran this call.
+    pending_review_count = len(capability_dedup.near_misses) + (
+        len(policy_dedup.near_misses) if policy_dedup is not None else 0
+    )
 
     return MergeResult(
         regulatory_instrument_id=regulatory_instrument_id,
@@ -292,4 +308,5 @@ def merge_baseline_graph(
             if policy_dedup is not None
             else ()
         ),
+        pending_review_count=pending_review_count,
     )

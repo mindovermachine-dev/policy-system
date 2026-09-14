@@ -27,6 +27,10 @@ from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     build_default_pipeline_dependencies,
 )
+from ps_service.api.near_miss_review_orchestration import (
+    NearMissReviewDependencies,
+    build_default_near_miss_review_dependencies,
+)
 from ps_service.api.restore_orchestration import (
     RestoreDependencies,
     build_default_restore_dependencies,
@@ -101,6 +105,24 @@ def provide_restore_dependencies() -> RestoreDependencies:
         The production :class:`RestoreDependencies` bundle.
     """
     return build_default_restore_dependencies()
+
+
+def provide_near_miss_review_dependencies() -> NearMissReviewDependencies:
+    """Return the production ``NearMissReviewDependencies`` for the near-miss review workflow.
+
+    Mirrors :func:`provide_pipeline_dependencies`/:func:`provide_restore_dependencies`
+    exactly: a plain provider (not a generator) so tests can swap it wholesale
+    via ``app.dependency_overrides`` with a fake bundle. The real bundle wires
+    the shipped ``pending_review`` functions and the single-tenant-graph
+    opener through ``build_default_near_miss_review_dependencies``, whose
+    ``ps_service.company_merge`` imports are all function-local (M6 --
+    ``ps_service.main`` never transitively loads that component at module
+    load).
+
+    Returns:
+        The production :class:`NearMissReviewDependencies` bundle.
+    """
+    return build_default_near_miss_review_dependencies()
 
 
 def provide_change_check_dependencies() -> ChangeCheckDependencies:

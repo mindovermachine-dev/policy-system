@@ -340,4 +340,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_regulations_parser.set_defaults(command="check_regulations")
 
+    # `near-misses` subcommand group (issue #35, PLAN.md §6): the near-miss
+    # review workflow. `list` (Slice 2, AC-BI-003) and `resolve` (Slice 3
+    # `keep-separate`, Slice 4 `merge` -- AC-BI-004/005/006/007/008/009) are
+    # wired -- mirrors `catalog`'s two-leaf group shape.
+    near_misses_parser = top_level_subparsers.add_parser(
+        "near-misses",
+        parents=[verbose_parent_parser],
+        help="Commands for the near-miss company-merge review workflow.",
+    )
+    near_misses_subparsers = near_misses_parser.add_subparsers(
+        dest="near_misses_command", required=True
+    )
+    near_misses_list_parser = near_misses_subparsers.add_parser(
+        "list",
+        parents=[verbose_parent_parser],
+        help="List every unresolved near-miss pending review.",
+    )
+    near_misses_list_parser.set_defaults(command="near_misses_list")
+
+    near_misses_resolve_parser = near_misses_subparsers.add_parser(
+        "resolve",
+        parents=[verbose_parent_parser],
+        help="Resolve one unresolved near-miss pending review.",
+    )
+    near_misses_resolve_parser.add_argument(
+        "review_id",
+        help="The pending review's id (e.g. 'review_<hex>').",
+    )
+    near_misses_resolve_parser.add_argument(
+        "--decision",
+        choices=["keep-separate", "merge"],
+        required=True,
+        help=(
+            "How to resolve the review. 'keep-separate' clears the pending "
+            "review only (no other graph change). 'merge' re-points every "
+            "edge referencing the loser canonical node onto the "
+            "deterministically-chosen winner, deletes the loser, and "
+            "deletes the pending review, atomically."
+        ),
+    )
+    near_misses_resolve_parser.set_defaults(command="near_misses_resolve")
+
     return parser

@@ -36,3 +36,27 @@ class CompanyMergeValidationError(Exception):
     is undefined. Raised by `similarity.py`, before any similarity score is
     computed.
     """
+
+
+class StalePendingReviewError(Exception):
+    """A `PendingReview`'s referenced incoming/existing node no longer exists.
+
+    Issue #35 Slice 4, CHANGES.md H2: raised by
+    `pending_review.resolve_review` (`decision="merge"`) when the combined
+    existence-check read finds either `incoming_id` or `nearest_existing_id`
+    no longer resolves to a real node -- e.g. a prior, unrelated merge
+    already deleted it (the review is "stale"). Raised **before** the merge
+    write query is ever issued, so AC-BI-008's "no graph changes" half holds
+    on this path too. The API-boundary translation to
+    `PendingReviewNotFoundError` (with H2's dedicated stale-reference
+    message) happens in `api.near_miss_review_orchestration.
+    run_resolve_near_miss` -- mirrors `RestoreArtifactRejectedError`'s own
+    "API-boundary translation of a lower-layer condition" pattern;
+    `ps_service.company_merge` never imports `ps_service.api` (M6 layering
+    stays one-directional).
+    """
+
+    def __init__(self, review_id: str) -> None:
+        """Store `review_id` for the API-boundary layer's message-building."""
+        self.review_id = review_id
+        super().__init__(f"pending review {review_id!r} references a node that no longer exists")

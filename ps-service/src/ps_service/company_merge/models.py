@@ -188,6 +188,48 @@ class DedupResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingReviewRecord:
+    """One persisted `PendingReview` node, as read back from FalkorDB.
+
+    Issue #35 (near-miss review workflow), §2.3: a distinct type from
+    `NearMissPair` above -- adds `id`/`kind`/`created_at`, which
+    `NearMissPair` correctly has no business carrying, since it is a
+    pre-persistence, in-memory-only shape. Slice 1 only ever constructs the
+    params written onto this node (`pending_review.persist_pending_reviews`);
+    nothing reads a `PendingReviewRecord` back yet -- that is Slice 2's
+    `list_pending_reviews`.
+    """
+
+    id: str
+    kind: Literal["Capability", "Policy"]
+    incoming_id: str
+    incoming_text: str
+    nearest_existing_id: str
+    nearest_existing_text: str
+    similarity: float
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveOutcome:
+    """The result of resolving one `PendingReview` (issue #35).
+
+    `decision="keep-separate"` leaves `winner_id`/`loser_id` as `None`
+    (AC-BI-004: only the `PendingReview` record itself is removed).
+    `decision="merge"` populates both with the deterministically-chosen
+    winner/loser canonical node ids (AC-BI-005/006). `decision` is a plain
+    `str`, not a `Literal`, mirroring `ResolveReviewResponse`'s own wire
+    shape (`api/models.py`) -- the request-side `Literal` is what widens
+    slice to slice, not this output type.
+    """
+
+    review_id: str
+    decision: str
+    winner_id: str | None = None
+    loser_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class MergeResult:
     """merge_baseline_graph()'s return value -- MergeBaselineGraph's outcome."""
 
@@ -197,6 +239,14 @@ class MergeResult:
     near_misses: tuple[NearMissPair, ...]  # AC-004, Capability
     # issue #54, S4 -- empty for an external-sourced baseline (no Policy pass ran).
     policy_canonical_ids: tuple[str, ...] = ()
+    # issue #35, Slice 5 (AC-BI-010): the run-scoped count of `PendingReview`
+    # nodes THIS call actually persisted -- `len(capability near_misses) +
+    # len(policy near_misses)`, i.e. exactly the number of
+    # `persist_pending_reviews` writes issued during this call (CREATE, not
+    # MERGE -- see pending_review.py), never a fresh "all unresolved reviews
+    # ever" graph read. Zero by default so every pre-existing `MergeResult(...)`
+    # construction in this codebase's tests stays valid unchanged.
+    pending_review_count: int = 0
 
 
 # S1's fix: a properties-dict type distinct from BaselineNode.properties,

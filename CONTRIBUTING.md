@@ -708,6 +708,11 @@ above for invoking `ps-cli` as a module without installing it at all.
 - Every release adds a `chore(release)` commit to `main` (see
   [Releasing](#releasing) above), so a `ready/**` branch already in flight when
   that happens may need a rebase before its own `gh tt deliver`.
+- A rebase that hits conflicts commits the resolution without running the
+  pre-commit hook (git's rebase backend never invokes it), so run
+  `uv run pre-commit run --all-files` after resolving. `.githooks/pre-push`
+  re-runs `ruff check`/`ruff format --check` on every commit you push as a
+  safety net, and rejects the push with ruff's own report if either fails.
 
 ## Reporting Issues
 

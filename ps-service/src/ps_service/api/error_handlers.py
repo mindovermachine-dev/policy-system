@@ -25,6 +25,7 @@ from ps_service.api.errors import (
     FixturePathError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
+    PendingReviewNotFoundError,
     PipelineStageError,
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
@@ -87,6 +88,7 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     IngestionConfigIncompleteError,
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
+    PendingReviewNotFoundError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -189,6 +191,11 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "request_body_too_large",
         status.HTTP_413_CONTENT_TOO_LARGE,
     ),
+    (
+        PendingReviewNotFoundError,
+        "pending_review_not_found",
+        status.HTTP_404_NOT_FOUND,
+    ),
 )
 
 
@@ -278,8 +285,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
-    ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
-    ``RequestValidationError`` 422, everything else 500.
+    ``PendingReviewNotFoundError`` 404, ``PipelineStageError`` 502,
+    ``RestoreStageFailedError`` 502, ``RequestValidationError`` 422,
+    everything else 500.
 
     Args:
         app: The FastAPI application to register handlers on.

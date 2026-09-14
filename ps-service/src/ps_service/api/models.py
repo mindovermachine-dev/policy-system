@@ -248,6 +248,64 @@ class ChangeCheckResponse(BaseModel):
     instruments: list[InstrumentCheckOutcomeBody]
 
 
+class PendingReviewEntry(BaseModel):
+    """One unresolved `PendingReview` as returned by `GET /near-misses` (issue #35, AC-BI-003).
+
+    `incoming_id`/`nearest_existing_id` are deliberately omitted -- AC-BI-003
+    only requires "ID, incoming text, existing text, and similarity score"
+    (the review's OWN id, not the two canonical node ids it references),
+    mirroring `RegulationCatalogEntry`'s own minimalism (PLAN.md §3.2).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    incoming_text: str = Field(min_length=1)
+    nearest_existing_text: str = Field(min_length=1)
+    similarity: float = Field(ge=0.0, le=1.0)
+
+
+class PendingReviewListResponse(BaseModel):
+    """Response body for `GET /near-misses`: every unresolved `PendingReview` (AC-BI-003)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reviews: list[PendingReviewEntry]
+
+
+class ResolveReviewRequest(BaseModel):
+    """`POST /near-misses/{review_id}/resolve` body (issue #35, AC-BI-004/005/008).
+
+    `decision` accepts `"keep-separate"` (Slice 3, AC-BI-004: clears the
+    pending review, nothing else) or `"merge"` (Slice 4, AC-BI-005/006/007:
+    re-points every edge referencing the loser canonical node onto the
+    deterministically-chosen winner, deletes the loser, deletes the pending
+    review, atomically). Any other value is rejected with a 422 validation
+    error before the route ever runs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["keep-separate", "merge"]
+
+
+class ResolveReviewResponse(BaseModel):
+    """Response body for `POST /near-misses/{review_id}/resolve` (AC-BI-004/005/008/009).
+
+    `winner_id`/`loser_id` stay `None` for `decision="keep-separate"`
+    (Slice 3); populated with the deterministically-chosen winner/loser
+    canonical node ids for `decision="merge"` (Slice 4, AC-BI-005/006).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    review_id: str = Field(min_length=1)
+    decision: str
+    winner_id: str | None = None
+    loser_id: str | None = None
+
+
 class ErrorDetail(BaseModel):
     """The ``error`` object inside a structured error body."""
 

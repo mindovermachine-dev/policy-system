@@ -26,7 +26,10 @@ from ps_cli.models import (
     ChangeCheckResult,
     IngestionResult,
     InstrumentCheckOutcome,
+    PendingReviewEntry,
+    PendingReviewsResult,
     ReadinessResult,
+    ResolveReviewResult,
     RestorationResult,
     RestorationStageOutcome,
     StageOutcome,
@@ -37,6 +40,8 @@ from ps_cli.modules.handlers import (
     handle_get_health,
     handle_ingest_document,
     handle_ingest_regulation,
+    handle_near_misses_list,
+    handle_near_misses_resolve,
     handle_restore_instrument,
 )
 
@@ -92,6 +97,153 @@ class _UnusedPsServiceClientMethods:
     def run_change_check(self) -> ChangeCheckResult:
         """Fail: this test's fake does not expect `run_change_check()` to be called."""
         raise AssertionError("run_change_check must not be called in this test")
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """Fail: this test's fake does not expect `list_pending_reviews()` to be called."""
+        raise AssertionError("list_pending_reviews must not be called in this test")
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Fail: this test's fake does not expect `resolve_review()` to be called."""
+        msg = (
+            f"resolve_review must not be called in this test "
+            f"(review_id={review_id!r}, decision={decision!r})"
+        )
+        raise AssertionError(msg)
+
+
+class _FakePendingReviewsClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake implementing `list_pending_reviews()`'s signature (issue #35)."""
+
+    def __init__(self, result: PendingReviewsResult) -> None:
+        """Script the PendingReviewsResult this fake's list_pending_reviews() returns."""
+        self._result = result
+
+    def list_pending_reviews(self) -> PendingReviewsResult:
+        """Return the scripted PendingReviewsResult."""
+        return self._result
+
+
+def test_handle_near_misses_list_prints_id_similarity_and_both_texts_per_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-003: each unresolved review prints its id, similarity, and both texts."""
+    result = PendingReviewsResult(
+        reviews=[
+            PendingReviewEntry(
+                id="review_aaa",
+                kind="Capability",
+                incoming_text="Report the incident to the authority.",
+                nearest_existing_text="Conduct a risk assessment.",
+                similarity=0.62,
+            ),
+            PendingReviewEntry(
+                id="review_bbb",
+                kind="Policy",
+                incoming_text="Maintain a data protection policy.",
+                nearest_existing_text="Maintain a privacy policy.",
+                similarity=0.701,
+            ),
+        ]
+    )
+    fake_client = _FakePendingReviewsClient(result)
+
+    handle_near_misses_list(fake_client)
+
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "review_aaa  0.620  'Report the incident to the authority.' vs "
+        "'Conduct a risk assessment.'\n"
+        "review_bbb  0.701  'Maintain a data protection policy.' vs "
+        "'Maintain a privacy policy.'\n"
+    )
+    assert captured.err == ""
+
+
+def test_handle_near_misses_list_no_reviews_prints_nothing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An empty `reviews` list prints nothing -- L2 ps-cli "Silence on success"."""
+    fake_client = _FakePendingReviewsClient(PendingReviewsResult(reviews=[]))
+
+    handle_near_misses_list(fake_client)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+class _FakeResolveReviewClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake implementing `resolve_review()`'s signature (issue #35, Slice 3)."""
+
+    def __init__(self, result: ResolveReviewResult) -> None:
+        """Script the ResolveReviewResult this fake's resolve_review() returns."""
+        self._result = result
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Record the call and return the scripted ResolveReviewResult."""
+        self.calls.append((review_id, decision))
+        return self._result
+
+
+class _FakeResolveReviewFailingClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake whose resolve_review() always raises (AC-BI-008)."""
+
+    def __init__(self, error: PsCliError) -> None:
+        """Store the PsCliError this fake's resolve_review() raises."""
+        self._error = error
+
+    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
+        """Raise the scripted PsCliError, simulating a not-found PS Service response."""
+        del review_id, decision
+        raise self._error
+
+
+def test_handle_near_misses_resolve_keep_separate_prints_confirmation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-004/009: a successful keep-separate resolve prints a confirmation line."""
+    result = ResolveReviewResult(
+        review_id="review_aaa", decision="keep-separate", winner_id=None, loser_id=None
+    )
+    fake_client = _FakeResolveReviewClient(result)
+
+    handle_near_misses_resolve("review_aaa", "keep-separate", fake_client)
+
+    captured = capsys.readouterr()
+    assert captured.out == "cleared review review_aaa (keep-separate)\n"
+    assert captured.err == ""
+    assert fake_client.calls == [("review_aaa", "keep-separate")]
+
+
+def test_handle_near_misses_resolve_unknown_id_propagates_ps_cli_error() -> None:
+    """AC-BI-008: a not-found id's PsCliError propagates uncaught -- only cli.run() catches it."""
+    fake_client = _FakeResolveReviewFailingClient(
+        PsCliError(msg="PS Service reported pending_review_not_found: no such review")
+    )
+
+    with pytest.raises(PsCliError, match="pending_review_not_found"):
+        handle_near_misses_resolve("review_missing", "keep-separate", fake_client)
+
+
+def test_handle_near_misses_resolve_merge_prints_winner_and_loser(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-005/006/007/009: a successful merge resolve prints winner/loser, not a bare id."""
+    result = ResolveReviewResult(
+        review_id="review_aaa",
+        decision="merge",
+        winner_id="capability_winner",
+        loser_id="capability_loser",
+    )
+    fake_client = _FakeResolveReviewClient(result)
+
+    handle_near_misses_resolve("review_aaa", "merge", fake_client)
+
+    captured = capsys.readouterr()
+    assert captured.out == "merged capability_loser into capability_winner\n"
+    assert captured.err == ""
+    assert fake_client.calls == [("review_aaa", "merge")]
 
 
 class _FakeIngestClient(_UnusedPsServiceClientMethods):
@@ -202,6 +354,74 @@ def test_handle_ingest_regulation_stage_line_byte_identical_when_no_skipped_unit
     assert "merge: succeeded" in lines
 
 
+def test_handle_ingest_regulation_surfaces_nonzero_pending_reviews(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Issue #35, Slice 5 (AC-BI-010): a merge-stage summary with
+    pending_reviews > 0 surfaces the count to the operator, mirroring
+    skipped_units's exact conditional-append idiom (CHANGES.md C2).
+    """
+    result = IngestionResult(
+        run_id="run-ingest-004",
+        regulatory_instrument_id="ri-gdpr",
+        source="catalog",
+        stages=[
+            StageOutcome(
+                stage="merge",
+                status="succeeded",
+                summary={
+                    "obligations": 4,
+                    "canonical_capabilities": 3,
+                    "near_misses": 2,
+                    "pending_reviews": 2,
+                },
+            ),
+        ],
+    )
+    fake = _FakeIngestClient(result=result)
+
+    handle_ingest_regulation("32016R0679", fake)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "merge: succeeded (pending_reviews: 2)" in lines
+
+
+def test_handle_ingest_regulation_stage_line_byte_identical_when_no_pending_reviews(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-010 corollary: pending_reviews == 0 (or absent) prints exactly
+    the pre-existing line, unchanged (CHANGES.md C2's byte-identical
+    guarantee).
+    """
+    result = IngestionResult(
+        run_id="run-ingest-005",
+        regulatory_instrument_id="ri-gdpr",
+        source="catalog",
+        stages=[
+            StageOutcome(
+                stage="merge",
+                status="succeeded",
+                summary={
+                    "obligations": 4,
+                    "canonical_capabilities": 3,
+                    "near_misses": 0,
+                    "pending_reviews": 0,
+                },
+            ),
+            StageOutcome(stage="extraction", status="succeeded", summary={"skipped_units": 0}),
+        ],
+    )
+    fake = _FakeIngestClient(result=result)
+
+    handle_ingest_regulation("32016R0679", fake)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "merge: succeeded" in lines
+    assert "extraction: succeeded" in lines
+
+
 def test_handle_ingest_regulation_propagates_ps_cli_error_from_client_uncaught() -> None:
     """A PsCliError from the client (e.g. a 502) propagates uncaught through the handler.
 
@@ -243,6 +463,123 @@ def test_handle_ingest_document_validates_locally_before_any_http_call(
         handle_ingest_document("bad-seed.json", client, fixtures_root=tmp_path)
 
     assert "graph_name" in excinfo.value.msg or "additional" in excinfo.value.msg.lower()
+
+
+_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT: dict[str, object] = {
+    "nodes": [
+        {
+            "label": "RegulatoryInstrument",
+            "id": "ENGPRAC-3.0",
+            "properties": {
+                "title": "Engineering Practices Policy",
+                "source_type": "internal",
+                "effective_date": "2026-08-01",
+                "version": "3.0",
+                "status": "active",
+            },
+        }
+    ],
+    "edges": [],
+}
+
+
+class _FakeInternalIngestClient(_UnusedPsServiceClientMethods):
+    """Hand-written fake implementing `ingest_internal()`'s signature.
+
+    Scripted to return a fixed `IngestionResult`, mirroring `_FakeIngestClient`
+    above but for the internal-seed path -- used only for issue #35 Slice 5's
+    pending_reviews stage-line tests, which need a specific `IngestionResult`
+    the way the pre-existing skipped_units tests do for
+    `handle_ingest_regulation`.
+    """
+
+    def __init__(self, *, result: IngestionResult) -> None:
+        """Script this fake's ingest_internal() outcome."""
+        self._result = result
+
+    def check_readiness(self) -> ReadinessResult:
+        """Report a fully-healthy target -- the pre-flight check must let this through."""
+        return ReadinessResult(status="ready", unhealthy_dependencies=[])
+
+    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+        """Return the scripted result, ignoring `fixture_path`."""
+        del fixture_path
+        return self._result
+
+
+def test_handle_ingest_document_surfaces_nonzero_pending_reviews(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Issue #35, Slice 5 (AC-BI-010): same conditional-append behavior as
+    `handle_ingest_regulation`, for the internal-seed pipeline's own
+    stage-print loop (CHANGES.md C2, handlers.py:215-219).
+    """
+    (tmp_path / "seed.json").write_text(
+        json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8"
+    )
+    result = IngestionResult(
+        run_id="run-internal-004",
+        regulatory_instrument_id="ri-engprac",
+        source="internal",
+        stages=[
+            StageOutcome(
+                stage="merge",
+                status="succeeded",
+                summary={
+                    "obligations": 1,
+                    "canonical_capabilities": 1,
+                    "near_misses": 1,
+                    "pending_reviews": 1,
+                },
+            ),
+        ],
+    )
+    client = _FakeInternalIngestClient(result=result)
+
+    handle_ingest_document("seed.json", client, fixtures_root=tmp_path)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "merge: succeeded (pending_reviews: 1)" in lines
+
+
+def test_handle_ingest_document_stage_line_byte_identical_when_no_pending_reviews(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-010 corollary for the internal-seed pipeline: pending_reviews ==
+    0 (or absent) prints exactly the pre-existing line, unchanged.
+    """
+    (tmp_path / "seed.json").write_text(
+        json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8"
+    )
+    result = IngestionResult(
+        run_id="run-internal-005",
+        regulatory_instrument_id="ri-engprac",
+        source="internal",
+        stages=[
+            StageOutcome(stage="internal_ingestion", status="succeeded", summary={"roles": 1}),
+            StageOutcome(
+                stage="merge",
+                status="succeeded",
+                summary={
+                    "obligations": 1,
+                    "canonical_capabilities": 1,
+                    "near_misses": 0,
+                    "pending_reviews": 0,
+                },
+            ),
+        ],
+    )
+    client = _FakeInternalIngestClient(result=result)
+
+    handle_ingest_document("seed.json", client, fixtures_root=tmp_path)
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert "internal_ingestion: succeeded" in lines
+    assert "merge: succeeded" in lines
 
 
 class _FakeProgressIngestClient(_UnusedPsServiceClientMethods):

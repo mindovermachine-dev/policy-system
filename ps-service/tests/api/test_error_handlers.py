@@ -25,6 +25,7 @@ from ps_service.api.errors import (
     FixturePathError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
+    PendingReviewNotFoundError,
     PipelineStageError,
 )
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
@@ -91,6 +92,7 @@ def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
 
     assert is_safe_verbatim(CatalogIdentifierNotFoundError("nope"))
     assert is_safe_verbatim(IngestionConfigIncompleteError("nope"))
+    assert is_safe_verbatim(PendingReviewNotFoundError("nope"))
     assert is_safe_verbatim(fake_domain_error("boom"))  # matched by class name, no deep import
     assert not is_safe_verbatim(RuntimeError("boom"))
     assert not is_safe_verbatim(FalkorDBConnectionError("at localhost:6379"))
@@ -121,6 +123,10 @@ _LEAKY_EXCEPTIONS: list[tuple[str, Exception]] = [
     (
         "pipeline_stage",
         PipelineStageError(stage="merge", reason="FalkorDB connection failed at 10.0.0.5:6379"),
+    ),
+    (
+        "pending_review_not_found",
+        PendingReviewNotFoundError("no unresolved PendingReview with id 'review_x'"),
     ),
     (
         "runtime_error",
@@ -201,6 +207,7 @@ def test_api_errors_map_to_their_documented_status_codes() -> None:
         (InternalSeedValidationError("x"), 422),
         (IngestionConfigIncompleteError("x"), 503),
         (PipelineStageError(stage="s", reason="r"), 502),
+        (PendingReviewNotFoundError("no unresolved PendingReview with id 'review_x'"), 404),
     ]
     for exc, expected_status in cases:
         client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)

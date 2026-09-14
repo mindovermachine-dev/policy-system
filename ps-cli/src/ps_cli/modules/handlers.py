@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
     from pathlib import Path
+    from typing import Literal
 
     from ps_cli.config import CliConfig
     from ps_cli.http_client import PsServiceClientProtocol
@@ -67,6 +68,49 @@ def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
         msg="LLM Interface is unavailable.",
         hint="check PS Service's /ready endpoint and its LLM provider configuration",
     )
+
+
+def handle_near_misses_list(client: PsServiceClientProtocol) -> None:
+    """Print every unresolved near-miss `PendingReview`, one line per review (issue #35, AC-BI-003).
+
+    Format: ``"{id}  {similarity:.3f}  {incoming_text!r} vs {nearest_existing_text!r}"``
+    -- a read-only listing, one line per entry, nothing else (L2 "Silence on
+    success"). `kind` is parsed off the wire response but not printed here
+    (PLAN.md §3 Slice 2's formatting is flagged as non-load-bearing, an
+    implementation-agnostic choice within AC-BI-003's "shown with its ID,
+    incoming text, existing text, and similarity score" requirement).
+    """
+    result = client.list_pending_reviews()
+    for review in result.reviews:
+        print(
+            f"{review.id}  {review.similarity:.3f}  "
+            f"{review.incoming_text!r} vs {review.nearest_existing_text!r}"
+        )
+
+
+def handle_near_misses_resolve(
+    review_id: str, decision: Literal["keep-separate", "merge"], client: PsServiceClientProtocol
+) -> None:
+    """Resolve one near-miss `PendingReview` (issue #35, AC-BI-004/005/006/007/008/009).
+
+    `--decision`'s argparse `choices` (`ps_cli.modules.parser`) already
+    reject any value outside `"keep-separate"`/`"merge"` at parse time,
+    before this handler ever runs. A not-found, already-resolved, or (merge
+    only) stale `review_id` surfaces as a `PsCliError` raised by
+    `client.resolve_review()` (AC-BI-008), propagating uncaught -- only
+    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9, matching
+    every other handler in this module).
+
+    On success, prints one confirmation line: `"cleared review {id}
+    (keep-separate)"` for `decision="keep-separate"`, or `"merged {loser_id}
+    into {winner_id}"` for `decision="merge"` -- exact wording is a
+    non-load-bearing formatting choice (PLAN.md §6 Slice 4).
+    """
+    result = client.resolve_review(review_id, decision)
+    if result.decision == "merge":
+        print(f"merged {result.loser_id} into {result.winner_id}")
+    else:
+        print(f"cleared review {result.review_id} ({result.decision})")
 
 
 def _poll_ingestion_progress(
@@ -121,10 +165,14 @@ def handle_ingest_regulation(
     `skipped_units > 0` (currently only the extraction stage ever does), that
     count is appended to the stage's line as `" (skipped_units: {n})"`
     (issue #63, AC-BI-003) -- when it is zero or absent, the line is
-    byte-identical to before this behavior was added (AC-BI-004). A
-    `PsCliError` raised by the client (e.g. a structured PS Service failure
-    response) propagates uncaught -- only `ps_cli.cli.run()` catches
-    `PsCliError` (PLAN.md §1 D5/D9).
+    byte-identical to before this behavior was added (AC-BI-004). Likewise,
+    when a stage's summary reports `pending_reviews > 0` (currently only the
+    merge stage ever does), that count is appended as
+    `" (pending_reviews: {n})"` (issue #35, AC-BI-010) -- zero or absent
+    leaves the line byte-identical, using the exact same conditional-append
+    idiom as `skipped_units`. A `PsCliError` raised by the client (e.g. a
+    structured PS Service failure response) propagates uncaught -- only
+    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
 
     While `ingest_catalog()` blocks (a real ingestion runs for minutes), a
     daemon background thread polls PS Service for the run's
@@ -159,6 +207,9 @@ def handle_ingest_regulation(
         skipped_units = stage.summary.get("skipped_units", 0)
         if skipped_units:
             line += f" (skipped_units: {skipped_units})"
+        pending_reviews = stage.summary.get("pending_reviews", 0)
+        if pending_reviews:
+            line += f" (pending_reviews: {pending_reviews})"
         print(line)
 
 
@@ -192,7 +243,11 @@ def handle_ingest_document(
     and would reject the request regardless of readiness).
 
     On success, prints the run id, the regulatory instrument id, and each
-    pipeline stage's name and status (AC-BI-010). A `PsCliError` raised by
+    pipeline stage's name and status (AC-BI-010). When the `merge` stage's
+    summary reports `pending_reviews > 0` (issue #35, AC-BI-010), that count
+    is appended to the stage's line as `" (pending_reviews: {n})"`, mirroring
+    `handle_ingest_regulation`'s own `skipped_units` idiom byte-for-byte --
+    zero or absent prints the line unchanged. A `PsCliError` raised by
     the client (a structured PS Service failure response) propagates
     uncaught -- only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1
     D5/D9).
@@ -203,7 +258,11 @@ def handle_ingest_document(
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
     for stage in result.stages:
-        print(f"{stage.stage}: {stage.status}")
+        line = f"{stage.stage}: {stage.status}"
+        pending_reviews = stage.summary.get("pending_reviews", 0)
+        if pending_reviews:
+            line += f" (pending_reviews: {pending_reviews})"
+        print(line)
 
 
 def handle_get_catalog(config: CliConfig) -> None:
@@ -353,6 +412,27 @@ def _dispatch_ingest_regulation(args: argparse.Namespace, client: PsServiceClien
     handle_ingest_regulation(cast("str", args.celex), client)
 
 
+def _dispatch_near_misses_list(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_near_misses_list`'s single-argument signature to the dispatch shape."""
+    del args
+    handle_near_misses_list(client)
+
+
+def _dispatch_near_misses_resolve(
+    args: argparse.Namespace, client: PsServiceClientProtocol
+) -> None:
+    """Adapt `handle_near_misses_resolve`'s signature to the dispatch shape.
+
+    `args.decision` is guaranteed `"keep-separate"` or `"merge"` by the
+    parser's own `choices`.
+    """
+    handle_near_misses_resolve(
+        cast("str", args.review_id),
+        cast('Literal["keep-separate", "merge"]', args.decision),
+        client,
+    )
+
+
 def _dispatch_ingest_document(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_ingest_document`'s signature to the dispatch shape.
 
@@ -384,6 +464,8 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None
     "restore_instrument": _dispatch_restore_instrument,
     "get_health": _dispatch_get_health,
     "check_regulations": _dispatch_check_regulations,
+    "near_misses_list": _dispatch_near_misses_list,
+    "near_misses_resolve": _dispatch_near_misses_resolve,
 }
 
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must

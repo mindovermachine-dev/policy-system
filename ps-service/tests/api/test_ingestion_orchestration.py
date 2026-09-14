@@ -33,11 +33,12 @@ from ps_service.api.errors import (
 from ps_service.api.ingestion_orchestration import (
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.run_status import get_stage
-from ps_service.company_merge.models import MergeResult
+from ps_service.company_merge.models import MergeResult, NearMissPair
 from ps_service.config import ServiceConfig
 from ps_service.dependency_health import CELLAR_ELI, is_healthy
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
@@ -775,3 +776,53 @@ def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_stage_failure(
         )
 
     assert get_stage(run_id) is None
+
+
+def test_merge_summary_includes_pending_reviews_key() -> None:
+    """Issue #35, Slice 5 (AC-BI-010): `_merge_summary`'s dict gains a new
+    `pending_reviews` key sourced from `MergeResult.pending_review_count`,
+    alongside the pre-existing `near_misses` key (unchanged, backward-compat
+    -- CHANGES.md/PLAN.md §5's decision: additive, not a rename/replace --
+    `ps-cli`'s own `_parse_stage_outcome` already iterates `summary.items()`
+    generically, so an extra key never breaks it).
+    """
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary",
+        obligation_ids=("obl-1",),
+        capability_canonical_ids=("cap-1", "cap-2"),
+        near_misses=(
+            NearMissPair(
+                incoming_id="cap-incoming",
+                incoming_text="Incoming Capability",
+                nearest_existing_id="cap-existing",
+                nearest_existing_text="Existing Capability",
+                similarity=0.5,
+            ),
+        ),
+        pending_review_count=1,
+    )
+
+    summary = _merge_summary(result)
+
+    assert summary["near_misses"] == 1
+    assert summary["pending_reviews"] == 1
+
+
+def test_merge_summary_pending_reviews_zero_when_no_near_misses() -> None:
+    """The default/no-near-miss case: `pending_reviews` is present and 0 --
+    the key is always emitted (not conditionally omitted), matching
+    `near_misses`'s own always-present convention. `handlers.py`'s CLI-side
+    conditional-append is what keeps the *terminal* line unchanged, not this
+    dict, which stays a plain summary of counts.
+    """
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary-2",
+        obligation_ids=(),
+        capability_canonical_ids=("cap-1",),
+        near_misses=(),
+    )
+
+    summary = _merge_summary(result)
+
+    assert summary["near_misses"] == 0
+    assert summary["pending_reviews"] == 0
