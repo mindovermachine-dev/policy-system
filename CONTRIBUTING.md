@@ -372,16 +372,16 @@ installed one described in the [user guide](./docs/artifacts/user-guide.md#ps-cl
 
 ```bash
 uv run python -m ps_cli --version
-uv run python -m ps_cli regulations list
-uv run python -m ps_cli regulations ingest 32016R0679
-uv run python -m ps_cli internal ingest <fixture_path>.json
+uv run python -m ps_cli get health
+uv run python -m ps_cli ingest regulation 32016R0679
+uv run python -m ps_cli ingest document <fixture_path>.json
 ```
 
-`regulations list`/`regulations ingest` only need PS Service itself —
-`regulations list` serves a static curated catalog, no FalkorDB/LLM
-dependency. `internal ingest` and real ingestion runs exercise the full
-pipeline, so PS Service needs FalkorDB and the LLM Interface configured (see
-below) — check `/ready` first if a command fails unexpectedly.
+`get health` only needs PS Service itself — it reports reachability, health,
+and readiness, no FalkorDB/LLM dependency. `ingest regulation`/`ingest
+document` and real ingestion runs exercise the full pipeline, so PS Service
+needs FalkorDB and the LLM Interface configured (see below) — check `/ready`
+first if a command fails unexpectedly.
 
 Target resolution (`PS_CLI_SERVICE_URL`, `ps-cli.toml`, named contexts) works
 the same way whether `ps-cli` was installed via `uv tool install` or invoked
@@ -389,7 +389,7 @@ as a module from a checkout — see the [user guide](./docs/artifacts/user-guide
 full precedence order:
 
 ```bash
-PS_CLI_SERVICE_URL=http://127.0.0.1:9000 uv run python -m ps_cli regulations list
+PS_CLI_SERVICE_URL=http://127.0.0.1:9000 uv run python -m ps_cli get health
 ```
 
 ### Configure the LLM Interface
@@ -489,7 +489,7 @@ PS_COMPANYMERGE_SIMILARITY_THRESHOLD=0.59
 
 Unlike `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL`, there's no
 provider choice to make here — just the one value. If it's unset, `/ready`
-reports `not_ready` and `POST /ingestions` (`ps-cli regulations ingest`)
+reports `not_ready` and `POST /ingestions` (`ps-cli ingest regulation`)
 fails fast with `ingestion_config_incomplete` before doing any I/O.
 `0.59` is not an arbitrary starting guess — it's the empirically recommended
 value from issue #29's labeled precision/recall/F1 sweep (see

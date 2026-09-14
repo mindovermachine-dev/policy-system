@@ -14,36 +14,6 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 
-class RegulationCatalogEntryBody(TypedDict):
-    """Raw JSON shape of one entry in `GET /regulations`'s `regulations` array."""
-
-    celex: str
-    title: str
-
-
-class RegulationCatalogResponseBody(TypedDict):
-    """Raw JSON shape of a `GET /regulations` 200 response body."""
-
-    regulations: list[RegulationCatalogEntryBody]
-    run_id: str
-
-
-@dataclass(frozen=True)
-class RegulationEntry:
-    """One regulation in the curated catalog: its CELEX identifier and title."""
-
-    celex: str
-    title: str
-
-
-@dataclass(frozen=True)
-class RegulationsResult:
-    """Parsed result of `PsServiceClient.list_regulations()`."""
-
-    regulations: list[RegulationEntry]
-    run_id: str
-
-
 class StageOutcomeBody(TypedDict):
     """Raw JSON shape of one entry in a `POST /ingestions` 200 response's `stages` array."""
 

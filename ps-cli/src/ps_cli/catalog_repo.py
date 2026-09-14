@@ -1,9 +1,9 @@
 """ps_cli.catalog_repo -- local-filesystem reads of the curated-content repo (D13, Slice 7.1).
 
 `read_catalog()`/`read_artifact()` never touch PS Service over the network at
-all -- they read `curated_repo_path`'s on-disk `catalog.json` (`catalog
-list`) and one instrument's `manifest.json` + `baseline.json` + `native.json`
-(`catalog restore`, before uploading their bytes to PS Service). Vendors its
+all -- they read `curated_repo_path`'s on-disk `catalog.json` (`get
+catalog`) and one instrument's `manifest.json` + `baseline.json` + `native.json`
+(`restore instrument`, before uploading their bytes to PS Service). Vendors its
 own lightweight shapes rather than importing `ps_service.export.models.
 InstrumentManifest` -- L2 Common's "ps-service and ps-cli are fully
 decoupled ... vendors its own copy of anything it needs" rule, the same
@@ -111,8 +111,8 @@ def _parse_catalog_entry(payload: object) -> CuratedInstrumentEntry:
 def read_catalog(repo_path: Path) -> list[CuratedInstrumentEntry]:
     """Read and parse `repo_path / "catalog.json"` into `CuratedInstrumentEntry` objects.
 
-    Local filesystem only -- never touches PS Service (D13: `catalog list`
-    needs no PS Service connection at all, unlike `catalog restore`). Raises
+    Local filesystem only -- never touches PS Service (D13: `get catalog`
+    needs no PS Service connection at all, unlike `restore instrument`). Raises
     `PsCliError` naming the missing path if `catalog.json` does not exist,
     or a generic `PsCliError` if its content does not match the expected
     shape.

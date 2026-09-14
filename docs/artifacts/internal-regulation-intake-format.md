@@ -1,6 +1,6 @@
 # Internal-Regulation Intake Format
 
-> **Status: Draft.** This specifies the target input format for `ps-cli internal ingest`,
+> **Status: Draft.** This specifies the target input format for `ps-cli ingest document`,
 > a deliverable of [#54](https://github.com/mindovermachine-dev/policy-system/issues/54)
 > (not yet implemented). Once #54 ships, `ps-cli` and `ps-service` will validate submitted
 > files against this format directly. Treat this document as the format's authoritative
@@ -10,7 +10,7 @@
 
 You are a **Policy Manager** preparing one of your organization's internal policies,
 standards, or SoPs (e.g. an Engineering Practices standard) for ingestion into the
-compliance knowledge graph via `ps-cli internal ingest`. This document tells you — or the
+compliance knowledge graph via `ps-cli ingest document`. This document tells you — or the
 AI assistant you use to do the extraction — exactly what JSON to produce.
 
 This format is deliberately independent of `docs/artifacts/ps-domain-concepts.md`, which is
@@ -326,6 +326,6 @@ ships and the schema file exists; this document will link to it directly at that
 - [`ps-domain-concepts.md`](./ps-domain-concepts.md) — the full internal ontology this format
   is a customer-facing subset of, for anyone who wants the underlying rationale.
 - [`user-guide.md`](./user-guide.md) — end-to-end `ps-cli` usage, including how to point
-  `ps-cli` at the right environment before running `internal ingest`.
+  `ps-cli` at the right environment before running `ingest document`.
 - [Issue #54](https://github.com/mindovermachine-dev/policy-system/issues/54) — tracks the
   implementation this format specifies.

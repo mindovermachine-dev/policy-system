@@ -165,6 +165,22 @@ These patterns are adapted from the proven shape of the `gh-tt` CLI (a separate,
 - Format-validate a single argument's own value with a `type=` callback that raises `argparse.ArgumentTypeError` (an ordinary argparse usage error, exit 2) — not inside the handler via `assert_contract`. Reserve `assert_contract`/`PsCliError` for checks that need PS Service's response or other post-parse/business-logic context, or for genuinely cross-argument checks (flag combinations), which stay a post-`parse_args()` check in the parser-building function.
 - Ship a top-level `--version` flag (prints the installed package version via `importlib.metadata.version`, returns 0) and let a bare invocation with no subcommand print full `--help` and return 0, rather than argparse's terser default required-argument error — both handled in `main()`/`run()` after parsing, not by making every subparser level optional.
 
+### CLI Command Naming Convention
+
+- **Shape**: `ps-cli <verb> <resource> [name] [flags]`, modeled on kubectl (`kubectl get pods`, `kubectl delete deployment web`). Each verb is a top-level `add_subparsers()` group; each resource is a leaf subparser under it — even when a verb currently has only one resource (e.g. `check regulations`) — so a later sibling resource needs no reshuffle of the group structure.
+- **Current verb vocabulary**:
+  - `get` — read-only lookup/listing (e.g. `get health`, `get catalog`).
+  - `ingest` — bring new content into PS Service (e.g. `ingest regulation`, `ingest document`).
+  - `restore` — restore a curated instrument's artifact into PS Service (e.g. `restore instrument`).
+  - `check` — sweep for state changes (e.g. `check regulations`).
+  - `config` — manage named contexts. The one exception group: it does not nest `config <verb> <resource>`, instead mirroring kubectl's own `kubectl config` subcommands, whose leaves are verb-noun compounds (`set-context`/`use-context`/`get-contexts`).
+- **This vocabulary is expected to grow.** When implementing a new command, prefer a `<verb> <resource>` shape consistent with the existing groups above over inventing a new top-level group or a bespoke spelling:
+  - When implementing #71 (export), prefer `ps-cli export instrument <instrument_id>`.
+  - When implementing #72 (catalog add/remove), prefer `ps-cli add catalog-entry <path>` / `ps-cli remove catalog-entry <instrument_id>`.
+  - When implementing #77 (kgraph list), prefer `ps-cli get instruments` — a distinct resource from `get catalog`: `catalog` reads the local curated-content repo, `instruments` would read live FalkorDB state via PS Service.
+  - When implementing #35 (near-misses list/resolve), prefer `ps-cli get near-misses` / `ps-cli resolve near-miss <id> --decision=merge|keep-separate`.
+  - None of #71/#72/#77/#35's commands exist today — this is guidance for whoever implements them, not a claim of current behavior.
+
 ### Error Handling
 
 - **Single user-facing error type**: user-facing errors (invalid state, missing precondition, bad input) are raised as one `PsCliError` exception via an `assert_contract(*, contract: bool, msg: str, hint: str | None = None)` helper — not the many domain-specific exception types used in `ps-service`. Only `PsCliError` is caught, in one `try/except` around command dispatch in `main()`; format as `❌ {msg}` (plus `💡 {hint}` on its own line, if given) to stderr, then `sys.exit(1)`. Success falls through to an explicit `sys.exit(0)`.

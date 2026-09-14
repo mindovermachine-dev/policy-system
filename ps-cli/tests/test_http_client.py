@@ -1,5 +1,5 @@
 """Tests for ps_cli.http_client: PsServiceClient construction, AC-BI-009 warning,
-and list_regulations().
+and its various endpoint methods.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 from ps_cli.catalog_repo import CuratedArtifact, CuratedInstrumentManifest
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
-    _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per list_regulations()'s existing precedent
+    _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per check_health()'s existing precedent
     PsServiceClient,
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
 )
@@ -72,119 +72,14 @@ class TestPsServiceClientConstruction:
         assert captured.err == ""
 
 
-_CATALOG_BODY = {
-    "regulations": [
-        {"celex": "32016R0679", "title": "General Data Protection Regulation"},
-        {"celex": "32019R0881", "title": "Cybersecurity Act"},
-    ],
-    "run_id": "run-abc123",
-}
-
-
 def _unused_handler(request: httpx.Request) -> httpx.Response:
     """A transport handler that should never be invoked (construction-only tests)."""
     msg = f"unexpected request in a construction-only test: {request.url}"
     raise AssertionError(msg)
 
 
-def _catalog_handler(request: httpx.Request) -> httpx.Response:
-    assert request.url.path == "/regulations"
-    return httpx.Response(200, json=_CATALOG_BODY)
-
-
 def _connect_error_handler(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
-
-
-class TestListRegulations:
-    """Increment 8: PsServiceClient.list_regulations()."""
-
-    def test_parses_a_200_catalog_response(self) -> None:
-        """A 200 GET /regulations body parses into RegulationEntry list + run_id."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_catalog_handler)
-        )
-
-        result = client.list_regulations()
-
-        assert result.run_id == "run-abc123"
-        assert len(result.regulations) == 2
-        assert result.regulations[0].celex == "32016R0679"
-        assert result.regulations[0].title == "General Data Protection Regulation"
-        assert result.regulations[1].celex == "32019R0881"
-        assert result.regulations[1].title == "Cybersecurity Act"
-
-    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.list_regulations()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert "http://127.0.0.1:8000" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
-
-    def test_connect_timeout_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ConnectTimeout also maps to the same actionable PsCliError."""
-
-        def _timeout_handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectTimeout("timed out", request=request)
-
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_timeout_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.list_regulations()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-
-    def test_read_timeout_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ReadTimeout maps to an actionable PsCliError per D5's mapping.
-
-        Found via the Increment 17 live run against a real ingestion pipeline: PS Service
-        legitimately does not respond within the client's connect window on a slow real
-        request, and this must surface as a clean `PsCliError`, not an uncaught
-        `httpx.ReadTimeout` bug.
-        """
-
-        def _read_timeout_handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ReadTimeout("timed out", request=request)
-
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_read_timeout_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.list_regulations()
-
-        assert "did not respond in time" in excinfo.value.msg
-        assert "http://127.0.0.1:8000" in excinfo.value.msg
-
-    def test_uses_the_unmodified_client_wide_timeout(self) -> None:
-        """Regression guard (OPEN_QUESTIONS_RESOLVED.md item 10 / BATCH_H_FIX.md).
-
-        `GET /regulations` is fast and static -- it must keep inheriting the
-        client-wide 5s connect / 30s read timeout unchanged, never the extended
-        30-minute read timeout that `POST /ingestions` now applies per-request. This
-        pins that boundary so a future edit can't silently widen `list_regulations()`'s
-        timeout too.
-        """
-        captured_timeouts: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_timeouts.append(request.extensions.get("timeout"))
-            return httpx.Response(200, json=_CATALOG_BODY)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.list_regulations()
-
-        assert captured_timeouts == [{"connect": 5.0, "read": 30.0, "write": 5.0, "pool": 5.0}]
 
 
 _INGESTION_SUCCESS_BODY = {

@@ -1,4 +1,4 @@
-"""Integration test: `ps-cli catalog restore <instrument_id>` against a real spawned
+"""Integration test: `ps-cli restore instrument <instrument_id>` against a real spawned
 `ps-service`, real FalkorDB, and NO LLM provider configured at all (Slice 7.5, D5/D13).
 
 Marked `@pytest.mark.integration` + `@pytest.mark.falkordb_live` -- unlike
@@ -33,10 +33,10 @@ confirmed by reading `ps_service/export/export_instrument.py` and `export/catalo
 directly. This does not match D1's own ASCII layout diagram (PLAN.md §1 D1), which shows
 `catalog.json` as a child of `curated-content/`, matching `ps_cli.config.CliConfig
 .curated_repo_path`'s default (`"./curated-content"`) and `ps_cli.catalog_repo.read_catalog`'s
-own `repo_path / "catalog.json"` lookup (Slice 7.1). `catalog restore` (this test's subject)
+own `repo_path / "catalog.json"` lookup (Slice 7.1). `restore instrument` (this test's subject)
 never calls `read_catalog` -- only `read_artifact`, which needs just the per-instrument
 directory -- so this test sidesteps the mismatch entirely by pointing
-`PS_CLI_CURATED_REPO_PATH` at `repo_root / "curated-content"` directly. `catalog list` against
+`PS_CLI_CURATED_REPO_PATH` at `repo_root / "curated-content"` directly. `get catalog` against
 a real, `export_instrument`-produced repo would NOT find its `catalog.json` today; this is
 flagged for the orchestrator/a future slice, not silently worked around.
 """
@@ -292,18 +292,18 @@ def live_falkordb() -> FalkorDB:
     return FalkorDB(host=_FALKORDB_HOST, port=_FALKORDB_PORT)
 
 
-def test_catalog_restore_against_real_spawned_ps_service_with_no_llm_configured(
+def test_restore_instrument_against_real_spawned_ps_service_with_no_llm_configured(
     live_falkordb: FalkorDB,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-002/AC-BI-005/AC-BI-011 end to end: real `ps-cli catalog restore`, real
+    """AC-BI-002/AC-BI-005/AC-BI-011 end to end: real `ps-cli restore instrument`, real
     `ps-service`, real FalkorDB, NO LLM provider configured anywhere -- restoring one
     curated instrument and confirming a follow-up direct-FalkorDB query sees the seeded
-    content (mirrors `ps-cli regulations list`-style follow-up verification; `ps-cli` has
-    no query command of its own, so the verification queries FalkorDB directly, exactly as
-    `test_integration_regulations_ingest.py`'s own cleanup step already does).
+    content (`ps-cli` has no query command of its own, so the verification queries
+    FalkorDB directly, exactly as `test_integration_regulations_ingest.py`'s own cleanup
+    step already does).
     """
     token = uuid.uuid4().hex[:10]
     short = f"s75{token}"
@@ -357,7 +357,7 @@ def test_catalog_restore_against_real_spawned_ps_service_with_no_llm_configured(
         monkeypatch.setenv("PS_CLI_SERVICE_URL", base_url)
         monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
 
-        exit_code = run(["catalog", "restore", instrument_id], client=None)
+        exit_code = run(["restore", "instrument", instrument_id], client=None)
 
         captured = capsys.readouterr()
         assert exit_code == 0, f"stdout={captured.out!r} stderr={captured.err!r}"

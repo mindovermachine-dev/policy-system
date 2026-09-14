@@ -18,7 +18,7 @@ import pytest
 from ps_cli.credentials import FileCredentialStore
 from ps_cli.errors import PsCliError
 from ps_cli.modules.config_handlers import (
-    handle_config_list_contexts,
+    handle_config_get_contexts,
     handle_config_set_context,
     handle_config_use_context,
 )
@@ -159,10 +159,10 @@ def test_handle_config_use_context_raises_listing_valid_names_for_unknown_contex
     assert "prod" in combined
 
 
-# --- issue #56 Slice 28: handle_config_list_contexts() ----------------------------------
+# --- issue #56 Slice 28: handle_config_get_contexts() ----------------------------------
 
 
-def test_handle_config_list_contexts_marks_current_context(
+def test_handle_config_get_contexts_marks_current_context(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Two contexts, one current -- both appear in stdout; exactly one line starts with `*`,
@@ -172,7 +172,7 @@ def test_handle_config_list_contexts_marks_current_context(
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
     handle_config_use_context("prod", config_dir=tmp_path)
 
-    handle_config_list_contexts(config_dir=tmp_path)
+    handle_config_get_contexts(config_dir=tmp_path)
 
     out_lines = capsys.readouterr().out.splitlines()
     assert "dev" in "\n".join(out_lines)
@@ -184,10 +184,10 @@ def test_handle_config_list_contexts_marks_current_context(
     assert "prod" in starred[0]
 
 
-def test_handle_config_list_contexts_with_no_targets_toml_prints_nothing(
+def test_handle_config_get_contexts_with_no_targets_toml_prints_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """No `targets.toml` -> empty stdout; not an error state (AC-BI-007)."""
-    handle_config_list_contexts(config_dir=tmp_path)
+    handle_config_get_contexts(config_dir=tmp_path)
 
     assert capsys.readouterr().out == ""

@@ -1,7 +1,6 @@
-"""Tests for ps_cli.modules.handlers: handle_regulations_list (PLAN.md §3 Increment 9),
-handle_regulations_ingest (PLAN.md §3 Increment 12).
+"""Tests for ps_cli.modules.handlers: handle_ingest_regulation (PLAN.md §3 Increment 12).
 
-`handle_internal_ingest`'s full happy-path wiring (PLAN.md §3 Increment 15) is
+`handle_ingest_document`'s full happy-path wiring (PLAN.md §3 Increment 15) is
 deliberately not unit-tested at this layer -- its coverage there is exactly two
 `cli.run()`-level tests in `ps-cli/tests/test_cli.py`, which prove the full
 wiring (parser -> dispatch -> handler -> client) end to end. Issue #54's S1
@@ -28,20 +27,17 @@ from ps_cli.models import (
     IngestionResult,
     InstrumentCheckOutcome,
     ReadinessResult,
-    RegulationEntry,
-    RegulationsResult,
     RestorationResult,
     RestorationStageOutcome,
     StageOutcome,
 )
 from ps_cli.modules.handlers import (
-    handle_catalog_list,
-    handle_catalog_restore,
-    handle_check,
-    handle_health,
-    handle_internal_ingest,
-    handle_regulations_ingest,
-    handle_regulations_list,
+    handle_check_regulations,
+    handle_get_catalog,
+    handle_get_health,
+    handle_ingest_document,
+    handle_ingest_regulation,
+    handle_restore_instrument,
 )
 
 if TYPE_CHECKING:
@@ -60,10 +56,6 @@ class _UnusedPsServiceClientMethods:
     type checker requires each fake to structurally satisfy all three
     `PsServiceClientProtocol` methods rather than just the one under test.
     """
-
-    def list_regulations(self) -> RegulationsResult:
-        """Fail: this test's fake does not expect `list_regulations()` to be called."""
-        raise AssertionError("list_regulations must not be called in this test")
 
     def check_health(self) -> str:
         """Fail: this test's fake does not expect `check_health()` to be called."""
@@ -102,46 +94,6 @@ class _UnusedPsServiceClientMethods:
         raise AssertionError("run_change_check must not be called in this test")
 
 
-class _FakeRegulationsClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake implementing `list_regulations()`'s signature.
-
-    No httpx involved at this layer (PLAN.md §3 Increment 9) -- this is a
-    duck-typed stand-in, structurally satisfying `PsServiceClientProtocol`
-    (`ps_cli/http_client.py`) with no `cast()` needed (PLAN.md §1 D10).
-    """
-
-    def __init__(self, result: RegulationsResult) -> None:
-        """Script the RegulationsResult this fake's list_regulations() returns."""
-        self._result = result
-
-    def list_regulations(self) -> RegulationsResult:
-        """Return the scripted RegulationsResult."""
-        return self._result
-
-
-def test_handle_regulations_list_prints_celex_and_title_per_line(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Each regulation prints as "{celex}  {title}"; no run_id, no header/footer."""
-    result = RegulationsResult(
-        regulations=[
-            RegulationEntry(celex="32016R0679", title="General Data Protection Regulation"),
-            RegulationEntry(celex="32019R0881", title="Cybersecurity Act"),
-        ],
-        run_id="run-abc123",
-    )
-    fake_client = _FakeRegulationsClient(result)
-
-    handle_regulations_list(fake_client)
-
-    captured = capsys.readouterr()
-    assert captured.out == (
-        "32016R0679  General Data Protection Regulation\n32019R0881  Cybersecurity Act\n"
-    )
-    assert captured.err == ""
-    assert "run-abc123" not in captured.out
-
-
 class _FakeIngestClient(_UnusedPsServiceClientMethods):
     """Hand-written fake implementing `ingest_catalog()`'s signature.
 
@@ -173,7 +125,7 @@ class _FakeIngestClient(_UnusedPsServiceClientMethods):
         return self._result
 
 
-def test_handle_regulations_ingest_prints_run_id_and_stage_summary_on_success(
+def test_handle_ingest_regulation_prints_run_id_and_stage_summary_on_success(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A successful ingest prints run_id, regulatory_instrument_id, and each stage's outcome."""
@@ -188,7 +140,7 @@ def test_handle_regulations_ingest_prints_run_id_and_stage_summary_on_success(
     )
     fake = _FakeIngestClient(result=result)
 
-    handle_regulations_ingest("32016R0679", fake)
+    handle_ingest_regulation("32016R0679", fake)
 
     captured = capsys.readouterr()
     assert "run_id: run-ingest-001" in captured.out
@@ -198,7 +150,7 @@ def test_handle_regulations_ingest_prints_run_id_and_stage_summary_on_success(
     assert fake.called_with_celex == "32016R0679"
 
 
-def test_handle_regulations_ingest_surfaces_nonzero_skipped_units(
+def test_handle_ingest_regulation_surfaces_nonzero_skipped_units(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-003: a stage summary with skipped_units > 0 surfaces the count to the operator."""
@@ -216,14 +168,14 @@ def test_handle_regulations_ingest_surfaces_nonzero_skipped_units(
     )
     fake = _FakeIngestClient(result=result)
 
-    handle_regulations_ingest("32016R0679", fake)
+    handle_ingest_regulation("32016R0679", fake)
 
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
     assert "extraction: succeeded (skipped_units: 3)" in lines
 
 
-def test_handle_regulations_ingest_stage_line_byte_identical_when_no_skipped_units(
+def test_handle_ingest_regulation_stage_line_byte_identical_when_no_skipped_units(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-004: skipped_units == 0 (or absent) prints exactly the pre-existing line, unchanged."""
@@ -242,7 +194,7 @@ def test_handle_regulations_ingest_stage_line_byte_identical_when_no_skipped_uni
     )
     fake = _FakeIngestClient(result=result)
 
-    handle_regulations_ingest("32016R0679", fake)
+    handle_ingest_regulation("32016R0679", fake)
 
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
@@ -250,7 +202,7 @@ def test_handle_regulations_ingest_stage_line_byte_identical_when_no_skipped_uni
     assert "merge: succeeded" in lines
 
 
-def test_handle_regulations_ingest_propagates_ps_cli_error_from_client_uncaught() -> None:
+def test_handle_ingest_regulation_propagates_ps_cli_error_from_client_uncaught() -> None:
     """A PsCliError from the client (e.g. a 502) propagates uncaught through the handler.
 
     Not caught here -- only `ps_cli.cli.run()` catches `PsCliError`, in its
@@ -265,10 +217,10 @@ def test_handle_regulations_ingest_propagates_ps_cli_error_from_client_uncaught(
     )
 
     with pytest.raises(PsCliError):
-        handle_regulations_ingest("32016R0679", fake)
+        handle_ingest_regulation("32016R0679", fake)
 
 
-def test_handle_internal_ingest_validates_locally_before_any_http_call(
+def test_handle_ingest_document_validates_locally_before_any_http_call(
     tmp_path: Path,
 ) -> None:
     """A schema-invalid local fixture is rejected before `client.ingest_internal()` is called.
@@ -288,7 +240,7 @@ def test_handle_internal_ingest_validates_locally_before_any_http_call(
     client = _UnusedPsServiceClientMethods()
 
     with pytest.raises(PsCliError) as excinfo:
-        handle_internal_ingest("bad-seed.json", client, fixtures_root=tmp_path)
+        handle_ingest_document("bad-seed.json", client, fixtures_root=tmp_path)
 
     assert "graph_name" in excinfo.value.msg or "additional" in excinfo.value.msg.lower()
 
@@ -342,7 +294,7 @@ _PROGRESS_TEST_RESULT = IngestionResult(
 )
 
 
-def test_handle_regulations_ingest_prints_stage_changes_to_stderr_while_waiting(
+def test_handle_ingest_regulation_prints_stage_changes_to_stderr_while_waiting(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Stage changes observed while `ingest_catalog()` blocks print to stderr, not stdout.
@@ -356,7 +308,7 @@ def test_handle_regulations_ingest_prints_stage_changes_to_stderr_while_waiting(
         block_seconds=0.05,
     )
 
-    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
 
     captured = capsys.readouterr()
     assert "ingestion: running" in captured.err
@@ -366,7 +318,7 @@ def test_handle_regulations_ingest_prints_stage_changes_to_stderr_while_waiting(
     )
 
 
-def test_handle_regulations_ingest_does_not_repeat_an_unchanged_stage_line(
+def test_handle_ingest_regulation_does_not_repeat_an_unchanged_stage_line(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A stage that stays the same across multiple polls prints only once."""
@@ -376,13 +328,13 @@ def test_handle_regulations_ingest_does_not_repeat_an_unchanged_stage_line(
         block_seconds=0.08,
     )
 
-    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
 
     captured = capsys.readouterr()
     assert captured.err.count("ingestion: running") == 1
 
 
-def test_handle_regulations_ingest_stops_polling_after_ingest_catalog_returns() -> None:
+def test_handle_ingest_regulation_stops_polling_after_ingest_catalog_returns() -> None:
     """The poller thread is no longer alive once the handler has returned (no thread leak)."""
     fake = _FakeProgressIngestClient(
         result=_PROGRESS_TEST_RESULT,
@@ -390,13 +342,13 @@ def test_handle_regulations_ingest_stops_polling_after_ingest_catalog_returns() 
         block_seconds=0.05,
     )
 
-    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
 
     poller_threads = [t for t in threading.enumerate() if t.name == "ps-cli-ingest-poller"]
     assert not any(t.is_alive() for t in poller_threads)
 
 
-def test_handle_regulations_ingest_poll_failures_never_affect_the_final_result(
+def test_handle_ingest_regulation_poll_failures_never_affect_the_final_result(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`poll_ingestion_status()` always returning `None` never affects the final output."""
@@ -406,7 +358,7 @@ def test_handle_regulations_ingest_poll_failures_never_affect_the_final_result(
         block_seconds=0.05,
     )
 
-    handle_regulations_ingest("32016R0679", fake, poll_interval_seconds=0.01)
+    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
 
     captured = capsys.readouterr()
     assert captured.err == ""
@@ -437,14 +389,14 @@ def _write_catalog_fixture(repo_path: Path) -> None:
     )
 
 
-def test_handle_catalog_list_prints_instrument_id_title_source_type_and_jurisdiction(
+def test_handle_get_catalog_prints_instrument_id_title_source_type_and_jurisdiction(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Each entry prints as "{id}  {title} ({source_type}, {jurisdiction or 'n/a'})"."""
     _write_catalog_fixture(tmp_path)
     config = CliConfig(service_url="http://127.0.0.1:8000", curated_repo_path=tmp_path)
 
-    handle_catalog_list(config)
+    handle_get_catalog(config)
 
     captured = capsys.readouterr()
     assert captured.out == (
@@ -454,12 +406,12 @@ def test_handle_catalog_list_prints_instrument_id_title_source_type_and_jurisdic
     assert captured.err == ""
 
 
-def test_handle_catalog_list_takes_no_client_parameter() -> None:
-    """D13: `catalog list` never constructs a `PsServiceClient` -- proven structurally by
-    `handle_catalog_list`'s own signature taking only `config`, unlike every other handler
+def test_handle_get_catalog_takes_no_client_parameter() -> None:
+    """D13: `get catalog` never constructs a `PsServiceClient` -- proven structurally by
+    `handle_get_catalog`'s own signature taking only `config`, unlike every other handler
     in this module (each of which takes a client).
     """
-    signature = inspect.signature(handle_catalog_list)
+    signature = inspect.signature(handle_get_catalog)
 
     assert list(signature.parameters) == ["config"]
 
@@ -508,7 +460,7 @@ def _write_instrument_fixture(repo_path: Path, instrument_id: str) -> None:
     (instrument_dir / "native.json").write_bytes(b'{"nodes": [], "edges": []}')
 
 
-def test_handle_catalog_restore_prints_instrument_id_and_stage_outcomes(
+def test_handle_restore_instrument_prints_instrument_id_and_stage_outcomes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A successful restore prints the instrument id and each completed stage's outcome."""
@@ -522,7 +474,7 @@ def test_handle_catalog_restore_prints_instrument_id_and_stage_outcomes(
     )
     fake = _FakeRestoreClient(result=result)
 
-    handle_catalog_restore("CRA-1.0", fake, curated_repo_path=tmp_path)
+    handle_restore_instrument("CRA-1.0", fake, curated_repo_path=tmp_path)
 
     captured = capsys.readouterr()
     assert "instrument_id: CRA-1.0" in captured.out
@@ -533,7 +485,7 @@ def test_handle_catalog_restore_prints_instrument_id_and_stage_outcomes(
     assert fake.called_with_artifact.manifest.short_name == "CRA"
 
 
-def test_handle_catalog_restore_propagates_ps_cli_error_from_client_uncaught(
+def test_handle_restore_instrument_propagates_ps_cli_error_from_client_uncaught(
     tmp_path: Path,
 ) -> None:
     """A PsCliError from the client (e.g. a 422 checksum rejection) propagates uncaught.
@@ -547,17 +499,17 @@ def test_handle_catalog_restore_propagates_ps_cli_error_from_client_uncaught(
     )
 
     with pytest.raises(PsCliError):
-        handle_catalog_restore("CRA-1.0", fake, curated_repo_path=tmp_path)
+        handle_restore_instrument("CRA-1.0", fake, curated_repo_path=tmp_path)
 
 
-def test_handle_catalog_restore_propagates_ps_cli_error_when_local_artifact_missing(
+def test_handle_restore_instrument_propagates_ps_cli_error_when_local_artifact_missing(
     tmp_path: Path,
 ) -> None:
     """A missing local instrument directory raises PsCliError before the client is ever called."""
     fake = _FakeRestoreClient()
 
     with pytest.raises(PsCliError):
-        handle_catalog_restore("MISSING-1.0", fake, curated_repo_path=tmp_path)
+        handle_restore_instrument("MISSING-1.0", fake, curated_repo_path=tmp_path)
 
     assert fake.called_with_artifact is None
 
@@ -579,7 +531,7 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
         return self._readiness
 
 
-def test_handle_health_prints_reachable_alive_ready_on_happy_path(
+def test_handle_get_health_prints_reachable_alive_ready_on_happy_path(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A fully healthy, fully ready target prints exactly the three summary lines (D10/D11)."""
@@ -588,14 +540,16 @@ def test_handle_health_prints_reachable_alive_ready_on_happy_path(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
     )
 
-    handle_health(fake)
+    handle_get_health(fake)
 
     captured = capsys.readouterr()
     assert captured.out == "reachable: yes\nhealth: alive\nready: ready\n"
     assert captured.err == ""
 
 
-def test_handle_health_raises_ps_cli_error_naming_unhealthy_dependencies_when_not_ready() -> None:
+def test_handle_get_health_raises_ps_cli_error_naming_unhealthy_dependencies_when_not_ready() -> (
+    None
+):
     """A not-ready target with a named unhealthy dependency raises PsCliError with that name
     in the hint (AC-BI-001 handler half, AC-BI-007).
     """
@@ -605,14 +559,14 @@ def test_handle_health_raises_ps_cli_error_naming_unhealthy_dependencies_when_no
     )
 
     with pytest.raises(PsCliError) as excinfo:
-        handle_health(fake)
+        handle_get_health(fake)
 
     assert "not ready" in excinfo.value.msg
     assert excinfo.value.hint is not None
     assert "falkordb" in excinfo.value.hint
 
 
-def test_handle_health_raises_ps_cli_error_with_no_hint_when_no_dependency_named() -> None:
+def test_handle_get_health_raises_ps_cli_error_with_no_hint_when_no_dependency_named() -> None:
     """A not-ready target with no unhealthy dependency named (§0.3's line-970 nuance) still
     raises, but with no hint -- proving the hint is genuinely conditional, not always-present.
     """
@@ -622,12 +576,12 @@ def test_handle_health_raises_ps_cli_error_with_no_hint_when_no_dependency_named
     )
 
     with pytest.raises(PsCliError) as excinfo:
-        handle_health(fake)
+        handle_get_health(fake)
 
     assert excinfo.value.hint is None
 
 
-def test_handle_health_not_ready_message_never_says_could_not_reach() -> None:
+def test_handle_get_health_not_ready_message_never_says_could_not_reach() -> None:
     """The not-ready error's rendered text is textually distinct from the unreachable-target
     error's wording (AC-BI-008), proven by an executed assertion, not just inspection.
     """
@@ -637,7 +591,7 @@ def test_handle_health_not_ready_message_never_says_could_not_reach() -> None:
     )
 
     with pytest.raises(PsCliError) as excinfo:
-        handle_health(fake)
+        handle_get_health(fake)
 
     assert "Could not reach" not in str(excinfo.value)
 
@@ -658,7 +612,7 @@ class _FakeCheckClient(_UnusedPsServiceClientMethods):
         return self._result
 
 
-def test_handle_check_prints_run_id_and_no_tracked_instruments_message_when_empty(
+def test_handle_check_regulations_prints_run_id_and_no_tracked_instruments_message_when_empty(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """An empty sweep prints `run_id: {run_id}` then `no tracked instruments`, in that
@@ -666,14 +620,14 @@ def test_handle_check_prints_run_id_and_no_tracked_instruments_message_when_empt
     """
     fake = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
 
-    handle_check(fake)
+    handle_check_regulations(fake)
 
     captured = capsys.readouterr()
     assert captured.out == "run_id: r1\nno tracked instruments\n"
     assert captured.err == ""
 
 
-def test_handle_check_prints_run_id_first_then_one_line_per_instrument(
+def test_handle_check_regulations_prints_run_id_first_then_one_line_per_instrument(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A mixed-bucket sweep prints `run_id: {run_id}` first, then one line per
@@ -697,7 +651,7 @@ def test_handle_check_prints_run_id_first_then_one_line_per_instrument(
         )
     )
 
-    handle_check(fake)
+    handle_check_regulations(fake)
 
     captured = capsys.readouterr()
     assert captured.out == (

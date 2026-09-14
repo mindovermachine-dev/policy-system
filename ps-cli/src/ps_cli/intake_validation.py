@@ -1,6 +1,6 @@
-"""Local JSON Schema validation for `ps-cli internal ingest`'s submitted file (D3/D7).
+"""Local JSON Schema validation for `ps-cli ingest document`'s submitted file (D3/D7).
 
-`validate_local_seed_file` is called by `handlers.handle_internal_ingest` before
+`validate_local_seed_file` is called by `handlers.handle_ingest_document` before
 any network call reaches PS Service (AC-BI-019/B4). `ps-cli` and `ps-service`
 share a filesystem in every environment this issue targets (D3's deployment
 reconciliation) -- `ps-cli` validates the same file, at the same relative path,
@@ -100,7 +100,7 @@ def validate_local_seed_file(path: Path) -> None:
     Raises `PsCliError` naming the specific missing/invalid property (never a
     generic parse error, AC-BI-019) when `path` is missing, unreadable, not
     valid JSON, or fails schema validation. No-ops on a conforming document.
-    Called by `handlers.handle_internal_ingest` before `client.ingest_internal()`
+    Called by `handlers.handle_ingest_document` before `client.ingest_internal()`
     -- a rejection here means zero HTTP calls are ever made (D3/B4).
     """
     document = _read_seed_document(path)

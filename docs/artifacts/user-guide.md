@@ -210,9 +210,9 @@ upgrade path and installs over whatever version is currently on `PATH`.
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
 ```bash
-ps-cli catalog list         # curated instruments available to restore
+ps-cli get catalog              # curated instruments available to restore
 
-ps-cli catalog restore <id> # e.g. `ps-cli catalog 32024R2847` just printed
+ps-cli restore instrument <id>  # e.g. `ps-cli restore instrument CRA-1.0` just printed
 ```
 
 Until something is seeded, the system answers questions with an explicit "graph is unseeded" error rather than an empty result.
@@ -296,14 +296,16 @@ default. Point it elsewhere with the `PS_CLI_SERVICE_URL` env var, or a `ps-cli.
 #### Multiple named targets (contexts)
 
 If you regularly switch between environments — dev, test, prod — `ps-cli` supports
-named contexts, the way `kubectl` has contexts or `az` has subscriptions.
+named contexts, the way `kubectl` has contexts or `az` has subscriptions (in fact the
+whole CLI, not just contexts, follows kubectl's `<verb> <resource>` pattern — see
+[Command reference](#command-reference) below).
 
 ```bash
 ps-cli config set-context dev --url https://dev.example.com
 ps-cli config set-context prod --url https://prod.example.com
 
 ps-cli config use-context prod
-ps-cli config list-contexts
+ps-cli config get-contexts
 #   dev   https://dev.example.com
 # * prod  https://prod.example.com   (* marks the current context)
 ```
@@ -311,14 +313,14 @@ ps-cli config list-contexts
 Once a context is current, every command uses it — no `PS_CLI_SERVICE_URL` needed:
 
 ```bash
-ps-cli regulations list   # targets prod
+ps-cli get health   # targets prod
 ```
 
 **Override for a single command** with `--context`, without changing what's current:
 
 ```bash
-ps-cli --context dev regulations list   # targets dev, just this once
-ps-cli config list-contexts             # still shows prod as current
+ps-cli --context dev get health   # targets dev, just this once
+ps-cli config get-contexts        # still shows prod as current
 ```
 
 **Resolution order** (highest wins): `PS_CLI_SERVICE_URL` env var > `--context` flag >
@@ -329,7 +331,7 @@ the location with `PS_CLI_CONFIG_DIR` (mirroring `gh`'s `GH_CONFIG_DIR`) if you 
 an isolated config, e.g. for testing:
 
 ```bash
-PS_CLI_CONFIG_DIR=/tmp/my-ps-cli-config ps-cli config list-contexts
+PS_CLI_CONFIG_DIR=/tmp/my-ps-cli-config ps-cli config get-contexts
 ```
 
 `targets.toml` only ever holds context names and URLs — never a credential.
@@ -369,16 +371,15 @@ Global flags, usable before or after any subcommand:
 
 | Command | Arguments | Description |
 | --- | --- | --- |
-| `ps-cli health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
-| `ps-cli check` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
-| `ps-cli regulations list` | — | List the curated EU-regulation catalog (CELEX + title). Static, PS Service-packaged data — does **not** reflect what's actually restored/ingested into the graph, and has no FalkorDB/LLM dependency. Tracked for removal: [#78](https://github.com/mindovermachine-dev/policy-system/issues/78). |
-| `ps-cli regulations ingest <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
-| `ps-cli internal ingest <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
-| `ps-cli catalog list` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
-| `ps-cli catalog restore <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
+| `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
+| `ps-cli get catalog` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
+| `ps-cli ingest regulation <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
+| `ps-cli ingest document <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
+| `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
+| `ps-cli check regulations` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
-| `ps-cli config list-contexts` | — | List every named context, marking the current one. |
+| `ps-cli config get-contexts` | — | List every named context, marking the current one. |
 
 Run `ps-cli --help` or `ps-cli <command> --help` for the same reference from the CLI
 itself.
@@ -386,24 +387,23 @@ itself.
 ### Running commands
 
 ```bash
-ps-cli regulations list                    # static curated catalog — no FalkorDB/LLM dependency
-ps-cli regulations ingest 32016R0679        # full ingestion pipeline
-ps-cli internal ingest <fixture_path>.json  # ingest an internal policy document
+ps-cli get catalog                          # local curated catalog — no FalkorDB/LLM dependency
+ps-cli ingest regulation 32016R0679         # full ingestion pipeline
+ps-cli ingest document <fixture_path>.json  # ingest an internal policy document
 ```
 
-`regulations ingest` and `internal ingest` exercise the full pipeline, so the PS
+`ingest regulation` and `ingest document` exercise the full pipeline, so the PS
 Service instance you're targeting needs FalkorDB and its LLM interface configured —
 check its `/ready` endpoint first if a command fails unexpectedly (see
 [Troubleshooting](#troubleshooting) below).
 
-A few behaviors worth knowing about `regulations ingest`:
+A few behaviors worth knowing about `ingest regulation`:
 
 - The `celex` argument is trimmed and format-validated before it's sent — a malformed
   value is rejected immediately, without a round trip to PS Service.
-- A CELEX identifier doesn't have to be in the curated catalog (`regulations list`) to
-  be ingestible: if it's not curated, PS Service resolves it against Cellar/ELI (the
-  public EU document repository) directly. `regulations list` stays the fast, known-title
-  discovery set; ingestion isn't limited to it.
+- A CELEX identifier doesn't have to be in PS Service's curated set to be ingestible:
+  if it's not curated, PS Service resolves it against Cellar/ELI (the public EU
+  document repository) directly. Ingestion isn't limited to the curated set.
 - A real ingestion run takes minutes (a full CRA ingestion has measured ~10 minutes
   end to end). `ps-cli` prints each pipeline stage's name to stderr as it starts, so a
   long-running ingest doesn't look hung — the final `run_id` /
@@ -439,20 +439,21 @@ Beyond that, PS Service's own health is what to check next — see
 
 Note that `ready: ready` no longer implies the LLM Interface or Cellar/ELI are healthy —
 readiness reflects FalkorDB only. An LLM Interface outage instead surfaces to
-`regulations ingest`/`internal ingest`/`check` via that command's own pre-flight failure
-message (`❌ LLM Interface is unavailable.`), before any pipeline call is made.
+`ingest regulation`/`ingest document`/`check regulations` via that command's own
+pre-flight failure message (`❌ LLM Interface is unavailable.`), before any pipeline
+call is made.
 
-`ps-cli health` reports all three — reachability, health, and readiness — in one call:
+`ps-cli get health` reports all three — reachability, health, and readiness — in one call:
 
 ```
-$ ps-cli health
+$ ps-cli get health
 reachable: yes
 health: alive
 ready: ready
 ```
 
 ```
-$ ps-cli health
+$ ps-cli get health
 ❌ PS Service is reachable but not ready (health='alive', ready='not_ready').
 💡 unhealthy dependencies: falkordb
 ```
@@ -511,10 +512,10 @@ without needing this backup/restore machinery at all.
 
 | Symptom | Check |
 | --- | --- |
-| `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config list-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
-| A command fails right after connecting | `ps-cli health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but FalkorDB is unreachable, or required ingestion config is incomplete — LLM Interface/Cellar-ELI issues are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. |
-| `regulations ingest` / `internal ingest` fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [CONTRIBUTING.md](../../CONTRIBUTING.md#configure-the-llm-interface). |
-| `regulations ingest` / `internal ingest` / `check` fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint and its LLM provider configuration. |
+| `ps-cli` reports "Could not reach PS Service" | Is the target URL right (`ps-cli config get-contexts` / `echo $PS_CLI_SERVICE_URL`)? Is PS Service actually running there? |
+| A command fails right after connecting | `ps-cli get health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but FalkorDB is unreachable, or required ingestion config is incomplete — LLM Interface/Cellar-ELI issues are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. |
+| `ingest regulation` / `ingest document` fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [CONTRIBUTING.md](../../CONTRIBUTING.md#configure-the-llm-interface). |
+| `ingest regulation` / `ingest document` / `check regulations` fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint and its LLM provider configuration. |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [ps-cli Troubleshooting](#troubleshooting). |
 
 ## Glossary

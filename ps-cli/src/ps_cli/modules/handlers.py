@@ -30,11 +30,11 @@ if TYPE_CHECKING:
 
 # How often the background poller (`_poll_ingestion_progress`) checks PS Service for the
 # run's currently-executing stage (AC-BI-009). A test overrides this via
-# `handle_regulations_ingest`'s `poll_interval_seconds` keyword rather than waiting on the
+# `handle_ingest_regulation`'s `poll_interval_seconds` keyword rather than waiting on the
 # real interval (PLAN.md §3 Increment 15).
 _POLL_INTERVAL_SECONDS = 2.0
 
-# Bound on how long `handle_regulations_ingest` waits for the poller thread to notice
+# Bound on how long `handle_ingest_regulation` waits for the poller thread to notice
 # `stop_event` and exit, before its own final summary prints (PLAN.md §3 Increment 15). The
 # poller's own loop granularity is `poll_interval_seconds`, not this value -- this is only a
 # safety bound against an unexpectedly slow/stuck thread.
@@ -42,7 +42,7 @@ _POLLER_JOIN_TIMEOUT_SECONDS = 5.0
 
 # The dependency name PS Service's `/ready` reports when its LLM provider is unreachable
 # (issue #75). Only this dependency's presence in `unhealthy_dependencies` blocks
-# `regulations ingest`'s pre-flight check (AC-BI-009) -- `cellar_eli` alone never does
+# `ingest regulation`'s pre-flight check (AC-BI-009) -- `cellar_eli` alone never does
 # (AC-BI-010).
 _LLM_INTERFACE_DEPENDENCY_NAME = "llm_interface"
 
@@ -69,19 +69,6 @@ def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
     )
 
 
-def handle_regulations_list(client: PsServiceClientProtocol) -> None:
-    """Print PS Service's curated regulation catalog, one line per regulation.
-
-    Format: ``"{celex}  {title}"``. No run id is printed here -- ``regulations
-    list`` is a read-only catalog query, not an ingestion command, so AC-BI-010
-    ("run id printed on ingestion completion") does not apply to it (confirmed
-    orchestrator decision; see PLAN.md §3 Increment 9).
-    """
-    result = client.list_regulations()
-    for regulation in result.regulations:
-        print(f"{regulation.celex}  {regulation.title}")
-
-
 def _poll_ingestion_progress(
     client: PsServiceClientProtocol,
     run_id: str,
@@ -90,7 +77,7 @@ def _poll_ingestion_progress(
 ) -> None:
     """Print each newly-observed in-flight stage to stderr until `stop_event` is set.
 
-    Runs on the daemon background thread `handle_regulations_ingest` starts
+    Runs on the daemon background thread `handle_ingest_regulation` starts
     (AC-BI-009). Polls `client.poll_ingestion_status(run_id)` every
     `poll_interval_seconds`, printing `"{stage}: running"` to `sys.stderr`
     only when `stage` is not `None` and differs from the last stage printed
@@ -110,7 +97,7 @@ def _poll_ingestion_progress(
             last_stage = stage
 
 
-def handle_regulations_ingest(
+def handle_ingest_regulation(
     celex: str,
     client: PsServiceClientProtocol,
     *,
@@ -175,7 +162,7 @@ def handle_regulations_ingest(
         print(line)
 
 
-def handle_internal_ingest(
+def handle_ingest_document(
     fixture_path: str, client: PsServiceClientProtocol, *, fixtures_root: Path
 ) -> None:
     """Ingest an internal-document fixture, identified by `fixture_path`, via PS Service.
@@ -198,7 +185,7 @@ def handle_internal_ingest(
     recording zero calls.
 
     Once local validation succeeds, `_assert_llm_interface_available` runs
-    the same pre-flight readiness check `handle_regulations_ingest` runs
+    the same pre-flight readiness check `handle_ingest_regulation` runs
     (issue #75, AC-BI-009..013): a target reporting LLM Interface unreachable
     fails fast here too, before `client.ingest_internal()`'s network call
     (DD2 -- local validation still runs first, since it's the cheaper check
@@ -219,12 +206,12 @@ def handle_internal_ingest(
         print(f"{stage.stage}: {stage.status}")
 
 
-def handle_catalog_list(config: CliConfig) -> None:
+def handle_get_catalog(config: CliConfig) -> None:
     """Print the local curated-content catalog, one line per instrument.
 
     Reads `config.curated_repo_path`'s on-disk `catalog.json` directly via
     `catalog_repo.read_catalog()` -- no `PsServiceClient` is ever constructed
-    (D13: `catalog list` needs no PS Service connection at all, unlike every
+    (D13: `get catalog` needs no PS Service connection at all, unlike every
     other command in this module). This is the only handler here that takes
     a `CliConfig` instead of a client, by design -- see `ps_cli.cli.run()`'s
     `NO_CLIENT_DISPATCH` branch, which never calls `_resolve_client` for it.
@@ -238,7 +225,7 @@ def handle_catalog_list(config: CliConfig) -> None:
         print(f"{entry.instrument_id}  {entry.title} ({entry.source_type}, {jurisdiction})")
 
 
-def handle_catalog_restore(
+def handle_restore_instrument(
     instrument_id: str,
     client: PsServiceClientProtocol,
     *,
@@ -253,7 +240,7 @@ def handle_catalog_restore(
     off `curated_repo_path`, PS Service does the FalkorDB work), then uploads
     it via `client.restore_instrument()`. On success, prints the restored
     instrument id and each completed stage's name and status, mirroring
-    `handle_regulations_ingest`'s summary-line shape. A `PsCliError` raised
+    `handle_ingest_regulation`'s summary-line shape. A `PsCliError` raised
     by `catalog_repo.read_artifact` (missing local instrument directory) or
     by the client (a structured PS Service rejection) propagates uncaught --
     only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
@@ -265,7 +252,7 @@ def handle_catalog_restore(
         print(f"{stage.stage}: {stage.status}")
 
 
-def handle_health(client: PsServiceClientProtocol) -> None:
+def handle_get_health(client: PsServiceClientProtocol) -> None:
     """Report PS Service's reachability, health (`/health`), and readiness (`/ready`).
 
     An unreachable target (AC-BI-009) or an unexpected response shape
@@ -302,7 +289,7 @@ def handle_health(client: PsServiceClientProtocol) -> None:
     print(f"ready: {readiness.status}")
 
 
-def handle_check(client: PsServiceClientProtocol) -> None:
+def handle_check_regulations(client: PsServiceClientProtocol) -> None:
     """Sweep every tracked instrument for amendments and re-ingest any found.
 
     Before anything else, `_assert_llm_interface_available` runs a pre-flight
@@ -312,7 +299,7 @@ def handle_check(client: PsServiceClientProtocol) -> None:
     amended instrument found.
 
     Prints the run id first (issue #73, PLAN.md §1 D8), matching
-    `handle_regulations_ingest`'s own `print(f"run_id: {result.run_id}")`
+    `handle_ingest_regulation`'s own `print(f"run_id: {result.run_id}")`
     precedent, then one line per tracked instrument, in the order the sweep
     reported them: `"{instrument_id}: {outcome}"`, with `" ({detail})"`
     appended only when `detail` is not `None`. A generic, outcome-agnostic
@@ -334,8 +321,8 @@ def handle_check(client: PsServiceClientProtocol) -> None:
         print(f"{outcome.instrument_id}: {outcome.outcome}{detail_suffix}")
 
 
-def _dispatch_catalog_list(args: argparse.Namespace) -> None:
-    """Adapt `handle_catalog_list`'s signature to the `NO_CLIENT_DISPATCH` shape.
+def _dispatch_get_catalog(args: argparse.Namespace) -> None:
+    """Adapt `handle_get_catalog`'s signature to the `NO_CLIENT_DISPATCH` shape.
 
     Calls `load_config()` directly -- never `ps_cli.cli._resolve_client` --
     so no `PsServiceClient` is ever constructed for this command (D13).
@@ -344,71 +331,64 @@ def _dispatch_catalog_list(args: argparse.Namespace) -> None:
     entirely" requirement.
     """
     context = getattr(args, "context", None)
-    handle_catalog_list(load_config(context=context))
+    handle_get_catalog(load_config(context=context))
 
 
-def _dispatch_catalog_restore(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_catalog_restore`'s signature to the `DISPATCH` shape.
+def _dispatch_restore_instrument(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_restore_instrument`'s signature to the `DISPATCH` shape.
 
-    Unlike `catalog_list`, `catalog restore` does contact PS Service (D5), so
+    Unlike `get_catalog`, `restore instrument` does contact PS Service (D5), so
     `client` here is the real `_resolve_client`-built one -- only the extra
     `curated_repo_path` value is resolved locally via `load_config()`.
     """
     context = getattr(args, "context", None)
     curated_repo_path = load_config(context=context).curated_repo_path
-    handle_catalog_restore(
+    handle_restore_instrument(
         cast("str", args.instrument_id), client, curated_repo_path=curated_repo_path
     )
 
 
-def _dispatch_regulations_list(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_regulations_list`'s single-argument signature to the dispatch shape."""
-    del args
-    handle_regulations_list(client)
+def _dispatch_ingest_regulation(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_ingest_regulation`'s signature to the dispatch shape, passing `celex`."""
+    handle_ingest_regulation(cast("str", args.celex), client)
 
 
-def _dispatch_regulations_ingest(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_regulations_ingest`'s signature to the dispatch shape, passing `celex`."""
-    handle_regulations_ingest(cast("str", args.celex), client)
-
-
-def _dispatch_internal_ingest(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_internal_ingest`'s signature to the dispatch shape.
+def _dispatch_ingest_document(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_ingest_document`'s signature to the dispatch shape.
 
     Resolves `fixtures_root` locally via `load_config()` (mirroring
-    `_dispatch_catalog_restore`'s own `curated_repo_path` resolution) so
-    `handle_internal_ingest` can validate the submitted file before any
+    `_dispatch_restore_instrument`'s own `curated_repo_path` resolution) so
+    `handle_ingest_document` can validate the submitted file before any
     network call (issue #54 D3).
     """
     context = getattr(args, "context", None)
     fixtures_root = load_config(context=context).fixtures_root
-    handle_internal_ingest(cast("str", args.fixture_path), client, fixtures_root=fixtures_root)
+    handle_ingest_document(cast("str", args.fixture_path), client, fixtures_root=fixtures_root)
 
 
-def _dispatch_health(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_health`'s single-argument signature to the dispatch shape."""
+def _dispatch_get_health(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_get_health`'s single-argument signature to the dispatch shape."""
     del args
-    handle_health(client)
+    handle_get_health(client)
 
 
-def _dispatch_check(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_check`'s single-argument signature to the dispatch shape."""
+def _dispatch_check_regulations(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_check_regulations`'s single-argument signature to the dispatch shape."""
     del args
-    handle_check(client)
+    handle_check_regulations(client)
 
 
 DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None]] = {
-    "regulations_list": _dispatch_regulations_list,
-    "regulations_ingest": _dispatch_regulations_ingest,
-    "internal_ingest": _dispatch_internal_ingest,
-    "catalog_restore": _dispatch_catalog_restore,
-    "health": _dispatch_health,
-    "check": _dispatch_check,
+    "ingest_regulation": _dispatch_ingest_regulation,
+    "ingest_document": _dispatch_ingest_document,
+    "restore_instrument": _dispatch_restore_instrument,
+    "get_health": _dispatch_get_health,
+    "check_regulations": _dispatch_check_regulations,
 }
 
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must
 # never construct a `PsServiceClient` or resolve `.service_url` at all (D13). `ps_cli.
 # cli.run()` checks this dict before falling through to `DISPATCH` + `_resolve_client`.
 NO_CLIENT_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
-    "catalog_list": _dispatch_catalog_list,
+    "get_catalog": _dispatch_get_catalog,
 }

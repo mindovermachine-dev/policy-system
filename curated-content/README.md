@@ -7,7 +7,7 @@ Service without an LLM provider or a live extraction run (issue #66).
 
 ```text
 curated-content/
-  catalog.json                  # aggregate listing consumed by `ps-cli catalog list`
+  catalog.json                  # aggregate listing consumed by `ps-cli get catalog`
   {INSTRUMENT_ID}/
     manifest.json                # schema_version, checksums, and identity fields
     baseline.json                 # the instrument's baseline graph, serialized
@@ -20,7 +20,7 @@ see
 [`ps-service-container-architecture.md`'s Export section](../docs/architecture/ps-service-container-architecture.md#export)
 for the mechanism, and
 [`ps-service-container-architecture.md`'s Restore section](../docs/architecture/ps-service-container-architecture.md#restore)
-for how `ps-cli catalog restore <instrument_id>` loads one back into a target
+for how `ps-cli restore instrument <instrument_id>` loads one back into a target
 deployment. `catalog.json` is always regenerated wholesale by that same tooling —
 never hand-edited.
 

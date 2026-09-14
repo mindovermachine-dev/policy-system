@@ -20,8 +20,6 @@ from ps_cli.models import (
     IngestionResult,
     InstrumentCheckOutcome,
     ReadinessResult,
-    RegulationEntry,
-    RegulationsResult,
     RestorationResult,
     RestorationStageOutcome,
     StageOutcome,
@@ -56,7 +54,7 @@ _CHANGE_CHECKS_PATH = "/change-checks"
 # `POST /ingestions` blocks synchronously for the entire real pipeline (Ingestion ->
 # Domain Mapper -> Company Merge, no async job queue, by #51's own design) -- a real CRA
 # ingestion measured 612.86s (10m12s) end to end. The client-wide timeout (30s read) is
-# correct for the fast, static `GET /regulations` call but far too short here, so this
+# correct for a fast, static call like `GET /health` but far too short here, so this
 # per-request override widens only the read timeout, only for `POST /ingestions`: 1800s
 # (30 min) gives ~3x headroom over the observed real run for slower providers/larger
 # regulations, while staying bounded (not infinite), per AC-BI-007's "actionable error,
@@ -113,39 +111,6 @@ def _raise_connection_error(base_url: str, cause: BaseException) -> NoReturn:
 def _raise_read_timeout_error(base_url: str, cause: BaseException) -> NoReturn:
     """Raise the actionable `PsCliError` for a read-timeout waiting on `base_url` (D5)."""
     raise PsCliError(msg=_READ_TIMEOUT_MSG.format(base_url=base_url)) from cause
-
-
-def _parse_regulation_entry(payload: object) -> RegulationEntry:
-    """Parse one raw JSON object into a `RegulationEntry`.
-
-    Raises `PsCliError` (generic, defensive — D5) if the shape does not match.
-    """
-    if not isinstance(payload, dict):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    body = cast("dict[str, object]", payload)
-    celex = body.get("celex")
-    title = body.get("title")
-    if not isinstance(celex, str) or not isinstance(title, str):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    return RegulationEntry(celex=celex, title=title)
-
-
-def _parse_regulations_body(payload: object) -> RegulationsResult:
-    """Parse a `GET /regulations` 200 response body into a `RegulationsResult`.
-
-    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
-    expected `RegulationCatalogResponse` shape.
-    """
-    if not isinstance(payload, dict):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    body = cast("dict[str, object]", payload)
-    regulations_raw = body.get("regulations")
-    run_id = body.get("run_id")
-    if not isinstance(regulations_raw, list) or not isinstance(run_id, str):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    regulation_items = cast("list[object]", regulations_raw)
-    regulations = [_parse_regulation_entry(item) for item in regulation_items]
-    return RegulationsResult(regulations=regulations, run_id=run_id)
 
 
 def _parse_health_body(payload: object) -> str:
@@ -397,10 +362,6 @@ class PsServiceClientProtocol(Protocol):
     hand-written test fake satisfies the type structurally -- no `cast()` needed.
     """
 
-    def list_regulations(self) -> RegulationsResult:
-        """`GET /regulations`: the curated catalog of ingestible regulations."""
-        ...
-
     def check_health(self) -> str:
         """`GET /health`: whether the ASGI server is accepting connections."""
         ...
@@ -435,7 +396,7 @@ class PsServiceClientProtocol(Protocol):
 
 
 class PsServiceClient:
-    """Thin REST client over PS Service's `GET /regulations` / `POST /ingestions`."""
+    """Thin REST client over PS Service's `POST /ingestions` and related endpoints."""
 
     def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
         """Construct the client, warning on stderr once if `base_url` looks insecure.
@@ -452,21 +413,6 @@ class PsServiceClient:
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
             transport=transport,
         )
-
-    def list_regulations(self) -> RegulationsResult:
-        """`GET /regulations`: the curated catalog of ingestible regulations.
-
-        Raises `PsCliError` if PS Service cannot be reached (connection refused
-        or a connect timeout) or if the response body does not match the
-        expected shape.
-        """
-        try:
-            response = self._client.get("/regulations")
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        return _parse_regulations_body(response.json())
 
     def check_health(self) -> str:
         """`GET /health`: whether the ASGI server is accepting connections.

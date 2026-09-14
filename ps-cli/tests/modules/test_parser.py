@@ -101,11 +101,11 @@ def test_build_parser_config_use_context_with_leading_hyphen_name_exits_two(
     assert excinfo.value.code == 2
 
 
-def test_build_parser_parses_config_list_contexts() -> None:
-    """`ps-cli config list-contexts` (no arguments) parses correctly (D7, Slice 28)."""
-    args = build_parser().parse_args(["config", "list-contexts"])
+def test_build_parser_parses_config_get_contexts() -> None:
+    """`ps-cli config get-contexts` (no arguments) parses correctly (D7, Slice 28)."""
+    args = build_parser().parse_args(["config", "get-contexts"])
 
-    assert args.command == "config_list_contexts"
+    assert args.command == "config_get_contexts"
 
 
 def test_build_parser_config_set_context_with_leading_hyphen_name_exits_two(
@@ -150,63 +150,68 @@ def test_instrument_id_type_rejects_forward_slash() -> None:
         _instrument_id_type("CRA/1.0")
 
 
-def test_build_parser_parses_catalog_list() -> None:
-    """`ps-cli catalog list` (no arguments) parses correctly (D13)."""
-    args = build_parser().parse_args(["catalog", "list"])
+def test_build_parser_parses_get_catalog() -> None:
+    """`ps-cli get catalog` (no arguments) parses correctly (D13)."""
+    args = build_parser().parse_args(["get", "catalog"])
 
-    assert args.command == "catalog_list"
+    assert args.command == "get_catalog"
 
 
-def test_build_parser_parses_catalog_restore_with_instrument_id() -> None:
-    """`ps-cli catalog restore CRA-1.0` parses the positional instrument_id (D13/D17)."""
-    args = build_parser().parse_args(["catalog", "restore", "CRA-1.0"])
+def test_build_parser_parses_restore_instrument_with_instrument_id() -> None:
+    """`ps-cli restore instrument CRA-1.0` parses the positional instrument_id (D13/D17)."""
+    args = build_parser().parse_args(["restore", "instrument", "CRA-1.0"])
 
-    assert args.command == "catalog_restore"
+    assert args.command == "restore_instrument"
     assert args.instrument_id == "CRA-1.0"
 
 
-def test_build_parser_catalog_restore_with_malformed_instrument_id_exits_two(
+def test_build_parser_restore_instrument_with_malformed_instrument_id_exits_two(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A malformed instrument_id is rejected by argparse's `type=` callback, exit code 2."""
     with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["catalog", "restore", "../etc"])
+        build_parser().parse_args(["restore", "instrument", "../etc"])
 
     assert excinfo.value.code == 2
     assert "not a valid instrument id" in capsys.readouterr().err
 
 
-def test_build_parser_parses_health() -> None:
-    """`ps-cli health` (no arguments) parses correctly (D8): a top-level, subgroup-less leaf."""
-    args = build_parser().parse_args(["health"])
+def test_build_parser_parses_get_health() -> None:
+    """`ps-cli get health` (no arguments) parses correctly (D8): a resource leaf
+    under the `get` verb group.
+    """
+    args = build_parser().parse_args(["get", "health"])
 
-    assert args.command == "health"
-    assert args.group == "health"
+    assert args.command == "get_health"
+    assert args.group == "get"
 
 
-def test_build_parser_health_accepts_context_flag_before_and_after() -> None:
-    """`--context` works both before and after `health`, via the shared parent parser (D8)."""
-    args_before = build_parser().parse_args(["--context", "prod", "health"])
-    args_after = build_parser().parse_args(["health", "--context", "prod"])
+def test_build_parser_get_health_accepts_context_flag_before_and_after() -> None:
+    """`--context` works both before and after `get health`, via the shared parent parser (D8)."""
+    args_before = build_parser().parse_args(["--context", "prod", "get", "health"])
+    args_after = build_parser().parse_args(["get", "health", "--context", "prod"])
 
     assert args_before.context == "prod"
     assert args_after.context == "prod"
 
 
-def test_build_parser_parses_check() -> None:
-    """`ps-cli check` (no arguments) parses correctly (issue #73 D1): a top-level,
-    subgroup-less leaf, mirroring `health`'s own D8 precedent exactly.
+def test_build_parser_parses_check_regulations() -> None:
+    """`ps-cli check regulations` (no arguments) parses correctly (issue #73 D1): a
+    resource leaf under the `check` verb group, mirroring `get health`'s own
+    verb/resource shape.
     """
-    args = build_parser().parse_args(["check"])
+    args = build_parser().parse_args(["check", "regulations"])
 
-    assert args.command == "check"
+    assert args.command == "check_regulations"
     assert args.group == "check"
 
 
-def test_build_parser_check_accepts_context_flag_before_and_after() -> None:
-    """`--context` works both before and after `check`, via the shared parent parser (D1)."""
-    args_before = build_parser().parse_args(["--context", "prod", "check"])
-    args_after = build_parser().parse_args(["check", "--context", "prod"])
+def test_build_parser_check_regulations_accepts_context_flag_before_and_after() -> None:
+    """`--context` works both before and after `check regulations`, via the shared parent
+    parser (D1).
+    """
+    args_before = build_parser().parse_args(["--context", "prod", "check", "regulations"])
+    args_after = build_parser().parse_args(["check", "regulations", "--context", "prod"])
 
     assert args_before.context == "prod"
     assert args_after.context == "prod"

@@ -1,11 +1,11 @@
-"""Integration test: `ps-cli regulations ingest <celex>` against a real spawned
+"""Integration test: `ps-cli ingest regulation <celex>` against a real spawned
 `ps-service`, real FalkorDB, and a real LLM Provider.
 
 Marked `@pytest.mark.integration` + `@pytest.mark.falkordb_live` + `@pytest.mark.llm_live`
 (all three already registered in the root `pyproject.toml` -- no config change needed).
 This is the true end-to-end happy-path proof for AC-BI-002 (PLAN.md Increment 17):
 `ps-service` runs as a real OS subprocess against real FalkorDB and a real LLM Provider;
-`ps_cli.cli.run()` runs in this test process and drives the whole `regulations ingest`
+`ps_cli.cli.run()` runs in this test process and drives the whole `ingest regulation`
 pipeline over a real HTTP round trip -- no mocks anywhere in this test.
 
 Vendors its own `_spawn_ps_service()` / `_wait_until_*()` helpers, adapted from
@@ -247,12 +247,12 @@ def running_ps_service(tmp_path: Path) -> Iterator[str]:
         _delete_disposable_graph_if_exists()
 
 
-def test_regulations_ingest_against_real_spawned_ps_service(
+def test_ingest_regulation_against_real_spawned_ps_service(
     running_ps_service: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-002 true happy path: `regulations ingest <celex>` end to end, no mocks.
+    """AC-BI-002 true happy path: `ingest regulation <celex>` end to end, no mocks.
 
     Only `ps-service` runs as a real OS subprocess; `ps_cli.cli.run()` runs in this test
     process and makes one real HTTP round trip against it over `PS_CLI_SERVICE_URL`. PS
@@ -277,7 +277,7 @@ def test_regulations_ingest_against_real_spawned_ps_service(
     """
     monkeypatch.setenv("PS_CLI_SERVICE_URL", running_ps_service)
 
-    exit_code = run(["regulations", "ingest", _CRA_CELEX], client=None)
+    exit_code = run(["ingest", "regulation", _CRA_CELEX], client=None)
 
     captured = capsys.readouterr()
     assert exit_code == 0, f"stdout={captured.out!r} stderr={captured.err!r}"

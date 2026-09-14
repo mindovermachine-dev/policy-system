@@ -24,7 +24,6 @@ from ps_cli.models import (
     IngestionResult,
     InstrumentCheckOutcome,
     ReadinessResult,
-    RegulationsResult,
     RestorationResult,
     RestorationStageOutcome,
 )
@@ -47,10 +46,6 @@ class _UnusedPsServiceClientMethods:
     type checker requires each fake to structurally satisfy all three
     `PsServiceClientProtocol` methods rather than just the one under test.
     """
-
-    def list_regulations(self) -> RegulationsResult:
-        """Fail: this test's fake does not expect `list_regulations()` to be called."""
-        raise AssertionError("list_regulations must not be called in this test")
 
     def check_health(self) -> str:
         """Fail: this test's fake does not expect `check_health()` to be called."""
@@ -124,48 +119,15 @@ class _FakeVersionErrorClient(_UnusedPsServiceClientMethods):
         raise self._error
 
 
-class _FakeSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose list_regulations() succeeds."""
-
-    def list_regulations(self) -> RegulationsResult:
-        """Return an empty-but-valid RegulationsResult."""
-        return RegulationsResult(regulations=[], run_id="run-fake-success")
-
-
 class _FakeFailingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose list_regulations() always raises."""
+    """A duck-typed PsServiceClient stand-in whose check_health() always raises."""
 
-    def list_regulations(self) -> RegulationsResult:
+    def check_health(self) -> str:
         """Raise a PsCliError, simulating a PS Service failure response."""
         raise PsCliError(
             msg="PS Service reported catalog_identifier_not_found: CELEX not found",
             hint="check the CELEX identifier and try again",
         )
-
-
-def test_run_regulations_list_returns_zero_on_success() -> None:
-    """`run(["regulations", "list"], client=<succeeding fake>)` returns 0."""
-    fake_client = _FakeSuccessClient()
-
-    exit_code = run(["regulations", "list"], client=fake_client)
-
-    assert exit_code == 0
-
-
-def test_regulations_list_unaffected_by_llm_interface_outage() -> None:
-    """AC-BI-008: `regulations list` succeeds unaffected while LLM Interface is down.
-
-    Reuses `_FakeSuccessClient` unmodified: it never overrides `check_health()` or
-    `check_readiness()`, so if `handle_regulations_list` ever called either (e.g. to
-    gate on PS Service's dependency health) this test would fail with an uncaught
-    `AssertionError` from `_UnusedPsServiceClientMethods`, regardless of what those
-    methods would have returned for an LLM Interface outage.
-    """
-    fake_client = _FakeSuccessClient()
-
-    exit_code = run(["regulations", "list"], client=fake_client)
-
-    assert exit_code == 0
 
 
 def test_run_formats_ps_cli_error_to_stderr_without_traceback(
@@ -174,7 +136,7 @@ def test_run_formats_ps_cli_error_to_stderr_without_traceback(
     """A PsCliError from the handler: exit 1, msg+hint on stderr, no traceback, no stdout."""
     fake_client = _FakeFailingClient()
 
-    exit_code = run(["regulations", "list"], client=fake_client)
+    exit_code = run(["get", "health"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -190,7 +152,7 @@ def test_run_formats_ps_cli_error_with_failure_site_when_verbose(
     """`-v`/`--verbose` adds a `🔦 @ file:line` diagnostic line after the formatted error."""
     fake_client = _FakeFailingClient()
 
-    exit_code = run(["-v", "regulations", "list"], client=fake_client)
+    exit_code = run(["-v", "get", "health"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -202,7 +164,7 @@ def test_run_omits_failure_site_when_not_verbose(capsys: pytest.CaptureFixture[s
     """Without `-v`, no `🔦` diagnostic line is printed -- just the formatted error."""
     fake_client = _FakeFailingClient()
 
-    run(["regulations", "list"], client=fake_client)
+    run(["get", "health"], client=fake_client)
 
     assert "🔦" not in capsys.readouterr().err
 
@@ -433,28 +395,28 @@ class _UncallableIngestClient(_UnusedPsServiceClientMethods):
         raise AssertionError(msg)
 
 
-def test_run_regulations_ingest_returns_zero_on_success() -> None:
-    """`run(["regulations", "ingest", <celex>], client=<succeeding fake>)` returns 0."""
+def test_run_ingest_regulation_returns_zero_on_success() -> None:
+    """`run(["ingest", "regulation", <celex>], client=<succeeding fake>)` returns 0."""
     fake_client = _FakeIngestSuccessClient()
 
-    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     assert exit_code == 0
 
 
-def test_run_regulations_ingest_prints_run_id_on_success(
+def test_run_ingest_regulation_prints_run_id_on_success(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-010: the run id is printed to stdout on a successful ingest."""
     fake_client = _FakeIngestSuccessClient()
 
-    run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     captured = capsys.readouterr()
     assert "run_id: run-ingest-cli" in captured.out
 
 
-def test_run_regulations_ingest_malformed_celex_exits_two_without_calling_client(
+def test_run_ingest_regulation_malformed_celex_exits_two_without_calling_client(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A malformed CELEX is rejected by argparse's `type=` callback (PLAN.md §1 D10).
@@ -468,7 +430,7 @@ def test_run_regulations_ingest_malformed_celex_exits_two_without_calling_client
     fake_client = _UncallableIngestClient()
 
     with pytest.raises(SystemExit) as excinfo:
-        run(["regulations", "ingest", "not-a-celex"], client=fake_client)
+        run(["ingest", "regulation", "not-a-celex"], client=fake_client)
 
     assert excinfo.value.code == 2
     assert "not a 10-character CELEX identifier" in capsys.readouterr().err
@@ -497,22 +459,22 @@ class _FakeIngestRecordingClient(_UnusedPsServiceClientMethods):
         )
 
 
-def test_run_regulations_ingest_trims_whitespace_padded_celex_before_calling_client() -> None:
+def test_run_ingest_regulation_trims_whitespace_padded_celex_before_calling_client() -> None:
     """AC-BI-001: a whitespace-padded CELEX is trimmed before it reaches the client."""
     fake_client = _FakeIngestRecordingClient()
 
-    run(["regulations", "ingest", "  32016R0679  "], client=fake_client)
+    run(["ingest", "regulation", "  32016R0679  "], client=fake_client)
 
     assert fake_client.called_with_celex == "32016R0679"
 
 
-def test_run_regulations_ingest_propagates_client_ps_cli_error_as_exit_one(
+def test_run_ingest_regulation_propagates_client_ps_cli_error_as_exit_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A PsCliError raised by ingest_catalog() (e.g. a 502) is caught centrally by run()."""
     fake_client = _FakeIngestFailingClient()
 
-    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -567,7 +529,7 @@ class _FakeReadinessGatedIngestClient(_UnusedPsServiceClientMethods):
         )
 
 
-def test_run_regulations_ingest_fails_fast_when_llm_interface_unreachable(
+def test_run_ingest_regulation_fails_fast_when_llm_interface_unreachable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-009: LLM Interface unhealthy blocks the command before any POST /ingestions."""
@@ -575,7 +537,7 @@ def test_run_regulations_ingest_fails_fast_when_llm_interface_unreachable(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
     )
 
-    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -583,19 +545,19 @@ def test_run_regulations_ingest_fails_fast_when_llm_interface_unreachable(
     assert "unavailable" in captured.err
 
 
-def test_run_regulations_ingest_does_not_block_when_only_cellar_eli_unreachable() -> None:
+def test_run_ingest_regulation_does_not_block_when_only_cellar_eli_unreachable() -> None:
     """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks the command."""
     fake_client = _FakeReadinessGatedIngestClient(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
         allow_ingest=True,
     )
 
-    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     assert exit_code == 0
 
 
-def test_run_regulations_ingest_preflight_fails_closed_distinctly_when_ps_service_unreachable(
+def test_run_ingest_regulation_preflight_fails_closed_distinctly_when_ps_service_unreachable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-012: an unreachable PS Service fails with its own distinct wording.
@@ -610,7 +572,7 @@ def test_run_regulations_ingest_preflight_fails_closed_distinctly_when_ps_servic
         )
     )
 
-    exit_code = run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -618,7 +580,7 @@ def test_run_regulations_ingest_preflight_fails_closed_distinctly_when_ps_servic
     assert "LLM Interface is unavailable" not in captured.err
 
 
-def test_run_regulations_ingest_preflight_message_never_contains_raw_dependency_error(
+def test_run_ingest_regulation_preflight_message_never_contains_raw_dependency_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-013: the failure message is the fixed string, never interpolating `readiness`."""
@@ -626,7 +588,7 @@ def test_run_regulations_ingest_preflight_message_never_contains_raw_dependency_
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
     )
 
-    run(["regulations", "ingest", "32016R0679"], client=fake_client)
+    run(["ingest", "regulation", "32016R0679"], client=fake_client)
 
     captured = capsys.readouterr()
     assert "❌ LLM Interface is unavailable." in captured.err
@@ -650,7 +612,7 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
     probe.close()
     monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
 
-    exit_code = run(["regulations", "list"])
+    exit_code = run(["ingest", "regulation", "32016R0679"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -661,7 +623,7 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
 # The exact, current string from ps_service/api/routes.py's
 # _INTERNAL_NOT_IMPLEMENTED_MESSAGE constant -- confirmed by reading that file
 # (read-only reference; ps-cli never imports ps_service). This is what a real,
-# unmodified ps-service returns today for `internal ingest`, via a 501
+# unmodified ps-service returns today for `ingest document`, via a 501
 # response `PsServiceClient.ingest_internal()` maps to a `PsCliError` carrying
 # this exact message (per Increment 14's `TestIngestInternal`).
 _INTERNAL_NOT_IMPLEMENTED_MESSAGE = (
@@ -742,7 +704,7 @@ def _write_valid_internal_seed_fixture(fixtures_root: Path, relative_path: str) 
     seed_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
 
 
-def test_internal_ingest_prints_run_id_on_mocked_success(
+def test_ingest_document_prints_run_id_on_mocked_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -761,14 +723,14 @@ def test_internal_ingest_prints_run_id_on_mocked_success(
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngestSuccessClient()
 
-    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "run_id: run-internal-cli" in captured.out
 
 
-def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
+def test_ingest_document_surfaces_real_service_501_as_clean_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -788,7 +750,7 @@ def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngest501Client()
 
-    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -799,7 +761,7 @@ def test_internal_ingest_surfaces_real_service_501_as_clean_failure(
 
 class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
-    `internal ingest` (mirrors `_FakeReadinessGatedIngestClient` for `regulations ingest`).
+    `ingest document` (mirrors `_FakeReadinessGatedIngestClient` for `ingest regulation`).
 
     By default `ingest_internal()` raises `AssertionError` if called -- proving the
     pre-flight check ran first and blocked the command; pass `allow_ingest=True` for the
@@ -829,12 +791,12 @@ class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
         )
 
 
-def test_internal_ingest_fails_fast_when_llm_interface_unreachable(
+def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-009: LLM Interface unhealthy blocks `internal ingest` before any network call.
+    """AC-BI-009: LLM Interface unhealthy blocks `ingest document` before any network call.
 
     The fixture is schema-valid so local validation passes and the pre-flight check is
     actually reached -- proving it is *this* check, not local validation, that blocks.
@@ -845,7 +807,7 @@ def test_internal_ingest_fails_fast_when_llm_interface_unreachable(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
     )
 
-    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -853,11 +815,11 @@ def test_internal_ingest_fails_fast_when_llm_interface_unreachable(
     assert "unavailable" in captured.err
 
 
-def test_internal_ingest_does_not_block_when_only_cellar_eli_unreachable(
+def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `internal ingest`."""
+    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `ingest document`."""
     monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeReadinessGatedInternalIngestClient(
@@ -865,12 +827,12 @@ def test_internal_ingest_does_not_block_when_only_cellar_eli_unreachable(
         allow_ingest=True,
     )
 
-    exit_code = run(["internal", "ingest", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
 
     assert exit_code == 0
 
 
-def test_internal_ingest_still_rejects_invalid_local_file_before_any_network_call(
+def test_ingest_document_still_rejects_invalid_local_file_before_any_network_call(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -892,7 +854,7 @@ def test_internal_ingest_still_rejects_invalid_local_file_before_any_network_cal
     (tmp_path / "bad-seed.json").write_text(json.dumps(invalid_document), encoding="utf-8")
     fake_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["internal", "ingest", "bad-seed.json"], client=fake_client)
+    exit_code = run(["ingest", "document", "bad-seed.json"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -951,7 +913,7 @@ def test_run_config_set_context_prints_fallback_warning_on_stderr_via_real_dispa
     end -- a wiring bug anywhere in that chain would fail this test even though every
     narrower slice (15-23.5) still passes on its own. `set-context` is the only one of this
     issue's three new commands that ever touches `CredentialStore` (D13's unconditional
-    `delete_credential`) -- `use-context`/`list-contexts` have no `credential_store` param
+    `delete_credential`) -- `use-context`/`get-contexts` have no `credential_store` param
     by design, so this single command's proof fully covers AC-BI-011's "every command that
     reads or writes it" wording for this issue's scope.
 
@@ -1052,28 +1014,28 @@ def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
 
 
 def test_parser_context_flag_before_subcommand_parses_correctly() -> None:
-    """`ps-cli --context dev regulations list` (flag before subcommand) parses `args.context`.
+    """`ps-cli --context dev get catalog` (flag before subcommand) parses `args.context`.
 
     The issue's own literal example (PLAN.md §1 D7's shared-parent-parser `SUPPRESS`
     mechanism, §0.4) -- proves the flag survives the subparser dispatch's namespace copy
     when given before the subcommand name, not only after it.
     """
-    args = build_parser().parse_args(["--context", "dev", "regulations", "list"])
+    args = build_parser().parse_args(["--context", "dev", "get", "catalog"])
 
     assert args.context == "dev"
 
 
-# --- issue #56 Slice 28: list-contexts, real dispatch (AC-BI-007 end-to-end proof) -------
+# --- issue #56 Slice 28: get-contexts, real dispatch (AC-BI-007 end-to-end proof) -------
 
 
-def test_run_config_list_contexts_never_constructs_ps_service_client_and_prints_contexts(
+def test_run_config_get_contexts_never_constructs_ps_service_client_and_prints_contexts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`config list-contexts` reaches `handle_config_list_contexts()` via the real
+    """`config get-contexts` reaches `handle_config_get_contexts()` via the real
     `run()` -> `CONFIG_DISPATCH` chain (AC-BI-007), never constructing a `PsServiceClient`
     -- mirroring Slice 24's `set-context` proof (D8). A broken `current_context` (naming a
     context absent from `[contexts]`, which `load_config()` would raise on -- AC-BI-008)
-    is deliberately present, proving `list-contexts` stays usable exactly when it is most
+    is deliberately present, proving `get-contexts` stays usable exactly when it is most
     needed: diagnosing a broken `targets.toml`.
     """
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
@@ -1083,7 +1045,7 @@ def test_run_config_list_contexts_never_constructs_ps_service_client_and_prints_
     )
     uncallable_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["config", "list-contexts"], client=uncallable_client)
+    exit_code = run(["config", "get-contexts"], client=uncallable_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1130,10 +1092,10 @@ def _write_instrument_fixture(repo_path: Path, instrument_id: str) -> None:
     (instrument_dir / "native.json").write_bytes(b'{"nodes": [], "edges": []}')
 
 
-def test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path(
+def test_run_get_catalog_never_constructs_client_but_resolves_curated_repo_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`catalog list` reads `curated_repo_path` via `load_config()` but never touches
+    """`get catalog` reads `curated_repo_path` via `load_config()` but never touches
     `PsServiceClient` at all (D13) -- proven via an uncallable client fake, mirroring
     `test_run_config_set_context_never_constructs_ps_service_client`'s own proof shape:
     if `run()` ever called a method on `uncallable_client`, this test would fail with an
@@ -1145,20 +1107,20 @@ def test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path
     monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
     uncallable_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["catalog", "list"], client=uncallable_client)
+    exit_code = run(["get", "catalog"], client=uncallable_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
 
 
-def test_catalog_list_unaffected_by_llm_interface_outage(
+def test_get_catalog_unaffected_by_llm_interface_outage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-008: `catalog list` succeeds unaffected while LLM Interface is down.
+    """AC-BI-008: `get catalog` succeeds unaffected while LLM Interface is down.
 
-    Mirrors `test_run_catalog_list_never_constructs_client_but_resolves_curated_repo_path`:
-    `catalog list` never receives a real `PsServiceClient` at all (D13), so it is
+    Mirrors `test_run_get_catalog_never_constructs_client_but_resolves_curated_repo_path`:
+    `get catalog` never receives a real `PsServiceClient` at all (D13), so it is
     structurally unaffected by any PS Service dependency state, LLM Interface included.
     Proven via an uncallable client fake -- if `run()` ever called a method on
     `uncallable_client`, this test would fail with an uncaught `AssertionError`.
@@ -1169,7 +1131,7 @@ def test_catalog_list_unaffected_by_llm_interface_outage(
     monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
     uncallable_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["catalog", "list"], client=uncallable_client)
+    exit_code = run(["get", "catalog"], client=uncallable_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1187,17 +1149,17 @@ class _FakeRestoreSuccessClient(_UnusedPsServiceClientMethods):
         )
 
 
-def test_run_catalog_restore_prints_instrument_id_on_mocked_success(
+def test_run_restore_instrument_prints_instrument_id_on_mocked_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The full parser -> dispatch -> handler -> client wiring for `catalog restore`."""
+    """The full parser -> dispatch -> handler -> client wiring for `restore instrument`."""
     curated_repo_path = tmp_path / "curated-content"
     curated_repo_path.mkdir()
     _write_instrument_fixture(curated_repo_path, "CRA-1.0")
     monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
     fake_client = _FakeRestoreSuccessClient()
 
-    exit_code = run(["catalog", "restore", "CRA-1.0"], client=fake_client)
+    exit_code = run(["restore", "instrument", "CRA-1.0"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1205,7 +1167,7 @@ def test_run_catalog_restore_prints_instrument_id_on_mocked_success(
     assert "verified: succeeded" in captured.out
 
 
-def test_run_catalog_restore_missing_local_artifact_exits_one_without_crashing(
+def test_run_restore_instrument_missing_local_artifact_exits_one_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A missing local instrument directory surfaces as a clean PsCliError, exit 1."""
@@ -1214,7 +1176,7 @@ def test_run_catalog_restore_missing_local_artifact_exits_one_without_crashing(
     monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
     uncallable_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["catalog", "restore", "MISSING-1.0"], client=uncallable_client)
+    exit_code = run(["restore", "instrument", "MISSING-1.0"], client=uncallable_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -1222,14 +1184,14 @@ def test_run_catalog_restore_missing_local_artifact_exits_one_without_crashing(
     assert "Traceback" not in captured.err
 
 
-# --- issue #68 Slice 10: `ps-cli health` end to end, through cli.run() -------------------
+# --- issue #68 Slice 10: `ps-cli get health` end to end, through cli.run() -------------------
 
 
 class _FakeHealthClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in with scripted check_health()/check_readiness().
 
     Mirrors `ps-cli/tests/modules/test_handlers.py::_FakeHealthClient` (Slices 8-9) at the
-    `cli.run()` layer instead of calling `handle_health()` directly -- this file exercises
+    `cli.run()` layer instead of calling `handle_get_health()` directly -- this file exercises
     the full parser -> dispatch -> handler -> client wire-up, not just the handler in
     isolation.
     """
@@ -1248,8 +1210,8 @@ class _FakeHealthClient(_UnusedPsServiceClientMethods):
         return self._readiness
 
 
-def test_run_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str]) -> None:
-    """`run(["health"], client=<fully healthy fake>)` returns 0 and prints the three summary
+def test_run_get_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str]) -> None:
+    """`run(["get", "health"], client=<fully healthy fake>)` returns 0 and prints the three summary
     lines to stdout (AC-BI-004 end-to-end, D11).
     """
     fake_client = _FakeHealthClient(
@@ -1257,7 +1219,7 @@ def test_run_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=[]),
     )
 
-    exit_code = run(["health"], client=fake_client)
+    exit_code = run(["get", "health"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1266,10 +1228,10 @@ def test_run_health_returns_zero_on_happy_path(capsys: pytest.CaptureFixture[str
     assert "ready: ready" in captured.out
 
 
-def test_run_health_returns_one_with_distinct_message_when_not_ready(
+def test_run_get_health_returns_one_with_distinct_message_when_not_ready(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`run(["health"], client=<not-ready fake>)` returns 1; stderr names the unhealthy
+    """`run(["get", "health"], client=<not-ready fake>)` returns 1; stderr names the unhealthy
     dependency and is textually distinct from the unreachable-target wording (AC-BI-001,
     AC-BI-007, AC-BI-008 end-to-end).
     """
@@ -1278,7 +1240,7 @@ def test_run_health_returns_one_with_distinct_message_when_not_ready(
         readiness=ReadinessResult(status="not_ready", unhealthy_dependencies=["falkordb"]),
     )
 
-    exit_code = run(["health"], client=fake_client)
+    exit_code = run(["get", "health"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -1287,12 +1249,12 @@ def test_run_health_returns_one_with_distinct_message_when_not_ready(
     assert "Could not reach" not in captured.err
 
 
-def test_run_health_with_unreachable_real_service_returns_one_without_crashing(
+def test_run_get_health_with_unreachable_real_service_returns_one_without_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """AC-BI-009's real-network proof for `health`, mirroring `test_run_with_unreachable_
+    """AC-BI-009's real-network proof for `get health`, mirroring `test_run_with_unreachable_
     real_service_returns_one_without_crashing`'s exact pattern (PLAN.md §4 Slice 10):
-    `run(["health"])` with `client=None` builds a real `PsServiceClient` from
+    `run(["get", "health"])` with `client=None` builds a real `PsServiceClient` from
     `PS_CLI_SERVICE_URL`, pointed at a definitely-closed local port (bind a socket, close it,
     reuse the freed port number -- a small accepted TOCTOU flake risk per PLAN.md, not
     engineered away). Asserts an actionable message on stderr, exit code 1, and -- by simply
@@ -1304,7 +1266,7 @@ def test_run_health_with_unreachable_real_service_returns_one_without_crashing(
     probe.close()
     monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
 
-    exit_code = run(["health"])
+    exit_code = run(["get", "health"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -1312,23 +1274,23 @@ def test_run_health_with_unreachable_real_service_returns_one_without_crashing(
     assert "Traceback" not in captured.err
 
 
-def test_run_health_with_context_flag_resolves_named_targets_url(
+def test_run_get_health_with_context_flag_resolves_named_targets_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC-BI-005/AC-BI-006 end-to-end for `health`, per CHANGES.md M2 (the only valid proof
+    """AC-BI-005/AC-BI-006 end-to-end for `get health`, per CHANGES.md M2 (the only valid proof
     mechanism for this slice): an independent `load_config(context=..., config_dir=...)`
     check performed after `config set-context`/`config use-context` calls against an
     isolated `PS_CLI_CONFIG_DIR`, mirroring `test_ac_bi_005_set_context_then_use_context_
     drives_subsequent_resolution`'s exact pattern (issue #56 Slice 26).
 
-    Deliberately does **not** call `run(["health", "--context", <name>], client=<fake>)`:
+    Deliberately does **not** call `run(["get", "health", "--context", <name>], client=<fake>)`:
     `_resolve_client()` (`cli.py:42-55`) returns an injected `client` unchanged before
     `load_config(context=...)` is ever reached, so a fake client's presence would make such a
     test pass regardless of whether `--context` resolution actually worked -- it would prove
     nothing about `--context`. `_resolve_client()`'s own `load_config(context=context).
-    service_url` call is exactly what this test proves resolves correctly; `health`'s
+    service_url` call is exactly what this test proves resolves correctly; `get health`'s
     `DISPATCH` entry reaches that same generic code path as every other client-backed
-    command (D9), so this proof transfers to `health` without needing to invoke it at all.
+    command (D9), so this proof transfers to `get health` without needing to invoke it at all.
     """
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
@@ -1363,7 +1325,7 @@ class _FakeCheckClient(_UnusedPsServiceClientMethods):
 
 class _FakeReadinessGatedCheckClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
-    `check` (mirrors `_FakeReadinessGatedIngestClient` for `regulations ingest`).
+    `check regulations` (mirrors `_FakeReadinessGatedIngestClient` for `ingest regulation`).
 
     By default `run_change_check()` raises `AssertionError` if called -- proving the
     pre-flight check ran first and blocked the command; pass `allow_check=True` for the
@@ -1386,15 +1348,15 @@ class _FakeReadinessGatedCheckClient(_UnusedPsServiceClientMethods):
         return ChangeCheckResult(run_id="run-check-cli", instruments=[])
 
 
-def test_check_fails_fast_when_llm_interface_unreachable(
+def test_check_regulations_fails_fast_when_llm_interface_unreachable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-009: LLM Interface unhealthy blocks `check` before any pipeline call."""
+    """AC-BI-009: LLM Interface unhealthy blocks `check regulations` before any pipeline call."""
     fake_client = _FakeReadinessGatedCheckClient(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
     )
 
-    exit_code = run(["check"], client=fake_client)
+    exit_code = run(["check", "regulations"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -1402,25 +1364,27 @@ def test_check_fails_fast_when_llm_interface_unreachable(
     assert "unavailable" in captured.err
 
 
-def test_check_does_not_block_when_only_cellar_eli_unreachable() -> None:
-    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `check`."""
+def test_check_regulations_does_not_block_when_only_cellar_eli_unreachable() -> None:
+    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `check regulations`."""
     fake_client = _FakeReadinessGatedCheckClient(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
         allow_check=True,
     )
 
-    exit_code = run(["check"], client=fake_client)
+    exit_code = run(["check", "regulations"], client=fake_client)
 
     assert exit_code == 0
 
 
-def test_run_check_returns_zero_on_empty_sweep(capsys: pytest.CaptureFixture[str]) -> None:
-    """`run(["check"], client=<empty-sweep fake>)` returns 0; stdout has both lines
+def test_run_check_regulations_returns_zero_on_empty_sweep(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`run(["check", "regulations"], client=<empty-sweep fake>)` returns 0; stdout has both lines
     (issue #73, PLAN.md §4 Slice 1).
     """
     fake_client = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
 
-    exit_code = run(["check"], client=fake_client)
+    exit_code = run(["check", "regulations"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1428,10 +1392,10 @@ def test_run_check_returns_zero_on_empty_sweep(capsys: pytest.CaptureFixture[str
     assert "no tracked instruments" in captured.out
 
 
-def test_run_check_prints_run_id_and_returns_zero_end_to_end(
+def test_run_check_regulations_prints_run_id_and_returns_zero_end_to_end(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`run(["check"], client=<multi-bucket fake>)` -> `0`; stdout has the run id
+    """`run(["check", "regulations"], client=<multi-bucket fake>)` -> `0`; stdout has the run id
     first, proving ps-cli can display any outcome bucket from Slice 2 onward
     (issue #73, PLAN.md §4 Slice 2, CHANGES.md's re-sequencing) -- closing the
     display gap for Slices 3-5 structurally, the same way Slice 7 structurally
@@ -1449,7 +1413,7 @@ def test_run_check_prints_run_id_and_returns_zero_end_to_end(
         )
     )
 
-    exit_code = run(["check"], client=fake_client)
+    exit_code = run(["check", "regulations"], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0

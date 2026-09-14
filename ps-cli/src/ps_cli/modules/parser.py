@@ -27,7 +27,7 @@ _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # D1) is not constrained by any existing server-side pattern -- `RestorationManifestPayload
 # .instrument_id`/`CatalogInstrumentEntry.instrument_id` (ps_service/api/models.py) are both
 # bare `Field(min_length=1)`, no `pattern=`. This charset is instead this module's own
-# documented assumption, chosen because `catalog restore <instrument_id>` later uses the
+# documented assumption, chosen because `restore instrument <instrument_id>` later uses the
 # value to build a local filesystem path (`catalog_repo.read_artifact`, Slice 7.1) -- alnum
 # start, alnum/`_`/`-`/`.` body, no `/`, matching every real `catalog.json` entry
 # (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal payload at parse
@@ -88,7 +88,7 @@ def _service_url_type(value: str) -> str:
 
 
 def _instrument_id_type(value: str) -> str:
-    """`type=` callback for the `instrument_id` positional (`catalog restore`).
+    """`type=` callback for the `instrument_id` positional (`restore instrument`).
 
     Format-validates at parse time -- same `type=`-callback convention as
     `_celex_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
@@ -120,16 +120,24 @@ def _fixture_path_type(value: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level parser: a `regulations` subcommand group with `list`/`ingest` leaves.
+    """Build the top-level parser: a strict kubectl-style `<verb> <resource>` surface.
+
+    Every top-level group except `config` is a verb (`get`, `ingest`, `restore`,
+    `check`); each verb group is itself an `add_subparsers()` group whose leaves are
+    resource nouns (e.g. `ingest regulation`, `restore instrument`) -- `ps-cli <verb>
+    <resource> [name] [flags]`, modeled on kubectl. `config` is the one exception
+    group, mirroring kubectl's own `kubectl config` subcommands: its leaves are
+    verb-noun compounds (`set-context`/`use-context`/`get-contexts`) rather than
+    nested `config <verb> <resource>`.
 
     Each leaf subparser sets `command` via `set_defaults()` (L2's prescribed
     "values derived at parse time" pattern) to the key `run()` looks up in
-    `DISPATCH`. `regulations_command`/`internal_command` are `required=True`,
-    so once a `group` is chosen, a successful `parse_args()` call always
-    yields a `command` for it -- `run()` never has to guard against a missing
-    one at that level. The top-level `group` itself is not required (an
-    operator can run `ps-cli` bare, or `ps-cli --version`, with no subcommand
-    at all -- `run()` handles both before dispatch).
+    `DISPATCH`. Every verb group's own `<verb>_command` subparsers dest (e.g.
+    `get_command`, `ingest_command`) is `required=True`, so once a `group` is
+    chosen, a successful `parse_args()` call always yields a `command` for it --
+    `run()` never has to guard against a missing one at that level. The top-level
+    `group` itself is not required (an operator can run `ps-cli` bare, or `ps-cli
+    --version`, with no subcommand at all -- `run()` handles both before dispatch).
 
     `-v`/`--verbose` and `--context <name>` (issue #56, PLAN.md §1 D7) are shared flags
     (L2 `## ps-cli` "parent parsers for flags shared across subcommands") available
@@ -175,61 +183,82 @@ def build_parser() -> argparse.ArgumentParser:
     )
     top_level_subparsers = parser.add_subparsers(dest="group", required=False)
 
-    regulations_parser = top_level_subparsers.add_parser(
-        "regulations",
+    # `get` (read-only lookups): service health, or the local curated catalog. Neither
+    # leaf mutates any state -- `get health` reports PS Service's reachability/health/
+    # readiness, `get catalog` reads `curated_repo_path`'s on-disk `catalog.json`
+    # directly and never contacts PS Service at all (D13: it skips
+    # `_resolve_client`/`load_config().service_url` entirely, like `config`'s commands).
+    get_parser = top_level_subparsers.add_parser(
+        "get",
         parents=[verbose_parent_parser],
-        help="Commands for the regulation catalog.",
+        help="Read-only lookups: service health, or the local curated catalog.",
     )
-    regulations_subparsers = regulations_parser.add_subparsers(
-        dest="regulations_command", required=True
-    )
-    list_parser = regulations_subparsers.add_parser(
-        "list",
-        parents=[verbose_parent_parser],
-        help="List the curated regulation catalog (CELEX + title).",
-    )
-    list_parser.set_defaults(command="regulations_list")
+    get_subparsers = get_parser.add_subparsers(dest="get_command", required=True)
 
-    ingest_parser = regulations_subparsers.add_parser(
+    get_health_parser = get_subparsers.add_parser(
+        "health",
+        parents=[verbose_parent_parser],
+        help="Report PS Service's reachability, health (`/health`), and readiness (`/ready`).",
+    )
+    get_health_parser.set_defaults(command="get_health")
+
+    get_catalog_parser = get_subparsers.add_parser(
+        "catalog",
+        parents=[verbose_parent_parser],
+        help=(
+            "List every curated instrument in the local curated-content repo "
+            "(no PS Service connection needed)."
+        ),
+    )
+    get_catalog_parser.set_defaults(command="get_catalog")
+
+    # `ingest` (bring new content into PS Service): a curated EU regulation by CELEX,
+    # or an internal-document fixture by path.
+    ingest_parser = top_level_subparsers.add_parser(
         "ingest",
+        parents=[verbose_parent_parser],
+        help="Bring new content into PS Service: a curated regulation or an internal document.",
+    )
+    ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)
+
+    ingest_regulation_parser = ingest_subparsers.add_parser(
+        "regulation",
         parents=[verbose_parent_parser],
         help="Ingest a curated EU regulation by its CELEX identifier.",
     )
-    ingest_parser.add_argument(
+    ingest_regulation_parser.add_argument(
         "celex",
         type=_celex_type,
         help="The regulation's 10-character CELEX identifier.",
     )
-    ingest_parser.set_defaults(command="regulations_ingest")
+    ingest_regulation_parser.set_defaults(command="ingest_regulation")
 
-    internal_parser = top_level_subparsers.add_parser(
-        "internal",
-        parents=[verbose_parent_parser],
-        help="Commands for internal-document ingestion.",
-    )
-    internal_subparsers = internal_parser.add_subparsers(dest="internal_command", required=True)
-    internal_ingest_parser = internal_subparsers.add_parser(
-        "ingest",
+    ingest_document_parser = ingest_subparsers.add_parser(
+        "document",
         parents=[verbose_parent_parser],
         help=(
             "Ingest an internal-document fixture by path. The path is resolved on PS "
             "Service's own fixtures root, not read from your local machine."
         ),
     )
-    internal_ingest_parser.add_argument(
+    ingest_document_parser.add_argument(
         "fixture_path",
         type=_fixture_path_type,
         help="Path to the fixture .json file, relative to PS Service's fixtures root.",
     )
-    internal_ingest_parser.set_defaults(command="internal_ingest")
+    ingest_document_parser.set_defaults(command="ingest_document")
 
     # `config` subcommand group (issue #56, PLAN.md §1 D7): manages named
     # PS Service targets (contexts) in `targets.toml`. `set-context` (Slice 14),
-    # `use-context` (Slice 25), and `list-contexts` (Slice 28) are all wired here.
+    # `use-context` (Slice 25), and `get-contexts` (Slice 28) are all wired here.
+    # This is the one exception to the verb-then-resource shape every other group
+    # follows -- it mirrors kubectl's own `kubectl config` subcommands, whose leaves
+    # are verb-noun compounds (`set-context`/`use-context`/`get-contexts`), not
+    # nested `config <verb> <resource>`.
     config_parser = top_level_subparsers.add_parser(
         "config",
         parents=[verbose_parent_parser],
-        help="Commands for managing named PS Service targets (contexts).",
+        help="Manage named PS Service targets (contexts) -- kubectl-style config verbs.",
     )
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
 
@@ -263,69 +292,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     use_context_parser.set_defaults(command="config_use_context")
 
-    list_contexts_parser = config_subparsers.add_parser(
-        "list-contexts",
+    get_contexts_parser = config_subparsers.add_parser(
+        "get-contexts",
         parents=[verbose_parent_parser],
         help="List every named context, marking the currently-selected one.",
     )
-    list_contexts_parser.set_defaults(command="config_list_contexts")
+    get_contexts_parser.set_defaults(command="config_get_contexts")
 
-    # `catalog` subcommand group (issue #66, D13): the curated-content repo's
-    # local catalog. `list` reads `curated_repo_path`'s on-disk `catalog.json`
-    # directly and never contacts PS Service at all (like `config`'s commands,
-    # it skips `_resolve_client`/`load_config().service_url` in `cli.run()`);
-    # `restore` does call PS Service (`POST /restorations`), reusing
-    # `_resolve_client` exactly like `regulations ingest`.
-    catalog_parser = top_level_subparsers.add_parser(
-        "catalog",
-        parents=[verbose_parent_parser],
-        help="Commands for the curated instrument catalog.",
-    )
-    catalog_subparsers = catalog_parser.add_subparsers(dest="catalog_command", required=True)
-
-    catalog_list_parser = catalog_subparsers.add_parser(
-        "list",
-        parents=[verbose_parent_parser],
-        help=(
-            "List every curated instrument in the local curated-content repo "
-            "(no PS Service connection needed)."
-        ),
-    )
-    catalog_list_parser.set_defaults(command="catalog_list")
-
-    catalog_restore_parser = catalog_subparsers.add_parser(
+    # `restore` (restore a curated instrument's artifact into PS Service): reads the
+    # artifact off `curated_repo_path` locally and uploads it (`POST /restorations`),
+    # reusing `_resolve_client` exactly like `ingest regulation`.
+    restore_parser = top_level_subparsers.add_parser(
         "restore",
+        parents=[verbose_parent_parser],
+        help="Restore a curated instrument's artifact into PS Service.",
+    )
+    restore_subparsers = restore_parser.add_subparsers(dest="restore_command", required=True)
+
+    restore_instrument_parser = restore_subparsers.add_parser(
+        "instrument",
         parents=[verbose_parent_parser],
         help="Restore one curated instrument's artifact into PS Service.",
     )
-    catalog_restore_parser.add_argument(
+    restore_instrument_parser.add_argument(
         "instrument_id",
         type=_instrument_id_type,
         help="The curated instrument's id, e.g. 'CRA-1.0'.",
     )
-    catalog_restore_parser.set_defaults(command="catalog_restore")
+    restore_instrument_parser.set_defaults(command="restore_instrument")
 
-    # `health` (issue #68, PLAN.md §1 D8): a top-level, subgroup-less leaf --
-    # unlike `regulations`/`config`/`catalog`, it has no `add_subparsers()`
-    # call of its own. Needs a resolved `PsServiceClient` and `--context`
-    # support (D9), which `verbose_parent_parser` already provides -- no
-    # parser-level `--context` change needed beyond adding this leaf.
-    health_parser = top_level_subparsers.add_parser(
-        "health",
-        parents=[verbose_parent_parser],
-        help="Report PS Service's reachability, health (`/health`), and readiness (`/ready`).",
-    )
-    health_parser.set_defaults(command="health")
-
-    # `check` (issue #73, PLAN.md §1 D1): a top-level, subgroup-less leaf --
-    # mirrors `health`'s own D8 precedent exactly (no positional argument,
-    # sweeps the whole tracked catalog, service-wide rather than
-    # instrument/CELEX/fixture-scoped like `regulations`/`internal`/`catalog`).
+    # `check` (issue #73, PLAN.md §1 D1): sweep for state changes. `regulations` is
+    # its only leaf today -- a subparser group of one, for structural consistency
+    # with `get`/`ingest`/`restore` (uniformity matters more than terseness here, and
+    # it leaves room for a future `check catalog` or similar without another
+    # reshuffle) rather than a subgroup-less top-level leaf.
     check_parser = top_level_subparsers.add_parser(
         "check",
         parents=[verbose_parent_parser],
+        help="Sweep for state changes against tracked content.",
+    )
+    check_subparsers = check_parser.add_subparsers(dest="check_command", required=True)
+
+    check_regulations_parser = check_subparsers.add_parser(
+        "regulations",
+        parents=[verbose_parent_parser],
         help="Sweep every tracked instrument for amendments and re-ingest any found.",
     )
-    check_parser.set_defaults(command="check")
+    check_regulations_parser.set_defaults(command="check_regulations")
 
     return parser

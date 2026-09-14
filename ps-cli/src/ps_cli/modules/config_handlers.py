@@ -4,7 +4,7 @@ Mirrors `ps_cli.modules.handlers`' shape (handler functions plus a dispatch dict
 kept in its own module and dispatch table (`CONFIG_DISPATCH`, not `DISPATCH`) per PLAN.md
 D8's flagged, deliberate deviation: `config` subcommands manage `targets.toml`/
 `credentials.toml` only -- they must never construct a `PsServiceClient` or call
-`load_config()` (see D8's two concrete reasons: `list-contexts` must stay usable even when
+`load_config()` (see D8's two concrete reasons: `get-contexts` must stay usable even when
 `load_config()` would raise, and `set-context`/`use-context` must never trigger
 `PsServiceClient.__init__`'s "insecure URL" side-effect warning for a command that never
 contacts PS Service). `ps_cli.cli.run()` branches on `command in CONFIG_DISPATCH` before
@@ -109,7 +109,7 @@ def handle_config_use_context(name: str, *, config_dir: Path | None = None) -> N
     )
 
 
-def handle_config_list_contexts(*, config_dir: Path | None = None) -> None:
+def handle_config_get_contexts(*, config_dir: Path | None = None) -> None:
     """Print every context, one per line, marking the currently-selected one.
 
     Loads `targets.toml` (prints nothing if absent or empty -- nothing configured yet is
@@ -138,14 +138,14 @@ def _dispatch_config_use_context(args: argparse.Namespace) -> None:
     handle_config_use_context(cast("str", args.name))
 
 
-def _dispatch_config_list_contexts(args: argparse.Namespace) -> None:
-    """Adapt `handle_config_list_contexts`'s signature to the `CONFIG_DISPATCH` shape."""
+def _dispatch_config_get_contexts(args: argparse.Namespace) -> None:
+    """Adapt `handle_config_get_contexts`'s signature to the `CONFIG_DISPATCH` shape."""
     del args
-    handle_config_list_contexts()
+    handle_config_get_contexts()
 
 
 CONFIG_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
     "config_set_context": _dispatch_config_set_context,
     "config_use_context": _dispatch_config_use_context,
-    "config_list_contexts": _dispatch_config_list_contexts,
+    "config_get_contexts": _dispatch_config_get_contexts,
 }

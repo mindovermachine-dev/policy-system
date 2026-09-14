@@ -119,7 +119,7 @@ def _dispatch_command(
     on a broken `targets.toml`, which must not block the very commands an
     operator would use to fix it, and `PsServiceClient`'s constructor has an
     "insecure URL" stderr side effect that makes no sense for a command that
-    never contacts PS Service); `NO_CLIENT_DISPATCH` (`catalog_list`, issue
+    never contacts PS Service); `NO_CLIENT_DISPATCH` (`get_catalog`, issue
     #66 D13, reads the local curated-content repo only -- like `config_*`
     above it must never construct a `PsServiceClient`, but unlike `config_*`
     its own dispatch adapter still resolves `curated_repo_path` via
