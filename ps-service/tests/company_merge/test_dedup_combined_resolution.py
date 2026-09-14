@@ -31,6 +31,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse
 
 from ps_service.company_merge.dedup import dedupe_canonical_nodes
 from ps_service.company_merge.models import BaselineNode
+from ps_service.company_merge.similarity import cosine_similarity
 
 _MODEL = "fake-embed-model"
 _THRESHOLD = 0.85
@@ -165,12 +166,23 @@ def test_dedupe_canonical_nodes_semantic_match_resolves_onto_existing_id(
     assert resolution.canonical_id != incoming_id
 
 
-def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(
+def test_dedupe_canonical_nodes_same_run_mints_do_not_converge_but_record_near_miss(
     make_emitter: MakeEmitter,
 ) -> None:
-    """(d): two incoming nodes with no existing match but semantically
-    equivalent to EACH OTHER (mocked identical embeddings) -> the second
-    resolves onto the first's id, not a separate mint.
+    """(d), rewritten for issue #30 (AC-BI-002/AC-BI-004): two incoming nodes
+    with no PRE-RUN existing match but semantically equivalent to EACH OTHER
+    (mocked identical embeddings) no longer converge onto one another -- the
+    semantic-match candidate pool is restricted to pre-run existing nodes
+    only, and a same-run mint is never itself an eligible merge target, no
+    matter how high its score. Both resolve `match_kind="new"`, and the
+    excluded same-run mint is recorded as a `NearMissPair` instead (the
+    direct live-path proof of AC-BI-004's at/above-threshold case, since the
+    two scripted embeddings are identical vectors -- cosine similarity
+    exactly 1.0, at/above `_THRESHOLD`).
+
+    This test previously asserted the OPPOSITE (same-run convergence
+    happens) -- per BASELINE.md's own note, that assertion became wrong
+    under issue #30's restriction and is not a regression.
     """
     emitter, _log_path = make_emitter()
     first_id = "obl_incoming_first_alpha"
@@ -202,11 +214,75 @@ def test_dedupe_canonical_nodes_in_run_convergence_onto_first_incoming_node(
     second_resolution = next(r for r in result.resolutions if r.incoming_id == second_id)
     assert first_resolution.match_kind == "new"
     assert first_resolution.canonical_id == first_id
-    assert second_resolution.match_kind == "semantic"
-    assert second_resolution.canonical_id == first_id
+    assert second_resolution.match_kind == "new"
+    assert second_resolution.canonical_id == second_id
     # first_id was minted THIS run, never present in the original existing
     # index -- its freshly-computed embedding is never a backfill candidate.
     assert result.embedding_backfills == {}
+
+    assert len(result.near_misses) == 1
+    near_miss = result.near_misses[0]
+    assert near_miss.incoming_id == second_id
+    assert near_miss.nearest_existing_id == first_id
+    assert near_miss.similarity == 1.0
+
+
+def test_dedupe_canonical_nodes_records_near_miss_for_higher_scoring_mint_on_merge(
+    make_emitter: MakeEmitter,
+) -> None:
+    """CHANGES.md row 1 (HIGH): the excluded same-run mint must be recorded
+    as a `NearMissPair` independently of whether the mint or merge branch is
+    taken. Scenario (Appendix B): one pre-run existing Capability `P`;
+    incoming `M` mints first (scores below threshold against `P`); incoming
+    `X` scores ABOVE threshold against BOTH `P` (eligible -- the merge
+    target) and `M` (same-run mint, and a HIGHER score than `P`). `X` must
+    still merge onto `P` (the eligible best), but the higher-scoring
+    excluded mint `M` must ALSO be recorded as a near-miss -- proving the
+    merge branch's AC-BI-004 check fires independently of the mint branch's
+    pre-existing one.
+    """
+    emitter, _log_path = make_emitter()
+    existing_id = "cap_existing_p"
+    mint_id = "cap_incoming_m"
+    merge_incoming_id = "cap_incoming_x"
+    p_vector = [1.0, 0.0]
+    m_vector = [0.766, 0.643]
+    x_vector = [0.8998, 0.4376]
+    graph = _ScriptedSingleTenantGraph(capability_rows=[[existing_id, "P duty.", p_vector]])
+    call_embedding = _ScriptedCallEmbedding({"M duty.": m_vector, "X duty.": x_vector})
+    incoming_nodes = (
+        _obligation(mint_id, "M duty."),
+        _obligation(merge_incoming_id, "X duty."),
+    )
+
+    similarity_x_p = cosine_similarity(tuple(x_vector), tuple(p_vector))
+    similarity_x_m = cosine_similarity(tuple(x_vector), tuple(m_vector))
+    assert similarity_x_p >= _THRESHOLD
+    assert similarity_x_m >= _THRESHOLD
+    assert similarity_x_m > similarity_x_p
+
+    result = dedupe_canonical_nodes(
+        incoming_nodes,
+        kind="Capability",
+        single_tenant_graph=graph,
+        model=_MODEL,
+        threshold=_THRESHOLD,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+    mint_resolution = next(r for r in result.resolutions if r.incoming_id == mint_id)
+    merge_resolution = next(r for r in result.resolutions if r.incoming_id == merge_incoming_id)
+    assert mint_resolution.match_kind == "new"
+    assert mint_resolution.canonical_id == mint_id
+    # X merges onto the ELIGIBLE best (the pre-run existing node P), not the
+    # higher-scoring same-run mint M.
+    assert merge_resolution.match_kind == "semantic"
+    assert merge_resolution.canonical_id == existing_id
+
+    x_near_miss = next(nm for nm in result.near_misses if nm.incoming_id == merge_incoming_id)
+    assert x_near_miss.nearest_existing_id == mint_id
+    assert x_near_miss.similarity == similarity_x_m
 
 
 def test_dedupe_canonical_nodes_within_run_reuse_bounds_existing_side_cost(

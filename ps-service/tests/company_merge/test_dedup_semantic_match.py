@@ -252,6 +252,109 @@ def test_find_best_semantic_match_newly_computed_embeddings_excludes_cached_entr
     }
 
 
+def test_find_best_semantic_match_eligible_ids_restricts_best_eligible_but_not_overall_best(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #30 (AC-BI-001/004 foundation): passing `eligible_ids` containing
+    only some scanned ids restricts `best_eligible_id`/`best_eligible_similarity`
+    to that subset, while `best_existing_id`/`best_similarity` keep reflecting
+    the unrestricted overall max across every entry scanned.
+    """
+    emitter, _log_path = make_emitter()
+    incoming_text = "Conduct a cybersecurity risk assessment."
+    existing_index = (
+        ExistingCanonicalNode(id="obligation_1", text="Report an incident.", embedding=(0.0, 1.0)),
+        ExistingCanonicalNode(
+            id="obligation_2", text="Conduct a risk assessment.", embedding=(0.9, 0.1)
+        ),
+    )
+    incoming_vector = [1.0, 0.0]
+    call_embedding = _ScriptedCallEmbedding({incoming_text: incoming_vector})
+
+    result = find_best_semantic_match(
+        incoming_text,
+        existing_index,
+        model=_MODEL,
+        call_embedding=call_embedding,
+        emitter=emitter,
+        eligible_ids=frozenset({"obligation_1"}),
+    )
+
+    assert result is not None
+    # Overall best is unrestricted: obligation_2 scores higher.
+    assert result.best_existing_id == "obligation_2"
+    assert result.best_similarity == cosine_similarity(tuple(incoming_vector), (0.9, 0.1))
+    # Eligible best is restricted to the one id passed in, even though it
+    # scores lower than the overall best.
+    assert result.best_eligible_id == "obligation_1"
+    assert result.best_eligible_similarity == cosine_similarity(tuple(incoming_vector), (0.0, 1.0))
+
+
+def test_find_best_semantic_match_empty_eligible_ids_yields_none_eligible_best(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #30: `eligible_ids=frozenset()` yields `best_eligible_id=None`,
+    `best_eligible_similarity=None`, while `best_existing_id`/`best_similarity`
+    are still populated from the unrestricted scan.
+    """
+    emitter, _log_path = make_emitter()
+    incoming_text = "Conduct a cybersecurity risk assessment."
+    existing_index = (
+        ExistingCanonicalNode(
+            id="obligation_1", text="Conduct a risk assessment.", embedding=(0.9, 0.1)
+        ),
+    )
+    incoming_vector = [1.0, 0.0]
+    call_embedding = _ScriptedCallEmbedding({incoming_text: incoming_vector})
+
+    result = find_best_semantic_match(
+        incoming_text,
+        existing_index,
+        model=_MODEL,
+        call_embedding=call_embedding,
+        emitter=emitter,
+        eligible_ids=frozenset(),
+    )
+
+    assert result is not None
+    assert result.best_existing_id == "obligation_1"
+    assert result.best_similarity == cosine_similarity(tuple(incoming_vector), (0.9, 0.1))
+    assert result.best_eligible_id is None
+    assert result.best_eligible_similarity is None
+
+
+def test_find_best_semantic_match_omitted_eligible_ids_defaults_to_overall_best(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #30: omitting `eligible_ids` (the pre-existing call style, used
+    by all other tests in this file) yields `best_eligible_id ==
+    best_existing_id` and `best_eligible_similarity == best_similarity` --
+    proves the default is fully backward compatible.
+    """
+    emitter, _log_path = make_emitter()
+    incoming_text = "Conduct a cybersecurity risk assessment."
+    existing_index = (
+        ExistingCanonicalNode(id="obligation_1", text="Report an incident.", embedding=(0.0, 1.0)),
+        ExistingCanonicalNode(
+            id="obligation_2", text="Conduct a risk assessment.", embedding=(0.9, 0.1)
+        ),
+    )
+    incoming_vector = [1.0, 0.0]
+    call_embedding = _ScriptedCallEmbedding({incoming_text: incoming_vector})
+
+    result = find_best_semantic_match(
+        incoming_text,
+        existing_index,
+        model=_MODEL,
+        call_embedding=call_embedding,
+        emitter=emitter,
+    )
+
+    assert result is not None
+    assert result.best_eligible_id == result.best_existing_id
+    assert result.best_eligible_similarity == result.best_similarity
+
+
 def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embedding(
     make_emitter: MakeEmitter,
 ) -> None:

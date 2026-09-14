@@ -115,3 +115,39 @@ def test_exact_match_produces_no_near_miss_and_no_backfill() -> None:
 
     assert result.near_misses == ()
     assert result.embedding_backfills == {}
+
+
+def test_resolve_capability_convergence_offline_second_same_run_mint_resolves_via_exact_match() -> (
+    None
+):
+    """AC-TE-001 (offline, end-to-end, issue #30): `resolve_exact_match`'s
+    candidate pool is the FULL, growing `working_index` -- never restricted
+    to `original_existing_ids` -- so two incoming nodes sharing the
+    identical id still collapse via exact-key match regardless of same-run
+    timing, unaffected by the semantic-match eligibility restriction this
+    issue adds. The first occurrence mints (`match_kind="new"`); the second
+    (same id) resolves `match_kind="exact"` onto it, never reaching
+    `_best_offline_match` at all.
+    """
+    shared_id = "capability_shared_between_two_incoming_nodes"
+    graph = _ScriptedSingleTenantGraph(capability_rows=[])
+    incoming_nodes = (
+        _capability(shared_id, "First occurrence Capability"),
+        _capability(shared_id, "Second occurrence Capability"),
+    )
+
+    result = resolve_capability_convergence_offline(
+        incoming_nodes,
+        incoming_embeddings={},
+        single_tenant_graph=graph,
+        threshold=_THRESHOLD,
+    )
+
+    assert len(result.resolutions) == 2
+    first_resolution, second_resolution = result.resolutions
+    assert first_resolution.incoming_id == shared_id
+    assert first_resolution.match_kind == "new"
+    assert first_resolution.canonical_id == shared_id
+    assert second_resolution.incoming_id == shared_id
+    assert second_resolution.match_kind == "exact"
+    assert second_resolution.canonical_id == shared_id

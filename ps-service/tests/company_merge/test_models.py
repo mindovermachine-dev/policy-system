@@ -196,6 +196,8 @@ def test_semantic_match_result_mutation_raises() -> None:
     result = SemanticMatchResult(
         best_existing_id="obl_existing_d4e5f6",
         best_similarity=0.91,
+        best_eligible_id="obl_existing_d4e5f6",
+        best_eligible_similarity=0.91,
         incoming_embedding=(0.1, 0.2, 0.3),
         newly_computed_existing_embeddings={},
     )
@@ -207,6 +209,8 @@ def test_semantic_match_result_constructs_with_valid_fields() -> None:
     result = SemanticMatchResult(
         best_existing_id="obl_existing_d4e5f6",
         best_similarity=0.91,
+        best_eligible_id="obl_existing_d4e5f6",
+        best_eligible_similarity=0.91,
         incoming_embedding=(0.1, 0.2, 0.3),
         newly_computed_existing_embeddings={},
     )
@@ -222,6 +226,8 @@ def test_semantic_match_result_accepts_non_empty_newly_computed_existing_embeddi
     result = SemanticMatchResult(
         best_existing_id="obl_existing_d4e5f6",
         best_similarity=0.91,
+        best_eligible_id="obl_existing_d4e5f6",
+        best_eligible_similarity=0.91,
         incoming_embedding=(0.1, 0.2, 0.3),
         newly_computed_existing_embeddings={"obl_existing_d4e5f6": (0.11, 0.22, 0.33)},
     )

@@ -105,7 +105,15 @@ class ExistingCanonicalNode:
 
 @dataclass(frozen=True, slots=True)
 class NearMissPair:
-    """AC-004: a below-threshold pair, surfaced, never merged."""
+    """A near-miss pair, surfaced, never merged.
+
+    Either AC-004's original case (a below-threshold pair) or, since issue
+    #30 (AC-BI-004), a pair whose only qualifying match was excluded as a
+    same-run mint: the incoming node's best-scoring candidate cleared
+    threshold, but that candidate was minted earlier in this same run
+    (never a pre-existing canonical node), so it was not an eligible merge
+    target -- the pair is recorded here instead of merged.
+    """
 
     incoming_id: str
     incoming_text: str
@@ -129,21 +137,34 @@ class CanonicalResolution:
 class SemanticMatchResult:
     """find_best_semantic_match's return value when existing_index is non-empty.
 
-    §5.3, B2's fix. `newly_computed_existing_embeddings` holds every
-    existing_index entry's embedding that had to be freshly computed during
-    THIS call (existing_id -> embedding) -- an entry that already carried a
-    cached embedding is excluded, since nothing was computed for it. This
-    type only carries values, it performs no I/O: the caller
-    (dedupe_canonical_nodes) is responsible for (a) folding these into its
-    own in-memory working index before the next incoming node is processed
-    -- closing the within-run reuse gap -- and (b) arranging their eventual
-    persistence onto the already-existing graph nodes they belong to via
+    §5.3, B2's fix. Since issue #30, carries TWO independent "best" pairs
+    computed from one embedding scan, at zero extra cost:
+    `best_existing_id`/`best_similarity` is the overall best-scoring entry
+    across EVERY entry scanned, used only for near-miss citation;
+    `best_eligible_id`/`best_eligible_similarity` is the best-scoring entry
+    restricted to the caller's `eligible_ids` (identical to the overall best
+    when the caller omits `eligible_ids`), used only for the merge decision.
+    `best_eligible_id`/`best_eligible_similarity` are both `None` when no
+    scanned entry belongs to `eligible_ids` (e.g. `eligible_ids` is an empty
+    frozenset).
+
+    `newly_computed_existing_embeddings` holds every existing_index entry's
+    embedding that had to be freshly computed during THIS call (existing_id
+    -> embedding) -- an entry that already carried a cached embedding is
+    excluded, since nothing was computed for it. This type only carries
+    values, it performs no I/O: the caller (dedupe_canonical_nodes) is
+    responsible for (a) folding these into its own in-memory working index
+    before the next incoming node is processed -- closing the within-run
+    reuse gap -- and (b) arranging their eventual persistence onto the
+    already-existing graph nodes they belong to via
     graph_writer.backfill_canonical_embeddings -- closing the across-run
     reuse gap. See §5.4/§5.5/§6.2 for the full mechanism.
     """
 
     best_existing_id: str
     best_similarity: float
+    best_eligible_id: str | None
+    best_eligible_similarity: float | None
     incoming_embedding: tuple[float, ...]
     newly_computed_existing_embeddings: dict[str, tuple[float, ...]]
 
