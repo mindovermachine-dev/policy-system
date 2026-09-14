@@ -43,6 +43,7 @@ from ps_service.domain_mapper.falkordb_client import (
     native_graph_name,
     select_graph,
 )
+from ps_service.domain_mapper.models import ExtractionUnit
 from ps_service.logging import LogEmitter, bind_run_context
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ if TYPE_CHECKING:
 
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
-    from ps_service.domain_mapper.models import DerivationResult, ExtractionUnit
+    from ps_service.domain_mapper.models import DerivationResult
 
 _LIMIT_PER_REGULATORY_INSTRUMENT = 15
 _LOG_FILENAME = "capstone.jsonl"
@@ -91,6 +92,67 @@ class _LimitedDomainMappingAdapter:
 
     def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
         return self._inner.read_native_units(graph)[: self._limit]
+
+
+class _AnnexOnlyDomainMappingAdapter:
+    """Wraps a real `DomainMappingAdapter`, filtering the `ExtractionUnit`s
+    returned down to only annex-derived units (`citation_ref` starting with
+    `"Annex "`). Satisfies `DomainMappingAdapter` structurally — no
+    production code change needed for this test's bounding requirement.
+    """
+
+    def __init__(self, inner: DomainMappingAdapter) -> None:
+        self._inner = inner
+
+    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+        return tuple(
+            unit
+            for unit in self._inner.read_native_units(graph)
+            if unit.citation_ref.startswith("Annex ")
+        )
+
+
+class _FakeDomainMappingAdapter:
+    """Test double for `DomainMappingAdapter`: returns a fixed tuple of
+    `ExtractionUnit`s regardless of `graph`, for exercising
+    `_AnnexOnlyDomainMappingAdapter`'s filter logic without FalkorDB.
+    """
+
+    def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
+        self._units = units
+
+    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+        return self._units
+
+
+def test_annex_only_domain_mapping_adapter_filters_to_annex_citation_refs_only() -> None:
+    article_unit = ExtractionUnit(
+        citation_ref="Art. 1",
+        text="Subject matter.",
+        article_number="1",
+        paragraph_number="1",
+        article_heading="Subject matter",
+    )
+    annex_i_unit = ExtractionUnit(
+        citation_ref="Annex I",
+        text="Essential cybersecurity requirements.",
+        article_number="I",
+        paragraph_number="1",
+        article_heading="",
+    )
+    annex_ii_unit = ExtractionUnit(
+        citation_ref="Annex II",
+        text="Information and instructions for the user.",
+        article_number="II",
+        paragraph_number="1",
+        article_heading="",
+    )
+    inner = _FakeDomainMappingAdapter((article_unit, annex_i_unit, annex_ii_unit))
+    adapter = _AnnexOnlyDomainMappingAdapter(inner)
+
+    result = adapter.read_native_units(cast("GraphHandle", object()))
+
+    assert result == (annex_i_unit, annex_ii_unit)
 
 
 @dataclass
@@ -362,4 +424,178 @@ def test_live_three_regulation_capstone_extracts_and_derives_across_cra_gdpr_nis
     assert len(set(all_run_ids)) == len(all_run_ids), (
         f"expected 6 mutually distinct run_ids across the 3 regulations' 2 actions each, "
         f"got {all_run_ids}"
+    )
+
+
+def _annex_i_defines_and_expresses_rows(
+    baseline_graph: GraphHandle,
+) -> tuple[list[list[object]], list[list[object]]]:
+    """Mirrors `_assert_ac001_provenance`'s query pattern (lines 228-250
+    above), filtered down to rows whose `source_ref` is exactly `"Annex I"`.
+    """
+    defines_rows = _query_rows(
+        baseline_graph,
+        "MATCH (:RegulatoryInstrument)-[e:DEFINES]->(:Role) "
+        'WHERE e.source_ref = "Annex I" RETURN e.source_ref',
+    )
+    expresses_rows = _query_rows(
+        baseline_graph,
+        "MATCH (:RegulatoryInstrument)-[e:EXPRESSES]->(r:Requirement) "
+        'WHERE e.source_ref = "Annex I" RETURN e.source_ref, r.confidence',
+    )
+    return defines_rows, expresses_rows
+
+
+@pytest.mark.falkordb_live
+@pytest.mark.llm_live
+@pytest.mark.skipif(
+    not _LLM_INTERFACE_MODEL,
+    reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
+)
+def test_live_cra_annex_i_produces_at_least_one_role_and_requirement(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-006: running `ExtractRolesAndRequirements` against CRA's real
+    native graph, scoped to only its ANNEX units via
+    `_AnnexOnlyDomainMappingAdapter`, persists at least one Role and one
+    Requirement to `cra_baseline` whose `DEFINES`/`EXPRESSES` `source_ref`
+    is exactly `"Annex I"`.
+
+    The Requirement `confidence` values collected here are also persisted
+    to a module-level cache (`_CRA_ANNEX_I_REQUIREMENT_CONFIDENCES`) that
+    Slice 11's `test_live_nis2_annex_content_yields_no_hallucinated_duties`
+    reads, so the "materially lower-confidence" comparison in that test has
+    real CRA Annex I confidences to compare against without re-running
+    extraction. If this test has not run in the same pytest session (e.g.
+    it was deselected via `-k`), Slice 11's test falls back to re-querying
+    `cra_baseline` directly for the same values — see that test's docstring.
+    """
+    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
+    model = _LLM_INTERFACE_MODEL
+
+    config = load_config()
+    db = connect_from_config(config)
+    adapter = _AnnexOnlyDomainMappingAdapter(CellarEliDomainMappingAdapter())
+    emitter, _log_path = make_emitter(filename=_LOG_FILENAME)
+
+    fixture = _RegulatoryInstrumentFixture("CRA", "CRA-1.0")
+    native_graph = select_graph(db, native_graph_name(fixture.short_name))
+    baseline_graph = select_graph(db, baseline_graph_name(fixture.short_name))
+
+    with bind_run_context("capstone-cra-annex-i-extraction"):
+        extract_roles_and_requirements(
+            fixture.regulatory_instrument_id,
+            adapter=adapter,
+            native_graph=native_graph,
+            baseline_graph=baseline_graph,
+            model=model,
+            emitter=emitter,
+        )
+
+    defines_rows, expresses_rows = _annex_i_defines_and_expresses_rows(baseline_graph)
+
+    assert defines_rows, (
+        f"{fixture.regulatory_instrument_id}: no DEFINES edge with source_ref == 'Annex I' found"
+    )
+    assert expresses_rows, (
+        f"{fixture.regulatory_instrument_id}: no EXPRESSES edge with source_ref == 'Annex I' found"
+    )
+
+    confidences = tuple(cast("float", row[1]) for row in expresses_rows)
+    _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES.clear()
+    _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES.extend(confidences)
+
+
+# Populated by `test_live_cra_annex_i_produces_at_least_one_role_and_requirement` when it
+# runs in the same pytest session; read by
+# `test_live_nis2_annex_content_yields_no_hallucinated_duties` as a same-session shortcut
+# before falling back to a direct `cra_baseline` re-query. Both tests share this module's
+# `.env`-presence skipif, so either both run or both skip together in a normal invocation
+# (e.g. `-m "llm_live and falkordb_live"` with no `-k` filter) — the fallback exists only
+# to keep Slice 11's test correct under an unusual `-k`-filtered or single-test invocation.
+_CRA_ANNEX_I_REQUIREMENT_CONFIDENCES: list[float] = []
+
+
+@pytest.mark.falkordb_live
+@pytest.mark.llm_live
+@pytest.mark.skipif(
+    not _LLM_INTERFACE_MODEL,
+    reason="requires .env sourced (PS_LLMINTERFACE_MODEL, AZURE_API_KEY, AZURE_API_BASE)",
+)
+def test_live_nis2_annex_content_yields_no_hallucinated_duties(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-011 (and the runtime half of AC-BI-005): running the identical
+    `_AnnexOnlyDomainMappingAdapter` code path — no regulation-specific
+    branch anywhere in `cellar_eli.py` or `extraction.py` — against NIS2's
+    real native graph extracts no hallucinated Requirement duties from its
+    non-operative annex content.
+
+    Concrete, non-arbitrary threshold (per PLAN.md Slice 11): this test
+    passes if EITHER (a) zero `Requirement` nodes whose `EXPRESSES.source_ref`
+    starts with `"Annex "` exist in `nis2_baseline`, OR (b) at least one
+    such Requirement exists but
+    `max(nis2_annex_confidences) < min(cra_annex_i_confidences)` — i.e.
+    NIS2's single most-confident annex-derived Requirement is still less
+    confident than CRA's single least-confident genuine Annex I Requirement
+    (from `test_live_cra_annex_i_produces_at_least_one_role_and_requirement`,
+    which must run first in the same session — a normal
+    `-m "llm_live and falkordb_live"` invocation with no `-k` filter runs
+    both; if that module-level cache is empty here — e.g. this test was
+    selected on its own — this test re-queries `cra_baseline` directly for
+    the same `source_ref = "Annex I"` Requirement confidences instead of
+    skipping the comparison).
+    """
+    assert _LLM_INTERFACE_MODEL is not None  # narrows type; skipif already guards this
+    model = _LLM_INTERFACE_MODEL
+
+    config = load_config()
+    db = connect_from_config(config)
+    adapter = _AnnexOnlyDomainMappingAdapter(CellarEliDomainMappingAdapter())
+    emitter, _log_path = make_emitter(filename=_LOG_FILENAME)
+
+    fixture = _RegulatoryInstrumentFixture("NIS2", "NIS2-1.0")
+    native_graph = select_graph(db, native_graph_name(fixture.short_name))
+    baseline_graph = select_graph(db, baseline_graph_name(fixture.short_name))
+
+    with bind_run_context("capstone-nis2-annex-extraction"):
+        extract_roles_and_requirements(
+            fixture.regulatory_instrument_id,
+            adapter=adapter,
+            native_graph=native_graph,
+            baseline_graph=baseline_graph,
+            model=model,
+            emitter=emitter,
+        )
+
+    nis2_annex_rows = _query_rows(
+        baseline_graph,
+        "MATCH (:RegulatoryInstrument)-[e:EXPRESSES]->(r:Requirement) "
+        'WHERE e.source_ref STARTS WITH "Annex " RETURN e.source_ref, r.confidence',
+    )
+    if not nis2_annex_rows:
+        return  # branch (a): no annex-derived Requirement candidates at all
+
+    nis2_annex_confidences = [cast("float", row[1]) for row in nis2_annex_rows]
+
+    if _CRA_ANNEX_I_REQUIREMENT_CONFIDENCES:
+        cra_annex_i_confidences = list(_CRA_ANNEX_I_REQUIREMENT_CONFIDENCES)
+    else:
+        cra_baseline_graph = select_graph(db, baseline_graph_name("CRA"))
+        _cra_defines_rows, cra_expresses_rows = _annex_i_defines_and_expresses_rows(
+            cra_baseline_graph
+        )
+        cra_annex_i_confidences = [cast("float", row[1]) for row in cra_expresses_rows]
+
+    assert cra_annex_i_confidences, (
+        "no CRA Annex I Requirement confidences available for comparison — "
+        "run test_live_cra_annex_i_produces_at_least_one_role_and_requirement first"
+    )
+
+    # branch (b): NIS2's most-confident annex-derived Requirement must still be
+    # strictly less confident than CRA's least-confident genuine Annex I Requirement.
+    assert max(nis2_annex_confidences) < min(cra_annex_i_confidences), (
+        f"NIS2 annex-derived Requirement confidences {nis2_annex_confidences} are not "
+        f"materially lower than CRA Annex I confidences {cra_annex_i_confidences} "
+        f"(max(nis2) < min(cra) failed)"
     )

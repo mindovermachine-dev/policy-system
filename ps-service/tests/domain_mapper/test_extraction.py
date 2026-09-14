@@ -18,6 +18,7 @@ import openai
 import pytest
 from litellm.types.utils import Choices, Message, ModelResponse
 
+from ps_service.domain_mapper import identity
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.domain_mapper.extraction import (
     _build_defined_terms_map,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
@@ -619,6 +620,85 @@ def test_extract_roles_and_requirements_ac002_persists_low_confidence_candidate(
     assert properties["confidence"] == 0.1
 
 
+_UNIT_ANNEX_I = ExtractionUnit(
+    citation_ref="Annex I",
+    text="Products with digital elements shall be designed, developed and "
+    "produced in such a way that they ensure an appropriate level of "
+    "cybersecurity based on the risks.",
+    article_number="I",
+    paragraph_number="1",
+    article_heading="",
+)
+
+
+def test_extract_roles_and_requirements_persists_from_annex_unit(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Slice 6 (GH #25): `extract_roles_and_requirements` is annex-agnostic —
+    a single annex-derived `ExtractionUnit` (`citation_ref="Annex I"`,
+    `article_number="I"`) flows through the same real orchestrating
+    function, unmodified, as any ARTICLE-derived unit (mirrors
+    `test_extract_roles_and_requirements_ac001_...` exactly, just with one
+    annex unit instead of two article units).
+
+    Proves end-to-end (adapter-shaped input -> extraction -> identity ->
+    graph-write payload), not just in isolation: the persisted
+    `DEFINES`/`EXPRESSES` edges carry `source_ref == "Annex I"` verbatim
+    (AC-BI-001/003), and the persisted `RequirementNode.id` equals the real
+    `identity.requirement_id()` formula computed independently here from
+    the unit's own `article_number`/`paragraph_number` (AC-BI-007) — not a
+    hardcoded string, so a regression in either the id formula or its
+    annex-unit wiring would fail this assertion.
+    """
+    emitter, _log_path = make_emitter()
+    native_graph = _FakeNativeGraph({"id": _REGULATION_ID, "title": "Cyber Resilience Act"})
+    baseline_graph = _FakeBaselineGraph()
+    adapter = _FakeAdapter((_UNIT_ANNEX_I,))
+    call_completion = _scripted_call_completion(
+        {
+            _UNIT_ANNEX_I.citation_ref: _requirements_json(
+                role_name="Manufacturer",
+                text="Ensure products are designed with an appropriate level of cybersecurity.",
+            )
+        }
+    )
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=adapter,
+        native_graph=native_graph,
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert result.candidate_count == 1
+    assert result.skipped_unit_count == 0
+    assert set(result.role_node_ids) == {"Manufacturer"}
+
+    expected_requirement_id = identity.requirement_id(_REGULATION_ID, "I", "1", None)
+    assert result.requirement_ids == (expected_requirement_id,)
+
+    defines_calls = _find_edge_call(baseline_graph, "DEFINES")
+    expresses_calls = _find_edge_call(baseline_graph, "EXPRESSES")
+    assert len(defines_calls) == 1
+    assert len(expresses_calls) == 1
+    assert defines_calls[0].params is not None
+    assert expresses_calls[0].params is not None
+    assert defines_calls[0].params["source_ref"] == "Annex I"
+    assert expresses_calls[0].params["source_ref"] == "Annex I"
+
+    requirement_calls = [
+        call
+        for call in baseline_graph.calls
+        if call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
+    ]
+    assert len(requirement_calls) == 1
+    assert requirement_calls[0].params is not None
+    assert requirement_calls[0].params["id"] == expected_requirement_id
+
+
 def test_extract_roles_and_requirements_ac006_emits_log_entry_with_bound_run_id(
     make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
@@ -705,6 +785,56 @@ def test_extract_roles_and_requirements_isolates_per_unit_extraction_failure(
     ]
     assert len(error_entries) == 1
     assert error_entries[0]["entity_id"] == _UNIT_IMPORTER.citation_ref
+
+
+def test_malformed_annex_unit_response_is_skipped_and_logged(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """Slice 7 (GH #25): the same per-unit failure isolation proven for two
+    ARTICLE units above (`..._isolates_per_unit_extraction_failure`) also
+    covers an annex-derived unit correctly, with no production change --
+    a malformed/unparseable LLM response for the annex unit
+    (`citation_ref="Annex I"`) is caught, logged
+    (`outcome="error"`, `entity_id="Annex I"`), and does not abort the
+    ordinary ARTICLE unit's own extraction.
+    """
+    emitter, log_path = make_emitter()
+    native_graph = _FakeNativeGraph({"id": _REGULATION_ID})
+    baseline_graph = _FakeBaselineGraph()
+    adapter = _FakeAdapter((_UNIT_MANUFACTURER, _UNIT_ANNEX_I))
+    call_completion = _scripted_call_completion(
+        {
+            _UNIT_MANUFACTURER.citation_ref: _requirements_json(
+                role_name="Manufacturer", text="Conduct a cybersecurity risk assessment."
+            ),
+            _UNIT_ANNEX_I.citation_ref: "{not valid json",
+        }
+    )
+
+    result = extract_roles_and_requirements(
+        _REGULATION_ID,
+        adapter=adapter,
+        native_graph=native_graph,
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert result.skipped_unit_count == 1
+    assert result.candidate_count == 1
+    assert len(result.requirement_ids) == 1
+    assert set(result.role_node_ids) == {"Manufacturer"}
+
+    lines = read_lines(log_path)
+    error_entries = [
+        line
+        for line in lines
+        if line.get("component") == "domain_mapper" and line.get("outcome") == "error"
+    ]
+    assert len(error_entries) == 1
+    assert error_entries[0]["entity_id"] == "Annex I"
 
 
 def test_extract_roles_and_requirements_logs_error_kind_without_raw_payload(

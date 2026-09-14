@@ -40,6 +40,18 @@ def test_requirement_id_shape_with_letter() -> None:
     assert requirement_id("CRA-1.0", "13", "8", "c") == "CRA-1.0_req_art_13.8c"
 
 
+def test_requirement_id_for_annex_derived_article_number() -> None:
+    """GH #25 decision 1.4's plausibility argument, pinned down as an
+    executable fact: an annex-shaped `(article="I", paragraph="1")` input
+    -- fed through the real, UNCHANGED `requirement_id` formula (AC-BI-007,
+    no new identity function) -- produces the expected id shape and never
+    collides with a real numeric-Article-derived id.
+    """
+    assert requirement_id("CRA-1.0", "I", "1", None) == "CRA-1.0_req_art_I.1"
+    assert requirement_id("CRA-1.0", "I", "1", "a") == "CRA-1.0_req_art_I.1a"
+    assert requirement_id("CRA-1.0", "1", "1", None) != requirement_id("CRA-1.0", "I", "1", None)
+
+
 # --- obligation_id -------------------------------------------------------
 
 

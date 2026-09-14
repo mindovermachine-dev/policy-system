@@ -16,11 +16,17 @@ adapters.cellar_eli.structure`'s own writes (`_walk_article`/
 regexes (`^Art\\.\\s*(\\d+)$`, `^Art\\.\\s*(\\d+)\\((\\d+)\\)$`) match this
 exactly, no adjustment needed.
 
-Scope decision (Open Question 4, locked in): only `ARTICLE`/`PARAGRAPH` are
-ever queried — `RECITAL`/`ANNEX`/`CHAPTER`/`SECTION` nodes are structurally
-unreachable from this adapter's Cypher (it never matches those labels), so
-they can never contribute an `ExtractionUnit` even when present in the same
-native graph.
+Scope decision (Open Question 4, revised by GH #25): `ARTICLE`/`PARAGRAPH`
+AND `ANNEX` are queried — `RECITAL`/`CHAPTER`/`SECTION` nodes remain
+structurally unreachable from this adapter's Cypher (it never matches those
+labels), so they can never contribute an `ExtractionUnit` even when present
+in the same native graph. An `ANNEX` node has no `PARAGRAPH`-shaped child
+and no `heading` property (unlike `ARTICLE`) — it always becomes exactly one
+whole-node `ExtractionUnit`, with `article_heading=""` (never invented) and
+`paragraph_number="1"` (the same sentinel the paragraph-less-Article
+fallback already uses). `ANNEX` units are always ordered after every
+ARTICLE/PARAGRAPH unit, sorted by the native `order` property server-side
+(`ORDER BY a.order`), never re-derived from the citation label.
 
 Document order is `(article_number, paragraph_number)` as integers, not the
 raw query order (`ORDER BY a.id` sorts lexicographically — `"art_10"` sorts
@@ -41,6 +47,11 @@ if TYPE_CHECKING:
 
 _ARTICLE_CITATION_RE = re.compile(r"^Art\.\s*(\d+)$")
 _PARAGRAPH_CITATION_RE = re.compile(r"^Art\.\s*(\d+)\((\d+)\)$")
+# Negative lookahead rejects a bare-digit annex label (e.g. "Annex 1") while still
+# accepting Roman numerals ("I", "II") or any other non-digit-only alphanumeric label —
+# a digit-only label would otherwise produce an `article_number` indistinguishable from
+# a real numeric-Article-derived one (GH #25 CHANGES.md Row #1).
+_ANNEX_CITATION_RE = re.compile(r"^Annex\s+(?!\d+$)(\S+)$")
 
 
 class CellarEliDomainMappingAdapter:
@@ -64,7 +75,16 @@ class CellarEliDomainMappingAdapter:
             units.extend(self._units_for_article(graph, row))
 
         units.sort(key=lambda unit: (int(unit.article_number), int(unit.paragraph_number)))
-        return tuple(units)
+
+        annex_rows = cast(
+            "list[list[object]]",
+            graph.query(
+                "MATCH (a:ANNEX) RETURN a.citation_ref, a.text ORDER BY a.order"
+            ).result_set,
+        )
+        annex_units = [self._annex_unit(row) for row in annex_rows]
+
+        return (*units, *annex_units)
 
     def _units_for_article(self, graph: GraphHandle, row: list[object]) -> list[ExtractionUnit]:
         article_id = cast("str", row[0])
@@ -109,3 +129,14 @@ class CellarEliDomainMappingAdapter:
             paragraph_match.group(2),
             heading,
         )
+
+    def _annex_unit(self, row: list[object]) -> ExtractionUnit:
+        citation_ref = cast("str", row[0])
+        text = cast("str", row[1])
+
+        annex_match = _ANNEX_CITATION_RE.match(citation_ref)
+        if annex_match is None:
+            raise DomainMapperExtractionError(
+                f"unexpected Annex citation_ref shape: {citation_ref!r}"
+            )
+        return ExtractionUnit(citation_ref, text, annex_match.group(1), "1", "")
