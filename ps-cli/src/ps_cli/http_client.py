@@ -460,8 +460,8 @@ class PsServiceClientProtocol(Protocol):
         """`POST /ingestions` with `{"source": "catalog", "celex": celex}`."""
         ...
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
-        """`POST /ingestions` with `{"source": "internal", "fixture_path": fixture_path}`."""
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
+        """`POST /ingestions` with `{"source": "internal", "content": content}`."""
         ...
 
     def poll_ingestion_status(self, run_id: str) -> str | None:
@@ -682,22 +682,23 @@ class PsServiceClient:
             return None
         return _parse_ingestion_status(payload)
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
-        """`POST /ingestions` with `{"source": "internal", "fixture_path": fixture_path}`.
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
+        """`POST /ingestions` with `{"source": "internal", "content": content}`.
 
-        Ingests an internal-document fixture, identified by a path resolved
-        server-side against PS Service's own fixtures root (PLAN.md §1 D8 --
-        `fixture_path` is never read from the local filesystem here). Raises
-        `PsCliError` if PS Service cannot be reached, if it returns a non-2xx
-        response (parsed per D5's error-body mapping -- today this always
-        includes a 501 `internal_ingestion_not_implemented` until issue #54's
-        backend lands), or if a 200 response body does not match the expected
+        Ingests an internal document whose content was already read and
+        parsed locally by `ps_cli.intake_validation.validate_local_seed_file`
+        -- `content` is sent directly in the request body, nested as JSON,
+        never as a filesystem path (issue #91). Raises `PsCliError` if PS
+        Service cannot be reached, if it returns a non-2xx response (parsed
+        per D5's error-body mapping -- today this always includes a 501
+        `internal_ingestion_not_implemented` until issue #54's backend
+        lands), or if a 200 response body does not match the expected
         success shape.
         """
         try:
             response = self._client.post(
                 _INGESTIONS_PATH,
-                json={"source": "internal", "fixture_path": fixture_path},
+                json={"source": "internal", "content": content},
                 timeout=_INGESTION_REQUEST_TIMEOUT,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:

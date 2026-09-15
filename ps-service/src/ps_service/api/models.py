@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CatalogInstrumentEntry(BaseModel):
@@ -59,48 +59,19 @@ class CatalogIngestionRequest(BaseModel):
 
 
 class InternalIngestionRequest(BaseModel):
-    """``POST /ingestions`` body naming an internal-document JSON fixture by relative path.
+    """``POST /ingestions`` body carrying an internal document's content directly.
 
-    ``fixture_path`` is constrained to a ``.json`` file reachable by a relative
-    path of safe characters; the ``_no_traversal`` validator additionally rejects
-    any ``..`` segment, a leading ``/``, or a backslash so the value cannot escape
-    the fixtures root when it is later resolved (AC-BI-007, first of two layers).
+    ``content`` is the intake document's own JSON structure (nodes/edges),
+    nested directly in the request body -- not a filesystem path, so there is
+    no path-traversal sink to guard (D16). Its shape is gated by the existing
+    JSON-Schema + Pydantic parse inside the internal-seed adapter, not by a
+    ``Field()`` constraint here (D1).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     source: Literal["internal"]
-    fixture_path: str = Field(
-        min_length=1,
-        max_length=256,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._/\-]*\.json$",
-    )
-
-    @field_validator("fixture_path")
-    @classmethod
-    def _no_traversal(cls, v: str) -> str:
-        """Reject a ``..`` path segment, a leading ``/``, or a backslash.
-
-        Raising ``ValueError`` here (rather than the L2-preferred domain
-        exception) is deliberate: Pydantic only converts ``ValueError`` /
-        ``AssertionError`` from a field validator into a ``ValidationError``,
-        which is what the API boundary must surface as a 422.
-
-        Args:
-            v: The candidate relative fixture path.
-
-        Returns:
-            The unchanged value when it contains no traversal construct.
-
-        Raises:
-            ValueError: If the value could escape the fixtures root (leading
-                slash, a backslash separator, or a ``..`` segment).
-        """
-        if v.startswith("/") or "\\" in v:
-            raise ValueError("fixture_path must be a relative POSIX path")
-        if any(segment == ".." for segment in v.split("/")):
-            raise ValueError("fixture_path must not contain a '..' segment")
-        return v
+    content: dict[str, object]
 
 
 IngestionRequest = Annotated[

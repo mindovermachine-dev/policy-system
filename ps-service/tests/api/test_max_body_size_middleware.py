@@ -86,6 +86,22 @@ def test_request_over_the_limit_returns_413_with_structured_body() -> None:
     assert "run_id" in body
 
 
+def test_oversized_internal_content_request_returns_413_with_structured_body() -> None:
+    """AC-BI-008: the size limit covers the new content-transport payload shape,
+    not only the legacy path-based one.
+    """
+    client = TestClient(create_app(_app_config(max_bytes=10)))
+
+    response = client.post(
+        "/ingestions", json={"source": "internal", "content": {"padding": "x" * 100}}
+    )
+
+    assert response.status_code == 413
+    body = response.json()
+    assert body["error"]["code"] == "request_body_too_large"
+    assert "run_id" in body
+
+
 def test_request_over_the_limit_is_rejected_for_any_route_not_only_ingestions() -> None:
     """The middleware inspects every HTTP request generically -- not one route's own body."""
     client = TestClient(create_app(_app_config(max_bytes=10)))

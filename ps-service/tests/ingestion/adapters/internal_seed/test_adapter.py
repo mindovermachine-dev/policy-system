@@ -2,24 +2,24 @@
 
 S2's red-before-green tests 1/2 (PLAN.md S2): AC-BI-002 (unknown edge type
 rejected) and AC-BI-003 (non-"internal" source_type rejected), both exercised
-through the real `read_seed` composition (JSON Schema structural layer +
+through the real `parse_seed` composition (JSON Schema structural layer +
 Pydantic parse), not just the schema layer alone (already covered by
 `tests/ingestion/adapters/internal_seed/test_schema.py`).
+
+Issue #91 retypes `read_seed(identifier: str)` to `parse_seed(document:
+dict[str, object])` -- the adapter no longer does any file I/O, so these
+tests pass a document dict directly rather than writing one to `tmp_path`.
 """
 
 from __future__ import annotations
 
 import copy
-import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 
 from ps_service.ingestion.adapters.internal_seed.adapter import InternalSeedIngestionAdapter
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _VALID_SEED_DOCUMENT: dict[str, Any] = {
     "nodes": [
@@ -61,23 +61,17 @@ _VALID_SEED_DOCUMENT: dict[str, Any] = {
 }
 
 
-def _write_seed(tmp_path: Path, document: dict[str, Any]) -> str:
-    path = tmp_path / "seed.json"
-    path.write_text(json.dumps(document), encoding="utf-8")
-    return str(path)
-
-
-def test_read_seed_accepts_a_well_formed_document(tmp_path: Path) -> None:
+def test_parse_seed_accepts_a_well_formed_document() -> None:
     """A schema-clean, well-typed document parses into an `InternalRegulationSeed`."""
-    identifier = _write_seed(tmp_path, copy.deepcopy(_VALID_SEED_DOCUMENT))
+    document = copy.deepcopy(_VALID_SEED_DOCUMENT)
 
-    seed = InternalSeedIngestionAdapter().read_seed(identifier)
+    seed = InternalSeedIngestionAdapter().parse_seed(document)
 
     assert len(seed.nodes) == 3
     assert len(seed.edges) == 2
 
 
-def test_read_seed_rejects_unknown_edge_type(tmp_path: Path) -> None:
+def test_parse_seed_rejects_unknown_edge_type() -> None:
     """AC-BI-002: an edge `type` outside the allow-list is rejected.
 
     `VERIFIED_BY` (a real edge type in `ps-domain-concepts.md`'s wider
@@ -94,34 +88,15 @@ def test_read_seed_rejects_unknown_edge_type(tmp_path: Path) -> None:
             "to": {"label": "Role", "id": "role-1"},
         }
     )
-    identifier = _write_seed(tmp_path, document)
 
     with pytest.raises(InternalSeedError):
-        InternalSeedIngestionAdapter().read_seed(identifier)
+        InternalSeedIngestionAdapter().parse_seed(document)
 
 
-def test_read_seed_rejects_non_internal_source_type(tmp_path: Path) -> None:
+def test_parse_seed_rejects_non_internal_source_type() -> None:
     """AC-BI-003: a `RegulatoryInstrument.source_type` other than `"internal"` is rejected."""
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["nodes"][0]["properties"]["source_type"] = "external"
-    identifier = _write_seed(tmp_path, document)
 
     with pytest.raises(InternalSeedError):
-        InternalSeedIngestionAdapter().read_seed(identifier)
-
-
-def test_read_seed_rejects_missing_file(tmp_path: Path) -> None:
-    """A path that does not exist raises `InternalSeedError`, naming the path."""
-    missing = str(tmp_path / "does-not-exist.json")
-
-    with pytest.raises(InternalSeedError):
-        InternalSeedIngestionAdapter().read_seed(missing)
-
-
-def test_read_seed_rejects_invalid_json(tmp_path: Path) -> None:
-    """A file that is not valid JSON raises `InternalSeedError`, not a bare `JSONDecodeError`."""
-    path = tmp_path / "seed.json"
-    path.write_text("{not valid json", encoding="utf-8")
-
-    with pytest.raises(InternalSeedError):
-        InternalSeedIngestionAdapter().read_seed(str(path))
+        InternalSeedIngestionAdapter().parse_seed(document)

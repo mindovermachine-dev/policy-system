@@ -98,10 +98,12 @@ def _write_seed_file(tmp_path: Path, document: dict[str, Any]) -> Path:
 def test_validate_local_seed_file_accepts_the_documented_worked_example(
     tmp_path: Path,
 ) -> None:
-    """A schema-conformant file is accepted -- no exception raised."""
+    """A schema-conformant file is accepted, and the parsed document is returned (D13)."""
     seed_path = _write_seed_file(tmp_path, copy.deepcopy(_VALID_SEED_DOCUMENT))
 
-    validate_local_seed_file(seed_path)
+    document = validate_local_seed_file(seed_path)
+
+    assert document == _VALID_SEED_DOCUMENT
 
 
 def test_rejects_seed_missing_required_property(tmp_path: Path) -> None:

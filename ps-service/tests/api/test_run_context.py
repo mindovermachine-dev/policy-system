@@ -18,6 +18,8 @@ the run id is returned to the caller).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -31,13 +33,16 @@ from ps_service.logging import facade
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from api._fakes import ReadLines
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
 _VALID_CELEX = "32024R2847"
-_INTERNAL_FIXTURE_PATH = "engineering-practices/engineering-practices-seed.json"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_INTERNAL_SEED_DOCUMENT: dict[str, object] = json.loads(
+    (
+        _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-seed.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _app_config() -> ServiceConfig:
@@ -106,7 +111,7 @@ def test_log_lines_emitted_during_an_internal_request_carry_the_returned_run_id(
 
     response = client.post(
         "/ingestions",
-        json={"source": "internal", "fixture_path": _INTERNAL_FIXTURE_PATH},
+        json={"source": "internal", "content": _INTERNAL_SEED_DOCUMENT},
     )
 
     assert response.status_code == 200

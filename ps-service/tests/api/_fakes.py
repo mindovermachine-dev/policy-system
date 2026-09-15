@@ -334,24 +334,24 @@ class FakeIngestInternalStage:
 
 
 class FakeInternalSeedAdapter:
-    """Stand-in for ``InternalSeedIngestionAdapter`` -- reads a real seed file off disk.
+    """Stand-in for ``InternalSeedIngestionAdapter`` -- parses a real document dict.
 
     Unlike :class:`FakeIngestionAdapter` (never invoked, since the faked
     ``ingest`` stage ignores its adapter), the internal pipeline's own
-    orchestration genuinely calls ``adapter.read_seed(...)`` itself (to
+    orchestration genuinely calls ``adapter.parse_seed(...)`` itself (to
     derive the graph ``short_name`` before any graph is opened) -- so this
     fake delegates to the real, already-tested ``InternalSeedIngestionAdapter``
     rather than raising, letting a route-level test exercise real parsing
-    against a real fixture file while every downstream stage stays faked.
+    against a real document while every downstream stage stays faked.
     """
 
-    def read_seed(self, identifier: str) -> InternalRegulationSeed:
-        """Delegate to the real adapter -- fixture parsing is not what these tests fake."""
+    def parse_seed(self, document: dict[str, object]) -> InternalRegulationSeed:
+        """Delegate to the real adapter -- document parsing is not what these tests fake."""
         from ps_service.ingestion.adapters.internal_seed.adapter import (
             InternalSeedIngestionAdapter,
         )
 
-        return InternalSeedIngestionAdapter().read_seed(identifier)
+        return InternalSeedIngestionAdapter().parse_seed(document)
 
 
 class FakeIngestionAdapter:

@@ -22,7 +22,6 @@ from ps_service.api.error_handlers import (
 )
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
-    FixturePathError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PendingReviewNotFoundError,
@@ -105,10 +104,6 @@ _LEAKY_EXCEPTIONS: list[tuple[str, Exception]] = [
         CatalogIdentifierNotFoundError(
             f"CELEX 32099R9999 absent; searched {_REPO_ROOT}/catalog at localhost:6379",
         ),
-    ),
-    (
-        "fixture_path",
-        FixturePathError(f"{Path.home()}/secrets/evil.json escapes {_REPO_ROOT}/test-data"),
     ),
     (
         "internal_seed",
@@ -203,7 +198,6 @@ def test_pipeline_stage_error_names_the_failing_stage() -> None:
 def test_api_errors_map_to_their_documented_status_codes() -> None:
     cases: list[tuple[Exception, int]] = [
         (CatalogIdentifierNotFoundError("x"), 404),
-        (FixturePathError("x"), 400),
         (InternalSeedValidationError("x"), 422),
         (IngestionConfigIncompleteError("x"), 503),
         (PipelineStageError(stage="s", reason="r"), 502),

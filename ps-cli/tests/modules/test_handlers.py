@@ -79,9 +79,9 @@ class _UnusedPsServiceClientMethods:
         msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
         raise AssertionError(msg)
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
-        msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+        msg = f"ingest_internal must not be called in this test (content={content!r})"
         raise AssertionError(msg)
 
     def poll_ingestion_status(self, run_id: str) -> str | None:
@@ -456,11 +456,12 @@ def test_handle_ingest_document_validates_locally_before_any_http_call(
         "edges": [],
         "graph_name": "policy_system",
     }
-    (tmp_path / "bad-seed.json").write_text(json.dumps(invalid_document), encoding="utf-8")
+    document_path = tmp_path / "bad-seed.json"
+    document_path.write_text(json.dumps(invalid_document), encoding="utf-8")
     client = _UnusedPsServiceClientMethods()
 
     with pytest.raises(PsCliError) as excinfo:
-        handle_ingest_document("bad-seed.json", client, fixtures_root=tmp_path)
+        handle_ingest_document(document_path, client)
 
     assert "graph_name" in excinfo.value.msg or "additional" in excinfo.value.msg.lower()
 
@@ -501,9 +502,9 @@ class _FakeInternalIngestClient(_UnusedPsServiceClientMethods):
         """Report a fully-healthy target -- the pre-flight check must let this through."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
-        """Return the scripted result, ignoring `fixture_path`."""
-        del fixture_path
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
+        """Return the scripted result, ignoring `content`."""
+        del content
         return self._result
 
 
@@ -515,9 +516,8 @@ def test_handle_ingest_document_surfaces_nonzero_pending_reviews(
     `handle_ingest_regulation`, for the internal-seed pipeline's own
     stage-print loop (CHANGES.md C2, handlers.py:215-219).
     """
-    (tmp_path / "seed.json").write_text(
-        json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8"
-    )
+    document_path = tmp_path / "seed.json"
+    document_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
     result = IngestionResult(
         run_id="run-internal-004",
         regulatory_instrument_id="ri-engprac",
@@ -537,7 +537,7 @@ def test_handle_ingest_document_surfaces_nonzero_pending_reviews(
     )
     client = _FakeInternalIngestClient(result=result)
 
-    handle_ingest_document("seed.json", client, fixtures_root=tmp_path)
+    handle_ingest_document(document_path, client)
 
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
@@ -551,9 +551,8 @@ def test_handle_ingest_document_stage_line_byte_identical_when_no_pending_review
     """AC-BI-010 corollary for the internal-seed pipeline: pending_reviews ==
     0 (or absent) prints exactly the pre-existing line, unchanged.
     """
-    (tmp_path / "seed.json").write_text(
-        json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8"
-    )
+    document_path = tmp_path / "seed.json"
+    document_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
     result = IngestionResult(
         run_id="run-internal-005",
         regulatory_instrument_id="ri-engprac",
@@ -574,7 +573,7 @@ def test_handle_ingest_document_stage_line_byte_identical_when_no_pending_review
     )
     client = _FakeInternalIngestClient(result=result)
 
-    handle_ingest_document("seed.json", client, fixtures_root=tmp_path)
+    handle_ingest_document(document_path, client)
 
     captured = capsys.readouterr()
     lines = captured.out.splitlines()

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
@@ -22,6 +23,15 @@ from ps_cli.models import ChangeCheckResult, ReadinessResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# Shared wire-contract literal (issue #91, CHANGES.md A2): both ps-service's and
+# ps-cli's own test suites read the internal-ingestion envelope's field name from
+# this one file, so a one-sided rename of `content` breaks the *other* side's
+# test rather than going unnoticed by either.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WIRE_CONTRACTS_DIR = _REPO_ROOT / "test-data" / "wire-contracts"
+_ENVELOPE_CONTRACT_PATH = _WIRE_CONTRACTS_DIR / "ingest-internal-envelope.json"
+_ENVELOPE_CONTRACT: dict[str, object] = json.loads(_ENVELOPE_CONTRACT_PATH.read_text())
 
 
 class TestShouldWarnInsecure:
@@ -507,7 +517,7 @@ def _internal_not_implemented_handler(request: httpx.Request) -> httpx.Response:
 
 
 class TestIngestInternal:
-    """Increment 14: PsServiceClient.ingest_internal(fixture_path)."""
+    """Increment 14: PsServiceClient.ingest_internal(content)."""
 
     def test_parses_a_200_success_response(self) -> None:
         """A 200 POST /ingestions body with source "internal" parses into an IngestionResult."""
@@ -516,7 +526,7 @@ class TestIngestInternal:
             transport=httpx.MockTransport(_internal_ingestion_success_handler),
         )
 
-        result = client.ingest_internal("seeds/internal-sop.json")
+        result = client.ingest_internal({"nodes": [], "edges": []})
 
         assert result.run_id == "run-internal-001"
         assert result.regulatory_instrument_id == "ri-internal"
@@ -527,7 +537,7 @@ class TestIngestInternal:
         assert result.stages[0].summary == {"nodes": 1}
 
     def test_posts_the_expected_request_body(self) -> None:
-        """The request body is {"source": "internal", "fixture_path": fixture_path}."""
+        """The request body is {"source": "internal", <content_field_name>: content}."""
         captured_bodies: list[object] = []
 
         def _handler(request: httpx.Request) -> httpx.Response:
@@ -535,11 +545,15 @@ class TestIngestInternal:
             return httpx.Response(200, json=_INTERNAL_INGESTION_SUCCESS_BODY)
 
         client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+        content: dict[str, object] = {"nodes": [], "edges": []}
 
-        client.ingest_internal("seeds/internal-sop.json")
+        client.ingest_internal(content)
 
         assert captured_bodies == [
-            {"source": "internal", "fixture_path": "seeds/internal-sop.json"}
+            {
+                "source": _ENVELOPE_CONTRACT["source"],
+                _ENVELOPE_CONTRACT["content_field_name"]: content,
+            }
         ]
 
     def test_501_internal_ingestion_not_implemented_raises_ps_cli_error(self) -> None:
@@ -558,7 +572,7 @@ class TestIngestInternal:
         )
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_internal("seeds/internal-sop.json")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert "internal_ingestion_not_implemented" in excinfo.value.msg
         assert _INTERNAL_NOT_IMPLEMENTED_MESSAGE in excinfo.value.msg
@@ -580,7 +594,7 @@ class TestIngestInternal:
 
         client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
 
-        client.ingest_internal("seeds/internal-sop.json")
+        client.ingest_internal({"nodes": [], "edges": []})
 
         assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
 

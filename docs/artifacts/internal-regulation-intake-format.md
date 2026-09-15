@@ -1,10 +1,13 @@
 # Internal-Regulation Intake Format
 
-> **Status: Draft.** This specifies the target input format for `ps-cli ingest document`,
-> a deliverable of [#54](https://github.com/mindovermachine-dev/policy-system/issues/54)
-> (not yet implemented). Once #54 ships, `ps-cli` and `ps-service` will validate submitted
-> files against this format directly. Treat this document as the format's authoritative
-> specification-in-progress, not as something you can ingest today.
+> **Status: Draft.** This specifies the input format for `ps-cli ingest document`, a
+> deliverable of [#54](https://github.com/mindovermachine-dev/policy-system/issues/54).
+> `ps-cli` and `ps-service` validate submitted files against this format directly.
+> Content-transport has shipped: `ps-cli ingest document <local-file-path>` reads the
+> file from your own machine, validates it locally, and sends its content in the
+> request body — PS Service performs no server-side path resolution and never touches
+> its own filesystem to locate the document. The node/edge schema below remains
+> unchanged by that transport work.
 
 ## Who this is for
 

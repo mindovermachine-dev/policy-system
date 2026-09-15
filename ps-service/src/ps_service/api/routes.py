@@ -26,7 +26,6 @@ from ps_service.api.dependencies import (
     provide_restore_dependencies,
     provide_run_id,
 )
-from ps_service.api.fixtures import resolve_fixture_path
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     resolve_via_cellar,
@@ -95,10 +94,10 @@ async def create_ingestion(
     same pipeline a curated one would (AC-BI-003/004), fetching the document at
     most once for the whole request (AC-BI-006). A stage failure -- including a
     Cellar/ELI outage during resolution -- surfaces as a 502 naming the failing
-    stage (AC-BI-007/008). A ``source: "internal"`` request resolves
-    ``fixture_path`` against PS Service's own fixtures root (``resolve_fixture_path``,
-    AC-BI-010 layer 2) and runs the internal-seed pipeline (issue #54, S2):
-    today, one ``internal_ingestion`` stage that parses, validates, mints, and
+    stage (AC-BI-007/008). A ``source: "internal"`` request carries the intake
+    document's content directly in the body (issue #91 -- no server-side path
+    resolution) and runs the internal-seed pipeline (issue #54, S2): today,
+    one ``internal_ingestion`` stage that parses, validates, mints, and
     persists the submission into ``{short}_baseline``/``{short}_native``.
 
     Args:
@@ -116,19 +115,15 @@ async def create_ingestion(
     Raises:
         CatalogIdentifierNotFoundError: The CELEX is absent from the curated
             catalog and does not exist on Cellar/ELI either (404).
-        FixturePathError: The internal request's ``fixture_path`` resolves
-            outside the fixtures root, isn't a ``.json`` file, or doesn't
-            exist (400).
         InternalSeedValidationError: The internal request's document fails
             structural or shape validation (422).
         PipelineStageError: A pipeline stage raised (502).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     if request_body.source == "internal":
-        seed_path = resolve_fixture_path(request_body.fixture_path)
         outcome = await run_in_threadpool(
             run_internal_ingestion_pipeline,
-            seed_path,
+            request_body.content,
             config=config,
             run_id=run_id,
             caller=caller,

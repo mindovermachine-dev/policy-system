@@ -11,6 +11,7 @@ boundaries" and mirroring `tests/ingestion/test_graph_writer.py`'s own style.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -34,6 +35,9 @@ from ps_service.ingestion.adapters.internal_seed.persist import (
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _DANGLING_EDGE_FIXTURE = (
     _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-dangling-edge.json"
+)
+_DANGLING_EDGE_DOCUMENT: dict[str, object] = json.loads(
+    _DANGLING_EDGE_FIXTURE.read_text(encoding="utf-8")
 )
 
 
@@ -190,7 +194,7 @@ def test_dangling_requires_edge_fails_closed_no_partial_write() -> None:
     (B1) -- schema-clean at the JSON-Schema layer, but referentially invalid
     (its one REQUIRES edge targets a Capability id never declared as a node).
     """
-    seed = InternalSeedIngestionAdapter().read_seed(str(_DANGLING_EDGE_FIXTURE))
+    seed = InternalSeedIngestionAdapter().parse_seed(_DANGLING_EDGE_DOCUMENT)
     baseline_graph = _FakeGraph()
     native_graph = _FakeGraph()
 

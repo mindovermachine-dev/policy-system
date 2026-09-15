@@ -374,7 +374,7 @@ Global flags, usable before or after any subcommand:
 | `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
 | `ps-cli get catalog` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
 | `ps-cli ingest regulation <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
-| `ps-cli ingest document <fixture_path>` | `fixture_path` — a `.json` path, resolved on PS Service's fixtures root, not read locally | Ingest an internal policy document. |
+| `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
 | `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
 | `ps-cli check regulations` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
@@ -387,9 +387,9 @@ itself.
 ### Running commands
 
 ```bash
-ps-cli get catalog                          # local curated catalog — no FalkorDB/LLM dependency
-ps-cli ingest regulation 32016R0679         # full ingestion pipeline
-ps-cli ingest document <fixture_path>.json  # ingest an internal policy document
+ps-cli get catalog                           # local curated catalog — no FalkorDB/LLM dependency
+ps-cli ingest regulation 32016R0679          # full ingestion pipeline
+ps-cli ingest document <document_path>.json  # reads the file locally, sends its content
 ```
 
 `ingest regulation` and `ingest document` exercise the full pipeline, so the PS

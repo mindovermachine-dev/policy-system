@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 import threading
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from ps_cli import catalog_repo
@@ -23,7 +24,6 @@ from ps_cli.intake_validation import validate_local_seed_file
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
-    from pathlib import Path
     from typing import Literal
 
     from ps_cli.config import CliConfig
@@ -213,24 +213,20 @@ def handle_ingest_regulation(
         print(line)
 
 
-def handle_ingest_document(
-    fixture_path: str, client: PsServiceClientProtocol, *, fixtures_root: Path
-) -> None:
-    """Ingest an internal-document fixture, identified by `fixture_path`, via PS Service.
+def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol) -> None:
+    """Ingest an internal document, read locally from `document_path`, via PS Service.
 
-    `fixture_path` is a reference to a file PS Service itself resolves
-    server-side against its own fixtures root -- the wire request never
-    changes shape (PLAN.md §1 D8, issue #54 D3). Its format (non-empty, ends
-    with `.json`) is already validated by argparse's `type=_fixture_path_type`
-    callback (`ps_cli.modules.parser`) before this handler ever runs (L1
-    "Fail Fast at Boundaries").
+    `document_path` is a plain local filesystem path (relative to the
+    operator's cwd, or absolute) -- read directly from this machine, never
+    resolved against any server-side or ps-cli-owned root (issue #91). Its
+    format (non-empty, ends with `.json`) is already validated by argparse's
+    `type=_document_path_type` callback (`ps_cli.modules.parser`) before this
+    handler ever runs (L1 "Fail Fast at Boundaries").
 
-    Before any network call, `validate_local_seed_file` validates the same
-    file *locally*, at `fixtures_root / fixture_path` -- the same relative
-    path PS Service will independently resolve and validate itself, since
-    the two processes share a filesystem in every environment this issue
-    targets (issue #54 PLAN.md D3/D7, AC-BI-019). A schema violation (or a
-    missing/unreadable local file) raises `PsCliError` here, naming the
+    Before any network call, `validate_local_seed_file` reads and validates
+    the file at `document_path` against the packaged intake-format JSON
+    Schema, returning the parsed document (AC-BI-019). A schema violation (or
+    a missing/unreadable local file) raises `PsCliError` here, naming the
     specific problem, and neither `_assert_llm_interface_available` nor
     `client.ingest_internal()` is ever called -- provable by a fake client
     recording zero calls.
@@ -240,7 +236,9 @@ def handle_ingest_document(
     (issue #75, AC-BI-009..013): a target reporting LLM Interface unreachable
     fails fast here too, before `client.ingest_internal()`'s network call
     (DD2 -- local validation still runs first, since it's the cheaper check
-    and would reject the request regardless of readiness).
+    and would reject the request regardless of readiness). The already-parsed
+    document is then sent directly in the request body (D13/D9) -- the file
+    is never read or parsed a second time.
 
     On success, prints the run id, the regulatory instrument id, and each
     pipeline stage's name and status (AC-BI-010). When the `merge` stage's
@@ -252,9 +250,9 @@ def handle_ingest_document(
     uncaught -- only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1
     D5/D9).
     """
-    validate_local_seed_file(fixtures_root / fixture_path)
+    document = validate_local_seed_file(document_path)
     _assert_llm_interface_available(client)
-    result = client.ingest_internal(fixture_path)
+    result = client.ingest_internal(document)
     print(f"run_id: {result.run_id}")
     print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
     for stage in result.stages:
@@ -436,14 +434,11 @@ def _dispatch_near_misses_resolve(
 def _dispatch_ingest_document(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_ingest_document`'s signature to the dispatch shape.
 
-    Resolves `fixtures_root` locally via `load_config()` (mirroring
-    `_dispatch_restore_instrument`'s own `curated_repo_path` resolution) so
-    `handle_ingest_document` can validate the submitted file before any
-    network call (issue #54 D3).
+    `document_path` is a plain local filesystem path typed on the command
+    line -- no config lookup is needed to resolve it (issue #91 removed the
+    server-side/root-relative indirection entirely).
     """
-    context = getattr(args, "context", None)
-    fixtures_root = load_config(context=context).fixtures_root
-    handle_ingest_document(cast("str", args.fixture_path), client, fixtures_root=fixtures_root)
+    handle_ingest_document(Path(cast("str", args.document_path)), client)
 
 
 def _dispatch_get_health(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:

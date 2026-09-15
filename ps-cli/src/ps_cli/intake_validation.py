@@ -55,7 +55,7 @@ def _read_seed_document(path: Path) -> dict[str, object]:
     if not path.is_file():
         raise PsCliError(
             msg=f"fixture file not found: {path}",
-            hint="check the path is relative to your configured fixtures_root",
+            hint="check the path and try again",
         )
     try:
         parsed: object = json.loads(path.read_text(encoding="utf-8"))
@@ -94,18 +94,21 @@ def _describe_first_violation(
     return f"{location}: {error.message}"
 
 
-def validate_local_seed_file(path: Path) -> None:
+def validate_local_seed_file(path: Path) -> dict[str, object]:
     """Validate the local file at `path` against the packaged intake-format JSON Schema.
 
     Raises `PsCliError` naming the specific missing/invalid property (never a
     generic parse error, AC-BI-019) when `path` is missing, unreadable, not
-    valid JSON, or fails schema validation. No-ops on a conforming document.
-    Called by `handlers.handle_ingest_document` before `client.ingest_internal()`
-    -- a rejection here means zero HTTP calls are ever made (D3/B4).
+    valid JSON, or fails schema validation. Returns the parsed document on a
+    conforming file, so `handlers.handle_ingest_document` can hand it
+    straight to `client.ingest_internal()` without re-reading/re-parsing the
+    file a second time (issue #91). Called by `handlers.handle_ingest_document`
+    before `client.ingest_internal()` -- a rejection here means zero HTTP
+    calls are ever made (D3/B4).
     """
     document = _read_seed_document(path)
     validator = _load_validator()
     violation = _describe_first_violation(validator, document)
     if violation is None:
-        return
+        return document
     raise PsCliError(msg=f"fixture file at {path} is invalid at '{violation}'")

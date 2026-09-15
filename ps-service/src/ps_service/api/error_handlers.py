@@ -22,7 +22,6 @@ from fastapi.responses import JSONResponse
 from ps_service.api.errors import (
     ApiError,
     CatalogIdentifierNotFoundError,
-    FixturePathError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PendingReviewNotFoundError,
@@ -83,7 +82,6 @@ def _scrub_text(text: str) -> str:
 
 _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     CatalogIdentifierNotFoundError,
-    FixturePathError,
     InternalSeedValidationError,
     IngestionConfigIncompleteError,
     RequestBodyTooLargeError,
@@ -95,7 +93,6 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
 _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
     {
         "CatalogIdentifierNotFoundError",
-        "FixturePathError",
         "InternalSeedValidationError",
         "IngestionConfigIncompleteError",
         "InternalSeedError",
@@ -174,7 +171,6 @@ def _json(status_code: int, body: dict[str, object]) -> JSONResponse:
 
 _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
     (CatalogIdentifierNotFoundError, "catalog_identifier_not_found", status.HTTP_404_NOT_FOUND),
-    (FixturePathError, "fixture_path_invalid", status.HTTP_400_BAD_REQUEST),
     (InternalSeedValidationError, "internal_seed_invalid", status.HTTP_422_UNPROCESSABLE_CONTENT),
     (
         IngestionConfigIncompleteError,
@@ -281,7 +277,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     whitelisted ``ApiError`` subclass, one for ``PipelineStageError`` (502), one
     for ``RestoreStageFailedError`` (502), one for ``RequestValidationError``
     (422), and a catch-all ``Exception`` handler (generic 500). Status map:
-    ``CatalogIdentifierNotFoundError`` 404, ``FixturePathError`` 400,
+    ``CatalogIdentifierNotFoundError`` 404,
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,

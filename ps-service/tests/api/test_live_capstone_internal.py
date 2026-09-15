@@ -72,8 +72,10 @@ for the *other* two assertions in this module, hence the marker staying put.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -101,15 +103,27 @@ _DISPOSABLE_GRAPH = "policy_system_api_internal_capstone_test"
 _REAL_GRAPH = "policy_system"
 _ENDPOINT = "/ingestions"
 
-_SEED_FIXTURE_PATH = "authored-governance/authored-governance-seed.json"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_document(relative_path: str) -> dict[str, object]:
+    """Read and JSON-decode a `test-data/`-relative fixture document."""
+    return json.loads((_REPO_ROOT / "test-data" / relative_path).read_text(encoding="utf-8"))
+
+
 _SEED_RID = "AUTHGOV-1.0"
 _SEED_SHORT_NAME = "AUTHGOV"
-_SEED_REQUEST: dict[str, str] = {"source": "internal", "fixture_path": _SEED_FIXTURE_PATH}
+_SEED_REQUEST: dict[str, object] = {
+    "source": "internal",
+    "content": _load_document("authored-governance/authored-governance-seed.json"),
+}
 
-_DANGLING_FIXTURE_PATH = "authored-governance/authored-governance-dangling-edge.json"
 _DANGLING_RID = "AUTHGOV-DANGLING-1.0"
 _DANGLING_SHORT_NAME = "AUTHGOV-DANGLING"
-_DANGLING_REQUEST: dict[str, str] = {"source": "internal", "fixture_path": _DANGLING_FIXTURE_PATH}
+_DANGLING_REQUEST: dict[str, object] = {
+    "source": "internal",
+    "content": _load_document("authored-governance/authored-governance-dangling-edge.json"),
+}
 
 _COUNT_ALL = "MATCH (n) RETURN count(n)"
 

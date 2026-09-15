@@ -66,9 +66,9 @@ class _UnusedPsServiceClientMethods:
         msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
         raise AssertionError(msg)
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
-        msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+        msg = f"ingest_internal must not be called in this test (content={content!r})"
         raise AssertionError(msg)
 
     def poll_ingestion_status(self, run_id: str) -> str | None:
@@ -782,9 +782,9 @@ class _FakeInternalIngestSuccessClient(_UnusedPsServiceClientMethods):
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
-        """Return a fixed IngestionResult, ignoring `fixture_path`."""
-        del fixture_path
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
+        """Return a fixed IngestionResult, ignoring `content`."""
+        del content
         return IngestionResult(
             run_id="run-internal-cli",
             regulatory_instrument_id="ri-internal-cli",
@@ -806,9 +806,9 @@ class _FakeInternalIngest501Client(_UnusedPsServiceClientMethods):
         """Return a healthy default -- this fake's test is not about the pre-flight check."""
         return ReadinessResult(status="ready", unhealthy_dependencies=[])
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Raise the PsCliError PsServiceClient.ingest_internal() raises for the real 501."""
-        del fixture_path
+        del content
         raise PsCliError(
             msg=f"PS Service reported internal_ingestion_not_implemented: "
             f"{_INTERNAL_NOT_IMPLEMENTED_MESSAGE}",
@@ -840,16 +840,15 @@ _MINIMAL_VALID_INTERNAL_SEED_DOCUMENT = {
 }
 
 
-def _write_valid_internal_seed_fixture(fixtures_root: Path, relative_path: str) -> None:
-    """Write a schema-valid seed document at `fixtures_root / relative_path`."""
-    seed_path = fixtures_root / relative_path
+def _write_valid_internal_seed_fixture(directory: Path, relative_path: str) -> None:
+    """Write a schema-valid seed document at `directory / relative_path`."""
+    seed_path = directory / relative_path
     seed_path.parent.mkdir(parents=True, exist_ok=True)
     seed_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
 
 
 def test_ingest_document_prints_run_id_on_mocked_success(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Covers AC-BI-003's CLI plumbing only, per orchestrator decision 1 (2026-08-30).
@@ -858,15 +857,17 @@ def test_ingest_document_prints_run_id_on_mocked_success(
     proves ps-cli's command/argument/REST wiring against a mocked success
     response -- it is NOT proof the real service can ingest an internal
     fixture, and AC-BI-003 must not be marked done on the strength of this
-    test alone. `PS_CLI_FIXTURES_ROOT` points at a scratch directory holding a
-    schema-valid fixture (issue #54 S1) so local validation passes and the
-    call reaches the fake client, unrelated to what this test itself proves.
+    test alone. The seed fixture is written directly under `tmp_path` (issue
+    #91: `ingest document` now takes a plain local filesystem path, not one
+    resolved against a configured fixtures root) so local validation passes
+    and the call reaches the fake client, unrelated to what this test itself
+    proves.
     """
-    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngestSuccessClient()
 
-    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -875,7 +876,6 @@ def test_ingest_document_prints_run_id_on_mocked_success(
 
 def test_ingest_document_surfaces_real_service_501_as_clean_failure(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """What running this command against the real, unmodified ps-service produces today.
@@ -884,16 +884,16 @@ def test_ingest_document_surfaces_real_service_501_as_clean_failure(
     `POST /ingestions` with `source: "internal"` currently 501s
     (`internal_ingestion_not_implemented`) until issue #54's backend lands.
     Asserts AC-BI-008's shape: exit 1, the `internal_ingestion_not_implemented`
-    message surfaced in stderr, no traceback substring present.
-    `PS_CLI_FIXTURES_ROOT` points at a scratch directory holding a
-    schema-valid fixture (issue #54 S1) so local validation passes and the
-    call reaches the fake client, unrelated to what this test itself proves.
+    message surfaced in stderr, no traceback substring present. The seed
+    fixture is written directly under `tmp_path` (issue #91: no more
+    fixtures-root indirection) so local validation passes and the call
+    reaches the fake client, unrelated to what this test itself proves.
     """
-    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeInternalIngest501Client()
 
-    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -921,10 +921,10 @@ class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
         """Return the scripted ReadinessResult."""
         return self._readiness
 
-    def ingest_internal(self, fixture_path: str) -> IngestionResult:
+    def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail the test unless `allow_ingest=True` -- proves the pre-flight check ran first."""
         if not self._allow_ingest:
-            msg = f"ingest_internal must not be called in this test (fixture_path={fixture_path!r})"
+            msg = f"ingest_internal must not be called in this test (content={content!r})"
             raise AssertionError(msg)
         return IngestionResult(
             run_id="run-internal-cli",
@@ -936,7 +936,6 @@ class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
 
 def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-009: LLM Interface unhealthy blocks `ingest document` before any network call.
@@ -944,13 +943,13 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
     The fixture is schema-valid so local validation passes and the pre-flight check is
     actually reached -- proving it is *this* check, not local validation, that blocks.
     """
-    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeReadinessGatedInternalIngestClient(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
     )
 
-    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -960,24 +959,22 @@ def test_ingest_document_fails_fast_when_llm_interface_unreachable(
 
 def test_ingest_document_does_not_block_when_only_cellar_eli_unreachable(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `ingest document`."""
-    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
+    document_path = tmp_path / "seeds/internal-sop.json"
     _write_valid_internal_seed_fixture(tmp_path, "seeds/internal-sop.json")
     fake_client = _FakeReadinessGatedInternalIngestClient(
         readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
         allow_ingest=True,
     )
 
-    exit_code = run(["ingest", "document", "seeds/internal-sop.json"], client=fake_client)
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     assert exit_code == 0
 
 
 def test_ingest_document_still_rejects_invalid_local_file_before_any_network_call(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """DD2: local validation still runs before the pre-flight check.
@@ -988,16 +985,16 @@ def test_ingest_document_still_rejects_invalid_local_file_before_any_network_cal
     `AssertionError` escaping, proves the pre-flight check is never reached for an
     invalid local file.
     """
-    monkeypatch.setenv("PS_CLI_FIXTURES_ROOT", str(tmp_path))
     invalid_document: dict[str, object] = {
         "nodes": [],
         "edges": [],
         "graph_name": "policy_system",
     }
-    (tmp_path / "bad-seed.json").write_text(json.dumps(invalid_document), encoding="utf-8")
+    document_path = tmp_path / "bad-seed.json"
+    document_path.write_text(json.dumps(invalid_document), encoding="utf-8")
     fake_client = _UnusedPsServiceClientMethods()
 
-    exit_code = run(["ingest", "document", "bad-seed.json"], client=fake_client)
+    exit_code = run(["ingest", "document", str(document_path)], client=fake_client)
 
     captured = capsys.readouterr()
     assert exit_code == 1

@@ -26,15 +26,6 @@ class CatalogIdentifierNotFoundError(ApiError):
     """
 
 
-class FixturePathError(ApiError):
-    """An internal-document request's fixture path resolved outside the fixtures root.
-
-    Also covers a non-``.json`` suffix or a missing file (AC-BI-007). Raised by
-    ``fixtures.resolve_fixture_path`` at point of use, before any pipeline stage
-    runs. Handled as HTTP 400; ``str(exc)`` is surfaced verbatim.
-    """
-
-
 class InternalSeedValidationError(ApiError):
     """An internal seed document is malformed, carries an unknown label, or is not internal.
 

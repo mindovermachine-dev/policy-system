@@ -374,7 +374,7 @@ installed one described in the [user guide](./docs/artifacts/user-guide.md#ps-cl
 uv run python -m ps_cli --version
 uv run python -m ps_cli get health
 uv run python -m ps_cli ingest regulation 32016R0679
-uv run python -m ps_cli ingest document <fixture_path>.json
+uv run python -m ps_cli ingest document <document_path>.json  # local file, read and sent as content
 ```
 
 `get health` only needs PS Service itself — it reports reachability, health,

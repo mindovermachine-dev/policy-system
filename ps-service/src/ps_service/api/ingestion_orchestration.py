@@ -61,7 +61,6 @@ from ps_service.logging.facade import emit_log_entry
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
@@ -77,6 +76,11 @@ if TYPE_CHECKING:
 _COMPONENT = "api"
 _RUN_ACTION = "ingestion_run"
 _STAGE_REASON_MAX_LEN = 300
+_INTERNAL_INGESTION_SOURCE_IDENTIFIER = "internal-document"
+"""Fixed ``source_identifier`` for every internal-ingestion ``_emit_run`` call
+(D7, issue #91) -- there is no filesystem path any more to use as this value,
+and the parsed document's own id is not known until after parsing (the
+"started" log line fires before then)."""
 
 
 # --- graph seam (m9 -- no `falkordb` type ever crosses into `ps_service.api`) ---
@@ -160,10 +164,10 @@ class DeriveStage(Protocol):
 
 
 class InternalSeedAdapter(Protocol):
-    """Call shape of ``InternalSeedIngestionAdapter.read_seed``."""
+    """Call shape of ``InternalSeedIngestionAdapter.parse_seed``."""
 
-    def read_seed(self, identifier: str) -> InternalRegulationSeed:
-        """Read, validate, and parse one internal-regulation seed document."""
+    def parse_seed(self, document: dict[str, object]) -> InternalRegulationSeed:
+        """Validate and parse one already-read internal-regulation seed document."""
         ...
 
 
@@ -566,7 +570,10 @@ def _emit_run(
     Args:
         outcome: ``"started"`` / ``"succeeded"`` / ``"failed"``.
         run_id: The request-scoped run id, carried on every line.
-        source_identifier: The catalog CELEX (or, in #54, the internal seed id).
+        source_identifier: The catalog CELEX, or (issue #91) the fixed
+            ``_INTERNAL_INGESTION_SOURCE_IDENTIFIER`` literal for the
+            internal-document path -- content-transport carries no path or
+            other stable identifier known before parsing.
         caller: The requesting client host (or ``"unknown"``).
         emitter: Optional explicit emitter; otherwise the process default.
         duration_ms: Wall time for the run so far (omitted on ``"started"``).
@@ -843,19 +850,19 @@ def _internal_short_name(regulatory_instrument_id: str) -> str:
 
 
 def _read_internal_seed_and_short_name(
-    adapter: InternalSeedAdapter, seed_path: Path
+    adapter: InternalSeedAdapter, document: dict[str, object]
 ) -> tuple[InternalRegulationSeed, str]:
-    """Read, parse, and derive the graph ``short_name`` for ``seed_path``.
+    """Parse ``document`` and derive the graph ``short_name`` for it.
 
     Runs before any pipeline stage and before any graph is opened (AC-BI-006's
     "no I/O until validated" precedent, applied to the internal path): both a
-    schema/shape violation (AC-BI-002/003) from ``adapter.read_seed`` and a
+    schema/shape violation (AC-BI-002/003) from ``adapter.parse_seed`` and a
     missing/duplicate ``RegulatoryInstrument`` node from ``find_regulatory_instrument``
     are translated to ``InternalSeedValidationError`` (422) here, distinct from a
     later ``PipelineStageError`` (502) a genuine stage failure would raise.
     """
     try:
-        seed = adapter.read_seed(str(seed_path))
+        seed = adapter.parse_seed(document)
         short_name = _internal_short_name(find_regulatory_instrument(seed).id)
     except InternalSeedError as exc:
         raise InternalSeedValidationError(str(exc)) from exc
@@ -863,7 +870,7 @@ def _read_internal_seed_and_short_name(
 
 
 def run_internal_ingestion_pipeline(
-    seed_path: Path,
+    document: dict[str, object],
     *,
     config: ServiceConfig,
     run_id: str,
@@ -871,7 +878,7 @@ def run_internal_ingestion_pipeline(
     dependencies: PipelineDependencies,
     emitter: LogEmitter | None = None,
 ) -> IngestionOutcome:
-    """Run the internal-seed ingestion pipeline for one resolved fixture path.
+    """Run the internal-seed ingestion pipeline for one already-parsed document.
 
     Two stages in sequence (GH #76 removed issue #54 S3's ``governance_
     derivation`` stage outright -- Policy/Standard/Control are now authored
@@ -883,7 +890,7 @@ def run_internal_ingestion_pipeline(
     single-tenant ``policy_system`` graph, the same stage function
     :func:`run_catalog_ingestion_pipeline` already uses), each wrapped by
     :func:`_run_stage` so a failure in either of them aborts the sequence and
-    names the failing stage (AC-BI-013). The seed is read (and translated to
+    names the failing stage (AC-BI-013). The seed is parsed (and translated to
     :class:`InternalSeedValidationError` on a schema/shape violation)
     *before* any graph is opened, since the ``{short}_baseline``/``{short}_
     native`` graph names are derived from the seed's own
@@ -896,8 +903,9 @@ def run_internal_ingestion_pipeline(
     HTTP-503-before-any-I/O guarantee the catalog pipeline already gives.
 
     Args:
-        seed_path: The already-resolved (``ps_service.api.fixtures.
-            resolve_fixture_path``) filesystem path to the seed document.
+        document: The already-parsed intake document (the request body's
+            ``content`` field, issue #91) -- carried directly in the request,
+            never resolved against PS Service's own filesystem.
         config: The resolved service configuration.
         run_id: The request-scoped run id.
         caller: The requesting client host, or ``"unknown"``.
@@ -927,13 +935,13 @@ def run_internal_ingestion_pipeline(
     _emit_run(
         outcome="started",
         run_id=run_id,
-        source_identifier=str(seed_path),
+        source_identifier=_INTERNAL_INGESTION_SOURCE_IDENTIFIER,
         caller=caller,
         emitter=emitter,
     )
     try:
         try:
-            seed, short_name = _read_internal_seed_and_short_name(adapter, seed_path)
+            seed, short_name = _read_internal_seed_and_short_name(adapter, document)
             native_graph = dependencies.graphs.native(config, short_name)
             baseline_graph = dependencies.graphs.baseline(config, short_name)
             single_tenant_graph = dependencies.graphs.single_tenant(config)
@@ -965,7 +973,7 @@ def run_internal_ingestion_pipeline(
             _emit_run(
                 outcome="failed",
                 run_id=run_id,
-                source_identifier=str(seed_path),
+                source_identifier=_INTERNAL_INGESTION_SOURCE_IDENTIFIER,
                 caller=caller,
                 emitter=emitter,
                 duration_ms=_elapsed_ms(started),
@@ -977,7 +985,7 @@ def run_internal_ingestion_pipeline(
     _emit_run(
         outcome="succeeded",
         run_id=run_id,
-        source_identifier=str(seed_path),
+        source_identifier=_INTERNAL_INGESTION_SOURCE_IDENTIFIER,
         caller=caller,
         emitter=emitter,
         duration_ms=_elapsed_ms(started),

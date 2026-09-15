@@ -2,15 +2,17 @@
 
 Replaces the now-deleted ``test_internal_request_returns_501_referencing_54``
 (``tests/api/test_ingestions_catalog.py``): a ``source: "internal"`` request no
-longer 501s -- it resolves ``fixture_path`` against PS Service's own fixtures
-root (``resolve_fixture_path``, AC-BI-010 layer 2) and runs the internal-seed
-pipeline's one stage (``internal_ingestion``), via the same
-``app.dependency_overrides`` fake ``PipelineDependencies`` pattern every other
-route test in this package uses (``tests/api/_fakes.py``).
+longer 501s -- it carries the intake document's content directly in the
+request body (issue #91 -- no server-side path resolution) and runs the
+internal-seed pipeline's stages (``internal_ingestion``, ``merge``), via the
+same ``app.dependency_overrides`` fake ``PipelineDependencies`` pattern every
+other route test in this package uses (``tests/api/_fakes.py``).
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,7 +27,17 @@ from ps_service.main import create_app
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
-_REAL_FIXTURE_PATH = "engineering-practices/engineering-practices-seed.json"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
+    (
+        _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-seed.json"
+    ).read_text(encoding="utf-8")
+)
+_ENVELOPE_CONTRACT: dict[str, object] = json.loads(
+    (_REPO_ROOT / "test-data" / "wire-contracts" / "ingest-internal-envelope.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
 def _noop_emit(**_kwargs: object) -> None:
@@ -72,11 +84,11 @@ def test_post_ingestions_internal_runs_real_pipeline() -> None:
     submitted document and minted by ``internal_ingestion`` itself; issue
     #54 S4's ``merge`` stage still closes the loop to ``policy_system``).
 
-    ``fixture_path`` resolves against PS Service's real fixtures root
-    (``test-data/``) to the rewritten ``engineering-practices-seed.json``
-    (B1) -- the fake adapter delegates to the real, already-tested
-    ``InternalSeedIngestionAdapter.read_seed`` so this test exercises real
-    resolution + parsing, while the persistence/merge stages themselves stay
+    ``content`` is the parsed ``engineering-practices-seed.json`` fixture
+    (B1), read from ``test-data/`` at test-collection time -- the fake
+    adapter delegates to the real, already-tested
+    ``InternalSeedIngestionAdapter.parse_seed`` so this test exercises real
+    schema/parse validation, while the persistence/merge stages themselves stay
     faked (no real FalkorDB/LLM reached, matching every other route test in
     this package).
     """
@@ -84,7 +96,11 @@ def test_post_ingestions_internal_runs_real_pipeline() -> None:
     client = _client_with_fake(fake.dependencies)
 
     response = client.post(
-        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
+        "/ingestions",
+        json={
+            "source": _ENVELOPE_CONTRACT["source"],
+            _ENVELOPE_CONTRACT["content_field_name"]: _REAL_SEED_DOCUMENT,
+        },
     )
 
     assert response.status_code == 200
@@ -111,7 +127,7 @@ def test_post_ingestions_internal_summary_reports_policies_key() -> None:
     client = _client_with_fake(fake.dependencies)
 
     response = client.post(
-        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
+        "/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT}
     )
 
     assert response.status_code == 200
@@ -140,12 +156,8 @@ def test_second_ingestion_same_title_is_structural_no_op() -> None:
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
 
-    first = client.post(
-        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
-    )
-    second = client.post(
-        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
-    )
+    first = client.post("/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT})
+    second = client.post("/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -189,7 +201,7 @@ def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() 
     client = _client_with_fake(fake.dependencies)
 
     response = client.post(
-        "/ingestions", json={"source": "internal", "fixture_path": _REAL_FIXTURE_PATH}
+        "/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT}
     )
 
     assert response.status_code == 502
@@ -197,28 +209,3 @@ def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() 
     assert body["error"]["failing_stage"] == "internal_ingestion"
     assert body["error"]["message"]
     assert fake.recorder.order == ["internal_ingestion"]
-
-
-def test_fixture_path_outside_fixtures_root_rejected_at_point_of_use() -> None:
-    """AC-BI-010 layer 2: a well-formed but non-existent ``fixture_path`` 400s via
-    ``resolve_fixture_path`` -- before any pipeline stage runs.
-
-    ``fixture_path`` here already passes layer 1's own ``field_validator``
-    (no ``..``/leading slash/backslash) -- this proves the *second*,
-    independent layer that resolves the path against ``_FIXTURES_ROOT`` and
-    verifies the file actually exists there, not merely that the string
-    looks safe.
-    """
-    fake = build_fake_pipeline_dependencies()
-    client = _client_with_fake(fake.dependencies)
-
-    response = client.post(
-        "/ingestions",
-        json={"source": "internal", "fixture_path": "does-not-exist/missing-fixture.json"},
-    )
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error"]["code"]
-    assert "run_id" in body
-    assert fake.recorder.order == []

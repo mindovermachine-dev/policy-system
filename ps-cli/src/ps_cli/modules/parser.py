@@ -107,11 +107,14 @@ def _instrument_id_type(value: str) -> str:
     return value
 
 
-def _fixture_path_type(value: str) -> str:
-    """`type=` callback for the `fixture_path` positional: format-validate at parse time.
+def _document_path_type(value: str) -> str:
+    """`type=` callback for the `document_path` positional: format-validate at parse time.
 
     Same rationale as `_celex_type` -- format validation belongs at parse
-    time via `type=`, not in the handler.
+    time via `type=`, not in the handler. `value` is a plain local
+    filesystem path (relative to the operator's cwd, or absolute), resolved
+    the ordinary way -- not resolved against any PS Service or ps-cli-owned
+    root (issue #91).
     """
     if not value or not value.endswith(".json"):
         msg = f"'{value}' must be a non-empty path ending in '.json'"
@@ -237,14 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
         "document",
         parents=[verbose_parent_parser],
         help=(
-            "Ingest an internal-document fixture by path. The path is resolved on PS "
-            "Service's own fixtures root, not read from your local machine."
+            "Ingest an internal document by local path. The file is read from your "
+            "own machine and its content is sent to PS Service."
         ),
     )
     ingest_document_parser.add_argument(
-        "fixture_path",
-        type=_fixture_path_type,
-        help="Path to the fixture .json file, relative to PS Service's fixtures root.",
+        "document_path",
+        type=_document_path_type,
+        help="Path to the local .json document to ingest.",
     )
     ingest_document_parser.set_defaults(command="ingest_document")
 
