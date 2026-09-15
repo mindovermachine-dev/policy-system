@@ -34,14 +34,15 @@ adding a regulation never modifies or deletes existing customer data.
 
 Internal regulations (e.g. an Engineering Practices standard) use the same
 domain model as external ones (`source_type: internal` — see
-[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)). Two distinct mechanisms populate
-the full compliance spine, and they run in the same submission: the Role/Requirement/Obligation/
-Capability chain is extracted by Domain Mapper the same way as for external regulations, mapping
-onto existing Capabilities where they already exist or minting new ones that link back to the
-internal Business Regulation; Policies, Standards, and Controls are, by contrast, **authored
-directly by the Policy Manager** in that same submission (`GOVERNED_BY`/`SUPPORTED_BY`/
-`IMPLEMENTED_BY` edges to existing or newly-authored Policy/Standard/Control nodes), not derived
-by an LLM.
+[ps-domain-concepts.md](../artifacts/ps-domain-concepts.md)). Unlike external regulations, Domain
+Mapper is not invoked at all for internal sources: the entire compliance spine — Role,
+Requirement, Obligation, and Capability, exactly as much as Policy, Standard, and Control — is
+**authored directly by the Policy Manager** in that same submission and minted (canonical id
+only) by Ingestion's internal-seed adapter (`ps_service.ingestion.adapters.internal_seed`) in a
+single step, converging onto existing Capabilities (and Policies, for internal-SoP-derived
+instances) where they already exist via Company Merge, or minting new ones otherwise
+(`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` edges to existing or newly-authored Policy/
+Standard/Control nodes). None of this is derived by an LLM.
 
 ### UC-3: Ask compliance questions
 

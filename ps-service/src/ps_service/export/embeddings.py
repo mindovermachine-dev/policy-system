@@ -34,8 +34,9 @@ __all__ = ["backfill_capability_embeddings"]
 _TEXT_PROPERTY_BY_LABEL: dict[str, str] = {"Capability": "name", "Policy": "title"}
 
 # Which labels D7 backfills, keyed by `source_type` -- an `external` source's ingestion
-# pipeline always stops at Capability (docs/artifacts/ps-domain-concepts.md:44); only an
-# `internal` source's Domain Mapping Adapter reaches Policy.
+# pipeline always stops at Capability (docs/artifacts/ps-domain-concepts.md:44); both
+# Capability (all sources) and Policy (internal-SoP-derived instances, authored via
+# Ingestion's internal-seed adapter) get embeddings backfilled here.
 _EMBEDDABLE_LABELS_BY_SOURCE_TYPE: dict[Literal["external", "internal"], tuple[str, ...]] = {
     "external": ("Capability",),
     "internal": ("Capability", "Policy"),

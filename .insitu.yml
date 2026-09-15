@@ -83,6 +83,10 @@ inventory:
     name: Run prettier
     command: npx --no-install prettier --check .
 
+  - id: verify-domain-concepts-doc
+    name: Verify packaged MCP domain-concepts doc matches canonical
+    command: ./scripts/release/verify-domain-concepts-doc.sh
+
   - id: ruff-check
     name: Run ruff lint
     command: uv run ruff check .
@@ -205,6 +209,7 @@ waves:
       - cspell
       - markdownlint
       - prettier
+      - verify-domain-concepts-doc
       - actionlint
       - action-refs
       - ruff-check
