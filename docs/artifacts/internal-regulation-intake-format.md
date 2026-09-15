@@ -70,18 +70,21 @@ from your `RegulatoryInstrument` node's own `id`, so there is nothing to get wro
 }
 ```
 
-Only eight node labels and eight edge types are recognized. Anything else is rejected — no
+Only ten node labels and twelve edge types are recognized. Anything else is rejected — no
 partial file is ever accepted.
 
 | Allowed node labels | Allowed edge types |
 |---|---|
-| `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY` |
+| `RegulatoryInstrument`, `Role`, `Requirement`, `Obligation`, `Capability`, `Policy`, `Standard`, `Control`, `PracticeArea`, `RiskPath` | `DEFINES`, `EXPRESSES`, `HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`, `IMPLEMENTED_BY`, `COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY` |
 
 `Policy`, `Standard`, and `Control` are **authored by you**, not derived — see the
 [`Policy`](#policy), [`Standard`](#standard), and [`Control`](#control) node references and the
 [`GOVERNED_BY`](#edge-reference)/[`SUPPORTED_BY`](#edge-reference)/
-[`IMPLEMENTED_BY`](#edge-reference) edges below. Do **not** include `PracticeArea` or `RiskPath`
-nodes — those are not yet supported by this format; including them is a schema violation.
+[`IMPLEMENTED_BY`](#edge-reference) edges below. `PracticeArea` and `RiskPath` are likewise
+**authored by you**, representing the baseline-classification layer laid over your Policies,
+Capabilities, and Controls — see the [`PracticeArea`](#practicearea) and [`RiskPath`](#riskpath)
+node references and the [`COVERS`](#edge-reference)/[`OWNS`](#edge-reference)/
+[`MITIGATED_BY`](#edge-reference)/[`VERIFIED_BY`](#edge-reference) edges below.
 
 ## Ids: yours are local, ours are canonical
 
@@ -100,6 +103,8 @@ content-derived formulas, and rewrites every edge to point at the new id automat
 | `Policy` | Any local string, e.g. `"pol-1"` | Minted from the Policy's own `title` alone |
 | `Standard` | Any local string, e.g. `"std-1"` | Minted from the Policy it supports plus this Standard's own `title` |
 | `Control` | Any local string, e.g. `"ctrl-1"` | Minted from the Standard it verifies plus this Control's own `title` |
+| `PracticeArea` | Any local string, e.g. `"pa-1"` | Minted from the PracticeArea's own `name` alone |
+| `RiskPath` | Any local string, e.g. `"rp-1"` | Minted from the RiskPath's own `name` alone |
 
 Because Capability ids are minted from `name` alone, **reuse the same local id** across every
 Obligation that requires the same underlying capability — that's what lets one Capability
@@ -212,6 +217,48 @@ manual review). Every `Control` must implement exactly one `Standard` (see
 `Control` never carries a `confidence` property, for the same reason as `Policy`/`Standard` —
 submitting one is a schema violation, not a silently-dropped field.
 
+### `PracticeArea`
+
+Like `Policy`/`Standard`/`Control`, a `PracticeArea` is not extracted from your source
+material — it is a baseline-classification node you author directly, representing a named
+domain of engineering/organizational practice (e.g. "Secure SDLC", "Reliability"). Its identity
+is derived from its own `name` alone, deliberately independent of any Capability it may end up
+covering or Policy it may end up owning, so the same PracticeArea name always converges onto one
+node.
+
+| Property | Required | Notes |
+|---|---|---|
+| `name` | Yes | e.g. `"Secure SDLC"` |
+| `description` | No | |
+| `status` | Yes | `active` \| `deprecated` |
+| `version` | No | |
+| `owner_id` | No | An identifier for the person/team accountable for this PracticeArea, if useful |
+
+`PracticeArea` never carries a `confidence` property, for the same reason as
+`Policy`/`Standard`/`Control` — submitting one is a schema violation, not a silently-dropped
+field.
+
+### `RiskPath`
+
+Like `PracticeArea`, a `RiskPath` is not extracted from your source material — it is a
+baseline-classification node you author directly, representing a cross-cutting risk lens used
+to reason about completeness and gaps (e.g. "Secure Build and Release", "Incident and Recovery
+Readiness"). Its identity is derived from its own `name` alone, deliberately independent of any
+Capability or Control it may end up connected to, so the same RiskPath name always converges
+onto one node. Unlike `Standard`/`Control`, a `RiskPath` carries no required edge to exist.
+
+| Property | Required | Notes |
+|---|---|---|
+| `name` | Yes | e.g. `"Secure Build and Release"` |
+| `description` | No | |
+| `status` | Yes | `active` \| `deprecated` |
+| `risk_type` | No | `security` \| `reliability` \| `privacy` \| `compliance` \| `safety` \| `supply_chain` |
+| `version` | No | |
+
+`RiskPath` never carries a `confidence` property, for the same reason as
+`Policy`/`Standard`/`Control`/`PracticeArea` — submitting one is a schema violation, not a
+silently-dropped field.
+
 ## Edge reference
 
 | Edge | From → To | Required properties | Cardinality |
@@ -224,6 +271,10 @@ submitting one is a schema violation, not a silently-dropped field.
 | `GOVERNED_BY` | `Capability` → `Policy` | — (no required properties) | **at most one** Policy per Capability |
 | `SUPPORTED_BY` | `Policy` → `Standard` | — (no required properties) | **exactly one** Policy per Standard |
 | `IMPLEMENTED_BY` | `Standard` → `Control` | — (no required properties) | **exactly one** Standard per Control |
+| `VERIFIED_BY` | `RiskPath` → `Control` | — (no required properties) | many-to-many — no cap either side |
+| `OWNS` | `PracticeArea` → `Policy` | — (no required properties) | many-to-many — no cap either side |
+| `COVERS` | `PracticeArea` → `Capability` | — (no required properties) | many-to-many |
+| `MITIGATED_BY` | `RiskPath` → `Capability` | — (no required properties) | many-to-many — no cap either side |
 
 ### Authoring rules the model must follow
 
@@ -244,12 +295,23 @@ submitting one is a schema violation, not a silently-dropped field.
   Standard with zero or more than one supporting Policy is invalid.
 - Every `Control` must have **exactly one** inbound `IMPLEMENTED_BY` edge from a `Standard`. A
   Control with zero or more than one implemented Standard is invalid.
+- A `RiskPath` can `VERIFIED_BY` more than one `Control`, and the same `Control` can be
+  `VERIFIED_BY`d by more than one `RiskPath` — no artificial cap either side.
+- A `PracticeArea` can `OWNS` more than one `Policy`, and the same `Policy` can be `OWNS`d by
+  more than one `PracticeArea` — no artificial one-owner cap either side (see AC-BI-011).
+- A `Capability` may be `COVERS`ed by more than one `PracticeArea`; there is no one-parent
+  limit, unlike `GOVERNED_BY` (see AC-BI-011).
+- A `Capability` may be `MITIGATED_BY` more than one `RiskPath`; there is no one-parent
+  limit, unlike `GOVERNED_BY` (see AC-BI-011).
 
 ## Worked example
 
 A small slice — one instrument, two roles, two requirements, two obligations, two
 capabilities — showing every regulatory-spine edge type once, plus a full
-`Policy → Standard → Control` governance chain authored against one of the Capabilities. A real
+`Policy → Standard → Control` governance chain authored against one of the Capabilities, and a
+`PracticeArea`/`RiskPath` baseline-classification layer laid over that same governance chain
+(one `PracticeArea` `COVERS`ing the Capability and `OWNS`ing the Policy, one `RiskPath`
+`MITIGATED_BY`-linked to the Capability and `VERIFIED_BY`-linked to the Control). A real
 submission simply repeats this pattern.
 
 ```json
@@ -280,7 +342,10 @@ submission simply repeats this pattern.
 
     { "label": "Policy", "id": "pol-access-control", "properties": { "title": "Access Control Policy", "status": "approved" } },
     { "label": "Standard", "id": "std-access-control", "properties": { "title": "Access Control Standard", "implementation_status": "implemented" } },
-    { "label": "Control", "id": "ctrl-access-review", "properties": { "type": "automated", "title": "Automated Access Review Check", "implementation_status": "implemented", "execution_frequency": "daily" } }
+    { "label": "Control", "id": "ctrl-access-review", "properties": { "type": "automated", "title": "Automated Access Review Check", "implementation_status": "implemented", "execution_frequency": "daily" } },
+
+    { "label": "PracticeArea", "id": "pa-access-control", "properties": { "name": "Access Control", "status": "active" } },
+    { "label": "RiskPath", "id": "rp-unauthorized-access", "properties": { "name": "Unauthorized Access", "status": "active", "risk_type": "security" } }
   ],
   "edges": [
     { "type": "DEFINES", "from": { "label": "RegulatoryInstrument", "id": "ENGPRAC-3.0" }, "to": { "label": "Role", "id": "role-eng-manager" }, "properties": { "source_ref": "Sec. 1" } },
@@ -300,7 +365,12 @@ submission simply repeats this pattern.
 
     { "type": "GOVERNED_BY", "from": { "label": "Capability", "id": "cap-access-control" }, "to": { "label": "Policy", "id": "pol-access-control" } },
     { "type": "SUPPORTED_BY", "from": { "label": "Policy", "id": "pol-access-control" }, "to": { "label": "Standard", "id": "std-access-control" } },
-    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std-access-control" }, "to": { "label": "Control", "id": "ctrl-access-review" } }
+    { "type": "IMPLEMENTED_BY", "from": { "label": "Standard", "id": "std-access-control" }, "to": { "label": "Control", "id": "ctrl-access-review" } },
+
+    { "type": "COVERS", "from": { "label": "PracticeArea", "id": "pa-access-control" }, "to": { "label": "Capability", "id": "cap-access-control" } },
+    { "type": "OWNS", "from": { "label": "PracticeArea", "id": "pa-access-control" }, "to": { "label": "Policy", "id": "pol-access-control" } },
+    { "type": "MITIGATED_BY", "from": { "label": "RiskPath", "id": "rp-unauthorized-access" }, "to": { "label": "Capability", "id": "cap-access-control" } },
+    { "type": "VERIFIED_BY", "from": { "label": "RiskPath", "id": "rp-unauthorized-access" }, "to": { "label": "Control", "id": "ctrl-access-review" } }
   ]
 }
 ```
@@ -314,7 +384,6 @@ submission simply repeats this pattern.
 - A Capability with two or more outbound `GOVERNED_BY` edges.
 - A Standard with zero, or two or more, inbound `SUPPORTED_BY` edges.
 - A Control with zero, or two or more, inbound `IMPLEMENTED_BY` edges.
-- Any `PracticeArea`/`RiskPath` content — not yet supported by this format.
 
 Every rejection is fail-closed: no partial graph is ever written from an invalid file.
 

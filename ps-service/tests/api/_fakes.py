@@ -330,6 +330,8 @@ class FakeIngestInternalStage:
             policy_count=0,
             standard_count=0,
             control_count=0,
+            practice_area_count=0,
+            risk_path_count=0,
         )
 
 

@@ -33,7 +33,7 @@
       }
     },
     "nodeLabel": {
-      "enum": ["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability", "Policy", "Standard", "Control"]
+      "enum": ["RegulatoryInstrument", "Role", "Requirement", "Obligation", "Capability", "Policy", "Standard", "Control", "PracticeArea", "RiskPath"]
     },
     "node": {
       "type": "object",
@@ -84,6 +84,14 @@
         {
           "if": { "properties": { "label": { "const": "Control" } } },
           "then": { "properties": { "properties": { "$ref": "#/$defs/controlProperties" } } }
+        },
+        {
+          "if": { "properties": { "label": { "const": "PracticeArea" } } },
+          "then": { "properties": { "properties": { "$ref": "#/$defs/practiceAreaProperties" } } }
+        },
+        {
+          "if": { "properties": { "label": { "const": "RiskPath" } } },
+          "then": { "properties": { "properties": { "$ref": "#/$defs/riskPathProperties" } } }
         }
       ]
     },
@@ -180,6 +188,30 @@
         "evidence_ref": { "type": "string" }
       }
     },
+    "practiceAreaProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "status": { "enum": ["active", "deprecated"] },
+        "version": { "type": "string" },
+        "owner_id": { "type": "string" }
+      }
+    },
+    "riskPathProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "status": { "enum": ["active", "deprecated"] },
+        "risk_type": { "enum": ["security", "reliability", "privacy", "compliance", "safety", "supply_chain"] },
+        "version": { "type": "string" }
+      }
+    },
     "edge": {
       "type": "object",
       "additionalProperties": false,
@@ -194,7 +226,11 @@
             "REQUIRES",
             "GOVERNED_BY",
             "SUPPORTED_BY",
-            "IMPLEMENTED_BY"
+            "IMPLEMENTED_BY",
+            "COVERS",
+            "VERIFIED_BY",
+            "OWNS",
+            "MITIGATED_BY"
           ]
         },
         "from": { "$ref": "#/$defs/nodeRef" },

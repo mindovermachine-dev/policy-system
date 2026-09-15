@@ -427,7 +427,7 @@ Alternatively, authored directly in the internal-seed intake document when the g
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `OWNS` (inbound) | PracticeArea | 0..* : 1 | — | See [PracticeArea → OWNS](#practicearea). Starter baseline should enforce exactly one owning PracticeArea per active Policy. |
+| `OWNS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → OWNS](#practicearea). A Policy may be owned by any number of PracticeAreas — no artificial one-owner cap, matching COVERS/MITIGATED_BY/VERIFIED_BY (see AC-BI-011). |
 | `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
 

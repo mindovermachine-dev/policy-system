@@ -74,16 +74,16 @@ def test_parse_seed_accepts_a_well_formed_document() -> None:
 def test_parse_seed_rejects_unknown_edge_type() -> None:
     """AC-BI-002: an edge `type` outside the allow-list is rejected.
 
-    `VERIFIED_BY` (a real edge type in `ps-domain-concepts.md`'s wider
-    ontology, but not part of this intake format's allow-list -- it connects
-    a RiskPath, which this format does not support) is used here since
-    `GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` (GH #76 Slices 1-3) are now
-    all valid edge types.
+    `"NOT_A_REAL_EDGE_TYPE"` is a fictional placeholder: every previously-used
+    placeholder here (`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY` from GH
+    #76 Slices 1-3, and `VERIFIED_BY` from GH #93 Slice 6, alongside
+    `COVERS`/`OWNS`/`MITIGATED_BY`) is now a valid edge type in this intake
+    format's allow-list.
     """
     document = copy.deepcopy(_VALID_SEED_DOCUMENT)
     document["edges"].append(
         {
-            "type": "VERIFIED_BY",
+            "type": "NOT_A_REAL_EDGE_TYPE",
             "from": {"label": "Obligation", "id": "obl-1"},
             "to": {"label": "Role", "id": "role-1"},
         }

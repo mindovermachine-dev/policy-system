@@ -9,7 +9,9 @@ from ps_service.domain_mapper.identity import (
     control_id,
     obligation_id,
     policy_id,
+    practice_area_id,
     requirement_id,
+    risk_path_id,
     role_id,
     standard_id,
 )
@@ -103,6 +105,38 @@ def test_capability_id_is_deterministic() -> None:
 def test_capability_id_differs_for_different_names() -> None:
     first = capability_id("Security Logging")
     second = capability_id("Data Encryption")
+    assert first != second
+
+
+# --- practice_area_id (issue #93 Slice 1) ---------------------------------
+
+
+def test_practice_area_id_is_deterministic() -> None:
+    first = practice_area_id("Secure SDLC")
+    second = practice_area_id("Secure SDLC")
+    assert first == second
+    assert first.startswith("pa_secure_sdlc_")
+
+
+def test_practice_area_id_differs_for_different_names() -> None:
+    first = practice_area_id("Secure SDLC")
+    second = practice_area_id("Reliability")
+    assert first != second
+
+
+# --- risk_path_id (issue #93 Slice 2) -------------------------------------
+
+
+def test_risk_path_id_is_deterministic() -> None:
+    first = risk_path_id("Secure Build and Release")
+    second = risk_path_id("Secure Build and Release")
+    assert first == second
+    assert first.startswith("rp_secure_build_and_release_")
+
+
+def test_risk_path_id_differs_for_different_names() -> None:
+    first = risk_path_id("Secure Build and Release")
+    second = risk_path_id("Incident and Recovery Readiness")
     assert first != second
 
 

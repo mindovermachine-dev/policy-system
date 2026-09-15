@@ -816,6 +816,8 @@ def _internal_ingestion_summary(result: InternalIngestResult) -> dict[str, int]:
         "policies": result.policy_count,
         "standards": result.standard_count,
         "controls": result.control_count,
+        "practice_areas": result.practice_area_count,
+        "risk_paths": result.risk_path_count,
     }
 
 

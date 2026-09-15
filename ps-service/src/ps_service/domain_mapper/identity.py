@@ -88,6 +88,18 @@ def policy_id(title: str) -> str:
     return f"pol_{_slug(title)}_{_hash(title.lower())}"
 
 
+def practice_area_id(name: str) -> str:
+    """`pa_{slug}_{hash}` — content-derived from `name` alone.
+
+    Mirrors `capability_id`/`policy_id`'s canonical, name-only identity shape
+    (`ps-domain-concepts.md`'s PracticeArea section) — deliberately never
+    derived from a covered Capability or owned Policy, so identical
+    PracticeArea names converge onto one node regardless of what they end
+    up connected to (AC-BI-009/010).
+    """
+    return f"pa_{_slug(name)}_{_hash(name.lower())}"
+
+
 def standard_id(policy_node_id: str, title: str) -> str:
     """`std_{slug}_{hash}` — content-derived from the Standard's `title` and Policy.
 
@@ -139,3 +151,12 @@ def control_id(standard_node_id: str, title: str) -> str:
     — it simply stops being an identity input.
     """
     return f"ctrl_{_slug(title)}_{_hash(f'{standard_node_id}:{title.lower()}')}"
+
+
+def risk_path_id(name: str) -> str:
+    """`rp_{slug}_{hash}` — content-derived from `name` alone.
+
+    Mirrors `capability_id`/`policy_id`/`practice_area_id`'s canonical,
+    name-only identity shape (`ps-domain-concepts.md`'s RiskPath section).
+    """
+    return f"rp_{_slug(name)}_{_hash(name.lower())}"

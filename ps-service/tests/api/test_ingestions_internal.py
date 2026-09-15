@@ -137,6 +137,8 @@ def test_post_ingestions_internal_summary_reports_policies_key() -> None:
     assert "policies" in internal_ingestion_stage["summary"]
     assert "standards" in internal_ingestion_stage["summary"]
     assert "controls" in internal_ingestion_stage["summary"]
+    assert "practice_areas" in internal_ingestion_stage["summary"]
+    assert "risk_paths" in internal_ingestion_stage["summary"]
 
 
 def test_second_ingestion_same_title_is_structural_no_op() -> None:

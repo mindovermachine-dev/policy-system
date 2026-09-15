@@ -64,6 +64,10 @@ _EDGE_ENDPOINT_LABELS: dict[EdgeType, tuple[NodeLabel, NodeLabel]] = {
     "GOVERNED_BY": ("Capability", "Policy"),
     "SUPPORTED_BY": ("Policy", "Standard"),
     "IMPLEMENTED_BY": ("Standard", "Control"),
+    "VERIFIED_BY": ("RiskPath", "Control"),
+    "COVERS": ("PracticeArea", "Capability"),
+    "OWNS": ("PracticeArea", "Policy"),
+    "MITIGATED_BY": ("RiskPath", "Capability"),
 }
 
 
@@ -96,6 +100,8 @@ class InternalIngestResult:
     policy_count: int
     standard_count: int
     control_count: int
+    practice_area_count: int
+    risk_path_count: int
 
 
 # --- Requirement id (internal-source formula; not domain_mapper.identity's external one) ---
@@ -407,6 +413,30 @@ def _mint_capability_ids(seed: InternalRegulationSeed) -> dict[str, str]:
     }
 
 
+def _mint_practice_area_ids(seed: InternalRegulationSeed) -> dict[str, str]:
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        practice_area_id,
+    )
+
+    return {
+        node.id: practice_area_id(_require_str_property(node, "name"))
+        for node in seed.nodes
+        if node.label == "PracticeArea"
+    }
+
+
+def _mint_risk_path_ids(seed: InternalRegulationSeed) -> dict[str, str]:
+    from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        risk_path_id,
+    )
+
+    return {
+        node.id: risk_path_id(_require_str_property(node, "name"))
+        for node in seed.nodes
+        if node.label == "RiskPath"
+    }
+
+
 def _mint_policy_ids(seed: InternalRegulationSeed) -> dict[str, str]:
     from ps_service.domain_mapper.identity import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
         policy_id,
@@ -586,6 +616,44 @@ def _policy_properties(node: SeedNode) -> dict[str, object]:
     return properties
 
 
+def _practice_area_properties(node: SeedNode) -> dict[str, object]:
+    """Required `name`/`status`, optional `description`/`version`/`owner_id`.
+
+    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
+    §3) -- an authored PracticeArea carries no LLM-derivation uncertainty,
+    mirroring Policy/Standard/Control's omission. Mirrors `_policy_properties`'s
+    shape.
+    """
+    properties: dict[str, object] = {
+        "name": _require_str_property(node, "name"),
+        "status": _require_str_property(node, "status"),
+    }
+    for optional_key in ("description", "version", "owner_id"):
+        value = node.properties.get(optional_key)
+        if value is not None:
+            properties[optional_key] = value
+    return properties
+
+
+def _risk_path_properties(node: SeedNode) -> dict[str, object]:
+    """Required `name`/`status`, optional `description`/`risk_type`/`version`.
+
+    Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
+    §3) -- an authored RiskPath carries no LLM-derivation uncertainty,
+    mirroring PracticeArea/Policy/Standard/Control's omission. Mirrors
+    `_practice_area_properties`'s shape.
+    """
+    properties: dict[str, object] = {
+        "name": _require_str_property(node, "name"),
+        "status": _require_str_property(node, "status"),
+    }
+    for optional_key in ("description", "risk_type", "version"):
+        value = node.properties.get(optional_key)
+        if value is not None:
+            properties[optional_key] = value
+    return properties
+
+
 def _standard_properties(node: SeedNode) -> dict[str, object]:
     """Required `title`/`implementation_status`, optional `description`/`version`.
 
@@ -692,6 +760,8 @@ class _CanonicalIds:
     policy: dict[str, str]
     standard: dict[str, str]
     control: dict[str, str]
+    practice_area: dict[str, str]
+    risk_path: dict[str, str]
 
     def resolve(self, ref: SeedRef) -> str:
         """Return `ref`'s canonical id, dispatching on its own declared label.
@@ -712,6 +782,8 @@ class _CanonicalIds:
             "Policy": self.policy,
             "Standard": self.standard,
             "Control": self.control,
+            "PracticeArea": self.practice_area,
+            "RiskPath": self.risk_path,
         }
         return by_label[ref.label][ref.id]
 
@@ -815,11 +887,43 @@ def _persist_baseline_dependent_nodes(
             )
 
 
+def _persist_baseline_classification_nodes(
+    graph: GraphHandle, seed: InternalRegulationSeed, canonical: _CanonicalIds
+) -> None:
+    """Write PracticeArea/RiskPath nodes (GH #93 Slices 1-2).
+
+    Split out of `_persist_baseline_nodes` (mirroring
+    `_persist_baseline_reference_nodes`'s own split, §0.6) -- these labels
+    carry no required edge to exist, unlike Policy/Standard/Control, so they
+    need no ordering relative to the other node-writing helpers.
+    """
+    for node in seed.nodes:
+        if node.label == "PracticeArea":
+            _execute_query(
+                graph,
+                "MERGE (n:PracticeArea {id: $id}) SET n += $properties",
+                params={
+                    "id": canonical.practice_area[node.id],
+                    "properties": _practice_area_properties(node),
+                },
+            )
+        elif node.label == "RiskPath":
+            _execute_query(
+                graph,
+                "MERGE (n:RiskPath {id: $id}) SET n += $properties",
+                params={
+                    "id": canonical.risk_path[node.id],
+                    "properties": _risk_path_properties(node),
+                },
+            )
+
+
 def _persist_baseline_nodes(
     graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
 ) -> None:
     _persist_baseline_reference_nodes(graph, seed, index, canonical)
     _persist_baseline_dependent_nodes(graph, seed, index, canonical)
+    _persist_baseline_classification_nodes(graph, seed, canonical)
 
 
 def _persist_baseline_edges(
@@ -893,6 +997,8 @@ def ingest_internal_regulatory_instrument(
     control_canonical_ids = _mint_control_ids(seed, index, standard_canonical_ids)
     obligation_canonical_ids = _mint_obligation_ids(seed, index, role_canonical_ids)
     requirement_canonical_ids = _mint_requirement_ids(seed, regulatory_instrument_id, index)
+    practice_area_canonical_ids = _mint_practice_area_ids(seed)
+    risk_path_canonical_ids = _mint_risk_path_ids(seed)
     canonical = _CanonicalIds(
         regulatory_instrument_id=regulatory_instrument_id,
         role=role_canonical_ids,
@@ -902,6 +1008,8 @@ def ingest_internal_regulatory_instrument(
         policy=policy_canonical_ids,
         standard=standard_canonical_ids,
         control=control_canonical_ids,
+        practice_area=practice_area_canonical_ids,
+        risk_path=risk_path_canonical_ids,
     )
 
     _persist_native(native_graph, seed)
@@ -916,4 +1024,6 @@ def ingest_internal_regulatory_instrument(
         policy_count=len(policy_canonical_ids),
         standard_count=len(standard_canonical_ids),
         control_count=len(control_canonical_ids),
+        practice_area_count=len(practice_area_canonical_ids),
+        risk_path_count=len(risk_path_canonical_ids),
     )

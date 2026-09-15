@@ -293,6 +293,362 @@ def _control(
     return SeedNode(label="Control", id=local_id, properties=properties)
 
 
+def _practice_area(local_id: str, name: str, *, status: str = "active") -> SeedNode:
+    return SeedNode(label="PracticeArea", id=local_id, properties={"name": name, "status": status})
+
+
+def test_persists_authored_practice_area_node_verbatim() -> None:
+    """GH #93 AC-BI-004 (PracticeArea portion): a submitted PracticeArea persists
+    verbatim, and `InternalIngestResult.practice_area_count == 1`. PracticeArea has
+    no required edge to exist (unlike Policy's GOVERNED_BY).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _practice_area("pa-1", "Secure SDLC"))
+    seed = InternalRegulationSeed(nodes=nodes, edges=seed.edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 1
+    from ps_service.domain_mapper.identity import practice_area_id
+
+    expected_practice_area_id = practice_area_id("Secure SDLC")
+    practice_area_writes = _written_node_properties(
+        baseline_graph, label_prefix="MERGE (n:PracticeArea"
+    )
+    assert practice_area_writes == {
+        expected_practice_area_id: {"name": "Secure SDLC", "status": "active"}
+    }
+
+
+def test_seed_with_no_practice_area_nodes_still_succeeds_with_zero_practice_area_count() -> None:
+    """AC-BI-005: omitting PracticeArea entirely still succeeds, persisting only the
+    regulatory spine, with zero PracticeArea nodes invented in their place.
+    """
+    seed = _build_seed()
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 0
+    practice_area_writes = _written_node_properties(
+        baseline_graph, label_prefix="MERGE (n:PracticeArea"
+    )
+    assert practice_area_writes == {}
+
+
+def _risk_path(local_id: str, name: str, *, status: str = "active") -> SeedNode:
+    return SeedNode(label="RiskPath", id=local_id, properties={"name": name, "status": status})
+
+
+def test_persists_authored_risk_path_node_verbatim() -> None:
+    """GH #93 AC-BI-004 (RiskPath portion): a submitted RiskPath persists
+    verbatim, and `InternalIngestResult.risk_path_count == 1`. RiskPath has
+    no required edge to exist (unlike Policy's GOVERNED_BY).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
+    seed = InternalRegulationSeed(nodes=nodes, edges=seed.edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 1
+    from ps_service.domain_mapper.identity import risk_path_id
+
+    expected_risk_path_id = risk_path_id("Secure Build and Release")
+    risk_path_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:RiskPath")
+    assert risk_path_writes == {
+        expected_risk_path_id: {"name": "Secure Build and Release", "status": "active"}
+    }
+
+
+def test_seed_with_no_risk_path_nodes_still_succeeds_with_zero_risk_path_count() -> None:
+    """AC-BI-005: omitting RiskPath entirely still succeeds, persisting only the
+    regulatory spine, with zero RiskPath nodes invented in their place.
+    """
+    seed = _build_seed()
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 0
+    risk_path_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:RiskPath")
+    assert risk_path_writes == {}
+
+
+def test_persists_mitigated_by_edge_risk_path_to_capability() -> None:
+    """GH #93 (MITIGATED_BY portion): a submitted RiskPath + MITIGATED_BY edge to a
+    Capability persists both the node and the edge (mirrors
+    `test_persists_covers_edge_practice_area_to_capability`).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
+    edges = (
+        *seed.edges,
+        _edge("MITIGATED_BY", "RiskPath", "rp-1", "Capability", "cap-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 1
+    mitigated_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:MITIGATED_BY]->(b)" in call.query
+    ]
+    assert len(mitigated_by_calls) == 1
+
+
+def test_capability_mitigated_by_two_risk_paths_succeeds() -> None:
+    """Directly proves AC-BI-011's no-cap clause for MITIGATED_BY -- the AC's explicit
+    "mitigated by more than one RiskPath" clause: two RiskPath nodes both
+    `MITIGATED_BY` the same Capability succeeds. Mirrors
+    `test_capability_covered_by_two_practice_areas_succeeds` -- do not "fix" this by
+    analogy into a cap; see PLAN.md Slice 5's gotcha against copying
+    `_index_policy_governors`'s at-most-one pattern.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _risk_path("rp-1", "Secure Build and Release"),
+        _risk_path("rp-2", "Third-Party Dependency Risk"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("MITIGATED_BY", "RiskPath", "rp-1", "Capability", "cap-1"),
+        _edge("MITIGATED_BY", "RiskPath", "rp-2", "Capability", "cap-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 2
+    mitigated_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:MITIGATED_BY]->(b)" in call.query
+    ]
+    assert len(mitigated_by_calls) == 2
+
+
+def test_dangling_mitigated_by_edge_fails_closed() -> None:
+    """A MITIGATED_BY edge referencing an undeclared Capability id raises, zero
+    writes on either graph (mirrors `test_dangling_covers_edge_fails_closed`).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
+    edges = (
+        *seed.edges,
+        _edge("MITIGATED_BY", "RiskPath", "rp-1", "Capability", "cap-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_persists_covers_edge_practice_area_to_capability() -> None:
+    """GH #93 (COVERS portion): a submitted PracticeArea + COVERS edge to a
+    Capability persists both the node and the edge (mirrors
+    `test_persists_authored_policy_node_and_governed_by_edge_verbatim`).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _practice_area("pa-1", "Secure SDLC"))
+    edges = (
+        *seed.edges,
+        _edge("COVERS", "PracticeArea", "pa-1", "Capability", "cap-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 1
+    covers_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:COVERS]->(b)" in call.query
+    ]
+    assert len(covers_calls) == 1
+
+
+def test_capability_covered_by_two_practice_areas_succeeds() -> None:
+    """Directly proves AC-BI-011's no-cap clause for COVERS: two PracticeArea
+    nodes both `COVERS` the same Capability. This is the negative-space
+    counterpart of `test_capability_with_two_governed_by_edges_fails_closed_no_partial_write`
+    -- same shape, but COVERS has no one-parent limit (unlike GOVERNED_BY), so
+    this must succeed rather than raise. Do not "fix" this by analogy into a
+    cap -- see PLAN.md Slice 3's explicit gotcha against an
+    `_index_practice_area_coverers`-style count check.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _practice_area("pa-1", "Secure SDLC"),
+        _practice_area("pa-2", "Reliability"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("COVERS", "PracticeArea", "pa-1", "Capability", "cap-1"),
+        _edge("COVERS", "PracticeArea", "pa-2", "Capability", "cap-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 2
+    covers_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:COVERS]->(b)" in call.query
+    ]
+    assert len(covers_calls) == 2
+
+
+def test_dangling_covers_edge_fails_closed() -> None:
+    """A COVERS edge referencing an undeclared Capability id raises, zero writes
+    on either graph (mirrors `test_dangling_governed_by_edge_fails_closed`).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _practice_area("pa-1", "Secure SDLC"))
+    edges = (
+        *seed.edges,
+        _edge("COVERS", "PracticeArea", "pa-1", "Capability", "cap-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
+def test_persists_owns_edge_practice_area_to_policy() -> None:
+    """GH #93 (OWNS portion, Slice 4): a submitted PracticeArea + OWNS edge to a
+    Policy persists both the node and the edge (mirrors
+    `test_persists_covers_edge_practice_area_to_capability`).
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _practice_area("pa-1", "Secure SDLC"),
+        _policy("pol-1", "Access Control Policy"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("OWNS", "PracticeArea", "pa-1", "Policy", "pol-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 1
+    owns_calls = [call for call in baseline_graph.calls if "MERGE (a)-[r:OWNS]->(b)" in call.query]
+    assert len(owns_calls) == 1
+
+
+def test_policy_owned_by_two_practice_areas_succeeds() -> None:
+    """Directly proves AC-BI-011's no-cap clause for OWNS: two PracticeArea nodes
+    both `OWNS` the same Policy. This is the one edge in this issue where the
+    no-cap decision explicitly contradicts a pre-existing doc line:
+    `docs/artifacts/ps-domain-concepts.md` line 430 (Policy's Relationships
+    table, `OWNS` row) used to read "`0..* : 1`" and claimed "Starter baseline
+    should enforce exactly one owning PracticeArea per active Policy" -- that
+    wording is corrected in this same slice (CHANGES.md Row 1/Appendix A) to
+    match the no-cap design. The issue's own Discussion section is explicit
+    that "COVERS/OWNS/MITIGATED_BY/VERIFIED_BY have NO upper bound on the
+    inbound side... AC-BI-011 exists specifically to prevent wrongly copying
+    GOVERNED_BY's 'at most one' pattern by analogy" -- so this test locks in
+    the no-cap decision rather than the old doc's cap, mirroring
+    `test_capability_covered_by_two_practice_areas_succeeds`. Do not "fix"
+    this by analogy into a cap -- see PLAN.md Slice 4's explicit gotcha
+    against copying Slice 3's "no `_index_*` function" mistake.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _practice_area("pa-1", "Secure SDLC"),
+        _practice_area("pa-2", "Reliability"),
+        _policy("pol-1", "Access Control Policy"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("OWNS", "PracticeArea", "pa-1", "Policy", "pol-1"),
+        _edge("OWNS", "PracticeArea", "pa-2", "Policy", "pol-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.practice_area_count == 2
+    owns_calls = [call for call in baseline_graph.calls if "MERGE (a)-[r:OWNS]->(b)" in call.query]
+    assert len(owns_calls) == 2
+
+
+def test_dangling_owns_edge_fails_closed() -> None:
+    """An OWNS edge referencing an undeclared Policy id raises, zero writes on
+    either graph (mirrors `test_dangling_covers_edge_fails_closed`).
+    """
+    seed = _build_seed()
+    nodes = (*seed.nodes, _practice_area("pa-1", "Secure SDLC"))
+    edges = (
+        *seed.edges,
+        _edge("OWNS", "PracticeArea", "pa-1", "Policy", "pol-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
+
+
 def test_persists_authored_policy_node_and_governed_by_edge_verbatim() -> None:
     """GH #76 AC-BI-004 (Policy portion): a submitted Policy + GOVERNED_BY edge
     from a Capability persists verbatim, and `InternalIngestResult.policy_count == 1`.
@@ -742,6 +1098,115 @@ def test_full_capability_policy_standard_control_chain_persists_every_node_and_e
 
     native_node_ids = _written_node_ids(native_graph)
     assert {"pol-1", "std-1", "ctrl-1"} <= native_node_ids
+
+
+def test_persists_verified_by_edge_risk_path_to_control() -> None:
+    """GH #93 (Slice 6): a `VERIFIED_BY` edge from a `RiskPath` to a `Control`
+    persists on the baseline graph, keyed on Control's weak-entity identity --
+    a full Capability -> Policy -> Standard -> Control chain (GH #76) must exist
+    first for a Control to mint at all.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+        _control("ctrl-1", "Automated Access Review Check"),
+        _risk_path("rp-1", "Secure Build and Release"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+        _edge("VERIFIED_BY", "RiskPath", "rp-1", "Control", "ctrl-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 1
+    assert result.control_count == 1
+
+    from ps_service.domain_mapper.identity import control_id, policy_id, risk_path_id, standard_id
+
+    expected_policy_id = policy_id("Access Control Policy")
+    expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
+    expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
+    expected_risk_path_id = risk_path_id("Secure Build and Release")
+
+    verified_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:VERIFIED_BY]->(b)" in call.query
+    ]
+    assert len(verified_by_calls) == 1
+    assert verified_by_calls[0].params == {
+        "from_id": expected_risk_path_id,
+        "to_id": expected_control_id,
+        "properties": {},
+    }
+
+
+def test_control_verified_by_two_risk_paths_succeeds() -> None:
+    """No-cap regression (mirrors Slice 4/5): a Control `VERIFIED_BY` two distinct
+    RiskPaths succeeds -- VERIFIED_BY's inbound side carries no artificial cap.
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy"),
+        _standard("std-1", "Access Control Standard"),
+        _control("ctrl-1", "Automated Access Review Check"),
+        _risk_path("rp-1", "Secure Build and Release"),
+        _risk_path("rp-2", "Third-Party Dependency Risk"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+        _edge("VERIFIED_BY", "RiskPath", "rp-1", "Control", "ctrl-1"),
+        _edge("VERIFIED_BY", "RiskPath", "rp-2", "Control", "ctrl-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    result = ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    assert result.risk_path_count == 2
+    assert result.control_count == 1
+
+    verified_by_calls = [
+        call for call in baseline_graph.calls if "MERGE (a)-[r:VERIFIED_BY]->(b)" in call.query
+    ]
+    assert len(verified_by_calls) == 2
+
+
+def test_dangling_verified_by_edge_fails_closed() -> None:
+    """A `VERIFIED_BY` edge referencing an undeclared Control id raises, zero writes."""
+    seed = _build_seed()
+    nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
+    edges = (
+        *seed.edges,
+        _edge("VERIFIED_BY", "RiskPath", "rp-1", "Control", "ctrl-does-not-exist"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    with pytest.raises(InternalSeedError):
+        ingest_internal_regulatory_instrument(
+            seed, baseline_graph=baseline_graph, native_graph=native_graph
+        )
+
+    assert baseline_graph.calls == []
+    assert native_graph.calls == []
 
 
 def test_role_id_omitted_when_ambiguous_never_null() -> None:

@@ -24,11 +24,16 @@ NodeLabel = Literal[
     "Policy",
     "Standard",
     "Control",
+    "PracticeArea",
+    "RiskPath",
 ]
 """The intake format's allowed node labels -- mirrors the packaged JSON Schema's
 `nodeLabel` enum exactly (D7). `Policy` (GH #76 Slice 1), `Standard` (GH #76
 Slice 2), and `Control` (GH #76 Slice 3) are authored governance labels --
-AC-BI-001 is fully satisfied now that all three land."""
+AC-BI-001 is fully satisfied now that all three land. `PracticeArea` (GH #93
+Slice 1) and `RiskPath` (GH #93 Slice 2) are the two authored
+baseline-classification labels the issue adds -- see the intake format doc's
+PracticeArea/RiskPath sections."""
 
 EdgeType = Literal[
     "DEFINES",
@@ -39,6 +44,10 @@ EdgeType = Literal[
     "GOVERNED_BY",
     "SUPPORTED_BY",
     "IMPLEMENTED_BY",
+    "VERIFIED_BY",
+    "OWNS",
+    "COVERS",
+    "MITIGATED_BY",
 ]
 """The intake format's allowed edge types -- mirrors the packaged JSON Schema's
 `edge.type` enum exactly (D7). `GOVERNED_BY` (GH #76 Slice 1), `SUPPORTED_BY`
