@@ -36,7 +36,11 @@
   },
   {
     "keep": null,
-    "drop": ["cap_policy_exception_governance_3cfd12", "cap_release_change_control_2ec781", "cap_quality_gate_assurance_10ab6e"],
+    "drop": [
+      "cap_policy_exception_governance_3cfd12",
+      "cap_release_change_control_2ec781",
+      "cap_quality_gate_assurance_10ab6e"
+    ],
     "note": "KEEP NATIVE (no merge). These three capabilities are internal engineering disciplines with no corresponding obligation/capability in CRA/GDPR/NIS2 (policy & exception governance, release/change control, quality-gate assurance). They remain ENGPRAC-native; the connection to regulations is via the other 6 merged capabilities."
   }
 ]

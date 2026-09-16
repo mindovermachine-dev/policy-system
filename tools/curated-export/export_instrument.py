@@ -5,10 +5,9 @@ Thin wrapper over `ps_service.export.export_instrument.export_instrument` --
 the real orchestration (embed -> serialize -> checksum -> manifest ->
 catalog.json) lives there; this script only parses arguments, resolves a
 real FalkorDB connection and a real embedding transport, and reports the
-outcome. Mirrors `tools/graph-ingestion/load_graph.py`'s/`tools/
-curated-export/migrate_engineering_practices.py`'s own CLI-shim shape
-(argparse, `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` env-driven connection
-defaults, a top-level connection guard printing a hint and exiting non-zero).
+outcome. Same CLI-shim shape as `tools/graph-ingestion/load_graph.py`:
+argparse, `PS_FALKORDB_HOST`/`PS_FALKORDB_PORT` env-driven connection
+defaults, a top-level connection guard printing a hint and exiting non-zero.
 
 Unlike every other script in `tools/`, this one always needs a real,
 configured LLM Provider -- Export's D7 embedding backfill is the one place
@@ -58,8 +57,8 @@ if TYPE_CHECKING:
 DEFAULT_HOST = os.environ.get("PS_FALKORDB_HOST", "localhost")
 DEFAULT_PORT = int(os.environ.get("PS_FALKORDB_PORT", "6379"))
 
-# tools/curated-export/export_instrument.py -> parents[2] is the repo root -- mirrors
-# migrate_engineering_practices.py's DEFAULT_SEED_FILE resolution exactly.
+# tools/curated-export/export_instrument.py -> parents[2] is the repo root -- the
+# standard repo-root resolution every tools/ script anchored two directories deep uses.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPO_ROOT = _REPO_ROOT
 # CHANGES.md MA3's exact packaged-copy destination -- ps_service.api.curated_content's

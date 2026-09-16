@@ -418,10 +418,19 @@ Alternatively, authored directly in the internal-seed intake document when the g
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `title` | string | Yes | |
-| `description` | string | No | |
+| `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `owner_id` | string | No | |
 | `status` | enum: `draft` \| `approved` \| `deprecated` | Yes | |
 | `version` | string | No | |
+| `scope_in` | string | No | What this Policy's commitment covers. |
+| `scope_out` | string | No | What this Policy's commitment explicitly does not cover. |
+| `normative_commitments` | string | No | The enforceable (`must`/`shall`/`required`) commitments this Policy makes. |
+| `review_cadence` | string | No | Review interval or trigger condition. |
+| `exception_pathway` | string | No | The exception/risk-acceptance mechanism and who can grant it. |
+| `measurable_outcomes` | string | No | At least one quantifiable or objectively verifiable outcome. |
+| `capability_grouping_rationale` | string | No | Why the governed Capabilities belong under one Policy — same owner, cadence, and control model. |
+
+These structured fields pair with `ps-skills/policy-system/rubrics/policy-rubric.md` (one field per scored criterion) and `policy-template.md` (one section per field).
 
 #### Relationships
 
@@ -449,9 +458,17 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `title` | string | Yes | |
-| `description` | string | No | |
+| `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `implementation_status` | enum: `draft` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
 | `version` | string | No | |
+| `procedure` | string | No | Steps explicit enough that two implementers would execute them the same way. |
+| `implementer_role` | string | No | Who implements. Standard has no `owner_id`; this is the only place this lives. |
+| `reviewer_role` | string | No | Who reviews/verifies. |
+| `applicability_boundary` | string | No | Which systems, environments, or data classes this Standard governs — and which it doesn't. |
+| `verification_notes` | string | No | Written so a Control could be built directly against it, pass/fail, without interpretation. |
+| `change_rationale` | string | No | Why this Standard was introduced, or what changed from its previous version and why. |
+
+These structured fields pair with `ps-skills/policy-system/rubrics/standard-rubric.md` (one field per scored criterion) and `standard-template.md` (one section per field).
 
 #### Relationships
 
@@ -479,12 +496,20 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 |----------|------|----------|-------|
 | `type` | enum: `automated` \| `manual` | Yes | |
 | `title` | string | Yes | |
-| `description` | string | No | |
+| `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `implementation_status` | enum: `planned` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
 | `execution_frequency` | string | No | |
 | `last_test_date` | date (ISO 8601) | No | |
 | `next_review_date` | date (ISO 8601) | No | |
 | `evidence_ref` | string | No | Opaque pointer into an external evidence/audit store; that store is out of scope for this document. |
+| `pass_fail_criteria` | string | No | Success criteria precise enough that two executors reach the same verdict. |
+| `execution_method` | string | No | How this Control runs, and its intended trigger/cadence — independent of whether `execution_frequency` is set yet. |
+| `evidence_plan` | string | No | What evidence this Control will produce and where, stated before `evidence_ref` exists. |
+| `executor_role` | string | No | Who executes. Control has no `owner_id`; this is the only place this lives. |
+| `reviewer_role` | string | No | Who reviews the result. |
+| `risk_alignment_rationale` | string | No | How this Control's objective addresses the risk exposure of the RiskPath(s) it verifies. |
+
+These structured fields pair with `ps-skills/policy-system/rubrics/control-rubric.md` (one field per scored criterion) and `control-template.md` (one section per field).
 
 #### Relationships
 

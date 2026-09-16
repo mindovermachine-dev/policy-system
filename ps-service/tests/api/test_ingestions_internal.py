@@ -30,7 +30,10 @@ if TYPE_CHECKING:
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
     (
-        _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-seed.json"
+        _REPO_ROOT
+        / "internal-sources"
+        / "engineering-practices"
+        / "engineering-practices-seed.json"
     ).read_text(encoding="utf-8")
 )
 _ENVELOPE_CONTRACT: dict[str, object] = json.loads(

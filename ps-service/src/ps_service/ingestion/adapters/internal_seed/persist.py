@@ -600,7 +600,13 @@ def _capability_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _policy_properties(node: SeedNode) -> dict[str, object]:
-    """Required `title`/`status`, optional `description`/`owner_id`/`version`.
+    """Required `title`/`status`, plus optional and structured properties.
+
+    Optional: `description`/`owner_id`/`version`. Structured authoring-rubric
+    fields: `scope_in`, `scope_out`, `normative_commitments`,
+    `review_cadence`, `exception_pathway`, `measurable_outcomes`,
+    `capability_grouping_rationale` -- see
+    `ps-skills/policy-system/rubrics/policy-rubric.md`.
 
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Policy carries no LLM-derivation uncertainty.
@@ -609,7 +615,18 @@ def _policy_properties(node: SeedNode) -> dict[str, object]:
         "title": _require_str_property(node, "title"),
         "status": _require_str_property(node, "status"),
     }
-    for optional_key in ("description", "owner_id", "version"):
+    for optional_key in (
+        "description",
+        "owner_id",
+        "version",
+        "scope_in",
+        "scope_out",
+        "normative_commitments",
+        "review_cadence",
+        "exception_pathway",
+        "measurable_outcomes",
+        "capability_grouping_rationale",
+    ):
         value = node.properties.get(optional_key)
         if value is not None:
             properties[optional_key] = value
@@ -655,7 +672,12 @@ def _risk_path_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _standard_properties(node: SeedNode) -> dict[str, object]:
-    """Required `title`/`implementation_status`, optional `description`/`version`.
+    """Required `title`/`implementation_status`, plus optional and structured properties.
+
+    Optional: `description`/`version`. Structured authoring-rubric fields:
+    `procedure`, `implementer_role`, `reviewer_role`, `applicability_boundary`,
+    `verification_notes`, `change_rationale` -- see
+    `ps-skills/policy-system/rubrics/standard-rubric.md`.
 
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Standard carries no LLM-derivation uncertainty.
@@ -665,7 +687,16 @@ def _standard_properties(node: SeedNode) -> dict[str, object]:
         "title": _require_str_property(node, "title"),
         "implementation_status": _require_str_property(node, "implementation_status"),
     }
-    for optional_key in ("description", "version"):
+    for optional_key in (
+        "description",
+        "version",
+        "procedure",
+        "implementer_role",
+        "reviewer_role",
+        "applicability_boundary",
+        "verification_notes",
+        "change_rationale",
+    ):
         value = node.properties.get(optional_key)
         if value is not None:
             properties[optional_key] = value
@@ -673,7 +704,15 @@ def _standard_properties(node: SeedNode) -> dict[str, object]:
 
 
 def _control_properties(node: SeedNode) -> dict[str, object]:
-    """Required `type`/`title`/`implementation_status`, optional operational fields.
+    """Required `type`/`title`/`implementation_status`, plus optional and structured properties.
+
+    Optional: the operational fields (`execution_frequency`, `last_test_date`,
+    `next_review_date`, `evidence_ref`). Structured authoring-rubric fields:
+    `pass_fail_criteria`, `execution_method`, `evidence_plan`, `executor_role`,
+    `reviewer_role`, `risk_alignment_rationale` -- see
+    `ps-skills/policy-system/rubrics/control-rubric.md`. `evidence_plan` is
+    the authoring-time prose describing intended evidence; `evidence_ref`
+    stays the operational pointer populated once real evidence exists.
 
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Control carries no LLM-derivation uncertainty.
@@ -690,6 +729,12 @@ def _control_properties(node: SeedNode) -> dict[str, object]:
         "last_test_date",
         "next_review_date",
         "evidence_ref",
+        "pass_fail_criteria",
+        "execution_method",
+        "evidence_plan",
+        "executor_role",
+        "reviewer_role",
+        "risk_alignment_rationale",
     ):
         value = node.properties.get(optional_key)
         if value is not None:

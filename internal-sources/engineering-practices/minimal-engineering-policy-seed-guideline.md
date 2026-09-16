@@ -1,4 +1,5 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
+
 # Minimal Engineering Policy Seed Guideline
 
 **Scope:** Mixed software + regulated domains  
@@ -10,10 +11,12 @@
 ## 1. Definition of Minimal Complete
 
 A starter set is **minimal complete** when every major engineering risk path has:
+
 - at least one governing `Policy`
 - at least one verifiable `Control` path
 
 Required risk paths:
+
 1. Secure build and release
 2. Reliable service operation
 3. Data protection and privacy
@@ -28,6 +31,7 @@ If a policy does not clearly reduce one of these paths, it is likely non-minimal
 ## 2. Engineering Practice Areas
 
 Recommended baseline areas (10):
+
 1. Engineering Governance and Exceptions
 2. Secure Development Lifecycle
 3. Identity and Access for Engineering Systems
@@ -44,6 +48,7 @@ Recommended baseline areas (10):
 ## 3. Typical Minimal Policy Set (Enforced Only)
 
 Recommended baseline policies (12):
+
 1. Engineering Policy Governance
 2. Risk Acceptance and Exception Management
 3. Secure SDLC Policy
@@ -64,6 +69,7 @@ This set is intentionally balanced: not too broad, not too fragmented.
 ## 4. Policy System Graph Seed Shape
 
 Recommended initial dataset size:
+
 1. `RegulatoryInstrument` (internal): 1
 2. `Role`: 5-7
 3. `Requirement`: 20-30
@@ -80,6 +86,7 @@ This is typically the smallest dataset that still produces useful graph converge
 ## 5. Minimality Rule
 
 When new requirements appear:
+
 1. First map to existing `Obligation` and `Capability`
 2. Only add a new `Policy` if owner, governance cadence, or control model genuinely differs
 

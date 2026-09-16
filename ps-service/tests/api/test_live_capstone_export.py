@@ -23,8 +23,10 @@ fixture graph pairs instead of seeding new ones:
   ``test_live_capstone_external.py``'s own ``cra_baseline``/``cra_native``
   side effect.
 - **Internal half:** the real, permanent ``engprac_baseline``/
-  ``engprac_native`` (``RegulatoryInstrument.id = "ENGPRAC-3.0"``), seeded
-  once by ``tools/curated-export/migrate_engineering_practices.py`` -- no
+  ``engprac_native`` (``RegulatoryInstrument.id = "ENGPRAC-1.0"``), seeded
+  by issue #95's real internal-seed adapter submissions (the incremental
+  per-slice submissions of ``internal-sources/engineering-practices/
+  engineering-practices-seed.json`` through ``POST /ingestions``) -- no
   setup of its own is needed, exactly like
   ``test_engineering_practices_migration_live.py``.
 
@@ -109,7 +111,7 @@ _CRA_REQUEST: dict[str, str] = {"source": "catalog", "celex": _CRA_CELEX}
 _CRA_BASELINE_GRAPH = "cra_baseline"
 _CRA_NATIVE_GRAPH = "cra_native"
 
-_ENGPRAC_INSTRUMENT_ID = "ENGPRAC-3.0"
+_ENGPRAC_INSTRUMENT_ID = "ENGPRAC-1.0"
 _ENGPRAC_BASELINE_GRAPH = "engprac_baseline"
 _ENGPRAC_NATIVE_GRAPH = "engprac_native"
 

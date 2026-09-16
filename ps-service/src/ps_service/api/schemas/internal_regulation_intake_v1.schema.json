@@ -159,7 +159,14 @@
         "status": { "enum": ["draft", "approved", "deprecated"] },
         "description": { "type": "string" },
         "owner_id": { "type": "string" },
-        "version": { "type": "string" }
+        "version": { "type": "string" },
+        "scope_in": { "type": "string" },
+        "scope_out": { "type": "string" },
+        "normative_commitments": { "type": "string" },
+        "review_cadence": { "type": "string" },
+        "exception_pathway": { "type": "string" },
+        "measurable_outcomes": { "type": "string" },
+        "capability_grouping_rationale": { "type": "string" }
       }
     },
     "standardProperties": {
@@ -170,7 +177,13 @@
         "title": { "type": "string", "minLength": 1 },
         "implementation_status": { "enum": ["draft", "implemented", "reviewed", "deprecated"] },
         "description": { "type": "string" },
-        "version": { "type": "string" }
+        "version": { "type": "string" },
+        "procedure": { "type": "string" },
+        "implementer_role": { "type": "string" },
+        "reviewer_role": { "type": "string" },
+        "applicability_boundary": { "type": "string" },
+        "verification_notes": { "type": "string" },
+        "change_rationale": { "type": "string" }
       }
     },
     "controlProperties": {
@@ -185,7 +198,13 @@
         "execution_frequency": { "type": "string" },
         "last_test_date": { "type": "string", "format": "date" },
         "next_review_date": { "type": "string", "format": "date" },
-        "evidence_ref": { "type": "string" }
+        "evidence_ref": { "type": "string" },
+        "pass_fail_criteria": { "type": "string" },
+        "execution_method": { "type": "string" },
+        "evidence_plan": { "type": "string" },
+        "executor_role": { "type": "string" },
+        "reviewer_role": { "type": "string" },
+        "risk_alignment_rationale": { "type": "string" }
       }
     },
     "practiceAreaProperties": {

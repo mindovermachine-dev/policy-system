@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "0f8c6052a19a036ee3ff67a49908a13bd33990d89e9c203b3ed303ba98d7ca52",
+  "celex": null,
+  "exported_at": "2026-09-16T14:48:28.087599+00:00",
+  "instrument_id": "ENGPRAC-1.0",
+  "jurisdiction": null,
+  "native_sha256": "7a3ff52da6c0b2c3ce6aec850acc7a1e619d5d34863e94b944035a04589f2565",
+  "schema_version": "2",
+  "short_name": "ENGPRAC",
+  "source_type": "internal",
+  "title": "Engineering Practices Policy",
+  "version": "1.0"
+}

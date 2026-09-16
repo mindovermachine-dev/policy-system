@@ -40,7 +40,10 @@ _VALID_CELEX = "32024R2847"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INTERNAL_SEED_DOCUMENT: dict[str, object] = json.loads(
     (
-        _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-seed.json"
+        _REPO_ROOT
+        / "internal-sources"
+        / "engineering-practices"
+        / "engineering-practices-seed.json"
     ).read_text(encoding="utf-8")
 )
 

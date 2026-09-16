@@ -1,0 +1,3746 @@
+{
+  "nodes": [
+    {
+      "label": "RegulatoryInstrument",
+      "id": "ENGPRAC-1.0",
+      "properties": {
+        "title": "Engineering Practices Policy",
+        "source_type": "internal",
+        "effective_date": "2026-08-01",
+        "version": "1.0",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-1",
+      "properties": {
+        "name": "Service Owner",
+        "description": "Accountable owner of a production service and its compliance posture."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-2",
+      "properties": {
+        "name": "Engineering Manager",
+        "description": "Owns team execution and adherence to engineering policy."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-3",
+      "properties": {
+        "name": "Security Engineer",
+        "description": "Implements and verifies security controls across the SDLC."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-4",
+      "properties": {
+        "name": "SRE Lead",
+        "description": "Owns reliability engineering standards and operational readiness."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-5",
+      "properties": {
+        "name": "QA Lead",
+        "description": "Owns quality gates and release test confidence."
+      }
+    },
+    {
+      "label": "Role",
+      "id": "role-6",
+      "properties": {
+        "name": "Data Protection Officer",
+        "description": "Owns privacy engineering governance and data protection obligations."
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-1",
+      "properties": {
+        "text": "Engineering managers shall maintain approved policy governance and controlled exception handling for all production services.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-2",
+      "properties": {
+        "text": "Service teams shall apply secure SDLC practices including threat-informed design and secure coding standards.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-3",
+      "properties": {
+        "text": "Engineering systems shall enforce strong authentication, least privilege, and periodic access review.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-4",
+      "properties": {
+        "text": "Code changes shall follow controlled release processes with rollback readiness and risk-based approvals.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-5",
+      "properties": {
+        "text": "Software components shall be tracked, verified, and license-compliant across the supply chain.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-6",
+      "properties": {
+        "text": "Releases shall satisfy quality gates with automated and risk-based test evidence before deployment.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-7",
+      "properties": {
+        "text": "Production services shall maintain reliability objectives, observability baselines, and recovery readiness.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-8",
+      "properties": {
+        "text": "Security vulnerabilities and incidents shall be triaged, remediated, and escalated within defined SLAs.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-9",
+      "properties": {
+        "text": "Data handling and privacy safeguards shall be implemented proportionate to data sensitivity and legal obligations.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "req-10",
+      "properties": {
+        "text": "Access and security logging shall be retained and reviewable to support traceability and audit evidence.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-1",
+      "properties": {
+        "text": "Maintain Policy Governance and Exception Management"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-2",
+      "properties": {
+        "text": "Execute Secure SDLC Practices"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-3",
+      "properties": {
+        "text": "Enforce Engineering Identity and Access Controls"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-4",
+      "properties": {
+        "text": "Ensure Release and Change Safety"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-5",
+      "properties": {
+        "text": "Assure Software Supply Chain Integrity"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-6",
+      "properties": {
+        "text": "Enforce Test and Quality Gates"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-7",
+      "properties": {
+        "text": "Maintain Reliability and Operational Readiness"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-8",
+      "properties": {
+        "text": "Operate Vulnerability and Incident Response"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-9",
+      "properties": {
+        "text": "Implement Data Protection and Privacy Engineering"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "obl-10",
+      "properties": {
+        "text": "Maintain Logging and Audit Traceability"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-1",
+      "properties": {
+        "name": "Policy and Exception Governance"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-2",
+      "properties": {
+        "name": "Secure Development Lifecycle"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-3",
+      "properties": {
+        "name": "Access Control & Authentication"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-4",
+      "properties": {
+        "name": "Release and Change Control"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-5",
+      "properties": {
+        "name": "Software Bill of Materials Management"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-6",
+      "properties": {
+        "name": "Quality Gate Assurance"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-7",
+      "properties": {
+        "name": "Service Reliability Management"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-8",
+      "properties": {
+        "name": "Vulnerability Management"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-9",
+      "properties": {
+        "name": "Privacy by Design and Default"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "cap-10",
+      "properties": {
+        "name": "Security Logging"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s2-pa-1",
+      "properties": {
+        "name": "Engineering Governance and Exceptions",
+        "description": "Cross-cutting practice area covering policy governance, exception handling, and risk-acceptance discipline for engineering systems.",
+        "status": "active",
+        "owner_id": "role-2",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s2-pa-2",
+      "properties": {
+        "name": "Identity and Access for Engineering Systems",
+        "description": "Practice area covering authentication, authorization, least-privilege provisioning, and periodic access review for internal engineering tooling and systems.",
+        "status": "active",
+        "owner_id": "role-3",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s2-pa-3",
+      "properties": {
+        "name": "Quality Engineering and Test Assurance",
+        "description": "Practice area covering automated and risk-based quality gates, test evidence, and release readiness verification before deployment.",
+        "status": "active",
+        "owner_id": "role-5",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s2-pol-1",
+      "properties": {
+        "title": "Engineering Policy Governance Policy",
+        "status": "draft",
+        "description": "Establishes how engineering policies are authorized, maintained, and exception-managed across all internal engineering practices.",
+        "owner_id": "role-2",
+        "version": "1.0",
+        "scope_in": "All internally authored engineering policies, standards, and controls under the Policy System; the lifecycle of policy exception requests and risk acceptances for any engineering Capability.",
+        "scope_out": "External regulatory instruments (GDPR, NIS2, CRA, AI Act, DORA, DSA) and their own Policy/Standard/Control content, which are never authored by this Policy; day-to-day operational execution of individual engineering standards, which is scoped to those standards themselves.",
+        "normative_commitments": "Every engineering policy must be reviewed and approved by an accountable owner before taking effect. Any deviation from an approved policy or standard must be recorded as a time-boxed exception with a named risk-acceptor; undocumented deviations are prohibited. Exceptions must be re-reviewed at or before their stated expiry.",
+        "review_cadence": "Reviewed annually, and immediately upon any material change to the engineering organization's policy authoring process or exception-handling tooling.",
+        "exception_pathway": "An engineering team requests an exception via the policy exception register; the Engineering Manager accountable for the affected service reviews and grants or denies it, recording a written risk-acceptance rationale and an expiry date not exceeding 12 months.",
+        "measurable_outcomes": "100% of active policy exceptions have a recorded expiry date and risk-acceptance rationale; zero policies remain in draft status for more than 90 days without an assigned owner.",
+        "capability_grouping_rationale": "Governs only cap-1 (Policy and Exception Governance). This Capability is ENGPRAC-native -- no regulation among GDPR/NIS2/CRA/AI Act/DORA/DSA defines an equivalent internal policy-exception-governance duty (re-confirmed against current curated-content baselines) -- so this Policy was not minted to mirror a regulation article; it exists because internal policy governance has its own distinct owner (Engineering Manager) and control model (exception register review) not shared by any other Capability in this dataset."
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s2-pol-2",
+      "properties": {
+        "title": "Access Control Policy",
+        "status": "draft",
+        "description": "Governs authentication, authorization, least-privilege provisioning, and periodic access review for engineering systems and tooling.",
+        "owner_id": "role-3",
+        "version": "1.0",
+        "scope_in": "All internal engineering systems, source control, CI/CD platforms, cloud infrastructure consoles, and production access tooling used by engineering staff; provisioning, de-provisioning, and periodic recertification of that access.",
+        "scope_out": "Customer-facing product access control and end-user authentication, which is governed by product-specific Capabilities, not this internal engineering-tooling Policy; physical facility access.",
+        "normative_commitments": "All engineering system access must be granted on a least-privilege basis and tied to a named approver. Shared or standing administrative credentials must not be used for routine engineering tasks. Access must be recertified at least quarterly.",
+        "review_cadence": "Reviewed every 12 months, and immediately following any material change to the engineering identity provider or access-provisioning tooling.",
+        "exception_pathway": "Requests for access beyond standard least-privilege baselines are submitted through the same exception register as cap-1's Policy; the Security Engineer accountable for the affected system reviews and time-boxes any grant, capped at 90 days before mandatory re-justification.",
+        "measurable_outcomes": "At least 95% of engineering system access grants have a recorded approver and expiry review date; zero standing administrative credentials shared across more than one individual.",
+        "capability_grouping_rationale": "Governs only cap-3 (Access Control & Authentication). Re-verified against CRA-1.0's live 'Information Access Control' Capability (id cap_information_access_control_116771): its description ('Process for granting access to relevant product and documentation information when requested on a justified basis') scopes a narrow, request-driven disclosure process for product/documentation information to external requesters -- not engineering-tooling identity and access management (authN, least-privilege, periodic recertification for internal systems). The real-world meanings do not match, so cap-3 is kept ENGPRAC-native under its existing name rather than renamed to converge onto CRA's Capability; this Policy was minted for a genuinely distinct ownership/control model (Security Engineer, access-provisioning tooling), not to mirror a regulation article."
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s2-pol-3",
+      "properties": {
+        "title": "Test and Quality Gate Policy",
+        "status": "draft",
+        "description": "Governs the automated and risk-based quality gates that release candidates must pass before deployment.",
+        "owner_id": "role-5",
+        "version": "1.0",
+        "scope_in": "All quality gates applied to release candidates prior to production deployment, including automated test-coverage thresholds, static analysis gates, and risk-based manual sign-off for high-risk releases.",
+        "scope_out": "The underlying test-authoring practices and test-case design methodology, which are execution details owned by individual service teams, not this Policy; production incident response, which is governed separately.",
+        "normative_commitments": "No release candidate must be promoted to production unless it has passed its defined quality gates. Any override of a failed quality gate must be approved in writing by the QA Lead and logged as an exception. Quality gate criteria must be reviewed whenever the CI/CD pipeline configuration changes.",
+        "review_cadence": "Reviewed every 6 months, and immediately upon any CI/CD platform migration.",
+        "exception_pathway": "A release requiring a quality-gate override is escalated to the QA Lead, who records a written risk-acceptance rationale referencing the specific failed gate and an expiry for any temporary waiver, capped at the current release cycle.",
+        "measurable_outcomes": "At least 90% of release candidates pass all automated quality gates without an override in a given quarter; 100% of overrides have a recorded QA Lead sign-off.",
+        "capability_grouping_rationale": "Governs only cap-6 (Quality Gate Assurance). Confirmed ENGPRAC-native (no CRA/GDPR/NIS2/AI Act/DORA/DSA Capability models internal release quality-gating). This Policy was minted for its own distinct ownership (QA Lead) and control model (CI-enforced automated gates plus manual override sign-off), not because a regulation article exists for it."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s2-std-1",
+      "properties": {
+        "title": "Policy Exception Request and Risk Acceptance Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for requesting, reviewing, and recording a policy exception and its risk acceptance.",
+        "version": "1.0",
+        "procedure": "1) Requestor submits an exception request in the policy exception register, naming the specific policy/standard clause being deviated from and the business justification. 2) The Engineering Manager accountable for the affected service reviews the request within 5 business days. 3) If approved, the Engineering Manager records a written risk-acceptance rationale and sets an expiry date not exceeding 12 months. 4) The register entry is tagged 'open' until the expiry date, at which point it is either renewed with a fresh review or closed.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Engineering Manager",
+        "applicability_boundary": "Applies to all policy/standard deviations for internally authored engineering policies; does not apply to deviations from external regulatory instruments' own requirements, which follow their own compliance-exception process outside this Policy System.",
+        "verification_notes": "A Control can test conformance by querying the exception register for: (a) every 'open' entry has a non-null expiry date and risk-acceptance rationale field, (b) no entry's expiry date is more than 12 months past its creation date, (c) no entry is past its expiry date while still tagged 'open'.",
+        "change_rationale": "Newly authored to give the Engineering Policy Governance Policy a concrete, testable exception procedure; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s2-std-2",
+      "properties": {
+        "title": "Engineering System Access Provisioning Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for granting least-privilege access to engineering systems and tooling.",
+        "version": "1.0",
+        "procedure": "1) Access requestor submits a request naming the specific system, resource, and role needed, with a business justification. 2) The Security Engineer (or delegated system owner) verifies the requested access matches the minimum privilege needed for the requestor's role. 3) Access is provisioned via the identity provider with a linked ticket reference recording the approver and justification. 4) Standing administrative roles are prohibited; time-boxed elevation is used instead, capped at 8 hours per grant.",
+        "implementer_role": "Security Engineer",
+        "reviewer_role": "System Owner (Service Owner role)",
+        "applicability_boundary": "Applies to all engineering-internal systems (source control, CI/CD, cloud consoles, production access tooling); does not apply to customer-facing product authentication.",
+        "verification_notes": "A Control can test conformance by sampling access grants in the identity provider's audit log and checking each has: a linked ticket reference, a named approver distinct from the requestor, and (for administrative roles) a time-boxed expiry of 8 hours or less.",
+        "change_rationale": "Newly authored as the first Standard under the Access Control Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s2-std-3",
+      "properties": {
+        "title": "Periodic Access Review and Recertification Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for periodically recertifying engineering system access grants.",
+        "version": "1.0",
+        "procedure": "1) Every calendar quarter, an automated report lists all active access grants per system, grouped by grantee and role. 2) The accountable Engineering Manager or Security Engineer for each system reviews the report and either confirms continued need or revokes access. 3) Revocations are executed within 5 business days of the review. 4) The completed review, including any revocations, is logged with a timestamp and reviewer name.",
+        "implementer_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager",
+        "applicability_boundary": "Applies to all engineering systems in scope of the Engineering System Access Provisioning Standard; excludes systems decommissioned before the review date.",
+        "verification_notes": "A Control can test conformance by checking that, for each quarter, every in-scope system has a logged review entry with a timestamp within that quarter and a named reviewer, and that any grant flagged for revocation shows a revocation timestamp within 5 business days.",
+        "change_rationale": "Newly authored to give the Access Control Policy a recurring recertification procedure distinct from initial provisioning; no predecessor version."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s2-std-4",
+      "properties": {
+        "title": "Release Quality Gate Verification Standard",
+        "implementation_status": "draft",
+        "description": "Defines the automated and manual quality gates a release candidate must pass before production deployment.",
+        "version": "1.0",
+        "procedure": "1) The CI pipeline runs automated test-coverage, static-analysis, and security-scan gates against every release candidate. 2) A release candidate failing any gate is blocked from promotion. 3) For releases classified high-risk, the QA Lead performs a manual readiness review covering test evidence, rollback plan, and known-issue triage before sign-off. 4) Any override of a failed gate requires the QA Lead's written approval per the Policy's exception pathway.",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "QA Lead",
+        "applicability_boundary": "Applies to all release candidates promoted through the CI/CD pipeline to production; does not apply to hotfix emergency deployments, which follow the separate incident-response exception process.",
+        "verification_notes": "A Control can test conformance by checking the CI pipeline's gate results for each release candidate: coverage/static-analysis/security-scan gate status recorded, and for high-risk releases, a logged QA Lead sign-off record with a timestamp preceding the deployment timestamp.",
+        "change_rationale": "Newly authored as the first Standard under the Test and Quality Gate Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-1",
+      "properties": {
+        "type": "automated",
+        "title": "Exception Register Completeness Check",
+        "implementation_status": "planned",
+        "description": "Automated scheduled check verifying every open policy exception register entry has a valid rationale and expiry.",
+        "pass_fail_criteria": "PASS if every register entry tagged 'open' has a non-null risk-acceptance rationale, a non-null expiry date no more than 12 months after creation, and no entry's expiry date is in the past. FAIL if any open entry is missing a rationale, has a missing/invalid expiry, or is past its expiry while still tagged 'open'.",
+        "execution_method": "Scheduled job queries the exception register weekly and evaluates each open entry against the pass/fail criteria above; intended to run every Monday at 06:00 UTC once scheduled.",
+        "evidence_plan": "Job output (pass/fail per entry, with entry IDs for any failures) will be written to the engineering compliance evidence store as a dated JSON report, one per run.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s2-rp-2 (Uncontrolled Policy Exceptions): an exception register entry missing a rationale or expiry is exactly the failure mode that risk path describes -- an exception that is never actually time-boxed or justified, effectively becoming a permanent, unreviewed policy bypass."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-2",
+      "properties": {
+        "type": "manual",
+        "title": "Quarterly Exception Risk-Acceptance Review",
+        "implementation_status": "planned",
+        "description": "Manual quarterly review by the Engineering Manager of all open policy exceptions to confirm risk acceptances remain justified.",
+        "pass_fail_criteria": "PASS if, for the quarter, every open exception has been reviewed by the accountable Engineering Manager with a written confirm-or-revoke decision recorded. FAIL if any open exception has no recorded quarterly decision.",
+        "execution_method": "Manual review meeting held once per quarter; the Engineering Manager walks the current open-exception list and records a decision for each. Intended cadence: quarterly, calendar-aligned.",
+        "evidence_plan": "Review minutes and per-exception decisions will be recorded in the exception register itself as a dated review note, one per exception per quarter.",
+        "executor_role": "Engineering Manager",
+        "reviewer_role": "Security Engineer (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies s2-rp-2 by catching exceptions that pass the automated completeness check (s2-ctrl-1) but whose underlying justification has become stale -- the human judgment call the automated check cannot make."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-3",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Least-Privilege Provisioning Scan",
+        "implementation_status": "planned",
+        "description": "Automated scan of the identity provider's access-grant log verifying every new grant meets least-privilege and approval requirements.",
+        "pass_fail_criteria": "PASS if every access grant created in the scan window has a linked ticket reference, a named approver distinct from the requestor, and (for administrative roles) an expiry of 8 hours or less. FAIL if any grant is missing one of these.",
+        "execution_method": "Scheduled scan of the identity provider's audit log; intended to run daily once scheduled.",
+        "evidence_plan": "Scan results (pass/fail per grant, with grant IDs for failures) will be written to the engineering compliance evidence store as a dated report.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s2-rp-1 (Unauthorized Access to Engineering Systems): a grant without a linked approval or without a time-boxed elevation is exactly the unauthorized/unaccountable-access exposure that risk path describes."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-4",
+      "properties": {
+        "type": "automated",
+        "title": "Quarterly Access Recertification Report Automation",
+        "implementation_status": "planned",
+        "description": "Automated generation of the quarterly access-grant report used for recertification review.",
+        "pass_fail_criteria": "PASS if the quarterly report is generated and lists 100% of active access grants across in-scope systems, grouped by grantee and role, by the first business day of the quarter. FAIL if the report is missing any in-scope system or is not generated by that date.",
+        "execution_method": "Scheduled job aggregates active grants across the identity provider once per quarter; intended to run on the first day of each calendar quarter.",
+        "evidence_plan": "Generated report will be stored in the engineering compliance evidence store as a dated CSV/JSON export, one per quarter.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s2-rp-1 by ensuring the recertification review (s2-ctrl-5) has complete, accurate input data -- an incomplete report would let stale, unauthorized access go unreviewed."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-5",
+      "properties": {
+        "type": "manual",
+        "title": "Manager Access Recertification Sign-off Verification",
+        "implementation_status": "planned",
+        "description": "Manual verification that each accountable manager has completed a quarterly access recertification decision for every grant in their system.",
+        "pass_fail_criteria": "PASS if 100% of active grants in scope have a recorded confirm-or-revoke decision from the accountable manager within 5 business days of the quarterly report. FAIL if any grant lacks a recorded decision or the decision is late.",
+        "execution_method": "Manual review by the Security Engineer of the recertification log against the quarterly report; intended cadence: within 10 business days after each quarterly report is generated.",
+        "evidence_plan": "Recertification decisions and the Security Engineer's completeness check will be logged in the access-review system as dated entries per grant.",
+        "executor_role": "Engineering Manager (decision) / Security Engineer (completeness verification)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s2-rp-1 by confirming the human decision step of recertification actually happened for every grant, not just that a report was produced -- closing the loop the automated report (s2-ctrl-4) cannot close on its own."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-6",
+      "properties": {
+        "type": "automated",
+        "title": "CI Quality Gate Enforcement Check",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline check verifying every release candidate passes coverage, static-analysis, and security-scan gates before promotion.",
+        "pass_fail_criteria": "PASS if the release candidate's CI run shows all three gates (coverage threshold, static analysis, security scan) recorded as passed. FAIL if any gate is missing, failed, or skipped without a logged override.",
+        "execution_method": "Enforced automatically on every CI pipeline run for a release candidate; runs on every merge-to-release-branch event.",
+        "evidence_plan": "CI run results (per-gate pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "QA Lead",
+        "risk_alignment_rationale": "Directly supports the Secure Build and Release risk exposure (the mandatory RiskPath Slice 3 mints, which cap-6 attaches to via a forward MITIGATED_BY edge) by ensuring untested or unscanned code cannot reach production silently; grounds cap-6's Test and Quality Gate Policy governance in a concrete, automatically enforced gate."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s2-ctrl-7",
+      "properties": {
+        "type": "manual",
+        "title": "Release Readiness Manual Sign-off Review",
+        "implementation_status": "planned",
+        "description": "Manual QA Lead review of test evidence, rollback plan, and known-issue triage for high-risk release candidates before production sign-off.",
+        "pass_fail_criteria": "PASS if the QA Lead has logged a written sign-off for the release candidate referencing test evidence, rollback plan, and triaged known issues, with a timestamp preceding the deployment timestamp. FAIL if any high-risk release deploys without a logged QA Lead sign-off, or the sign-off predates the final CI gate result.",
+        "execution_method": "Manual review performed by the QA Lead for every release candidate classified high-risk; intended to run before every high-risk production deployment.",
+        "evidence_plan": "Sign-off record will be logged in the release-management system as a dated entry linked to the release candidate's build ID.",
+        "executor_role": "QA Lead",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly supports the same Secure Build and Release exposure as s2-ctrl-6 by adding the human judgment step automated gates cannot make -- catching known issues or incomplete rollback plans that pass automated checks but still represent real release risk."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s2-rp-1",
+      "properties": {
+        "name": "Unauthorized Access to Engineering Systems",
+        "description": "Risk that an individual gains or retains access to engineering systems (source control, CI/CD, cloud infrastructure, production tooling) beyond what their role justifies, undetected, because provisioning or recertification controls failed.",
+        "status": "active",
+        "risk_type": "security",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s2-rp-2",
+      "properties": {
+        "name": "Uncontrolled Policy Exceptions",
+        "description": "Risk that a deviation from an approved engineering policy or standard is never formally reviewed, time-boxed, or risk-accepted, and becomes a permanent, unaccountable bypass of governance controls.",
+        "status": "active",
+        "risk_type": "compliance",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s3-pa-1",
+      "properties": {
+        "name": "Secure Development Lifecycle",
+        "description": "Practice area covering threat-informed design, secure coding standards, and automated security testing gates integrated into the software development lifecycle.",
+        "status": "active",
+        "owner_id": "role-3",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s3-pa-2",
+      "properties": {
+        "name": "Change, Release, and Deployment Safety",
+        "description": "Practice area covering controlled release processes, change risk classification, deployment approval gates, and rollback readiness for production changes.",
+        "status": "active",
+        "owner_id": "role-1",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s3-pa-3",
+      "properties": {
+        "name": "Software Supply Chain and Dependencies",
+        "description": "Practice area covering software bill of materials generation, build artifact signing, and provenance attestation across the software supply chain.",
+        "status": "active",
+        "owner_id": "role-3",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s3-pol-1",
+      "properties": {
+        "title": "Secure SDLC Policy",
+        "status": "draft",
+        "description": "Establishes mandatory threat-informed design, secure coding, and automated security testing practices across the software development lifecycle.",
+        "owner_id": "role-3",
+        "version": "1.0",
+        "scope_in": "All internally developed services and applications from design through pre-production, including threat modeling, secure coding standards, and static/dependency/secret scanning integrated into CI pipelines.",
+        "scope_out": "Post-deployment runtime security monitoring and incident response, which are governed by separate reliability/incident-response Policies; third-party vendor security assessment, which is a supply-chain risk-assessment concern outside this Policy's SDLC scope.",
+        "normative_commitments": "Every service must have a documented threat model reviewed before its first production release and after any material architecture change. Every code change must pass automated static analysis and dependency vulnerability scanning before merge; no code with an unresolved critical-severity finding must be merged. Secrets must never be committed to source control.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon adoption of a new CI/CD scanning toolchain.",
+        "exception_pathway": "A team requesting exception from a scanning gate or threat-modeling requirement submits it via the policy exception register (shared with s2-pol-1); the Security Engineer accountable for the affected service reviews and time-boxes any grant, capped at 90 days pending remediation.",
+        "measurable_outcomes": "100% of production services have a threat model reviewed within the last 12 months; zero merged commits contain an unresolved critical-severity SAST or dependency-scan finding.",
+        "capability_grouping_rationale": "Governs only cap-2 (Secure Development Lifecycle). Re-confirmed cap-2 stays ENGPRAC-native: none of GDPR/NIS2/CRA/AI Act/DORA/DSA's live Capabilities model a design-time threat-modeling-plus-secure-coding duty scoped this way (CRA's closest text, 'Establish and Document Cybersecurity Policy for Secure Development and Vulnerability Handling', is an Obligation, not a matching Capability name). This Policy was minted for its own distinct ownership (Security Engineer) and control model (CI-enforced automated scanning plus periodic threat-model review), not to mirror a regulation article."
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s3-pol-2",
+      "properties": {
+        "title": "Change and Release Control Policy",
+        "status": "draft",
+        "description": "Governs risk-classified change approval, controlled release promotion, and rollback readiness for production deployments.",
+        "owner_id": "role-1",
+        "version": "1.0",
+        "scope_in": "All production changes and release promotions for internally owned services, including change risk classification, deployment approval gating, change-freeze windows, and rollback plan verification.",
+        "scope_out": "The quality-gate test evidence itself (coverage, static analysis, security scan pass/fail), which is governed by the existing Test and Quality Gate Policy (s2-pol-3); this Policy governs the change-approval and promotion process around those gates, not the gates' own test content.",
+        "normative_commitments": "Every production change must be classified by risk tier before approval. High-risk changes must not be promoted without a named approver's recorded sign-off. No change must be promoted during a declared change-freeze window without an emergency-change exception. Every release must have a documented, verified rollback plan before promotion.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any change to the deployment pipeline's approval-gating configuration.",
+        "exception_pathway": "A change requiring promotion during a freeze window or without standard risk-tier approval is escalated to the Service Owner accountable for the affected service, who records a written risk-acceptance rationale and an expiry capped at the current release cycle.",
+        "measurable_outcomes": "100% of high-risk changes have a recorded approver sign-off prior to promotion; zero changes promoted during an active freeze window without a logged emergency exception.",
+        "capability_grouping_rationale": "Governs only cap-4 (Release and Change Control). Confirmed ENGPRAC-native (re-verified against current curated-content baselines) -- no regulation among GDPR/NIS2/CRA/AI Act/DORA/DSA models this exact change-risk-classification-plus-deployment-approval duty. This Policy was minted for its own distinct ownership (Service Owner) and control model (pipeline-enforced approval gates plus manual freeze-window exceptions), not because a regulation article exists for it."
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s3-pol-3",
+      "properties": {
+        "title": "Build Integrity and Artifact Provenance Policy",
+        "status": "draft",
+        "description": "Establishes mandatory software bill of materials generation, build artifact signing, and provenance attestation for released software components.",
+        "owner_id": "role-3",
+        "version": "1.0",
+        "scope_in": "All build artifacts produced by internal CI/CD pipelines and promoted toward production, including their software bill of materials (SBOM), cryptographic signing, and provenance attestation.",
+        "scope_out": "Third-party/open-source dependency risk assessment itself (evaluating a vendor or library's own security posture), which is a distinct supply-chain risk-assessment duty scoped separately; this Policy governs the integrity and traceability of this organization's own build outputs, not third-party risk scoring.",
+        "normative_commitments": "Every release artifact must have an accompanying SBOM generated at build time. No artifact must be promoted to production unless it is cryptographically signed by the build pipeline. Every signed artifact must carry a provenance attestation linking it to its source commit and build job.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any change to the artifact signing key infrastructure or SBOM tooling.",
+        "exception_pathway": "A release requiring promotion without a complete SBOM or signature (e.g. due to tooling outage) is escalated to the Security Engineer accountable for build infrastructure, who records a written risk-acceptance rationale and an expiry capped at 7 days pending remediation.",
+        "measurable_outcomes": "100% of production-promoted artifacts have a generated SBOM and a valid cryptographic signature; zero artifacts promoted without a provenance attestation in a given quarter.",
+        "capability_grouping_rationale": "Governs only cap-5 (renamed this slice from 'Component Inventory & SBOM Management' to 'Software Bill of Materials Management' to converge onto CRA's real, already-ingested Capability of that exact name -- CRA's own description, 'Create, maintain, and provide software bill of materials documentation to a requesting authority', matches this Policy's build-time SBOM-generation duty closely enough to justify reuse rather than a fresh ENGPRAC-native Capability, per AC-BI-003. This Policy adds the signing/provenance-attestation half of build integrity that CRA's own SBOM-disclosure duty does not itself model, so it was minted rather than reused."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s3-std-1",
+      "properties": {
+        "title": "Secure Coding and Threat Modeling Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for threat modeling new services and applying secure coding standards during development.",
+        "version": "1.0",
+        "procedure": "1) Before a service's first production release, the development team creates a threat model covering data flows, trust boundaries, and identified threats using STRIDE or an equivalent method. 2) The Security Engineer reviews the threat model and records identified mitigations as backlog items. 3) The threat model is re-reviewed after any material architecture change (new external integration, new data store, new trust boundary). 4) Developers apply the organization's secure coding standard (input validation, output encoding, parameterized queries) during implementation, verified by the SAST gate.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to all internally developed services and applications prior to first production release and after material architecture changes; does not apply to third-party COTS software with no internal code changes.",
+        "verification_notes": "A Control can test conformance by checking that: (a) every production service has a threat model document dated within the last 12 months or since its last material architecture change, whichever is more recent, (b) the document has a recorded Security Engineer review sign-off.",
+        "change_rationale": "Newly authored as the first Standard under the Secure SDLC Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s3-std-2",
+      "properties": {
+        "title": "CI/CD Pipeline Security Scanning Standard",
+        "implementation_status": "draft",
+        "description": "Defines the automated static analysis, dependency vulnerability, and secret scanning gates enforced in the CI pipeline before merge.",
+        "version": "1.0",
+        "procedure": "1) Every pull request triggers automated SAST (static application security testing), dependency vulnerability scanning, and secret scanning in the CI pipeline. 2) A pull request with an unresolved critical-severity SAST or dependency-scan finding, or any detected committed secret, is blocked from merge. 3) Findings below critical severity are recorded as backlog items with a triage SLA. 4) Any override of a blocked merge requires the Security Engineer's written approval per the Policy's exception pathway.",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to every pull request targeting a protected branch in an internally owned source-control repository; does not apply to documentation-only or infrastructure-config-only repositories with no executable application code.",
+        "verification_notes": "A Control can test conformance by checking the CI pipeline's scan results for each merged pull request: SAST/dependency-scan/secret-scan status recorded, and no merge shows a critical-severity finding without a logged Security Engineer override.",
+        "change_rationale": "Newly authored as the second Standard under the Secure SDLC Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s3-std-3",
+      "properties": {
+        "title": "Controlled Release and Deployment Standard",
+        "implementation_status": "draft",
+        "description": "Defines the approval-gating and rollback-readiness procedure a release must satisfy before production deployment.",
+        "version": "1.0",
+        "procedure": "1) Every release candidate is tagged with a change risk tier (low/medium/high) per the Change Risk Classification and Approval Standard. 2) High-risk releases require a named approver's recorded sign-off in the deployment pipeline before promotion is unblocked. 3) Every release must have a documented rollback plan (previous version reference and rollback trigger criteria) attached before promotion. 4) No release is promoted during a declared change-freeze window without a logged emergency-change exception.",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "Service Owner",
+        "applicability_boundary": "Applies to all production deployments of internally owned services; does not apply to configuration-only feature-flag toggles that carry no code deployment.",
+        "verification_notes": "A Control can test conformance by checking the deployment pipeline's promotion record for each release: risk tier recorded, approver sign-off present for high-risk releases, rollback plan reference present, and no promotion timestamp falling inside an active freeze window without a logged exception.",
+        "change_rationale": "Newly authored as the first Standard under the Change and Release Control Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s3-std-4",
+      "properties": {
+        "title": "Change Risk Classification and Approval Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for classifying a production change's risk tier and routing it to the correct approval path.",
+        "version": "1.0",
+        "procedure": "1) The requesting engineer classifies the change as low/medium/high risk using the organization's risk-classification checklist (blast radius, data sensitivity, reversibility). 2) Low-risk changes proceed with standard CI gate approval only. 3) Medium-risk changes require the Engineering Manager's recorded approval. 4) High-risk changes require the Service Owner's recorded approval in addition to the Engineering Manager's. 5) Misclassified changes discovered post-hoc are logged and the classification checklist is updated.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Engineering Manager",
+        "applicability_boundary": "Applies to all production changes for internally owned services; does not apply to read-only configuration inspection or monitoring dashboard changes with no production behavior impact.",
+        "verification_notes": "A Control can test conformance by sampling promoted changes and checking each has a recorded risk-tier classification and the approval(s) matching that tier (Engineering Manager for medium, plus Service Owner for high) logged before the promotion timestamp.",
+        "change_rationale": "Newly authored as the second Standard under the Change and Release Control Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s3-std-5",
+      "properties": {
+        "title": "Build Artifact Signing and SBOM Generation Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for generating a software bill of materials and cryptographically signing every build artifact promoted toward production.",
+        "version": "1.0",
+        "procedure": "1) The CI pipeline generates an SBOM (in a standard format such as SPDX or CycloneDX) for every build artifact at build time, listing all direct and transitive dependencies. 2) The pipeline cryptographically signs the artifact using the organization's build-signing key immediately after a successful build. 3) A provenance attestation is generated linking the signed artifact to its source commit hash and CI build job ID. 4) An artifact missing an SBOM, a valid signature, or a provenance attestation is blocked from promotion to production.",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to all build artifacts produced by internal CI/CD pipelines destined for production deployment; does not apply to local developer-machine builds never promoted beyond a personal environment.",
+        "verification_notes": "A Control can test conformance by checking, for each artifact promoted to production, that the CI build record shows a generated SBOM, a valid signature verification result, and a provenance attestation referencing the source commit and build job ID.",
+        "change_rationale": "Newly authored as the first Standard under the Build Integrity and Artifact Provenance Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-1",
+      "properties": {
+        "type": "manual",
+        "title": "Threat Model Review Completion Check",
+        "implementation_status": "planned",
+        "description": "Manual verification that every production service has a Security-Engineer-reviewed threat model dated within the required window.",
+        "pass_fail_criteria": "PASS if every production service has a threat model document dated within the last 12 months (or since its last material architecture change, whichever is more recent) with a recorded Security Engineer review sign-off. FAIL if any production service's threat model is missing, stale, or lacks a sign-off.",
+        "execution_method": "Manual review performed by the Security Engineer against the service inventory; intended cadence: quarterly, cross-checked against the architecture-change log.",
+        "evidence_plan": "Review results (service name, threat model date, sign-off status) will be recorded in the engineering compliance evidence store as a dated quarterly report.",
+        "executor_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Secure Development Lifecycle mitigation (cap-2): a stale or missing threat model is exactly the design-time blind spot that lets an unvetted attack surface reach the build pipeline undetected."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Static Application Security Testing Gate",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline gate running static application security testing (SAST) against every pull request and blocking merge on unresolved critical findings.",
+        "pass_fail_criteria": "PASS if the pull request's SAST scan reports zero unresolved critical-severity findings. FAIL if any critical-severity finding is unresolved at merge time without a logged Security Engineer override.",
+        "execution_method": "Enforced automatically on every pull request via the CI pipeline's SAST step; runs on every push to a pull request targeting a protected branch.",
+        "evidence_plan": "SAST scan results (finding IDs, severities, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: an unresolved critical vulnerability reaching the build pipeline undetected is exactly the exposure this RiskPath describes; this gate is the first automated checkpoint that prevents it."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-3",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Dependency Vulnerability Scan Gate",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline gate scanning all direct and transitive dependencies for known vulnerabilities and blocking merge on unresolved critical findings.",
+        "pass_fail_criteria": "PASS if the dependency scan reports zero unresolved critical-severity vulnerabilities. FAIL if any critical-severity vulnerability is unresolved at merge time without a logged Security Engineer override.",
+        "execution_method": "Enforced automatically on every pull request via the CI pipeline's dependency-scan step; runs on every push to a pull request targeting a protected branch.",
+        "evidence_plan": "Dependency scan results (package, version, CVE ID, severity, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath and grounds the Software Supply Chain and Dependencies practice area (cap-5): a vulnerable dependency reaching a signed, released artifact undetected is exactly the build-integrity exposure this RiskPath describes."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-4",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Secret-Scanning Pre-Merge Check",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline gate scanning every pull request diff for committed secrets (credentials, keys, tokens) and blocking merge if any are detected.",
+        "pass_fail_criteria": "PASS if the secret scan detects zero committed secrets in the pull request diff. FAIL if any secret is detected and the merge proceeds without a logged Security Engineer override confirming remediation (key rotation).",
+        "execution_method": "Enforced automatically on every pull request via the CI pipeline's secret-scan step; runs on every push to a pull request targeting a protected branch.",
+        "evidence_plan": "Secret scan results (detection type, file, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: a committed secret reaching a built and released artifact undetected is a build-integrity exposure this RiskPath is scoped to catch before promotion."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-5",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Deployment Approval Gate Enforcement",
+        "implementation_status": "planned",
+        "description": "Automated deployment pipeline gate blocking promotion of any high-risk release candidate lacking a recorded approver sign-off.",
+        "pass_fail_criteria": "PASS if every high-risk release promoted to production has a recorded approver sign-off logged in the pipeline before the promotion timestamp. FAIL if any high-risk release is promoted without a logged sign-off.",
+        "execution_method": "Enforced automatically by the deployment pipeline on every promotion event for a release tagged high-risk; runs on every promotion attempt.",
+        "evidence_plan": "Promotion records (risk tier, approver, sign-off timestamp, pass/fail) will be stored in the deployment pipeline's own promotion-history log, referenced by release ID.",
+        "executor_role": "Deployment pipeline (owned by Release Engineer)",
+        "reviewer_role": "Service Owner",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Release and Change Control mitigation (cap-4): an unapproved high-risk change reaching production undetected is exactly the exposure this gate is designed to block."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-6",
+      "properties": {
+        "type": "automated",
+        "title": "Rollback Plan Presence Verification",
+        "implementation_status": "planned",
+        "description": "Automated deployment pipeline check verifying a rollback plan reference is attached to every release before promotion.",
+        "pass_fail_criteria": "PASS if the release's promotion record includes a non-null rollback plan reference (previous version tag and rollback trigger criteria). FAIL if promotion proceeds with a missing rollback plan reference.",
+        "execution_method": "Enforced automatically by the deployment pipeline on every promotion event; runs on every promotion attempt.",
+        "evidence_plan": "Promotion records (rollback plan reference, pass/fail) will be stored in the deployment pipeline's own promotion-history log, referenced by release ID.",
+        "executor_role": "Deployment pipeline (owned by Release Engineer)",
+        "reviewer_role": "Service Owner",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath: a release promoted without a verified rollback path leaves an unsafe, unrecoverable production change in place if the build proves defective post-release."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-7",
+      "properties": {
+        "type": "manual",
+        "title": "Change Risk Classification Approval Sign-off Verification",
+        "implementation_status": "planned",
+        "description": "Manual verification that sampled promoted changes carry a recorded risk-tier classification and the approvals required for that tier.",
+        "pass_fail_criteria": "PASS if, for the sampled changes, 100% show a recorded risk-tier classification and the approval(s) matching that tier (Engineering Manager for medium; Engineering Manager plus Service Owner for high) logged before the promotion timestamp. FAIL if any sampled change is missing its classification or a required approval.",
+        "execution_method": "Manual review performed by the Engineering Manager sampling promoted changes from the change log; intended cadence: monthly.",
+        "evidence_plan": "Review results (change ID, classification, approvals found, pass/fail) will be recorded in the engineering compliance evidence store as a dated monthly report.",
+        "executor_role": "Engineering Manager",
+        "reviewer_role": "Service Owner",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Release and Change Control mitigation (cap-4) by catching misclassified or under-approved changes that the automated deployment gate (s3-ctrl-5) only checks for changes already tagged high-risk -- this control catches misclassification itself."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-8",
+      "properties": {
+        "type": "automated",
+        "title": "Automated SBOM Generation and Artifact Signing Verification Gate",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline gate verifying every build artifact promoted toward production has a generated SBOM and a valid cryptographic signature.",
+        "pass_fail_criteria": "PASS if the promoted artifact has a generated SBOM (SPDX or CycloneDX format) and a signature that verifies successfully against the build-signing key. FAIL if either the SBOM is missing or the signature fails verification.",
+        "execution_method": "Enforced automatically by the CI pipeline immediately after build, before an artifact is eligible for promotion; runs on every build producing a promotable artifact.",
+        "evidence_plan": "Gate results (SBOM presence, signature verification result, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Build Integrity and Artifact Provenance mitigation (cap-5, renamed this slice to converge onto CRA's Software Bill of Materials Management Capability): an unsigned artifact or one missing its SBOM reaching production is exactly the build-integrity exposure this RiskPath describes."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s3-ctrl-9",
+      "properties": {
+        "type": "automated",
+        "title": "Build Provenance Attestation Verification",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline check verifying every signed artifact carries a provenance attestation linking it to its source commit and build job.",
+        "pass_fail_criteria": "PASS if the promoted artifact's provenance attestation references a valid source commit hash and CI build job ID that both resolve to real, existing records. FAIL if the attestation is missing or references an unresolvable commit or build job.",
+        "execution_method": "Enforced automatically by the CI pipeline immediately after artifact signing, before promotion; runs on every build producing a promotable artifact.",
+        "evidence_plan": "Attestation verification results (commit hash, build job ID, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Secure Build and Release RiskPath's Build Integrity and Artifact Provenance mitigation (cap-5) by ensuring an artifact's claimed origin can always be traced back to a real build, closing the loop the signing gate (s3-ctrl-8) alone cannot -- a signature proves integrity since signing, not where the artifact came from."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s3-rp-1",
+      "properties": {
+        "name": "Secure Build and Release",
+        "description": "Risk that a vulnerable, tampered, or unapproved software artifact is built and promoted into production undetected, because secure-coding, dependency-scanning, change-approval, or artifact-signing controls failed or were bypassed.",
+        "status": "active",
+        "risk_type": "security",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Requirement",
+      "id": "s4-req-1",
+      "properties": {
+        "text": "Third-party components, open-source libraries, and vendors shall undergo risk assessment proportionate to their criticality and exposure before adoption and at periodic intervals thereafter.",
+        "type": "requirement",
+        "status": "active"
+      }
+    },
+    {
+      "label": "Obligation",
+      "id": "s4-obl-1",
+      "properties": {
+        "text": "Assess Third-Party Component and Vendor Risk"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "s4-cap-1",
+      "properties": {
+        "name": "Third-Party Component Risk Assessment"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s4-pol-1",
+      "properties": {
+        "title": "Third-Party Component and License Policy",
+        "status": "draft",
+        "description": "Establishes mandatory risk assessment and license compliance review for third-party components, open-source libraries, and vendors before adoption and on a periodic basis thereafter.",
+        "owner_id": "role-3",
+        "version": "1.0",
+        "scope_in": "All third-party software components, open-source libraries, and vendor-supplied services adopted by internally developed services, including their initial risk assessment, license compatibility review, and periodic reassessment for continued use.",
+        "scope_out": "The organization's own build artifact integrity, signing, and provenance attestation, which is governed by the Build Integrity and Artifact Provenance Policy (s3-pol-3); post-adoption vulnerability patching of already-approved dependencies, which is a vulnerability-management concern outside this Policy's intake/license scope.",
+        "normative_commitments": "No third-party component, open-source library, or vendor must be adopted into a production service without a completed risk assessment. Every adopted open-source component must be scanned for license compatibility, and no component under a disallowed license must be integrated without an approved exception. High-risk third-party components and vendors must be reassessed at least quarterly.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any material change to the organization's approved-license list or third-party risk-scoring methodology.",
+        "exception_pathway": "A team requesting adoption of a component or vendor that fails risk assessment or license review submits it via the policy exception register (shared with s2-pol-1); the Security Engineer accountable for the affected service reviews and time-boxes any grant, capped at 90 days pending remediation or replacement.",
+        "measurable_outcomes": "100% of newly adopted third-party components and vendors have a recorded risk assessment prior to production use; zero components under a disallowed license are integrated without a logged exception.",
+        "capability_grouping_rationale": "Governs only s4-cap-1 (Third-Party Component Risk Assessment). Verified against DORA-1.0's live 'Third-Party Risk Assessment' (cap_third_party_risk_assessment_71b759, description: 'Assesses the risk posed by an ICT third-party service and uses that risk level to set audit frequency and scope') and 'Third-Party Oversight Assignment' (cap_third_party_oversight_assignment_eb83ed, description: 'The process for naming and assigning a responsible lead overseer for each critical ICT third-party service provider'): both are scoped to financial-entity regulatory oversight of critical ICT third-party service providers -- audit-frequency-setting and lead-overseer designation under EU DORA -- not an engineering team's risk assessment of an adopted open-source library or software vendor before integration. The real-world meanings do not match closely enough to justify reuse, so s4-cap-1 was minted ENGPRAC-native rather than converged onto either DORA Capability. This Policy was minted for its own distinct ownership (Security Engineer) and control model (automated dependency/license scanning plus manual new-component risk sign-off), not to mirror a regulation article."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s4-std-1",
+      "properties": {
+        "title": "Third-Party Component and Vendor Risk Assessment Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for assessing the risk of a new third-party component, open-source library, or vendor before adoption, and for periodically reassessing components already in use.",
+        "version": "1.0",
+        "procedure": "1) Before integrating a new third-party component, open-source library, or vendor, the requesting team runs the automated component risk-scoring scan against it (known-vulnerability history, maintenance activity, and provenance signals). 2) The Security Engineer reviews the risk score and any flagged findings, and records a written risk assessment sign-off (approve, approve-with-conditions, or reject) before the component may be integrated. 3) Every third-party component or vendor scored high-risk at intake is placed on a quarterly reassessment list. 4) Each quarter, the Security Engineer reviews the current risk-scoring scan results for every listed high-risk component/vendor and records a continue-or-remediate decision.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to all third-party components, open-source libraries, and vendor-supplied services newly adopted by, or already in use in, internally owned production services; does not apply to internally authored code or to build tooling covered by the Build Integrity and Artifact Provenance Policy (s3-pol-3).",
+        "verification_notes": "A Control can test conformance by checking that: (a) every newly integrated component has a recorded risk-scoring scan result and a Security Engineer sign-off dated before its first production use, (b) every component/vendor on the high-risk reassessment list has a logged continue-or-remediate decision dated within the current quarter.",
+        "change_rationale": "Newly authored as the first Standard under the Third-Party Component and License Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s4-std-2",
+      "properties": {
+        "title": "Third-Party License Compliance Standard",
+        "implementation_status": "draft",
+        "description": "Defines the automated license-compatibility scanning procedure applied to every third-party and open-source component before integration.",
+        "version": "1.0",
+        "procedure": "1) Every build pipeline run scans all direct and transitive open-source dependencies and records each one's declared license. 2) A dependency carrying a license on the organization's disallowed list blocks the build from promotion. 3) A dependency carrying a license requiring manual legal review (e.g. certain copyleft terms) is flagged and routed to the Security Engineer for a documented allow/deny decision. 4) Any override permitting a disallowed-license dependency requires the Security Engineer's written approval per the Policy's exception pathway.",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to all open-source and third-party licensed components integrated into internally owned services' build artifacts; does not apply to internally authored proprietary code, which carries no third-party license.",
+        "verification_notes": "A Control can test conformance by checking the CI pipeline's license-scan results for each build: every dependency's license recorded, no disallowed-license dependency promoted without a logged Security Engineer override, and every flagged copyleft dependency showing a documented allow/deny decision.",
+        "change_rationale": "Newly authored as the second Standard under the Third-Party Component and License Policy; no predecessor version."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s4-ctrl-1",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Dependency License Scan Gate",
+        "implementation_status": "planned",
+        "description": "Automated CI pipeline gate scanning all direct and transitive dependencies' licenses and blocking promotion of any build carrying a disallowed-license dependency.",
+        "pass_fail_criteria": "PASS if the build's license scan reports zero disallowed-license dependencies, or every disallowed-license dependency present has a logged Security Engineer override. FAIL if any disallowed-license dependency is promoted without a logged override.",
+        "execution_method": "Enforced automatically on every CI pipeline build via the license-scan step; runs on every build producing a promotable artifact.",
+        "evidence_plan": "License scan results (dependency, declared license, pass/fail) will be stored in the CI system's own build-history log, referenced by build ID.",
+        "executor_role": "CI pipeline (owned by Release Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath: a disallowed-license dependency reaching a released artifact undetected is exactly the unassessed supply-chain exposure this RiskPath describes."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s4-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Third-Party Component Risk Scoring Scan",
+        "implementation_status": "planned",
+        "description": "Automated scan scoring every newly adopted and currently-in-use third-party component or open-source library against known-vulnerability, maintenance-activity, and provenance signals.",
+        "pass_fail_criteria": "PASS if every component in scope has a recorded, current risk score (scan run within the last 30 days for new intake, or the current quarter for in-use components). FAIL if any in-scope component is missing a current risk score.",
+        "execution_method": "Scheduled scan runs on every new-component intake request and, for components already in use, on a rolling monthly schedule; intended to run automatically once scheduled.",
+        "evidence_plan": "Scan results (component name, version, risk score, contributing signals) will be written to the engineering compliance evidence store as a dated JSON report, one per run.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath's Third-Party Component Risk Assessment mitigation (s4-cap-1): a component with no current risk score is exactly the unassessed-dependency exposure this RiskPath describes, and this scan is the data source the manual sign-off (s4-ctrl-3) and reassessment review (s4-ctrl-4) both depend on."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s4-ctrl-3",
+      "properties": {
+        "type": "manual",
+        "title": "New Component and Vendor Risk Assessment Sign-off Verification",
+        "implementation_status": "planned",
+        "description": "Manual verification that every newly adopted third-party component, open-source library, or vendor has a Security Engineer risk-assessment sign-off recorded before its first production use.",
+        "pass_fail_criteria": "PASS if every component/vendor newly integrated in the review period has a logged Security Engineer sign-off (approve, approve-with-conditions, or reject-and-not-integrated) dated before its first production use. FAIL if any newly integrated component/vendor lacks a sign-off, or the sign-off postdates first production use.",
+        "execution_method": "Manual review performed by the Security Engineer sampling newly integrated components from the dependency intake log; intended cadence: monthly.",
+        "evidence_plan": "Review results (component name, sign-off decision, date) will be recorded in the engineering compliance evidence store as a dated monthly report.",
+        "executor_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath's Third-Party Component Risk Assessment mitigation (s4-cap-1) by confirming the human sign-off step of risk assessment actually happened before adoption, not just that a risk score was computed -- closing the loop the automated scan (s4-ctrl-2) alone cannot close."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s4-ctrl-4",
+      "properties": {
+        "type": "manual",
+        "title": "Quarterly Third-Party Risk Reassessment Review",
+        "implementation_status": "planned",
+        "description": "Manual quarterly review by the Security Engineer of every high-risk third-party component or vendor's current risk-scoring scan result, recording a continue-or-remediate decision.",
+        "pass_fail_criteria": "PASS if, for the quarter, every component/vendor on the high-risk reassessment list has a logged continue-or-remediate decision from the Security Engineer. FAIL if any listed high-risk component/vendor lacks a recorded quarterly decision.",
+        "execution_method": "Manual review meeting held once per quarter; the Security Engineer walks the current high-risk reassessment list and records a decision for each. Intended cadence: quarterly, calendar-aligned.",
+        "evidence_plan": "Review minutes and per-component decisions will be recorded in the engineering compliance evidence store as a dated review note, one per component per quarter.",
+        "executor_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies the Third-Party and Supply Chain Risk RiskPath by catching components whose risk profile has worsened since intake (e.g. a maintenance lapse or newly disclosed vulnerability) that the intake-time sign-off (s4-ctrl-3) could not have known about."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s4-rp-1",
+      "properties": {
+        "name": "Third-Party and Supply Chain Risk",
+        "description": "Risk that a vulnerable, unassessed, unmaintained, or license-non-compliant third-party component, open-source library, or vendor is adopted into or remains in a production service without risk assessment or license review, introducing security, licensing, or availability exposure that was never evaluated or has since gone stale.",
+        "status": "active",
+        "risk_type": "security",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s5-pa-1",
+      "properties": {
+        "name": "Reliability and Service Operations",
+        "description": "Practice area covering production reliability engineering: defining and tracking service level objectives and error budgets, and the resilience, capacity, and failover practices that keep production services meeting those objectives.",
+        "status": "active",
+        "owner_id": "role-4",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Capability",
+      "id": "s5-cap-1",
+      "properties": {
+        "name": "Service Level Objective Management",
+        "description": "Defines Service Level Indicators (SLIs) and Service Level Objectives (SLOs) for production services, tracks the resulting error budget, and uses it to drive reliability and release decisions. Grounded in Google's Site Reliability Engineering book's SLI/SLO/error-budget model (sre.google/sre-book/service-level-objectives) and the OpenSLO specification (github.com/openslo/openslo), a vendor-neutral, declarative format for SLIs, SLOs, and error-budget alert policies."
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s5-pol-1",
+      "properties": {
+        "title": "Service Reliability and Availability Policy",
+        "status": "draft",
+        "description": "Governs how production services define, measure, and act on reliability and availability commitments: service level objectives, error budgets, and the resilience/capacity practices needed to meet them.",
+        "owner_id": "role-4",
+        "version": "1.0",
+        "scope_in": "All internally owned production services' reliability commitments, including Service Level Indicator/Service Level Objective definition, error-budget tracking and error-budget-driven release gating, redundancy/failover design, and capacity planning.",
+        "scope_out": "Incident detection, triage, and postmortem response once an SLO breach or outage has already occurred, which is governed by the separate Vulnerability Management and Remediation Policy's incident-response half; security logging and audit-evidence retention, which are governed by the Data Handling, Logging, and Audit Retention Policy.",
+        "normative_commitments": "Every production service must have a documented SLO for each of its user-facing SLIs (availability, latency, or equivalent) before general availability. No service must be released or promoted while its rolling error budget is exhausted, absent a recorded exception. Every service classified business-critical must have a documented, periodically tested failover/redundancy design.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any change to the SLO measurement/alerting toolchain or the error-budget policy's target windows.",
+        "exception_pathway": "A team requesting release during an exhausted error budget submits the request via the shared policy exception register (per the Engineering Policy Governance Policy's mechanism); the SRE Lead accountable for the affected service reviews and time-boxes any grant, capped at the current release cycle, with a written risk-acceptance rationale.",
+        "measurable_outcomes": "100% of business-critical production services have a documented SLO and a currently tracked error budget; zero releases promoted against an exhausted error budget without a logged SRE Lead exception in a given quarter.",
+        "capability_grouping_rationale": "Governs cap-7 (Service Reliability Management) and s5-cap-1 (Service Level Objective Management). Both share the same accountable owner (SRE Lead), the same annual review cadence, and one integrated control model: s5-cap-1's SLI/SLO/error-budget tracking is the measurement mechanism that triggers cap-7's resilience and capacity actions (a shrinking error budget is what actually drives a failover test or a capacity review) -- they are not two independently-run disciplines, so grouping them under one Policy is not a reflexive regulation-driven split (AC-BI-008/AC-BI-010's minimality test) but reflects one real operating model. Neither Capability has a regulation counterpart: re-confirmed against current curated-content baselines for GDPR/NIS2/CRA/AI Act/DSA/the EU DORA regulation, none of which models an SLO/error-budget or general production-reliability duty -- capability_merges.json's own note on cap-7 (line 35) already flagged this gap, and s5-cap-1 was minted fresh via real SRE/observability research (Google's SRE book, OpenSLO spec) rather than forced onto any existing regulation Capability."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s5-std-1",
+      "properties": {
+        "title": "Service Level Objective and Error Budget Definition Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for defining SLIs/SLOs and the resulting error budget for a production service, and for gating releases on error-budget state.",
+        "version": "1.0",
+        "procedure": "1) For each user-facing capability of a production service, the SRE Lead and Service Owner jointly define one or more Service Level Indicators (request success rate, latency percentile, or equivalent) following the SLI/SLO model in Google's SRE book. 2) A target Service Level Objective and measurement window are set for each SLI and recorded in a declarative SLO definition (OpenSLO-compatible YAML or equivalent), naming the metric source. 3) The corresponding error budget (1 minus the SLO) is computed and tracked continuously against the live SLI. 4) An alert policy fires when the rolling error budget crosses a defined burn-rate threshold; when the budget is fully exhausted, new releases to that service are automatically blocked pending the exception pathway.",
+        "implementer_role": "SRE Lead",
+        "reviewer_role": "Service Owner",
+        "applicability_boundary": "Applies to every production service classified business-critical or customer-facing; does not apply to internal-only tooling with no defined user base.",
+        "verification_notes": "A Control can test conformance by checking: (a) every in-scope service has a recorded SLO definition naming its SLI, target, and measurement window, (b) the error-budget alert policy fired and was acted on whenever the tracked burn rate crossed its threshold, (c) no release was promoted to a service with an exhausted error budget without a logged exception.",
+        "change_rationale": "Newly authored as the first Standard under the Service Reliability and Availability Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s5-std-2",
+      "properties": {
+        "title": "Production Resilience and Capacity Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for redundancy/failover design, periodic failover testing, and capacity planning for production services.",
+        "version": "1.0",
+        "procedure": "1) Every business-critical service must have a documented redundancy/failover design covering its single points of failure. 2) The SRE Lead schedules a failover/disaster-recovery test at least every 6 months and records the result (pass/fail, time-to-recover). 3) Capacity is reviewed quarterly against current and forecast load, using the service's SLO-defined latency/throughput targets as the pass bar. 4) Any capacity or failover gap identified is logged as a backlog item with an owner and target date.",
+        "implementer_role": "SRE Lead",
+        "reviewer_role": "Engineering Manager",
+        "applicability_boundary": "Applies to all production services classified business-critical; excludes services explicitly designated best-effort with no availability commitment.",
+        "verification_notes": "A Control can test conformance by checking: (a) every business-critical service has a failover test result recorded within the last 6 months, (b) every such service has a capacity review recorded within the last quarter, (c) any logged gap has an assigned owner and target date.",
+        "change_rationale": "Newly authored as the second Standard under the Service Reliability and Availability Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s5-std-3",
+      "properties": {
+        "title": "Error-Budget-Gated Release and Reliability Review Standard",
+        "implementation_status": "draft",
+        "description": "Defines how error-budget state gates production releases, and the periodic review that connects SLO/error-budget tracking to resilience and capacity decisions.",
+        "version": "1.0",
+        "procedure": "1) The CI/CD pipeline queries the current error-budget state for the target service before promoting a release; a fully exhausted budget blocks promotion automatically. 2) An override requires the exception pathway defined in the Service Reliability and Availability Policy. 3) Monthly, the SRE Lead reviews each service's error-budget burn trend alongside its failover-test and capacity-review results (from the Production Resilience and Capacity Standard) and records whether the reliability posture is stable, improving, or degrading. 4) A degrading posture triggers a documented remediation action (e.g. a scheduled capacity increase or an updated failover design).",
+        "implementer_role": "Release Engineer / CI pipeline owner",
+        "reviewer_role": "SRE Lead",
+        "applicability_boundary": "Applies to all production services in scope of the Service Level Objective and Error Budget Definition Standard; does not apply to non-production environments.",
+        "verification_notes": "A Control can test conformance by checking: (a) the CI pipeline's release-gate log shows an error-budget check recorded for every promoted release, (b) every month has a logged SRE Lead reliability-posture review referencing that month's error-budget, failover, and capacity data, (c) every 'degrading' verdict has a linked remediation action.",
+        "change_rationale": "Newly authored as the third Standard under the Service Reliability and Availability Policy, tying the SLO/error-budget Standard and the resilience/capacity Standard together into one release-gating and review mechanism; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-1",
+      "properties": {
+        "type": "automated",
+        "title": "Automated SLI/SLO Compliance Monitoring Check",
+        "implementation_status": "planned",
+        "description": "Automated continuous check comparing each in-scope service's live SLI against its recorded SLO target and computing the current error budget.",
+        "pass_fail_criteria": "PASS if every in-scope service's SLI is being measured continuously and its computed error budget is available and current (updated within the last measurement window). FAIL if any in-scope service has no live SLI measurement, no recorded SLO target, or a stale (not updated within the window) error-budget computation.",
+        "execution_method": "Continuous automated evaluation against the SLO monitoring toolchain's metric source; intended to run continuously once scheduled, with a daily summary check.",
+        "evidence_plan": "Daily error-budget snapshots (per service, per SLI) will be written to the engineering compliance evidence store as a dated report.",
+        "executor_role": "Automated job (owned by SRE Lead)",
+        "reviewer_role": "SRE Lead",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1 (Reliable Service Operation): a service with no live SLI measurement or a stale error-budget computation is exactly the undetected-degradation failure mode that risk path describes -- reliability commitments existing on paper without anyone actually knowing whether they're being met."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Error Budget Burn-Rate Alerting Control",
+        "implementation_status": "planned",
+        "description": "Automated alert policy that fires when a service's error-budget burn rate crosses a defined threshold.",
+        "pass_fail_criteria": "PASS if every burn-rate threshold breach in the evaluation window produced a recorded alert routed to the accountable SRE Lead within 5 minutes. FAIL if any threshold breach produced no alert, or the alert was routed later than 5 minutes after the breach.",
+        "execution_method": "Automated alert policy evaluated continuously against the live error-budget computation (s5-ctrl-1's output); intended to run continuously once configured.",
+        "evidence_plan": "Alert firing/routing history will be stored in the alerting system's own event log, referenced by service and incident window.",
+        "executor_role": "Automated job (owned by SRE Lead)",
+        "reviewer_role": "SRE Lead",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1 by ensuring a shrinking error budget actually reaches a human before it is fully exhausted, closing the gap between measurement (s5-ctrl-1) and action."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-3",
+      "properties": {
+        "type": "manual",
+        "title": "Monthly Reliability Posture Review",
+        "implementation_status": "planned",
+        "description": "Manual monthly review by the SRE Lead of each service's error-budget trend, failover-test result, and capacity-review outcome, recording a stable/improving/degrading verdict.",
+        "pass_fail_criteria": "PASS if every in-scope service has a recorded monthly verdict with a named reviewer, and every 'degrading' verdict has a linked remediation action. FAIL if any in-scope service is missing a monthly verdict, or a 'degrading' verdict has no linked remediation action.",
+        "execution_method": "Manual review meeting held monthly; the SRE Lead walks each service's dashboard and records a verdict. Intended cadence: monthly, calendar-aligned.",
+        "evidence_plan": "Review minutes and per-service verdicts will be recorded in the reliability review log as a dated entry per service per month.",
+        "executor_role": "SRE Lead",
+        "reviewer_role": "Engineering Manager (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1 by catching a slow reliability decline that automated alerting (s5-ctrl-2) reacts to only at threshold-crossing time -- the periodic human judgment call over trend, not just instantaneous state."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-4",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Failover Test Verification",
+        "implementation_status": "planned",
+        "description": "Automated check verifying every business-critical service has a failover/disaster-recovery test result recorded within the required 6-month window.",
+        "pass_fail_criteria": "PASS if every business-critical service's most recent failover-test record is dated within the last 6 months and shows a pass/fail outcome with time-to-recover. FAIL if any business-critical service has no such record, or its most recent record is older than 6 months.",
+        "execution_method": "Scheduled job checks the failover-test log against the service registry; intended to run monthly once scheduled.",
+        "evidence_plan": "Compliance results (per service, pass/fail against the 6-month window) will be written to the engineering compliance evidence store as a dated report.",
+        "executor_role": "Automated job (owned by SRE Lead)",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1: a business-critical service that has never had its failover design actually tested is exactly the unbounded-outage-impact exposure that risk path describes -- redundancy that exists only on paper."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-5",
+      "properties": {
+        "type": "manual",
+        "title": "Quarterly Capacity Planning Review",
+        "implementation_status": "planned",
+        "description": "Manual quarterly review comparing each business-critical service's current and forecast load against its SLO-defined latency/throughput targets, identifying capacity gaps.",
+        "pass_fail_criteria": "PASS if every business-critical service has a recorded quarterly capacity review with a pass/gap verdict, and every identified gap has an assigned owner and target date. FAIL if any service lacks a quarterly review, or a gap has no assigned owner/target date.",
+        "execution_method": "Manual review performed by the SRE Lead each calendar quarter, using current load telemetry and the service's SLO targets. Intended cadence: quarterly, calendar-aligned.",
+        "evidence_plan": "Review outcomes and any logged gaps will be recorded in the capacity-planning log as a dated entry per service per quarter.",
+        "executor_role": "SRE Lead",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1 by catching capacity shortfalls before they cause an SLO breach -- a proactive check that complements the reactive error-budget alerting in s5-ctrl-2."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s5-ctrl-6",
+      "properties": {
+        "type": "automated",
+        "title": "Error-Budget-Gated Release Freeze Control",
+        "implementation_status": "planned",
+        "description": "Automated CI/CD pipeline gate that blocks promotion of a release to a service whose error budget is fully exhausted, absent a logged exception.",
+        "pass_fail_criteria": "PASS if every release promotion in the evaluation window either (a) targeted a service with a non-exhausted error budget, or (b) targeted a service with an exhausted budget but carried a linked, valid exception record. FAIL if any release was promoted to a service with an exhausted error budget with no linked exception.",
+        "execution_method": "Enforced automatically on every CI/CD promotion event by querying the live error-budget state (s5-ctrl-1's output); runs on every release-promotion attempt.",
+        "evidence_plan": "Gate decisions (pass/fail/overridden, per release) will be stored in the CI system's own build-history log, referenced by build ID and linked exception ID where applicable.",
+        "executor_role": "CI pipeline (owned by SRE Lead)",
+        "reviewer_role": "SRE Lead",
+        "risk_alignment_rationale": "Directly verifies s5-rp-1's most acute failure mode: shipping more change into a service that is already failing its reliability commitments, compounding an existing degradation instead of stabilizing it -- this Control is the concrete, automatically enforced mechanism that makes the Service Reliability and Availability Policy's error-budget-gating commitment real."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s5-rp-1",
+      "properties": {
+        "name": "Reliable Service Operation",
+        "description": "Risk that a production service fails to meet its reliability and availability commitments -- because no Service Level Objective was ever defined and tracked, its error budget is exhausted without anyone noticing or acting, or its redundancy/failover and capacity design was never actually tested -- resulting in undetected degradation, unbounded outage impact, or continued releases into an already-unhealthy service.",
+        "status": "active",
+        "risk_type": "reliability",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s6-pa-1",
+      "properties": {
+        "name": "Observability, Logging, and Audit Evidence",
+        "description": "Practice area covering structured access and security logging, log retention and integrity, and the audit-evidence practices that support traceability, incident investigation, and compliance-audit readiness for engineering systems.",
+        "status": "active",
+        "owner_id": "role-4",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s6-pol-1",
+      "properties": {
+        "title": "Data Handling, Logging, and Audit Retention Policy",
+        "status": "draft",
+        "description": "Governs how production services and engineering systems generate, structure, retain, and keep reviewable the access and security logs needed to support traceability and audit evidence.",
+        "owner_id": "role-4",
+        "version": "1.0",
+        "scope_in": "All structured access and security logging emitted by production engineering services and systems, including log schema/format requirements, retention duration and integrity of that log data, and the audit-evidence review pathway over it.",
+        "scope_out": "The broader data protection and privacy-by-design review governed by Slice 7's upcoming Data Protection and Privacy Engineering Policy (governing cap-9) -- that Policy addresses what personal data is collected/processed and how it is protected by design; this Policy addresses only the operational logging/retention mechanics needed for traceability and audit evidence, regardless of whether the underlying data is personal. Also out of scope: the exception register mechanism itself, defined once under the Engineering Policy Governance Policy.",
+        "normative_commitments": "Every production service must emit structured access and security logs conforming to the organization's log-schema standard. Logs must be retained for the minimum period required to support traceability and audit investigations, and must not be deleted, altered, or become unreviewable before that period elapses. Any detected gap or integrity failure in log retention must be escalated and remediated, not merely recorded as a known issue.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any change to the log-retention infrastructure or the organization's audit-evidence requirements.",
+        "exception_pathway": "A team requesting a deviation from the log-schema or retention requirements submits a request via the shared policy exception register (per the Engineering Policy Governance Policy's mechanism); the SRE Lead accountable for the affected service reviews and time-boxes any grant, capped at 90 days, with a written risk-acceptance rationale.",
+        "measurable_outcomes": "100% of production services have logs conforming to the log-schema standard; zero retention-integrity check failures left unescalated past their 1-business-day SLA in a given quarter.",
+        "capability_grouping_rationale": "Governs only cap-10 (Security Logging). This Policy is deliberately kept separate from Slice 7's upcoming Data Protection and Privacy Engineering Policy (governing cap-9), applying AC-BI-010's genuinely-different-ownership-model test: the two have different accountable owners (SRE Lead here vs. the Data Protection Officer there) and fundamentally different control models -- this Policy's controls are CI/scheduled-job automatable mechanical checks (log-schema validation, retention-integrity verification) that run continuously with no human judgment call, whereas privacy-by-design review is a human-led design review assessing proportionality and legal basis before a feature ships. Merging them would make one owner accountable for a control model they don't run, and would obscure that a log spilling raw personal data is a *different* failure from a log simply expiring early -- both real, but caught by different mechanisms. One Policy (not two) suffices here because only one Capability, cap-10, falls in this slice's scope: SRE Lead owns both the log-schema half and the retention-integrity half under one integrated control model, mirroring Slice 5's single-Policy pattern where a further split would have been reflexive, not warranted."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s6-std-1",
+      "properties": {
+        "title": "Structured Security Log Schema Standard",
+        "implementation_status": "draft",
+        "description": "Defines the required structured log schema and field set for access and security logs emitted by production services.",
+        "version": "1.0",
+        "procedure": "1) Every production service must emit access and security log events in the organization's structured log schema (JSON, with a defined field set: timestamp, actor identity, action, resource, outcome, source origin). 2) The Security Engineer maintains the canonical schema definition and versions it. 3) New services onboard by validating their log output against the current schema version in CI before first production deployment. 4) Any schema change is reviewed jointly by the SRE Lead and Security Engineer, and a migration window is set for existing services.",
+        "implementer_role": "Service Owner",
+        "reviewer_role": "SRE Lead",
+        "applicability_boundary": "Applies to all production services' access and security log output; does not apply to debug/trace-level application logs with no security or access relevance.",
+        "verification_notes": "A Control can test conformance by validating a sample of each service's emitted log events against the current schema definition in CI: (a) required fields present, (b) field types match, (c) no unstructured free-text line substituted for a required structured event.",
+        "change_rationale": "Newly authored as the first Standard under the Data Handling, Logging, and Audit Retention Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s6-std-2",
+      "properties": {
+        "title": "Security Log Retention and Integrity Standard",
+        "implementation_status": "draft",
+        "description": "Defines the retention period and integrity-verification procedure for access and security logs, so they remain available and unaltered for the duration needed to support traceability and audit evidence.",
+        "version": "1.0",
+        "procedure": "1) Access and security logs are retained for a minimum of 400 days, aligned to the organization's audit-evidence window, in write-once storage. 2) A scheduled job computes and records a retention-integrity check daily, confirming for each service that its expected log volume for the prior day is present and no log segment within the retention window has been deleted or altered outside the log pipeline's own append path. 3) Any detected gap or integrity failure is escalated to the SRE Lead within 1 business day and tracked as an incident until remediated. 4) Logs reaching the end of the retention window are purged per the organization's data-retention schedule and the purge is recorded in the purge log.",
+        "implementer_role": "SRE Lead",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to all structured access and security logs in scope of the Structured Security Log Schema Standard; does not apply to ephemeral debug logs outside that scope.",
+        "verification_notes": "A Control can test conformance by checking: (a) every service's expected log volume for each day in the retention window is present, (b) the daily retention-integrity check ran and recorded a result, (c) no integrity failure remained unescalated past 1 business day, (d) no log segment was purged before its retention window elapsed.",
+        "change_rationale": "Newly authored as the second Standard under the Data Handling, Logging, and Audit Retention Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s6-ctrl-1",
+      "properties": {
+        "type": "automated",
+        "title": "CI Structured Access Log Schema Validator",
+        "implementation_status": "planned",
+        "description": "Automated CI check that validates each service's emitted log samples against the current structured log schema before deployment.",
+        "pass_fail_criteria": "PASS if 100% of validated log samples for the build contain all required schema fields with correct types and no unstructured line substituted for a required event. FAIL if any required field is missing, mistyped, or a required event is emitted as unstructured free text.",
+        "execution_method": "Runs automatically on every CI build as a pre-deployment gate, evaluating a captured sample of the service's log output against the current schema version; intended to run on every build once wired in.",
+        "evidence_plan": "Per-build validation results (pass/fail, field-level diff on failure) will be written to the CI build log and referenced by build ID in the engineering compliance evidence store.",
+        "executor_role": "CI pipeline (owned by Security Engineer)",
+        "reviewer_role": "SRE Lead",
+        "risk_alignment_rationale": "Directly verifies s6-rp-1 (Traceability and Auditability): a log stream missing required fields or emitted as unstructured text is exactly the untraceable-evidence failure mode that risk path describes -- an incident investigator or auditor unable to reconstruct who did what, when."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s6-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Security Log Retention Integrity Check",
+        "implementation_status": "planned",
+        "description": "Automated scheduled job that verifies, for every in-scope service, that the expected log volume for the prior day is present in write-once storage and no log segment within the retention window has been deleted or altered outside the pipeline's append path.",
+        "pass_fail_criteria": "PASS if every in-scope service's expected log volume for the checked day is present and no unauthorized modification or deletion is detected anywhere in the current retention window. FAIL if any service's expected log volume is missing, or any out-of-band modification or deletion is detected.",
+        "execution_method": "Scheduled job runs daily against the log storage's integrity metadata (checksums / append-only ledger); intended cadence: daily, once scheduled.",
+        "evidence_plan": "Daily per-service integrity check results will be written to the engineering compliance evidence store as a dated report, referenced by service and date.",
+        "executor_role": "Automated job (owned by SRE Lead)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s6-rp-1: a gap or silent alteration in retained logs is exactly the undetected-evidence-loss failure mode that risk path describes -- retention that exists as policy text but not as a verified fact."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s6-ctrl-3",
+      "properties": {
+        "type": "manual",
+        "title": "Quarterly Audit Evidence Sampling Review",
+        "implementation_status": "planned",
+        "description": "Manual quarterly review where the Security Engineer samples retained access/security logs across a cross-section of services and confirms they are complete, schema-conformant, and sufficient to reconstruct a representative access event end-to-end.",
+        "pass_fail_criteria": "PASS if every sampled service's logs allow the reviewer to fully reconstruct at least one representative access event end-to-end with no missing or unreadable segment. FAIL if any sampled service's logs are incomplete, unreadable, or insufficient to reconstruct a representative event.",
+        "execution_method": "Manual review performed quarterly by the Security Engineer, sampling a rotating cross-section of production services and their retained logs. Intended cadence: quarterly, calendar-aligned.",
+        "evidence_plan": "Review findings (per sampled service, pass/fail and any gap identified) will be recorded in the audit-evidence review log as a dated entry per service per quarter.",
+        "executor_role": "Security Engineer",
+        "reviewer_role": "SRE Lead (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies s6-rp-1 by testing the end-to-end auditability claim the automated checks (s6-ctrl-1/s6-ctrl-2) can't fully cover on their own -- proving logs are not just present and unaltered, but actually usable to answer a real audit or incident question."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s6-ctrl-4",
+      "properties": {
+        "type": "automated",
+        "title": "Log Retention Window Purge Compliance Check",
+        "implementation_status": "planned",
+        "description": "Automated check verifying that no log segment was purged before its retention window elapsed, and that every purge past the window was recorded in the purge log.",
+        "pass_fail_criteria": "PASS if every purge event in the evaluation window occurred at or after the log segment's full retention period and is recorded in the purge log. FAIL if any log segment was purged before its retention window elapsed, or any purge event has no corresponding purge-log record.",
+        "execution_method": "Scheduled job cross-checks the storage system's deletion events against the purge log and each segment's retention-window start date; intended cadence: daily, once scheduled.",
+        "evidence_plan": "Purge-compliance check results will be written to the engineering compliance evidence store as a dated report, referenced by service and purge event ID.",
+        "executor_role": "Automated job (owned by SRE Lead)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s6-rp-1: evidence purged early -- whether accidental or malicious -- is a direct loss of the traceability and audit evidence this risk path exists to protect; this Control is the concrete mechanism that catches that failure mode before it becomes an unrecoverable audit gap."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s6-rp-1",
+      "properties": {
+        "name": "Traceability and Auditability",
+        "description": "Risk that engineering systems cannot reconstruct who did what, when, or cannot produce log evidence sufficient to support an audit or incident investigation -- because access/security logs are not structured consistently, are lost or silently altered before their required retention period elapses, or are purged early -- resulting in an unresolvable incident investigation, a failed compliance audit, or an inability to demonstrate accountability after the fact.",
+        "status": "active",
+        "risk_type": "compliance",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s7-pa-1",
+      "properties": {
+        "name": "Data Protection and Privacy Engineering",
+        "description": "Practice area covering privacy-by-design and privacy-by-default engineering practices, personal-data minimization in default configurations, and the technical and organizational safeguards needed to protect personal data proportionate to its sensitivity and legal basis.",
+        "status": "active",
+        "owner_id": "role-6",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s7-pol-1",
+      "properties": {
+        "title": "Data Protection and Privacy Engineering Policy",
+        "status": "draft",
+        "description": "Establishes mandatory privacy-by-design and privacy-by-default engineering practices, requiring personal-data minimization by default and proportionate technical and organizational safeguards across the software development lifecycle.",
+        "owner_id": "role-6",
+        "version": "1.0",
+        "scope_in": "All internally developed services and features that collect, process, or store personal data, including privacy-by-design review at design time, personal-data minimization in default configurations, and proportionate technical/organizational safeguards (encryption, pseudonymization, access restriction) matched to data sensitivity and legal basis.",
+        "scope_out": "Any specific external data-protection regulation's own Articles or Policy/Standard/Control content -- this Policy System's Domain Mapper never authors Policy/Standard/Control for an external source (ps-domain-concepts.md:43-44), so there is no external Policy of this kind to defer to or duplicate; general access-control/authentication mechanics for engineering tooling, governed separately by the Access Control Policy (s2-pol-2); log retention/audit-evidence mechanics, governed separately by the Data Handling, Logging, and Audit Retention Policy (s6-pol-1).",
+        "normative_commitments": "Every feature or service that collects or processes personal data must complete a privacy-by-design review before its first production release and after any material change to what personal data is collected or how it is used. Default system and process configurations must minimize personal-data collection, exposure, and retention; no feature may ship with a default that widens personal-data collection or retention without a recorded proportionality justification. Technical and organizational safeguards applied to personal data must be proportionate to that data's sensitivity and the legal basis for processing it.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any material change to the organization's data-protection legal-basis inventory or privacy-review tooling.",
+        "exception_pathway": "A team requesting an exception from a privacy-by-design finding or a default-minimization requirement submits it via the shared policy exception register (per the Engineering Policy Governance Policy's mechanism); the Data Protection Officer accountable for the affected processing activity reviews and time-boxes any grant, capped at 90 days, with a written risk-acceptance rationale naming the specific proportionality gap.",
+        "measurable_outcomes": "100% of features that collect or process personal data have a completed, DPO-approved privacy-by-design review before first production release; zero default configurations found, on quarterly sampling, to collect or retain personal data beyond what the recorded legal basis and proportionality justification support.",
+        "capability_grouping_rationale": "Governs only cap-9 (renamed this slice from 'Data Protection by Design & Default' to 'Privacy by Design and Default' to converge onto GDPR-1.0's existing Capability of that exact name, id cap_privacy_by_design_and_default_fbdf54 -- GDPR's own description, 'A process for embedding data protection measures into systems and operations from the outset and ensuring only necessary personal data is processed by default settings,' covers both the design-time and default-configuration halves of cap-9's original scope, unlike GDPR's narrower 'Data Protection by Default' Capability (cap_data_protection_by_default_0e4e38, 'Default system and process settings are configured to minimize data exposure...'), which omits the by-design half entirely -- so 'Privacy by Design and Default' is the closer real-world match and was used for the rename. Unlike every other Policy authored so far in this dataset, this is the FIRST Policy governing a Capability with no possible external Policy/Standard/Control to converge onto: ps-domain-concepts.md:43-44 confirms an external RegulatoryInstrument's Domain Mapper stage never reaches Policy/Standard/Control, so GDPR-1.0's own ingestion stopped at Capability and minted no Policy for cap-9 to converge onto (unlike, e.g., cap-5's Policy converging onto CRA's pre-existing SBOM Capability naming). This Policy is therefore scored on its own merits as a fresh internal authoring, not against a nonexistent 'existing Policy' comparison. Its ownership (Data Protection Officer) and control model (privacy-by-design design review plus default-configuration minimization and retention checks) are genuinely distinct from every other Policy in this dataset, including the logging/retention-focused Data Handling, Logging, and Audit Retention Policy (s6-pol-1), which already scoped this exact split out in its own capability_grouping_rationale."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s7-std-1",
+      "properties": {
+        "title": "Privacy-by-Design Review Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for conducting a privacy-by-design review before a feature or service that processes personal data reaches production.",
+        "version": "1.0",
+        "procedure": "1) Before first production release, or after any material change to what personal data is collected or how it is used, the owning team completes a privacy-by-design review documenting: data flows, categories of personal data involved, legal basis for processing, and proportionality of the safeguards applied. 2) The Data Protection Officer reviews the documented review and either approves it, requests changes, or records mitigations as backlog items. 3) A feature must not reach production until its privacy-by-design review is DPO-approved. 4) The review is re-conducted after any material architecture change that alters what personal data is collected, how it is processed, or its legal basis.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Data Protection Officer",
+        "applicability_boundary": "Applies to all internally developed features and services that collect, process, or store personal data prior to first production release and after material changes to that processing; does not apply to features that process no personal data whatsoever.",
+        "verification_notes": "A Control can test conformance by checking that: (a) every production feature/service that processes personal data has a privacy-by-design review document dated within the last 12 months or since its last material change to personal-data processing, whichever is more recent, (b) the document carries a recorded DPO approval sign-off predating the feature's production release date.",
+        "change_rationale": "Newly authored as the first Standard under the Data Protection and Privacy Engineering Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s7-std-2",
+      "properties": {
+        "title": "Default Data Minimization Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for verifying that default system and process configurations minimize personal-data collection, exposure, and retention.",
+        "version": "1.0",
+        "procedure": "1) For every feature that collects personal data, the default configuration (behavior with no user or administrator action taken) must collect only the personal-data fields necessary for the feature's stated purpose. 2) Any configuration option that would widen personal-data collection, exposure, or retention beyond the default must require an explicit, auditable opt-in action; it must never ship as the default. 3) The owning team records, in the feature's privacy-by-design review, the specific minimality justification for each personal-data field collected by default. 4) Default retention periods for personal data must be set to the shortest period that satisfies the recorded legal basis and business purpose, and must be reviewed whenever that basis or purpose changes.",
+        "implementer_role": "Requesting engineering team",
+        "reviewer_role": "Data Protection Officer",
+        "applicability_boundary": "Applies to all default (out-of-the-box, no user/administrator action taken) configurations of internally developed features that collect or process personal data; does not apply to explicit, auditable opt-in configurations a user or administrator deliberately selects.",
+        "verification_notes": "A Control can test conformance by sampling shipped default configurations for in-scope features and checking: (a) each personal-data field collected by default has a recorded minimality justification in the feature's privacy-by-design review, (b) no personal-data-widening option is enabled by default, (c) default retention periods match the shortest period the recorded legal basis/purpose supports.",
+        "change_rationale": "Newly authored as the second Standard under the Data Protection and Privacy Engineering Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s7-ctrl-1",
+      "properties": {
+        "type": "manual",
+        "title": "Privacy-by-Design Review Completion Check",
+        "implementation_status": "planned",
+        "description": "Manual verification that every production feature/service processing personal data has a current, DPO-approved privacy-by-design review.",
+        "pass_fail_criteria": "PASS if every in-scope production feature/service has a privacy-by-design review document dated within the last 12 months (or since its last material change to personal-data processing, whichever is more recent) with a recorded DPO approval sign-off predating its production release date. FAIL if any in-scope feature/service's review is missing, stale, or lacks a DPO sign-off.",
+        "execution_method": "Manual review performed by the Data Protection Officer against the feature/service inventory, cross-checked against the personal-data-processing change log; intended cadence: quarterly.",
+        "evidence_plan": "Review results (feature/service name, review date, DPO sign-off status) will be recorded in the engineering compliance evidence store as a dated quarterly report.",
+        "executor_role": "Data Protection Officer",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s7-rp-1 (Data Protection and Privacy): a missing or stale privacy-by-design review is exactly the undetected-personal-data-exposure blind spot that risk path describes -- a feature reaching production without anyone having assessed what personal data it touches or whether its safeguards are proportionate."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s7-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Default Data Minimization Scan",
+        "implementation_status": "planned",
+        "description": "Automated scan of a feature's shipped default configuration verifying it collects only the personal-data fields justified in its privacy-by-design review and enables no personal-data-widening option by default.",
+        "pass_fail_criteria": "PASS if every personal-data field collected by the feature's default configuration matches a field with a recorded minimality justification in its privacy-by-design review, and no personal-data-widening option is enabled by default. FAIL if any unjustified field is collected by default, or any widening option ships enabled.",
+        "execution_method": "Runs automatically in the CI pipeline against the feature's default configuration manifest and its linked privacy-by-design review record, on every build touching personal-data-handling code paths; intended to run on every such build once wired in.",
+        "evidence_plan": "Per-build scan results (fields checked, pass/fail, any unjustified field flagged) will be written to the CI build log and referenced by build ID in the engineering compliance evidence store.",
+        "executor_role": "CI pipeline (owned by Security Engineer)",
+        "reviewer_role": "Data Protection Officer",
+        "risk_alignment_rationale": "Directly verifies s7-rp-1: a default configuration that silently collects or exposes more personal data than justified is exactly the proportionality failure this risk path is scoped to catch before it reaches production undetected."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s7-ctrl-3",
+      "properties": {
+        "type": "automated",
+        "title": "Default Retention Period Compliance Check",
+        "implementation_status": "planned",
+        "description": "Automated scheduled check verifying personal-data default retention periods match the shortest period their recorded legal basis and purpose support, and that no personal data is retained past its configured period.",
+        "pass_fail_criteria": "PASS if every in-scope personal-data store's configured retention period matches its recorded legal-basis/purpose justification and no record is found retained past its configured period. FAIL if any store's retention period exceeds its justification, or any record is found past its configured retention period.",
+        "execution_method": "Scheduled job queries personal-data stores' retention configuration and actual record ages weekly; intended to run every Monday at 06:00 UTC once scheduled.",
+        "evidence_plan": "Job output (per-store pass/fail, record IDs for any over-retained data) will be written to the engineering compliance evidence store as a dated JSON report, one per run.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Data Protection Officer",
+        "risk_alignment_rationale": "Directly verifies s7-rp-1: personal data retained beyond what its legal basis and purpose justify is a concrete, checkable instance of the disproportionate-processing exposure this risk path describes, distinct from s7-ctrl-2's design-time default-collection check by catching drift over the data's actual lifetime."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s7-ctrl-4",
+      "properties": {
+        "type": "manual",
+        "title": "Quarterly Proportionality Sampling Review",
+        "implementation_status": "planned",
+        "description": "Manual quarterly review where the Data Protection Officer samples a cross-section of production features processing personal data and confirms the safeguards applied remain proportionate to the data's current sensitivity and legal basis.",
+        "pass_fail_criteria": "PASS if every sampled feature's applied safeguards (encryption, pseudonymization, access restriction) are, in the DPO's documented judgment, proportionate to the personal data's current sensitivity and legal basis. FAIL if any sampled feature's safeguards are found disproportionate -- too weak for the data's current sensitivity, or the legal basis has changed without a corresponding safeguard review.",
+        "execution_method": "Manual review performed quarterly by the Data Protection Officer, sampling a rotating cross-section of production features that process personal data. Intended cadence: quarterly, calendar-aligned.",
+        "evidence_plan": "Review findings (per sampled feature, pass/fail and any gap identified) will be recorded in the privacy-review log as a dated entry per feature per quarter.",
+        "executor_role": "Data Protection Officer",
+        "reviewer_role": "Engineering Manager (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies s7-rp-1 by testing the human judgment call the automated checks (s7-ctrl-2/s7-ctrl-3) can't make on their own -- whether the combination of safeguards actually applied remains proportionate as data sensitivity or legal basis shifts over time, not just whether individual fields or retention periods pass a mechanical check."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s7-rp-1",
+      "properties": {
+        "name": "Data Protection and Privacy",
+        "description": "Risk that personal data is collected, processed, or retained by an engineering system in a way disproportionate to its sensitivity or legal basis -- because privacy-by-design review, default data-minimization, or retention-proportionality controls failed or were bypassed -- resulting in unauthorized exposure, unlawful processing, or an inability to demonstrate proportionate safeguards after the fact.",
+        "status": "active",
+        "risk_type": "privacy",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "PracticeArea",
+      "id": "s8-pa-1",
+      "properties": {
+        "name": "Vulnerability and Incident Management",
+        "description": "Practice area covering security vulnerability scanning, triage, and severity-based remediation SLAs, together with the incident-response readiness (detection, drills, and postmortems) needed to recover from a security incident once it occurs.",
+        "status": "active",
+        "owner_id": "role-3",
+        "version": "1.0"
+      }
+    },
+    {
+      "label": "Policy",
+      "id": "s8-pol-1",
+      "properties": {
+        "title": "Vulnerability Management and Remediation Policy",
+        "status": "draft",
+        "description": "Governs how security vulnerabilities are scanned for, triaged, and remediated within severity-based SLAs, and how the organization detects, responds to, and recovers from a security incident once one occurs.",
+        "owner_id": "role-3",
+        "version": "1.0",
+        "scope_in": "All security vulnerability scanning, triage, and remediation for internally owned services and their dependencies (continuing the build-time scanning already governed by the Secure SDLC Policy into ongoing, post-release vulnerability management); security incident detection, response, escalation, tabletop drills, and postmortem review once a security vulnerability or breach is suspected or confirmed.",
+        "scope_out": "General service reliability and availability commitments -- Service Level Objective/error-budget tracking, redundancy/failover design, and capacity planning -- which remain governed by the Service Reliability and Availability Policy (s5-pol-1); build-time SAST/dependency/secret scanning gates that block a merge before release, which remain governed by the Secure SDLC Policy (s3-pol-1); this Policy governs what happens to a vulnerability or incident after code has already reached production.",
+        "normative_commitments": "Every production service and its dependencies must be continuously scanned for known vulnerabilities. Every discovered vulnerability must be triaged and assigned a severity within 2 business days of detection. Remediation (patch, mitigation, or accepted-risk exception) must complete within the SLA for its assigned severity (critical: 7 days, high: 30 days, medium: 90 days). Every suspected security incident must be triaged by an on-call responder within 1 hour, and every confirmed incident must have a completed postmortem within 10 business days of resolution.",
+        "review_cadence": "Reviewed every 12 months, and immediately upon any material change to the vulnerability-scanning toolchain or the incident-response escalation process.",
+        "exception_pathway": "A team unable to meet a remediation SLA (e.g. a critical vulnerability with no available patch) submits a request via the shared policy exception register (per the Engineering Policy Governance Policy's mechanism); the Security Engineer accountable for the affected service reviews and time-boxes any grant, capped at 30 days, with a written risk-acceptance rationale and a compensating mitigation.",
+        "measurable_outcomes": "100% of discovered vulnerabilities are triaged within 2 business days; at least 95% of remediations complete within their severity's SLA in a given quarter; 100% of confirmed security incidents have a completed postmortem within 10 business days of resolution.",
+        "capability_grouping_rationale": "Governs only cap-8 (Vulnerability Management), reused unchanged from CRA-1.0's exact-match Capability of that name (confirmed live, id cap_vulnerability_management_da8ef6, description 'Process for receiving, triaging, tracking, and fixing component vulnerabilities, including coordinating remediation actions and status follow-up') -- no rename needed since the stub's existing name already matches exactly. This Policy deliberately absorbs both the vulnerability-management half AND the incident-response half of the guideline's item 10/11 naming (`minimal-engineering-policy-seed-guideline.md` lines 57-58) under one Policy and one owner (Security Engineer), and explicitly does NOT absorb Slice 5's reliability concerns: the Service Reliability and Availability Policy (s5-pol-1) already scoped incident response for SLO/availability breaches out of its own boundary in its own `scope_out` ('Incident detection, triage, and postmortem response once an SLO breach or outage has already occurred, which is governed by the separate Vulnerability Management and Remediation Policy's incident-response half'), explicitly deferring to this Policy by name. That split is deliberate, not reflexive (AC-BI-008/AC-BI-010's minimality test): s5-pol-1 is owned by the SRE Lead with a reliability control model (SLI/SLO monitoring, error-budget gating, failover testing) triggered by a service failing to meet a performance/availability commitment, whereas this Policy is owned by the Security Engineer with a security control model (vulnerability scanning, severity-SLA remediation, incident-response drills and postmortems) triggered by a security exposure or breach -- two genuinely different trigger conditions, owners, and control mechanisms that happen to both use the word 'incident,' not one discipline artificially split by regulation-article boundaries. Keeping them as two Policies avoids making the SRE Lead accountable for a security-incident control model they don't run, and avoids making the Security Engineer accountable for SLO/error-budget mechanics that belong to reliability engineering."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s8-std-1",
+      "properties": {
+        "title": "Continuous Vulnerability Scanning and Triage Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for continuously scanning production services and their dependencies for known vulnerabilities and triaging each finding to an assigned severity.",
+        "version": "1.0",
+        "procedure": "1) Every production service and its runtime dependencies are scanned on a recurring schedule (at minimum daily) for known vulnerabilities using the organization's vulnerability-intelligence feed. 2) Every new finding is triaged by the Security Engineer within 2 business days, assigning a severity (critical/high/medium/low) using the organization's CVSS-aligned severity matrix. 3) Triaged findings are logged in the vulnerability register with the affected service, component, severity, and detection date. 4) A finding already covered by an active, unexpired exception is not re-triaged until the exception expires.",
+        "implementer_role": "Security Engineer",
+        "reviewer_role": "Service Owner",
+        "applicability_boundary": "Applies to all production services and their direct and transitive runtime dependencies; does not apply to non-production/development environments with no path to production data.",
+        "verification_notes": "A Control can test conformance by checking: (a) every in-scope service has a scan result dated within the last scan interval, (b) every new finding has a triage record (severity, triage date) within 2 business days of its detection date, (c) no untriaged finding remains open past that window.",
+        "change_rationale": "Newly authored as the first Standard under the Vulnerability Management and Remediation Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s8-std-2",
+      "properties": {
+        "title": "Severity-Based Remediation SLA Standard",
+        "implementation_status": "draft",
+        "description": "Defines the remediation SLA for each vulnerability severity tier and the escalation path for a remediation at risk of missing its SLA.",
+        "version": "1.0",
+        "procedure": "1) Every triaged vulnerability finding is assigned a remediation deadline based on its severity: critical 7 days, high 30 days, medium 90 days, from triage date. 2) The Security Engineer tracks open findings against their deadlines in the vulnerability register. 3) A finding within 2 days of missing its SLA without a completed remediation or filed exception is automatically escalated to the accountable Engineering Manager. 4) Remediation (patch deployed, mitigation applied, or exception granted per the Policy's exception pathway) closes the finding with a recorded closure date and method.",
+        "implementer_role": "Service Owner",
+        "reviewer_role": "Security Engineer",
+        "applicability_boundary": "Applies to every vulnerability finding triaged under the Continuous Vulnerability Scanning and Triage Standard; does not apply to findings in decommissioned services with no production traffic.",
+        "verification_notes": "A Control can test conformance by checking: (a) every closed finding's closure date is at or before its severity's SLA deadline, or is linked to a valid exception record, (b) every finding within 2 days of its deadline with no closure has a logged escalation to the Engineering Manager.",
+        "change_rationale": "Newly authored as the second Standard under the Vulnerability Management and Remediation Policy; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Standard",
+      "id": "s8-std-3",
+      "properties": {
+        "title": "Security Incident Response and Postmortem Standard",
+        "implementation_status": "draft",
+        "description": "Defines the procedure for detecting, triaging, and responding to a suspected security incident, and for completing a postmortem once it is resolved.",
+        "version": "1.0",
+        "procedure": "1) A suspected security incident (from monitoring, a vulnerability finding, or an external report) is triaged by the on-call security responder within 1 hour of detection, who declares it confirmed or a false positive. 2) A confirmed incident is assigned an incident commander who coordinates containment, eradication, and recovery, following the incident-response runbook. 3) The Security Engineer schedules an incident-response tabletop drill at least every 6 months, exercising the runbook against a simulated scenario and recording the result. 4) Within 10 business days of a confirmed incident's resolution, the incident commander leads a blameless postmortem documenting root cause, timeline, and follow-up remediation items with owners and target dates.",
+        "implementer_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager",
+        "applicability_boundary": "Applies to all suspected or confirmed security incidents affecting production services; does not apply to general service-availability incidents with no suspected security cause, which follow the Service Reliability and Availability Policy's own reliability-review process instead.",
+        "verification_notes": "A Control can test conformance by checking: (a) every logged suspected incident has an on-call triage record within 1 hour of detection, (b) every confirmed incident has a completed postmortem dated within 10 business days of its resolution date with root cause and follow-up items recorded, (c) a tabletop drill result exists dated within the last 6 months.",
+        "change_rationale": "Newly authored as the third Standard under the Vulnerability Management and Remediation Policy, covering the incident-response half of the Policy's scope distinct from the scanning/remediation half; no predecessor version exists."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s8-ctrl-1",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Vulnerability Scan Coverage and Triage SLA Check",
+        "implementation_status": "planned",
+        "description": "Automated scheduled check verifying every production service has a current vulnerability scan and every new finding was triaged within the 2-business-day SLA.",
+        "pass_fail_criteria": "PASS if every in-scope service has a scan result dated within the last scan interval and every finding detected in the window has a recorded triage (severity, triage date) within 2 business days of detection. FAIL if any service's scan is stale, or any finding is untriaged past 2 business days.",
+        "execution_method": "Scheduled job cross-checks the vulnerability register against the scan schedule and each finding's detection/triage timestamps; intended to run daily once scheduled.",
+        "evidence_plan": "Job output (per-service scan freshness, per-finding triage SLA pass/fail) will be written to the engineering compliance evidence store as a dated daily report.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s8-rp-1 (Incident and Recovery Readiness): a service with no current scan, or a finding sitting untriaged, is exactly the undetected/unactioned-vulnerability exposure that lets a fixable weakness silently become an incident."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s8-ctrl-2",
+      "properties": {
+        "type": "automated",
+        "title": "Automated Remediation SLA Compliance Check",
+        "implementation_status": "planned",
+        "description": "Automated scheduled check verifying every closed vulnerability finding was remediated within its severity's SLA, or is linked to a valid exception, and that at-risk findings were escalated.",
+        "pass_fail_criteria": "PASS if every closed finding's closure date is at or before its severity's SLA deadline or is linked to a valid, non-expired exception record, and every finding within 2 days of its deadline with no closure has a logged Engineering Manager escalation. FAIL if any closed finding missed its SLA with no linked exception, or any at-risk finding was not escalated.",
+        "execution_method": "Scheduled job evaluates the vulnerability register's open and closed findings against their severity-based deadlines; intended to run daily once scheduled.",
+        "evidence_plan": "Job output (per-finding SLA pass/fail, escalation status) will be written to the engineering compliance evidence store as a dated daily report.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s8-rp-1: a vulnerability remediated late, or never escalated when at risk of missing its SLA, is exactly the slow-remediation exposure that lets a known weakness remain exploitable long enough to become an incident."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s8-ctrl-3",
+      "properties": {
+        "type": "automated",
+        "title": "Vulnerability Intelligence Feed Freshness Check",
+        "implementation_status": "planned",
+        "description": "Automated check verifying the vulnerability-intelligence feed used for scanning is itself up to date, so scans are evaluated against current known-vulnerability data.",
+        "pass_fail_criteria": "PASS if the vulnerability-intelligence feed's last successful update is within the defined freshness window (24 hours). FAIL if the feed's last successful update is older than 24 hours, or the last scheduled update failed.",
+        "execution_method": "Scheduled job checks the feed provider's last-updated timestamp against the scanning toolchain's ingested copy; intended to run every 6 hours once scheduled.",
+        "evidence_plan": "Feed freshness check results will be written to the engineering compliance evidence store as a dated report, referenced by feed source and check timestamp.",
+        "executor_role": "Automated job (owned by Security Engineer)",
+        "reviewer_role": "Security Engineer",
+        "risk_alignment_rationale": "Directly verifies s8-rp-1 by grounding the scan-coverage check (s8-ctrl-1) itself: a scan running against stale vulnerability data would report false confidence, silently missing newly disclosed vulnerabilities that could otherwise be caught before becoming an incident."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s8-ctrl-4",
+      "properties": {
+        "type": "manual",
+        "title": "Incident Response Tabletop Drill Verification",
+        "implementation_status": "planned",
+        "description": "Manual verification that a security incident-response tabletop drill was conducted within the required 6-month window and that any gap it surfaced was logged with an owner.",
+        "pass_fail_criteria": "PASS if a tabletop drill result is recorded within the last 6 months, exercising the current incident-response runbook, with any surfaced gap logged with an assigned owner and target date. FAIL if no drill was conducted within the window, or a surfaced gap has no assigned owner/target date.",
+        "execution_method": "Manual review performed by the Security Engineer against the drill log; intended cadence: every 6 months, aligned to the drill schedule itself.",
+        "evidence_plan": "Drill results and any logged gaps will be recorded in the incident-response drill log as a dated entry per drill.",
+        "executor_role": "Security Engineer",
+        "reviewer_role": "Engineering Manager",
+        "risk_alignment_rationale": "Directly verifies s8-rp-1's recovery-readiness half: a runbook that has never actually been exercised is exactly the untested-recovery-capability exposure this risk path describes -- an incident-response plan that only looks ready on paper."
+      }
+    },
+    {
+      "label": "Control",
+      "id": "s8-ctrl-5",
+      "properties": {
+        "type": "manual",
+        "title": "Post-Incident Postmortem Completion Review",
+        "implementation_status": "planned",
+        "description": "Manual review confirming every confirmed security incident has a completed, blameless postmortem within 10 business days of resolution, with root cause and follow-up remediation items recorded.",
+        "pass_fail_criteria": "PASS if 100% of confirmed security incidents in the review period have a postmortem document dated within 10 business days of resolution, naming a root cause and follow-up items each with an owner and target date. FAIL if any confirmed incident is missing a postmortem, the postmortem is late, or it lacks a root cause or owned follow-up items.",
+        "execution_method": "Manual review performed by the Engineering Manager sampling the incident log each month; intended cadence: monthly.",
+        "evidence_plan": "Review results (incident ID, postmortem completeness, pass/fail) will be recorded in the engineering compliance evidence store as a dated monthly report.",
+        "executor_role": "Engineering Manager",
+        "reviewer_role": "Security Engineer (independent second reviewer)",
+        "risk_alignment_rationale": "Directly verifies s8-rp-1 by confirming the organization actually learns from a confirmed incident -- a missing or superficial postmortem is exactly the repeat-failure exposure this risk path is scoped to catch, closing the loop the drill verification (s8-ctrl-4) tests only in simulation."
+      }
+    },
+    {
+      "label": "RiskPath",
+      "id": "s8-rp-1",
+      "properties": {
+        "name": "Incident and Recovery Readiness",
+        "description": "Risk that a security vulnerability or incident goes undetected, untriaged, or unremediated long enough to be exploited, or that when an incident does occur, the organization cannot respond and recover effectively -- because vulnerability scanning coverage or triage SLAs lapsed, remediation missed its severity-based deadline, or the incident-response runbook was never actually tested or followed through to a completed postmortem -- resulting in prolonged exposure, an unrecovered breach, or the same root cause recurring because no lesson was captured.",
+        "status": "active",
+        "risk_type": "security",
+        "version": "1.0"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-1"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.1"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-2"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.2"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.3"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-4"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.4"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-5"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.5"
+      }
+    },
+    {
+      "type": "DEFINES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Role",
+        "id": "role-6"
+      },
+      "properties": {
+        "source_ref": "Sec. 3.6"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-1"
+      },
+      "properties": {
+        "source_ref": "4.1"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-2"
+      },
+      "properties": {
+        "source_ref": "4.2"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-3"
+      },
+      "properties": {
+        "source_ref": "4.3"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-4"
+      },
+      "properties": {
+        "source_ref": "4.4"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-5"
+      },
+      "properties": {
+        "source_ref": "4.5"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-6"
+      },
+      "properties": {
+        "source_ref": "4.6"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-7"
+      },
+      "properties": {
+        "source_ref": "4.7"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-8"
+      },
+      "properties": {
+        "source_ref": "4.8"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-9"
+      },
+      "properties": {
+        "source_ref": "4.9"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "req-10"
+      },
+      "properties": {
+        "source_ref": "4.10"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-1"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-2"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-3"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-4"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-5"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-5"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-6"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-7"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-8"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-9"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-10"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-1"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-2"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-2"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-3"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-4"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-4"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-5"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-5"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-6"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-6"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-7"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-7"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-8"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-8"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-9"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-9"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "req-10"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "obl-10"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-1"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-2"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-3"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-3"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-4"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-4"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-5"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-5"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-6"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-6"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-7"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-8"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-8"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-9"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-9"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-10"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-10"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-1"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-3"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-2"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-6"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-3"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-2"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-2"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-3"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s2-pol-3"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-3"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s2-pa-3"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-6"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s2-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s2-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s2-pol-2"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s2-std-2"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s2-pol-2"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s2-std-3"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s2-pol-3"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s2-std-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-5"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-4"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-6"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s2-std-4"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-7"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-3"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-3"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-4"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-5"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s2-rp-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s2-ctrl-2"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-2"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-1"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-4"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-2"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-5"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-3"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-2"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-2"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-3"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s3-pol-3"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-2"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-2"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-4"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-3"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-5"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s3-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s3-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s3-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s3-std-2"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s3-pol-2"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s3-std-3"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s3-pol-2"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s3-std-4"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s3-pol-3"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s3-std-5"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-5"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-6"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-4"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-7"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-5"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-8"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s3-std-5"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-9"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-2"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-4"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-5"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-6"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-2"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-5"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s3-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s3-ctrl-8"
+      }
+    },
+    {
+      "type": "EXPRESSES",
+      "from": {
+        "label": "RegulatoryInstrument",
+        "id": "ENGPRAC-1.0"
+      },
+      "to": {
+        "label": "Requirement",
+        "id": "s4-req-1"
+      },
+      "properties": {
+        "source_ref": "4.11"
+      }
+    },
+    {
+      "type": "HAS",
+      "from": {
+        "label": "Role",
+        "id": "role-3"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "s4-obl-1"
+      }
+    },
+    {
+      "type": "SATISFIED_BY",
+      "from": {
+        "label": "Requirement",
+        "id": "s4-req-1"
+      },
+      "to": {
+        "label": "Obligation",
+        "id": "s4-obl-1"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "s4-obl-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s4-cap-1"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "s4-cap-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s4-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-3"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s4-pol-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s3-pa-3"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s4-cap-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s4-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s4-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s4-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s4-std-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s4-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s4-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s4-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s4-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-1"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s4-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-5"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s4-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s4-cap-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s4-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s4-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-2"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s4-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s4-ctrl-3"
+      }
+    },
+    {
+      "type": "REQUIRES",
+      "from": {
+        "label": "Obligation",
+        "id": "obl-7"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s5-cap-1"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-7"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "s5-cap-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s5-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s5-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-7"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s5-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s5-cap-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s5-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s5-std-2"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s5-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s5-std-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-5"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s5-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-6"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s5-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-7"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s5-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "s5-cap-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s5-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-6"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s5-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s5-ctrl-4"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-10"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s6-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s6-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s6-pol-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s6-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-10"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s6-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s6-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s6-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s6-std-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s6-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s6-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s6-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s6-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-4"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s6-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-10"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s6-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s6-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-2"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s6-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s6-ctrl-4"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-9"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s7-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s7-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s7-pol-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s7-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-9"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s7-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s7-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s7-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s7-std-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s7-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s7-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s7-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s7-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-3"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s7-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-9"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s7-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s7-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-2"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s7-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-3"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s7-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s7-ctrl-4"
+      }
+    },
+    {
+      "type": "GOVERNED_BY",
+      "from": {
+        "label": "Capability",
+        "id": "cap-8"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s8-pol-1"
+      }
+    },
+    {
+      "type": "OWNS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s8-pa-1"
+      },
+      "to": {
+        "label": "Policy",
+        "id": "s8-pol-1"
+      }
+    },
+    {
+      "type": "COVERS",
+      "from": {
+        "label": "PracticeArea",
+        "id": "s8-pa-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-8"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s8-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s8-std-1"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s8-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s8-std-2"
+      }
+    },
+    {
+      "type": "SUPPORTED_BY",
+      "from": {
+        "label": "Policy",
+        "id": "s8-pol-1"
+      },
+      "to": {
+        "label": "Standard",
+        "id": "s8-std-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s8-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-1"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s8-std-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-3"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s8-std-2"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-2"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s8-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-4"
+      }
+    },
+    {
+      "type": "IMPLEMENTED_BY",
+      "from": {
+        "label": "Standard",
+        "id": "s8-std-3"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-5"
+      }
+    },
+    {
+      "type": "MITIGATED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s8-rp-1"
+      },
+      "to": {
+        "label": "Capability",
+        "id": "cap-8"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s8-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-1"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s8-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-2"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s8-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-4"
+      }
+    },
+    {
+      "type": "VERIFIED_BY",
+      "from": {
+        "label": "RiskPath",
+        "id": "s8-rp-1"
+      },
+      "to": {
+        "label": "Control",
+        "id": "s8-ctrl-5"
+      }
+    }
+  ]
+}

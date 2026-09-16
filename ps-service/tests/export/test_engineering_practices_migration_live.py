@@ -1,9 +1,10 @@
 """Live proof for PLAN.md Slice 3.6 (D15): the real, permanently-seeded
-`engprac_baseline`/`engprac_native` FalkorDB graph pair (seeded once by
-`tools/curated-export/migrate_engineering_practices.py` from
-`test-data/engineering-practices/engineering-practices-seed.json`) is a
-shape-correct baseline graph, and Slice 3.5's `export_instrument`
-orchestration runs against it end to end.
+`engprac_baseline`/`engprac_native` FalkorDB graph pair (seeded by issue
+#95's real internal-seed adapter submissions -- the incremental per-slice
+submissions of `internal-sources/engineering-practices/
+engineering-practices-seed.json` through `POST /ingestions` across Slices
+2-8 and 11 of that issue's plan) is a shape-correct baseline graph, and
+Slice 3.5's `export_instrument` orchestration runs against it end to end.
 
 Two things this test deliberately does NOT do:
 
@@ -50,7 +51,7 @@ if TYPE_CHECKING:
 
 _BASELINE_GRAPH_NAME = "engprac_baseline"
 _NATIVE_GRAPH_NAME = "engprac_native"
-_REGULATORY_INSTRUMENT_ID = "ENGPRAC-3.0"
+_REGULATORY_INSTRUMENT_ID = "ENGPRAC-1.0"
 
 
 class _QueryResult(Protocol):
@@ -133,9 +134,9 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     descriptor = InstrumentDescriptor(
         short_name="ENGPRAC",
         instrument_id=_REGULATORY_INSTRUMENT_ID,
-        version="3.0",
+        version="1.0",
         celex=None,
-        title="Engineering Practices Regulation",
+        title="Engineering Practices Policy",
         source_type="internal",
         jurisdiction=None,
     )
@@ -159,9 +160,17 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     instrument_dir = repo_root / "curated-content" / _REGULATORY_INSTRUMENT_ID
     baseline_document = json.loads((instrument_dir / "baseline.json").read_text(encoding="utf-8"))
     labels_present = {node["label"] for node in baseline_document["nodes"]}
-    assert {"Role", "Requirement", "Obligation", "Capability", "Policy", "Standard", "Control"} <= (
-        labels_present
-    )
+    assert {
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability",
+        "Policy",
+        "Standard",
+        "Control",
+        "PracticeArea",
+        "RiskPath",
+    } <= labels_present
 
     capability_nodes = [n for n in baseline_document["nodes"] if n["label"] == "Capability"]
     assert all("embedding" in node["properties"] for node in capability_nodes)
@@ -175,8 +184,10 @@ def test_export_instrument_runs_end_to_end_against_the_real_engprac_graphs(
     parsed_baseline = parse_serialized_graph_json((instrument_dir / "baseline.json").read_bytes())
     parsed_native = parse_serialized_graph_json((instrument_dir / "native.json").read_bytes())
     baseline_graph_handle = graph_query_handle(live_falkordb, _BASELINE_GRAPH_NAME)
+    native_graph_handle = graph_query_handle(live_falkordb, _NATIVE_GRAPH_NAME)
     live_node_count = _count(baseline_graph_handle.query("MATCH (n) RETURN count(n)"))
     live_edge_count = _count(baseline_graph_handle.query("MATCH ()-[r]->() RETURN count(r)"))
+    live_native_node_count = _count(native_graph_handle.query("MATCH (n) RETURN count(n)"))
     assert len(parsed_baseline.nodes) == live_node_count
     assert len(parsed_baseline.edges) == live_edge_count
-    assert len(parsed_native.nodes) == len(native_document["nodes"]) == 1
+    assert len(parsed_native.nodes) == len(native_document["nodes"]) == live_native_node_count
