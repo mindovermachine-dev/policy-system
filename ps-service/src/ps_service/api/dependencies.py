@@ -23,6 +23,10 @@ from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     build_default_change_check_dependencies,
 )
+from ps_service.api.export_orchestration import (
+    ExportDependencies,
+    build_default_export_dependencies,
+)
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     build_default_pipeline_dependencies,
@@ -105,6 +109,24 @@ def provide_restore_dependencies() -> RestoreDependencies:
         The production :class:`RestoreDependencies` bundle.
     """
     return build_default_restore_dependencies()
+
+
+def provide_export_dependencies() -> ExportDependencies:
+    """Return the production ``ExportDependencies`` for the export orchestration.
+
+    Mirrors :func:`provide_restore_dependencies` exactly: a plain provider
+    (not a generator) so tests can swap it wholesale via
+    ``app.dependency_overrides`` with a fake bundle. The real bundle wires
+    the shipped ``export_instrument`` entry point and FalkorDB
+    connection/graph-opener helpers through
+    ``build_default_export_dependencies``, whose ``ps_service.export``
+    imports are all function-local (M6 -- ``ps_service.main`` never
+    transitively loads that component at module load).
+
+    Returns:
+        The production :class:`ExportDependencies` bundle.
+    """
+    return build_default_export_dependencies()
 
 
 def provide_near_miss_review_dependencies() -> NearMissReviewDependencies:

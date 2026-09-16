@@ -376,6 +376,7 @@ Global flags, usable before or after any subcommand:
 | `ps-cli ingest regulation <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
 | `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
+| `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli check regulations` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
@@ -408,6 +409,19 @@ A few behaviors worth knowing about `ingest regulation`:
   end to end). `ps-cli` prints each pipeline stage's name to stderr as it starts, so a
   long-running ingest doesn't look hung — the final `run_id` /
   `regulatory_instrument_id` / per-stage summary still prints to stdout only, once.
+
+A few behaviors worth knowing about `export instrument`:
+
+- `destination` defaults to your current working directory when omitted.
+- The destination must already exist and be writable — `ps-cli` checks this before
+  making any call to PS Service, so a bad path fails fast with an actionable error
+  rather than after a wasted round trip.
+- Re-running the command against the same destination overwrites `baseline.json` /
+  `native.json` / `manifest.json` deterministically — there's no merge or append
+  behavior to worry about.
+- If the exported instrument is internal-source, `ps-cli` prints an explicit notice
+  that the exported files may contain your organization's own confidential policy
+  content.
 
 ### Troubleshooting
 

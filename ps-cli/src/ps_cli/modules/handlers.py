@@ -10,9 +10,13 @@ themselves; ``ps_cli.cli.run()`` owns the single catch site (PLAN.md §1 D5/D9).
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 import sys
 import threading
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -309,6 +313,71 @@ def handle_restore_instrument(
         print(f"{stage.stage}: {stage.status}")
 
 
+def handle_export_instrument(
+    instrument_id: str,
+    destination: Path | None,
+    client: PsServiceClientProtocol,
+) -> None:
+    """Export one already-ingested instrument's artifact from PS Service.
+
+    `instrument_id`'s format is already validated by argparse's
+    `type=_instrument_id_type` callback (`ps_cli.modules.parser`) before this
+    handler ever runs (L1 "Fail Fast at Boundaries"). `destination` resolves
+    to the operator's current working directory when not given (AC-BI-006,
+    the parser's own `nargs="?", default=None`).
+
+    Before `client.export_instrument()` is ever called, `resolved_destination`
+    is checked fail-fast (AC-BI-008): it must already exist as a directory and
+    be writable. Either failure raises `PsCliError` naming the path, with an
+    actionable hint -- proven by a fake client whose `export_instrument()`
+    raises `AssertionError` if invoked, so a wrongly-late check would fail the
+    test loudly rather than silently passing.
+
+    Calls `client.export_instrument()`, then writes the three resulting
+    files under the resolved destination with plain, deterministic-overwrite
+    writes (no partial-write logic needed): `baseline.json`/`native.json`
+    (the base64-decoded blobs, written as raw bytes) and `manifest.json`
+    (the manifest's fields, JSON-encoded). On success, prints the exported
+    instrument id, each completed stage's name and status, then the three
+    written paths -- mirroring `handle_restore_instrument`'s summary-line
+    shape, plus the paths. A `PsCliError` raised by the client (a structured
+    PS Service rejection) propagates uncaught -- only `ps_cli.cli.run()`
+    catches `PsCliError` (PLAN.md §1 D5/D9).
+    """
+    resolved_destination = destination or Path.cwd()
+    assert_contract(
+        contract=resolved_destination.is_dir(),
+        msg=f"export destination does not exist or is not a directory: {resolved_destination}",
+        hint="pass an existing writable directory, or omit the destination to use the cwd",
+    )
+    assert_contract(
+        contract=os.access(resolved_destination, os.W_OK),
+        msg=f"export destination is not writable: {resolved_destination}",
+        hint="check the directory's permissions",
+    )
+
+    result = client.export_instrument(instrument_id)
+
+    baseline_path = resolved_destination / "baseline.json"
+    native_path = resolved_destination / "native.json"
+    manifest_path = resolved_destination / "manifest.json"
+    baseline_path.write_bytes(base64.b64decode(result.baseline_blob_base64))
+    native_path.write_bytes(base64.b64decode(result.native_blob_base64))
+    manifest_path.write_text(json.dumps(asdict(result.manifest), indent=2))
+
+    print(f"instrument_id: {result.instrument_id}")
+    for stage in result.stages:
+        print(f"{stage.stage}: {stage.status}")
+    print(str(baseline_path))
+    print(str(native_path))
+    print(str(manifest_path))
+    if result.manifest.source_type == "internal":
+        print(
+            "NOTICE: this export contains internal-source content -- the file may hold "
+            "the organization's own confidential policy content."
+        )
+
+
 def handle_get_health(client: PsServiceClientProtocol) -> None:
     """Report PS Service's reachability, health (`/health`), and readiness (`/ready`).
 
@@ -405,6 +474,21 @@ def _dispatch_restore_instrument(args: argparse.Namespace, client: PsServiceClie
     )
 
 
+def _dispatch_export_instrument(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
+    """Adapt `handle_export_instrument`'s signature to the `DISPATCH` shape.
+
+    Unlike `restore_instrument`, `export` never reads the local curated
+    catalog (D1's own scope point), so no `load_config()` call is needed
+    here -- only `args.instrument_id`/`args.destination` are unpacked.
+    """
+    destination_raw = cast("str | None", args.destination)
+    handle_export_instrument(
+        cast("str", args.instrument_id),
+        Path(destination_raw) if destination_raw is not None else None,
+        client,
+    )
+
+
 def _dispatch_ingest_regulation(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_ingest_regulation`'s signature to the dispatch shape, passing `celex`."""
     handle_ingest_regulation(cast("str", args.celex), client)
@@ -457,6 +541,7 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None
     "ingest_regulation": _dispatch_ingest_regulation,
     "ingest_document": _dispatch_ingest_document,
     "restore_instrument": _dispatch_restore_instrument,
+    "export_instrument": _dispatch_export_instrument,
     "get_health": _dispatch_get_health,
     "check_regulations": _dispatch_check_regulations,
     "near_misses_list": _dispatch_near_misses_list,

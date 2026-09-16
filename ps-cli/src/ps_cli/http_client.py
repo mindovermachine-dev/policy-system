@@ -17,6 +17,9 @@ import httpx
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
+    ExportManifest,
+    ExportResult,
+    ExportStageOutcome,
     IngestionResult,
     InstrumentCheckOutcome,
     PendingReviewEntry,
@@ -50,6 +53,7 @@ _READ_TIMEOUT_MSG = "PS Service at {base_url} did not respond in time."
 
 _INGESTIONS_PATH = "/ingestions"
 _RESTORATIONS_PATH = "/restorations"
+_EXPORTS_PATH = "/exports"
 _HEALTH_PATH = "/health"
 _READY_PATH = "/ready"
 _CHANGE_CHECKS_PATH = "/change-checks"
@@ -81,6 +85,14 @@ _STATUS_POLL_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 # Service, so this is a documented, generous-but-bounded assumption (no real curated
 # instrument has been timed yet), not a precisely measured value like ingestion's.
 _RESTORATION_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=5.0, pool=5.0)
+
+# `POST /exports` always runs a real LLM embeddings backfill (PLAN.md §1 D8) -- unlike
+# `_RESTORATION_REQUEST_TIMEOUT`'s carve-out above (restore's dedup replay reuses the
+# artifact's own embeddings, no live RouteEmbedding call), export has no such shortcut.
+# This mirrors `_INGESTION_REQUEST_TIMEOUT`'s own reasoning and exact value instead --
+# a real, larger instrument's embedding backfill could plausibly exceed restore's
+# shorter 300s budget.
+_EXPORT_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=1800.0, write=5.0, pool=5.0)
 
 # `POST /change-checks` can call Cellar/ELI once per tracked instrument (poll) plus a
 # full Ingestion-only re-ingest per finding -- potentially several sequential external
@@ -269,6 +281,100 @@ def _parse_restoration_response(payload: object) -> RestorationResult:
     stage_items = cast("list[object]", stages_raw)
     stages = [_parse_restoration_stage_outcome(item) for item in stage_items]
     return RestorationResult(instrument_id=instrument_id, stages=stages)
+
+
+def _require_str_field(body: dict[str, object], key: str) -> str:
+    """Return `body[key]` as `str`, or raise `PsCliError` if it is missing or not a string.
+
+    A small shared helper for `_parse_export_manifest`'s nine required string
+    fields -- extracted (L2 Common DRY: "extract... once a pattern repeats a
+    third time") to keep that function's own cyclomatic complexity low rather
+    than one large chained `isinstance` boolean expression.
+    """
+    value = body.get(key)
+    if not isinstance(value, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return value
+
+
+def _optional_str_field(body: dict[str, object], key: str) -> str | None:
+    """Return `body[key]` as `str | None`, or raise `PsCliError` if present but not a string."""
+    value = body.get(key)
+    if value is not None and not isinstance(value, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return value
+
+
+def _parse_export_manifest(payload: object) -> ExportManifest:
+    """Parse the `manifest` field of a `POST /exports` 200 response body into an `ExportManifest`.
+
+    Field-for-field mirror of `ExportManifestPayload` (`ps_service/api/models.py`) --
+    vendored, never imported (AC-BI-004). Raises `PsCliError` (generic, defensive —
+    D5) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    return ExportManifest(
+        instrument_id=_require_str_field(body, "instrument_id"),
+        celex=_optional_str_field(body, "celex"),
+        title=_require_str_field(body, "title"),
+        short_name=_require_str_field(body, "short_name"),
+        version=_require_str_field(body, "version"),
+        source_type=_require_str_field(body, "source_type"),
+        jurisdiction=_optional_str_field(body, "jurisdiction"),
+        schema_version=_require_str_field(body, "schema_version"),
+        exported_at=_require_str_field(body, "exported_at"),
+        baseline_sha256=_require_str_field(body, "baseline_sha256"),
+        native_sha256=_require_str_field(body, "native_sha256"),
+    )
+
+
+def _parse_export_stage_outcome(payload: object) -> ExportStageOutcome:
+    """Parse one raw JSON object into an `ExportStageOutcome`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the shape does not match.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    stage = body.get("stage")
+    status = body.get("status")
+    if not isinstance(stage, str) or not isinstance(status, str):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    return ExportStageOutcome(stage=stage, status=status)
+
+
+def _parse_export_response(payload: object) -> ExportResult:
+    """Parse a `POST /exports` 200 response body into an `ExportResult`.
+
+    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
+    expected `ExportAcceptedResponseBody` shape.
+    """
+    if not isinstance(payload, dict):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    body = cast("dict[str, object]", payload)
+    instrument_id = body.get("instrument_id")
+    baseline_blob_base64 = body.get("baseline_blob_base64")
+    native_blob_base64 = body.get("native_blob_base64")
+    stages_raw = body.get("stages")
+    if (
+        not isinstance(instrument_id, str)
+        or not isinstance(baseline_blob_base64, str)
+        or not isinstance(native_blob_base64, str)
+        or not isinstance(stages_raw, list)
+    ):
+        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
+    stage_items = cast("list[object]", stages_raw)
+    stages = [_parse_export_stage_outcome(item) for item in stage_items]
+    manifest = _parse_export_manifest(body.get("manifest"))
+    return ExportResult(
+        instrument_id=instrument_id,
+        manifest=manifest,
+        baseline_blob_base64=baseline_blob_base64,
+        native_blob_base64=native_blob_base64,
+        stages=stages,
+    )
 
 
 def _parse_instrument_check_outcome(payload: object) -> InstrumentCheckOutcome:
@@ -472,6 +578,10 @@ class PsServiceClientProtocol(Protocol):
         """`POST /restorations` with `artifact`'s manifest fields + base64-encoded blobs."""
         ...
 
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """`POST /exports` with `{"instrument_id": instrument_id}`."""
+        ...
+
     def run_change_check(self) -> ChangeCheckResult:
         """`POST /change-checks`: sweep tracked instruments, re-ingesting any amendments found."""
         ...
@@ -633,6 +743,37 @@ class PsServiceClient:
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_restoration_response(response.json())
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """`POST /exports` with `{"instrument_id": instrument_id}`.
+
+        Exports an already-ingested instrument's baseline/native graphs plus
+        a generated manifest -- PS Service derives every other descriptor
+        field (`title`, `source_type`, `jurisdiction`, ...) server-side
+        against the actually-ingested graph; `ps-cli` sends only the id
+        (PLAN.md §1 D2/D11). Raises `PsCliError` if PS Service cannot be
+        reached, if it returns a non-2xx response (parsed per D5/D7's
+        error-body mapping -- an unknown instrument id surfaces as
+        `export_instrument_not_found`, any pipeline failure as
+        `export_stage_failed` naming the failing stage, an incomplete LLM
+        Interface config as `export_config_incomplete`), or if a 200
+        response body does not match the expected success shape. Uses
+        `_EXPORT_REQUEST_TIMEOUT` (D8) -- export always runs a real LLM
+        embeddings backfill, unlike `restore_instrument()`'s shorter one.
+        """
+        try:
+            response = self._client.post(
+                _EXPORTS_PATH,
+                json={"instrument_id": instrument_id},
+                timeout=_EXPORT_REQUEST_TIMEOUT,
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            _raise_connection_error(self._base_url, exc)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        if not response.is_success:
+            _raise_from_error_body(response)
+        return _parse_export_response(response.json())
 
     def run_change_check(self) -> ChangeCheckResult:
         """`POST /change-checks`: sweep tracked instruments, re-ingesting any amendments found.

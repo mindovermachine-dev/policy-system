@@ -7,6 +7,7 @@ PLAN.md §3 Increments 10, 12, 13.
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import socket
 from pathlib import Path
@@ -21,6 +22,9 @@ from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
+    ExportManifest,
+    ExportResult,
+    ExportStageOutcome,
     IngestionResult,
     InstrumentCheckOutcome,
     PendingReviewsResult,
@@ -79,6 +83,11 @@ class _UnusedPsServiceClientMethods:
     def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
         """Fail: this test's fake does not expect `restore_instrument()` to be called."""
         msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
+        raise AssertionError(msg)
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """Fail: this test's fake does not expect `export_instrument()` to be called."""
+        msg = f"export_instrument must not be called in this test (instrument_id={instrument_id!r})"
         raise AssertionError(msg)
 
     def run_change_check(self) -> ChangeCheckResult:
@@ -1322,6 +1331,326 @@ def test_run_restore_instrument_missing_local_artifact_exits_one_without_crashin
     assert exit_code == 1
     assert "curated instrument directory not found" in captured.err
     assert "Traceback" not in captured.err
+
+
+# --- issue #71, new S3 (CHANGES.md A2): `ps-cli export instrument` end to end ----------------
+
+_EXPORT_MANIFEST = ExportManifest(
+    instrument_id="CRA-1.0",
+    celex="32024R2847",
+    title="Cyber Resilience Act",
+    short_name="CRA",
+    version="1.0",
+    source_type="external",
+    jurisdiction="EU",
+    schema_version="1.0.0",
+    exported_at="2026-09-04T00:00:00Z",
+    baseline_sha256="a" * 64,
+    native_sha256="b" * 64,
+)
+
+_EXPORT_BASELINE_BLOB = b'{"baseline": true}'
+_EXPORT_NATIVE_BLOB = b'{"native": true}'
+
+
+class _FakeExportSuccessClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose export_instrument() succeeds."""
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """Return a fixed ExportResult, echoing the given instrument id."""
+        return ExportResult(
+            instrument_id=instrument_id,
+            manifest=_EXPORT_MANIFEST,
+            baseline_blob_base64=base64.b64encode(_EXPORT_BASELINE_BLOB).decode("ascii"),
+            native_blob_base64=base64.b64encode(_EXPORT_NATIVE_BLOB).decode("ascii"),
+            stages=[ExportStageOutcome(stage="serialized", status="succeeded")],
+        )
+
+
+def test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The full parser -> dispatch -> handler -> client wiring for `export instrument`.
+
+    Uses an `external`-source fake manifest -- the internal-source notice (AC-BI-014)
+    is a later slice's own dedicated test, not this one's concern either way.
+    """
+    fake_client = _FakeExportSuccessClient()
+
+    exit_code = run(["export", "instrument", "CRA-1.0", str(tmp_path)], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+
+    baseline_path = tmp_path / "baseline.json"
+    native_path = tmp_path / "native.json"
+    manifest_path = tmp_path / "manifest.json"
+    assert baseline_path.read_bytes() == _EXPORT_BASELINE_BLOB
+    assert native_path.read_bytes() == _EXPORT_NATIVE_BLOB
+    manifest_content = json.loads(manifest_path.read_text())
+    assert manifest_content == {
+        "instrument_id": "CRA-1.0",
+        "celex": "32024R2847",
+        "title": "Cyber Resilience Act",
+        "short_name": "CRA",
+        "version": "1.0",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "schema_version": "1.0.0",
+        "exported_at": "2026-09-04T00:00:00Z",
+        "baseline_sha256": "a" * 64,
+        "native_sha256": "b" * 64,
+    }
+
+    assert "instrument_id: CRA-1.0" in captured.out
+    assert "serialized: succeeded" in captured.out
+    assert str(baseline_path) in captured.out
+    assert str(native_path) in captured.out
+    assert str(manifest_path) in captured.out
+
+
+def test_run_export_instrument_defaults_destination_to_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-006: omitting `destination` writes the three files to the operator's cwd.
+
+    Mirrors `test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success`
+    but omits the `destination` positional entirely, relying on
+    `handle_export_instrument`'s own `destination or Path.cwd()` resolution.
+    """
+    monkeypatch.chdir(tmp_path)
+    fake_client = _FakeExportSuccessClient()
+
+    exit_code = run(["export", "instrument", "CRA-1.0"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (tmp_path / "baseline.json").read_bytes() == _EXPORT_BASELINE_BLOB
+    assert (tmp_path / "native.json").read_bytes() == _EXPORT_NATIVE_BLOB
+    assert (tmp_path / "manifest.json").exists()
+    assert "instrument_id: CRA-1.0" in captured.out
+
+
+def test_run_export_instrument_nonexistent_destination_fails_before_calling_client(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-008: a destination that doesn't exist fails fast, before PS Service is called.
+
+    Uses the bare `_UnusedPsServiceClientMethods()` fake -- if `handle_export_instrument`
+    ever called `export_instrument()` before the destination check, this test would fail
+    with an uncaught `AssertionError`, not a graceful exit code.
+    """
+    missing_destination = tmp_path / "nonexistent"
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    exit_code = run(
+        ["export", "instrument", "CRA-1.0", str(missing_destination)], client=uncallable_client
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert str(missing_destination) in captured.err
+    assert "💡" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_run_export_instrument_unwritable_destination_fails_before_calling_client(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-008: a destination that exists but isn't writable fails fast, same as above.
+
+    Uses a dedicated subdirectory of `tmp_path` (never `tmp_path` itself) so the
+    permission-bit change is scoped to a directory this test controls end to end; the
+    `finally` block restores it to a writable mode before pytest's own `tmp_path`
+    teardown runs, so no permission-broken temp dir is left behind.
+    """
+    unwritable_destination = tmp_path / "readonly"
+    unwritable_destination.mkdir()
+    unwritable_destination.chmod(0o500)
+    uncallable_client = _UnusedPsServiceClientMethods()
+
+    try:
+        exit_code = run(
+            ["export", "instrument", "CRA-1.0", str(unwritable_destination)],
+            client=uncallable_client,
+        )
+    finally:
+        unwritable_destination.chmod(0o700)
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert str(unwritable_destination) in captured.err
+    assert "💡" in captured.err
+    assert "Traceback" not in captured.err
+
+
+_EXPORT_MANIFEST_V2 = ExportManifest(
+    instrument_id="CRA-2.0",
+    celex="32024R2847",
+    title="Cyber Resilience Act (Amended)",
+    short_name="CRA",
+    version="2.0",
+    source_type="external",
+    jurisdiction="EU",
+    schema_version="1.0.0",
+    exported_at="2026-09-16T00:00:00Z",
+    baseline_sha256="c" * 64,
+    native_sha256="d" * 64,
+)
+
+_EXPORT_BASELINE_BLOB_V2 = b'{"baseline": true, "amended": true}'
+_EXPORT_NATIVE_BLOB_V2 = b'{"native": true, "amended": true}'
+
+
+class _FakeExportSuccessClientV2(_UnusedPsServiceClientMethods):
+    """A second duck-typed `export_instrument()` fake returning different content than V1.
+
+    Simulates a re-export after the source instrument changed (AC-BI-010).
+    """
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """Return a fixed ExportResult distinct from `_FakeExportSuccessClient`'s."""
+        return ExportResult(
+            instrument_id=instrument_id,
+            manifest=_EXPORT_MANIFEST_V2,
+            baseline_blob_base64=base64.b64encode(_EXPORT_BASELINE_BLOB_V2).decode("ascii"),
+            native_blob_base64=base64.b64encode(_EXPORT_NATIVE_BLOB_V2).decode("ascii"),
+            stages=[ExportStageOutcome(stage="serialized", status="succeeded")],
+        )
+
+
+def test_run_export_instrument_overwrites_prior_export_deterministically(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-010: re-exporting to the same destination fully replaces the prior artifact.
+
+    Runs the full `run(...)` dispatch twice against the same `tmp_path`, with two fake
+    clients returning two *different* `ExportResult`s (different instrument id, blob
+    content, and manifest fields -- simulating a re-export after the source instrument
+    changed). After the second run, none of the first run's bytes may survive in any of
+    the three written files -- not as leftover trailing bytes, not merged into the JSON,
+    nowhere.
+    """
+    exit_code_1 = run(
+        ["export", "instrument", "CRA-1.0", str(tmp_path)], client=_FakeExportSuccessClient()
+    )
+    assert exit_code_1 == 0
+    capsys.readouterr()
+
+    exit_code_2 = run(
+        ["export", "instrument", "CRA-2.0", str(tmp_path)], client=_FakeExportSuccessClientV2()
+    )
+    assert exit_code_2 == 0
+    capsys.readouterr()
+
+    baseline_path = tmp_path / "baseline.json"
+    native_path = tmp_path / "native.json"
+    manifest_path = tmp_path / "manifest.json"
+
+    assert baseline_path.read_bytes() == _EXPORT_BASELINE_BLOB_V2
+    assert native_path.read_bytes() == _EXPORT_NATIVE_BLOB_V2
+    manifest_content = json.loads(manifest_path.read_text())
+    assert manifest_content == {
+        "instrument_id": "CRA-2.0",
+        "celex": "32024R2847",
+        "title": "Cyber Resilience Act (Amended)",
+        "short_name": "CRA",
+        "version": "2.0",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "schema_version": "1.0.0",
+        "exported_at": "2026-09-16T00:00:00Z",
+        "baseline_sha256": "c" * 64,
+        "native_sha256": "d" * 64,
+    }
+
+    # No trace of the first run's content survives anywhere in any of the three files.
+    assert _EXPORT_BASELINE_BLOB not in baseline_path.read_bytes()
+    assert _EXPORT_NATIVE_BLOB not in native_path.read_bytes()
+    first_run_manifest_text = manifest_path.read_text()
+    assert "CRA-1.0" not in first_run_manifest_text
+    assert "a" * 64 not in first_run_manifest_text
+    assert "b" * 64 not in first_run_manifest_text
+    assert 'Cyber Resilience Act"' not in first_run_manifest_text
+
+
+# --- issue #71, S14 (AC-BI-014): internal-source confidentiality notice -----------------------
+
+_EXPORT_MANIFEST_INTERNAL = ExportManifest(
+    instrument_id="INTERNAL-POLICY-1.0",
+    celex=None,
+    title="Internal Remote Work Policy",
+    short_name="RWP",
+    version="1.0",
+    source_type="internal",
+    jurisdiction=None,
+    schema_version="1.0.0",
+    exported_at="2026-09-16T00:00:00Z",
+    baseline_sha256="e" * 64,
+    native_sha256="f" * 64,
+)
+
+
+class _FakeExportSuccessClientInternal(_UnusedPsServiceClientMethods):
+    """A duck-typed `export_instrument()` fake whose manifest's `source_type` is `internal`."""
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """Return a fixed ExportResult carrying `_EXPORT_MANIFEST_INTERNAL`."""
+        return ExportResult(
+            instrument_id=instrument_id,
+            manifest=_EXPORT_MANIFEST_INTERNAL,
+            baseline_blob_base64=base64.b64encode(_EXPORT_BASELINE_BLOB).decode("ascii"),
+            native_blob_base64=base64.b64encode(_EXPORT_NATIVE_BLOB).decode("ascii"),
+            stages=[ExportStageOutcome(stage="serialized", status="succeeded")],
+        )
+
+
+def test_run_export_instrument_internal_source_prints_confidentiality_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-014: an internal-source export prints an explicit confidentiality notice.
+
+    Exact wording is non-load-bearing (PLAN.md S14) -- only that a notice mentioning
+    both "internal" and "confidential" appears on stdout after the usual summary lines.
+    """
+    fake_client = _FakeExportSuccessClientInternal()
+
+    exit_code = run(
+        ["export", "instrument", "INTERNAL-POLICY-1.0", str(tmp_path)], client=fake_client
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "NOTICE" in captured.out
+    assert "internal" in captured.out
+    assert "confidential" in captured.out
+
+
+def test_run_export_instrument_external_source_prints_no_confidentiality_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-014: an external-source export's stdout is unchanged -- no notice, no regression.
+
+    Byte-for-byte identical to
+    `test_run_export_instrument_writes_files_and_prints_summary_on_mocked_success`'s own
+    stdout assertions -- proving AC-BI-014's addition is a no-op for the common case.
+    """
+    fake_client = _FakeExportSuccessClient()
+
+    exit_code = run(["export", "instrument", "CRA-1.0", str(tmp_path)], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+
+    baseline_path = tmp_path / "baseline.json"
+    native_path = tmp_path / "native.json"
+    manifest_path = tmp_path / "manifest.json"
+    assert "instrument_id: CRA-1.0" in captured.out
+    assert "serialized: succeeded" in captured.out
+    assert str(baseline_path) in captured.out
+    assert str(native_path) in captured.out
+    assert str(manifest_path) in captured.out
+    assert "NOTICE" not in captured.out
 
 
 # --- issue #68 Slice 10: `ps-cli get health` end to end, through cli.run() -------------------

@@ -95,6 +95,75 @@ class RestorationResult:
     stages: list[RestorationStageOutcome]
 
 
+class ExportManifestBody(TypedDict):
+    """Raw JSON shape of the `manifest` field in a `POST /exports` 200 response body."""
+
+    instrument_id: str
+    celex: str | None
+    title: str
+    short_name: str
+    version: str
+    source_type: str
+    jurisdiction: str | None
+    schema_version: str
+    exported_at: str
+    baseline_sha256: str
+    native_sha256: str
+
+
+class ExportStageOutcomeBody(TypedDict):
+    """Raw JSON shape of one entry in a `POST /exports` 200 response's `stages` array."""
+
+    stage: str
+    status: str
+
+
+class ExportAcceptedResponseBody(TypedDict):
+    """Raw JSON shape of a `POST /exports` 200 response body."""
+
+    instrument_id: str
+    manifest: ExportManifestBody
+    baseline_blob_base64: str
+    native_blob_base64: str
+    stages: list[ExportStageOutcomeBody]
+
+
+@dataclass(frozen=True)
+class ExportManifest:
+    """The `manifest.json` fields returned by `PsServiceClient.export_instrument()`."""
+
+    instrument_id: str
+    celex: str | None
+    title: str
+    short_name: str
+    version: str
+    source_type: str
+    jurisdiction: str | None
+    schema_version: str
+    exported_at: str
+    baseline_sha256: str
+    native_sha256: str
+
+
+@dataclass(frozen=True)
+class ExportStageOutcome:
+    """One completed export stage, as reported in an export's success result."""
+
+    stage: str
+    status: str
+
+
+@dataclass(frozen=True)
+class ExportResult:
+    """Parsed success result of `PsServiceClient.export_instrument()`."""
+
+    instrument_id: str
+    manifest: ExportManifest
+    baseline_blob_base64: str
+    native_blob_base64: str
+    stages: list[ExportStageOutcome]
+
+
 class HealthResponseBody(TypedDict):
     """Raw JSON shape of a `GET /health` 200 response body."""
 

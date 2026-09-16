@@ -109,6 +109,49 @@ class PendingReviewNotFoundError(ApiError):
     """
 
 
+class ExportInstrumentNotFoundError(ApiError):
+    """A ``POST /exports`` ``instrument_id`` names no actually-ingested instrument.
+
+    Raised by ``api.export_orchestration.run_export`` before any file I/O --
+    either ``instrument_id`` is malformed (no ``{short}-{version}`` shape,
+    zero graph access) or the derived ``{short}_baseline`` graph key doesn't
+    exist yet (issue #71 CHANGES.md Appendix A1's safe ``db.list_graphs()``
+    pre-check, before any ``MATCH`` is ever issued against that key) or the
+    graph exists but carries no ``RegulatoryInstrument`` node under this id
+    (PLAN.md D2, AC-BI-007). Handled as HTTP 404; ``str(exc)`` is domain-level
+    and surfaced verbatim.
+    """
+
+
+class ExportConfigIncompleteError(ApiError):
+    """The resolved ``ServiceConfig`` is missing the embedding model export needs.
+
+    ``llm_interface_embed_model`` is ``None`` -- raised by the orchestration's
+    config guard before any FalkorDB call (PLAN.md D3). Handled as HTTP 503;
+    ``str(exc)`` is surfaced verbatim.
+    """
+
+
+class ExportStageFailedError(ApiError):
+    """An export stage raised; the export did not complete (PLAN.md D3/AC-BI-011).
+
+    Carries the failing stage name and an already-sanitised reason, mirroring
+    ``RestoreStageFailedError``'s exact shape (one exception type per distinct
+    failure boundary, L2 Error Handling). Handled as HTTP 502.
+    """
+
+    def __init__(self, *, stage: str, reason: str) -> None:
+        """Record the failing stage and its sanitised reason.
+
+        Args:
+            stage: The export stage that raised (e.g. ``"serialization"``).
+            reason: A caller-safe, already path/host-scrubbed reason string.
+        """
+        super().__init__(f"{stage} stage failed: {reason}")
+        self.stage: str = stage
+        self.reason: str = reason
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

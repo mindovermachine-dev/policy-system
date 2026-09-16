@@ -122,6 +122,50 @@ def _document_path_type(value: str) -> str:
     return value
 
 
+def _add_export_parser(
+    top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
+    verbose_parent_parser: argparse.ArgumentParser,
+) -> None:
+    """Add the `export` verb group to `top_level_subparsers` (issue #71).
+
+    Extracted out of `build_parser()` itself (rather than inlined alongside every
+    other verb group there) purely to keep that already-large function under
+    ruff's `PLR0915` statement-count budget -- no behavioral difference from
+    inlining. Mirrors `restore`'s block: `POST /exports` /
+    `client.export_instrument`, in the opposite direction. `destination` is a
+    second, optional positional (`nargs="?"`, default `None`) rather than a
+    `type=` callback -- writability is a runtime filesystem check, not a format
+    check, so it belongs in the handler, not here (PLAN.md §1 D8).
+    """
+    export_parser = top_level_subparsers.add_parser(
+        "export",
+        parents=[verbose_parent_parser],
+        help="Export an already-ingested instrument's artifact from PS Service.",
+    )
+    export_subparsers = export_parser.add_subparsers(dest="export_command", required=True)
+
+    export_instrument_parser = export_subparsers.add_parser(
+        "instrument",
+        parents=[verbose_parent_parser],
+        help="Export one already-ingested instrument's artifact from PS Service.",
+    )
+    export_instrument_parser.add_argument(
+        "instrument_id",
+        type=_instrument_id_type,
+        help="The already-ingested instrument's id, e.g. 'CRA-1.0'.",
+    )
+    export_instrument_parser.add_argument(
+        "destination",
+        nargs="?",
+        default=None,
+        help=(
+            "Directory to write baseline.json/native.json/manifest.json into "
+            "(default: the current working directory)."
+        ),
+    )
+    export_instrument_parser.set_defaults(command="export_instrument")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser: a strict kubectl-style `<verb> <resource>` surface.
 
@@ -323,6 +367,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="The curated instrument's id, e.g. 'CRA-1.0'.",
     )
     restore_instrument_parser.set_defaults(command="restore_instrument")
+
+    # `export` (export an already-ingested instrument's baseline/native graphs plus a
+    # generated manifest into local files, issue #71): mirrors `restore`'s block above,
+    # in the opposite direction. See `_add_export_parser`'s own docstring for why this
+    # one verb group is factored into a helper rather than inlined like every other.
+    _add_export_parser(top_level_subparsers, verbose_parent_parser)
 
     # `check` (issue #73, PLAN.md §1 D1): sweep for state changes. `regulations` is
     # its only leaf today -- a subparser group of one, for structural consistency

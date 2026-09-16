@@ -24,6 +24,7 @@ from ps_cli.config import CliConfig
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
+    ExportResult,
     IngestionResult,
     InstrumentCheckOutcome,
     PendingReviewEntry,
@@ -92,6 +93,11 @@ class _UnusedPsServiceClientMethods:
     def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
         """Fail: this test's fake does not expect `restore_instrument()` to be called."""
         msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
+        raise AssertionError(msg)
+
+    def export_instrument(self, instrument_id: str) -> ExportResult:
+        """Fail: this test's fake does not expect `export_instrument()` to be called."""
+        msg = f"export_instrument must not be called in this test (instrument_id={instrument_id!r})"
         raise AssertionError(msg)
 
     def run_change_check(self) -> ChangeCheckResult:

@@ -888,6 +888,178 @@ class TestRestoreInstrument:
         assert "Could not reach PS Service" in excinfo.value.msg
 
 
+_EXPORT_MANIFEST_BODY = {
+    "instrument_id": "CRA-1.0",
+    "celex": "32024R2847",
+    "title": "Cyber Resilience Act",
+    "short_name": "CRA",
+    "version": "1.0",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "schema_version": "1.0.0",
+    "exported_at": "2026-09-04T00:00:00Z",
+    "baseline_sha256": "a" * 64,
+    "native_sha256": "b" * 64,
+}
+
+_EXPORT_SUCCESS_BODY = {
+    "instrument_id": "CRA-1.0",
+    "manifest": _EXPORT_MANIFEST_BODY,
+    "baseline_blob_base64": base64.b64encode(b'{"nodes": [], "edges": []}').decode("ascii"),
+    "native_blob_base64": base64.b64encode(b'{"nodes": [], "edges": []}').decode("ascii"),
+    "stages": [
+        {"stage": "serialized", "status": "succeeded"},
+    ],
+}
+
+
+def _export_success_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/exports"
+    assert request.method == "POST"
+    return httpx.Response(200, json=_EXPORT_SUCCESS_BODY)
+
+
+class TestExportInstrument:
+    """Issue #71, new S3 (CHANGES.md A2): PsServiceClient.export_instrument(instrument_id)."""
+
+    def test_parses_a_200_success_response(self) -> None:
+        """A 200 POST /exports body parses into an ExportResult."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_export_success_handler)
+        )
+
+        result = client.export_instrument("CRA-1.0")
+
+        assert result.instrument_id == "CRA-1.0"
+        assert result.manifest.instrument_id == "CRA-1.0"
+        assert result.manifest.celex == "32024R2847"
+        assert result.manifest.source_type == "external"
+        assert result.manifest.baseline_sha256 == "a" * 64
+        assert result.baseline_blob_base64 == _EXPORT_SUCCESS_BODY["baseline_blob_base64"]
+        assert result.native_blob_base64 == _EXPORT_SUCCESS_BODY["native_blob_base64"]
+        assert len(result.stages) == 1
+        assert result.stages[0].stage == "serialized"
+        assert result.stages[0].status == "succeeded"
+
+    def test_posts_the_expected_request_body(self) -> None:
+        """The request body is {"instrument_id": instrument_id}, posted to /exports."""
+        captured_bodies: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/exports"
+            captured_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json=_EXPORT_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.export_instrument("CRA-1.0")
+
+        assert captured_bodies == [{"instrument_id": "CRA-1.0"}]
+
+    def test_404_export_instrument_not_found_raises_ps_cli_error(self) -> None:
+        """A 404 export_instrument_not_found body maps to PsCliError.
+
+        Exercises the *existing*, unmodified `_raise_from_error_body` (D7) -- proves
+        no new client-side classification code is needed for export's error shapes.
+        """
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=404,
+                    code="export_instrument_not_found",
+                    message="no ingested instrument with id 'MISSING-1.0'",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("MISSING-1.0")
+
+        assert "export_instrument_not_found" in excinfo.value.msg
+        assert "MISSING-1.0" in excinfo.value.msg
+
+    def test_502_export_stage_failed_surfaces_failing_stage(self) -> None:
+        """A 502 export_stage_failed body's failing_stage surfaces in the raised error."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=502,
+                    code="export_stage_failed",
+                    message="the serialize stage failed",
+                    failing_stage="serialize",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert "export_stage_failed" in excinfo.value.msg
+        assert "serialize" in excinfo.value.msg
+
+    def test_503_export_config_incomplete_raises_ps_cli_error(self) -> None:
+        """A 503 export_config_incomplete body maps to PsCliError per D7's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(
+                _make_error_body_handler(
+                    status_code=503,
+                    code="export_config_incomplete",
+                    message="LLM Interface embedding model is not configured.",
+                )
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert "export_config_incomplete" in excinfo.value.msg
+
+    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
+        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert "Could not reach PS Service" in excinfo.value.msg
+
+    def test_read_timeout_raises_ps_cli_error(self) -> None:
+        """A transport-level ReadTimeout maps to PsCliError per D5's mapping."""
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.export_instrument("CRA-1.0")
+
+        assert "did not respond in time" in excinfo.value.msg
+
+    def test_posts_with_the_extended_export_read_timeout(self) -> None:
+        """D8: export_instrument() passes the extended 1800s read timeout, not restore's 300s.
+
+        Export always runs a real LLM embeddings backfill, unlike restore's dedup
+        replay which reuses the artifact's own embeddings.
+        """
+        captured_timeouts: list[object] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_timeouts.append(request.extensions.get("timeout"))
+            return httpx.Response(200, json=_EXPORT_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.export_instrument("CRA-1.0")
+
+        assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
+
+
 def _health_handler(request: httpx.Request) -> httpx.Response:
     assert request.url.path == "/health"
     assert request.method == "GET"

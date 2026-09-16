@@ -21,11 +21,13 @@ from ps_service.api.change_check_orchestration import (
 from ps_service.api.dependencies import (
     get_service_config,
     provide_change_check_dependencies,
+    provide_export_dependencies,
     provide_near_miss_review_dependencies,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_run_id,
 )
+from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     resolve_via_cellar,
@@ -36,6 +38,8 @@ from ps_service.api.models import (
     CatalogInstrumentEntry,
     ChangeCheckResponse,
     CuratedCatalogResponse,
+    ExportAcceptedResponse,
+    ExportRequest,
     IngestionAcceptedResponse,
     IngestionRequest,
     IngestionStatusResponse,
@@ -202,6 +206,35 @@ async def create_restoration(
     return run_restoration(request_body, config=config, actor=caller, dependencies=dependencies)
 
 
+async def create_export(
+    request_body: ExportRequest,
+    http_request: Request,
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[ExportDependencies, Depends(provide_export_dependencies)],
+) -> ExportAcceptedResponse:
+    """Export one already-ingested curated instrument (issue #71, ``POST /exports``).
+
+    Thin route wiring over ``export_orchestration.run_export`` -- an unknown
+    or malformed ``instrument_id`` surfaces as 404
+    (``ExportInstrumentNotFoundError``), a missing embedding model config as
+    503 (``ExportConfigIncompleteError``), and any other export failure as
+    502 naming the failing stage (``ExportStageFailedError``).
+
+    Args:
+        request_body: The instrument id to export.
+        http_request: The raw request, for the caller host (mirrors
+            ``create_restoration``'s own ``caller`` derivation).
+        config: The resolved service configuration (injected).
+        dependencies: The export dependency bundle (injected; overridden in tests).
+
+    Returns:
+        An :class:`ExportAcceptedResponse` carrying the manifest and both
+        base64-encoded graph blobs.
+    """
+    caller = http_request.client.host if http_request.client else "unknown"
+    return run_export(request_body, config=config, actor=caller, dependencies=dependencies)
+
+
 def _to_change_check_response(result: ChangeCheckResult) -> ChangeCheckResponse:
     """Map a ``ChangeCheckResult`` to the ``POST /change-checks`` success body."""
     return ChangeCheckResponse(
@@ -353,6 +386,12 @@ def build_api_router() -> APIRouter:
     router.add_api_route(
         "/restorations",
         create_restoration,
+        methods=["POST"],
+        status_code=status.HTTP_200_OK,
+    )
+    router.add_api_route(
+        "/exports",
+        create_export,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
     )

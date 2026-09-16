@@ -22,6 +22,9 @@ from fastapi.responses import JSONResponse
 from ps_service.api.errors import (
     ApiError,
     CatalogIdentifierNotFoundError,
+    ExportConfigIncompleteError,
+    ExportInstrumentNotFoundError,
+    ExportStageFailedError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PendingReviewNotFoundError,
@@ -87,6 +90,8 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
     PendingReviewNotFoundError,
+    ExportInstrumentNotFoundError,
+    ExportConfigIncompleteError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -192,6 +197,16 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "pending_review_not_found",
         status.HTTP_404_NOT_FOUND,
     ),
+    (
+        ExportInstrumentNotFoundError,
+        "export_instrument_not_found",
+        status.HTTP_404_NOT_FOUND,
+    ),
+    (
+        ExportConfigIncompleteError,
+        "export_config_incomplete",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
 )
 
 
@@ -248,6 +263,25 @@ async def _handle_restore_stage_failed_error(request: Request, exc: Exception) -
     )
 
 
+async def _handle_export_stage_failed_error(request: Request, exc: Exception) -> JSONResponse:
+    """Shape an ``ExportStageFailedError`` body: HTTP 502, naming the failing stage (PLAN.md D6)."""
+    run_id = _bound_run_id(request)
+    if not isinstance(exc, ExportStageFailedError):  # defensive — registered for this type only
+        return _json(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            _error_body(code=_GENERIC_500_CODE, message=_GENERIC_500_MESSAGE, run_id=run_id),
+        )
+    return _json(
+        status.HTTP_502_BAD_GATEWAY,
+        _error_body(
+            code="export_stage_failed",
+            message=_scrub_text(exc.reason)[:_REASON_MAX_LEN],
+            run_id=run_id,
+            failing_stage=exc.stage,
+        ),
+    )
+
+
 async def _handle_request_validation_error(request: Request, exc: Exception) -> JSONResponse:
     """Shape a ``RequestValidationError`` body: HTTP 422, generic message, no field detail."""
     del exc  # the raw errors can echo submitted values / paths — never surfaced
@@ -275,15 +309,17 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     Called from ``ps_service.main.create_app``. Registers one handler per
     whitelisted ``ApiError`` subclass, one for ``PipelineStageError`` (502), one
-    for ``RestoreStageFailedError`` (502), one for ``RequestValidationError``
-    (422), and a catch-all ``Exception`` handler (generic 500). Status map:
+    for ``RestoreStageFailedError`` (502), one for ``ExportStageFailedError``
+    (502), one for ``RequestValidationError`` (422), and a catch-all
+    ``Exception`` handler (generic 500). Status map:
     ``CatalogIdentifierNotFoundError`` 404,
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
-    ``PendingReviewNotFoundError`` 404, ``PipelineStageError`` 502,
-    ``RestoreStageFailedError`` 502, ``RequestValidationError`` 422,
-    everything else 500.
+    ``PendingReviewNotFoundError`` 404, ``ExportInstrumentNotFoundError`` 404,
+    ``ExportConfigIncompleteError`` 503, ``PipelineStageError`` 502,
+    ``RestoreStageFailedError`` 502, ``ExportStageFailedError`` 502,
+    ``RequestValidationError`` 422, everything else 500.
 
     Args:
         app: The FastAPI application to register handlers on.
@@ -292,5 +328,6 @@ def register_exception_handlers(app: FastAPI) -> None:
         app.add_exception_handler(exc_type, _make_verbatim_handler(code, status_code))
     app.add_exception_handler(PipelineStageError, _handle_pipeline_stage_error)
     app.add_exception_handler(RestoreStageFailedError, _handle_restore_stage_failed_error)
+    app.add_exception_handler(ExportStageFailedError, _handle_export_stage_failed_error)
     app.add_exception_handler(RequestValidationError, _handle_request_validation_error)
     app.add_exception_handler(Exception, _handle_unexpected_exception)

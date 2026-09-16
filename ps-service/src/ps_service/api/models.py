@@ -181,6 +181,76 @@ class RestorationAcceptedResponse(BaseModel):
     stages: list[RestorationStageOutcome]
 
 
+class ExportRequest(BaseModel):
+    """``POST /exports`` body: the id of one already-ingested instrument (PLAN.md D2/D11).
+
+    Only ``instrument_id`` is accepted -- every other descriptor field
+    (``short_name``, ``title``, ``source_type``, ``jurisdiction``, ``version``,
+    ``celex``) is derived server-side against the actually-ingested
+    ``{short}_baseline`` graph, never supplied by the client (D2). The
+    ``pattern`` mirrors ``ps_cli.modules.parser._INSTRUMENT_ID_PATTERN``'s own
+    client-side charset, re-declared here as D11's defense-in-depth layer at
+    this trust boundary (L2 Data Modeling).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    instrument_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    )
+
+
+class ExportManifestPayload(BaseModel):
+    """The ``manifest.json`` fields carried inline in a ``POST /exports`` response.
+
+    Field-for-field mirror of ``ps_service.export.models.InstrumentManifest``,
+    the same way ``RestorationManifestPayload`` mirrors it request-side (D6) --
+    here it is nested in the *response* body instead, since export produces a
+    manifest rather than consuming one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument_id: str = Field(min_length=1)
+    celex: str | None = Field(default=None, min_length=10, max_length=10)
+    title: str = Field(min_length=1)
+    short_name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    source_type: Literal["external", "internal"]
+    jurisdiction: str | None = None
+    schema_version: str = Field(min_length=1)
+    exported_at: str = Field(min_length=1)
+    baseline_sha256: str = Field(min_length=64, max_length=64)
+    native_sha256: str = Field(min_length=64, max_length=64)
+
+
+class ExportStageOutcome(BaseModel):
+    """One completed export stage as reported in the accepted response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stage: str = Field(min_length=1)
+    status: Literal["succeeded"]
+
+
+class ExportAcceptedResponse(BaseModel):
+    """Success body for ``POST /exports``: the manifest plus both base64-encoded blobs.
+
+    ``baseline_blob_base64``/``native_blob_base64`` mirror
+    ``RestorationRequest``'s own base64 convention, response-side instead of
+    request-side (PLAN.md D1) -- ``ps-cli`` decodes and writes them to the
+    destination directory the caller chose.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    instrument_id: str = Field(min_length=1)
+    manifest: ExportManifestPayload
+    baseline_blob_base64: str = Field(min_length=1)
+    native_blob_base64: str = Field(min_length=1)
+    stages: list[ExportStageOutcome]
+
+
 class InstrumentCheckOutcomeBody(BaseModel):
     """One tracked instrument's classification, as reported by `POST /change-checks`.
 
