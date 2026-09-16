@@ -28,10 +28,11 @@ never hand-edited.
 content curated here is compatible with public redistribution, covering both external
 (EU regulation) and internal (project-authored) sources.
 
-**Current state:** this folder ships as an empty scaffold — no `{INSTRUMENT_ID}/`
-directories or `catalog.json` are committed yet. Populating it with real curated
-instruments (CRA, GDPR, NIS2, and the internal Engineering Practices baseline) is a
-one-time maintainer action, tracked separately from restoring an already-curated
-instrument (see the user guide's
+**Current state:** nine external EU instruments are curated here — CRA, GDPR, NIS2,
+RRF, the Data Act, the Web Accessibility Directive, DSA, DORA, and the AI Act (see
+`catalog.json` for the full list with CELEX ids). The internal Engineering Practices
+baseline is not yet curated. Populating a new instrument is a one-time maintainer
+action, tracked separately from restoring an already-curated instrument (see the user
+guide's
 [Local Test, step 7](../docs/artifacts/user-guide.md#7-load-regulations-into-the-graph)
 for what an operator sees once it is populated).

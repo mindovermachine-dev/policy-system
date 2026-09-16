@@ -22,8 +22,12 @@ redistribution, for both commercial and non-commercial purposes — subject to
 acknowledging the source, not distorting the original meaning or wording, and not
 holding the EU institutions liable for how the reused content is subsequently used,
 unless a specific document states an exception. None of the instruments this project
-has ingested to date (CRA, `32024R2847`; GDPR, `32016R0679`; NIS2, `32022L2555`) carry
-such an exception. Verbatim EU legal-act text exported into this folder's
+has ingested to date (CRA, `32024R2847`; GDPR, `32016R0679`; NIS2, `32022L2555`; AI
+Act, `32024R1689`; DORA, `32022R2554`; DSA, `32022R2065`) carry such an exception —
+each was individually checked (EUR-Lex's own legal notice, plus for the AI Act the
+dedicated AI Act Service Desk copyright notice at `ai-act-service-desk.ec.europa.eu`)
+and found to state only the standard Commission Decision 2011/833/EU reuse terms, with
+no instrument-specific restriction. Verbatim EU legal-act text exported into this folder's
 `{instrument_id}/` artifacts (baseline and native structural graphs alike) is
 therefore compatible with public redistribution as part of this open-source
 repository. **No additional per-instrument license file is required** — this

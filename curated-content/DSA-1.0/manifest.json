@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "fa25836b2cfc6036f66aa140d7af4f301cebb83a74f125aef6dc3787d05dad5d",
+  "celex": "32022R2065",
+  "exported_at": "2026-09-15T13:06:45.576044+00:00",
+  "instrument_id": "DSA-1.0",
+  "jurisdiction": "EU",
+  "native_sha256": "44097afd4210f7cd05c0bfff684c3f05a2405951d5e62137ce9ea608fa0ef24c",
+  "schema_version": "2",
+  "short_name": "dsa",
+  "source_type": "external",
+  "title": "Digital Services Act (DSA)",
+  "version": "1.0"
+}

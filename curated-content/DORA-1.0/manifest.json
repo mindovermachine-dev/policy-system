@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "a746834d5fec6cbd61f4e0831144ae8c7c9248f1e3eb87c9a942f03ab080bef4",
+  "celex": "32022R2554",
+  "exported_at": "2026-09-15T13:06:47.037163+00:00",
+  "instrument_id": "DORA-1.0",
+  "jurisdiction": "EU",
+  "native_sha256": "6d04d250cd362e40ed3655899b543d11bfcba5f188231a419145790ef26bebfa",
+  "schema_version": "2",
+  "short_name": "dora",
+  "source_type": "external",
+  "title": "Digital Operational Resilience Act (DORA)",
+  "version": "1.0"
+}

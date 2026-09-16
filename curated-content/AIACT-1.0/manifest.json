@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "78591b3b215461bfdd0958979eacdd05488855380229cdffb4213a80e9affbf5",
+  "celex": "32024R1689",
+  "exported_at": "2026-09-15T13:06:48.588390+00:00",
+  "instrument_id": "AIACT-1.0",
+  "jurisdiction": "EU",
+  "native_sha256": "ca896754f76d25fb91542c3e6a8cb01ce1475c2a31eccb15a40bd9651250943d",
+  "schema_version": "2",
+  "short_name": "aiact",
+  "source_type": "external",
+  "title": "Artificial Intelligence Act (AI Act)",
+  "version": "1.0"
+}
