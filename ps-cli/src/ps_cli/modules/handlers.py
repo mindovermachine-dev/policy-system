@@ -20,7 +20,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from ps_cli import catalog_repo
+from ps_cli import catalog_repo, render
 from ps_cli.config import load_config
 from ps_cli.errors import assert_contract
 from ps_cli.intake_validation import validate_local_seed_file
@@ -268,7 +268,7 @@ def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol)
 
 
 def handle_get_catalog(config: CliConfig) -> None:
-    """Print the local curated-content catalog, one line per instrument.
+    """Print the local curated-content catalog as a bordered table.
 
     Reads `config.curated_repo_path`'s on-disk `catalog.json` directly via
     `catalog_repo.read_catalog()` -- no `PsServiceClient` is ever constructed
@@ -276,14 +276,22 @@ def handle_get_catalog(config: CliConfig) -> None:
     other command in this module). This is the only handler here that takes
     a `CliConfig` instead of a client, by design -- see `ps_cli.cli.run()`'s
     `NO_CLIENT_DISPATCH` branch, which never calls `_resolve_client` for it.
-    Format: ``"{instrument_id}  {title} ({source_type}, {jurisdiction})"``,
-    with ``jurisdiction`` printed as ``"n/a"`` when `None` (an internal
-    source, D15).
+    Format: one row per instrument with columns "Instrument ID", "Title",
+    "Source Type", "Jurisdiction" (rendered via `render.print_table()`), with
+    ``jurisdiction`` printed as ``"n/a"`` when `None` (an internal source,
+    D15). Prints nothing if the catalog is empty.
     """
     entries = catalog_repo.read_catalog(config.curated_repo_path)
-    for entry in entries:
-        jurisdiction = entry.jurisdiction if entry.jurisdiction is not None else "n/a"
-        print(f"{entry.instrument_id}  {entry.title} ({entry.source_type}, {jurisdiction})")
+    rows = [
+        [
+            entry.instrument_id,
+            entry.title,
+            entry.source_type,
+            entry.jurisdiction if entry.jurisdiction is not None else "n/a",
+        ]
+        for entry in entries
+    ]
+    render.print_table(["Instrument ID", "Title", "Source Type", "Jurisdiction"], rows)
 
 
 def handle_restore_instrument(

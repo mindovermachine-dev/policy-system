@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from ps_cli import render
 from ps_cli.credentials import build_credential_store
 from ps_cli.errors import assert_contract
 from ps_cli.targets import TargetsFile, load_targets, resolve_config_dir, write_targets
@@ -110,22 +111,24 @@ def handle_config_use_context(name: str, *, config_dir: Path | None = None) -> N
 
 
 def handle_config_get_contexts(*, config_dir: Path | None = None) -> None:
-    """Print every context, one per line, marking the currently-selected one.
+    """Print every context as a bordered table, marking the currently-selected one.
 
     Loads `targets.toml` (prints nothing if absent or empty -- nothing configured yet is
-    not a failure state, no AC requires otherwise). For each context name, sorted
-    alphabetically, prints `f"{marker} {name}  {url}"` where `marker` is `"*"` for
-    `current_context` and `" "` otherwise (AC-BI-007). `config_dir` defaults to
-    `resolve_config_dir()` when omitted, the same seam every other handler here uses.
+    not a failure state, no AC requires otherwise). Rows are sorted alphabetically by
+    context name, with columns "Current" (``"*"`` for `current_context`, `" "`
+    otherwise), "Name", "URL" (rendered via `render.print_table()`). `config_dir`
+    defaults to `resolve_config_dir()` when omitted, the same seam every other handler
+    here uses.
     """
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
     targets = load_targets(resolved_config_dir)
     if targets is None:
         return
-
-    for name in sorted(targets.contexts):
-        marker = "*" if name == targets.current_context else " "
-        print(f"{marker} {name}  {targets.contexts[name]}")
+    rows = [
+        ["*" if name == targets.current_context else " ", name, targets.contexts[name]]
+        for name in sorted(targets.contexts)
+    ]
+    render.print_table(["Current", "Name", "URL"], rows)
 
 
 def _dispatch_config_set_context(args: argparse.Namespace) -> None:

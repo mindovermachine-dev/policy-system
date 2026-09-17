@@ -734,18 +734,92 @@ def _write_catalog_fixture(repo_path: Path) -> None:
 def test_handle_get_catalog_prints_instrument_id_title_source_type_and_jurisdiction(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Each entry prints as "{id}  {title} ({source_type}, {jurisdiction or 'n/a'})"."""
+    """Each entry prints as a row of a bordered, aligned table."""
     _write_catalog_fixture(tmp_path)
     config = CliConfig(service_url="http://127.0.0.1:8000", curated_repo_path=tmp_path)
 
     handle_get_catalog(config)
 
     captured = capsys.readouterr()
-    assert captured.out == (
-        "CRA-1.0  Cyber Resilience Act (external, EU)\n"
-        "ENGPRAC-1.0  Engineering Practices (internal, n/a)\n"
-    )
     assert captured.err == ""
+    assert "Instrument ID" in captured.out
+    assert "Title" in captured.out
+    assert "Source Type" in captured.out
+    assert "Jurisdiction" in captured.out
+    assert "CRA-1.0" in captured.out
+    assert "Cyber Resilience Act" in captured.out
+    assert "external" in captured.out
+    assert "EU" in captured.out
+    assert "ENGPRAC-1.0" in captured.out
+    assert "Engineering Practices" in captured.out
+    assert "internal" in captured.out
+    assert "n/a" in captured.out
+    lines = [line for line in captured.out.splitlines() if line.strip()]
+    assert len({len(line) for line in lines}) == 1  # every line same length -> aligned
+
+
+def test_handle_get_catalog_does_not_truncate_a_wide_title(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-006, handler level: a 120-char instrument title is never truncated."""
+    wide_title = "T" * 120
+    (tmp_path / "catalog.json").write_text(
+        json.dumps(
+            [
+                {
+                    "instrument_id": "CRA-1.0",
+                    "title": wide_title,
+                    "source_type": "external",
+                    "jurisdiction": "EU",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = CliConfig(service_url="http://127.0.0.1:8000", curated_repo_path=tmp_path)
+
+    handle_get_catalog(config)
+
+    assert wide_title in capsys.readouterr().out
+
+
+def test_handle_get_catalog_with_empty_catalog_prints_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-007: an empty `catalog.json` (`[]`) prints nothing at all."""
+    (tmp_path / "catalog.json").write_text("[]", encoding="utf-8")
+    config = CliConfig(service_url="http://127.0.0.1:8000", curated_repo_path=tmp_path)
+
+    handle_get_catalog(config)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_handle_get_catalog_renders_a_hostile_title_literally(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-009, handler level: a hostile instrument title renders literally, no crash."""
+    hostile_title = "[bold]Injected[/bold] \x1b[31mFakeAnsi\x1b[0m"
+    (tmp_path / "catalog.json").write_text(
+        json.dumps(
+            [
+                {
+                    "instrument_id": "CRA-1.0",
+                    "title": hostile_title,
+                    "source_type": "external",
+                    "jurisdiction": "EU",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config = CliConfig(service_url="http://127.0.0.1:8000", curated_repo_path=tmp_path)
+
+    handle_get_catalog(config)
+
+    out = capsys.readouterr().out
+    assert "[bold]Injected[/bold]" in out
+    assert "\x1b" not in out
 
 
 def test_handle_get_catalog_takes_no_client_parameter() -> None:

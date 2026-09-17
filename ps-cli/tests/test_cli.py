@@ -1260,7 +1260,10 @@ def test_run_get_catalog_never_constructs_client_but_resolves_curated_repo_path(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
+    assert "CRA-1.0" in captured.out
+    assert "Cyber Resilience Act" in captured.out
+    assert "external" in captured.out
+    assert "EU" in captured.out
 
 
 def test_get_catalog_unaffected_by_llm_interface_outage(
@@ -1284,7 +1287,10 @@ def test_get_catalog_unaffected_by_llm_interface_outage(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "CRA-1.0  Cyber Resilience Act (external, EU)" in captured.out
+    assert "CRA-1.0" in captured.out
+    assert "Cyber Resilience Act" in captured.out
+    assert "external" in captured.out
+    assert "EU" in captured.out
 
 
 class _FakeRestoreSuccessClient(_UnusedPsServiceClientMethods):

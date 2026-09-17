@@ -33,6 +33,34 @@ def test_escape_basic_string_escapes_control_characters() -> None:
     assert reparsed == {"value": original}
 
 
+def test_escape_basic_string_escapes_non_map_control_characters() -> None:
+    r"""C0 control bytes outside the 5-entry explicit map (e.g. ESC) are also escaped.
+
+    Regression test for the late-addition bug found during Slice 6/AC-BI-009: the
+    escape table previously only covered backslash/quote/tab/newline/CR, so any other
+    control byte (ESC `\\x1b`, BEL `\\x07`, NUL, ..., DEL `\\x7f`) was written through
+    unescaped, producing TOML that violates the spec and that `tomllib` then rejects
+    on the next read.
+    """
+    original = "a\x1bb"
+
+    escaped = escape_basic_string(original)
+
+    assert "\x1b" not in escaped
+    reparsed = tomllib.loads(f'value = "{escaped}"\n')
+    assert reparsed == {"value": original}
+
+
+def test_escape_basic_string_round_trips_bel_and_del_control_characters() -> None:
+    """BEL (U+0007) and DEL (U+007F) — both outside the explicit map — round-trip too."""
+    original = "x\x07y\x7fz"
+
+    escaped = escape_basic_string(original)
+    reparsed = tomllib.loads(f'value = "{escaped}"\n')
+
+    assert reparsed == {"value": original}
+
+
 def test_format_flat_table_renders_header_and_sorted_key_value_lines() -> None:
     """`format_flat_table` renders `[table_name]` then `key = "value"` lines, sorted by key."""
     rendered = format_flat_table("contexts", {"prod": "https://x", "dev": "http://y"})

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import keyring.errors
 import pytest
 
 from ps_cli.credentials import FileCredentialStore
@@ -22,7 +23,7 @@ from ps_cli.modules.config_handlers import (
     handle_config_set_context,
     handle_config_use_context,
 )
-from ps_cli.targets import load_targets
+from ps_cli.targets import TargetsFile, load_targets, write_targets
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -99,6 +100,15 @@ def test_handle_config_set_context_deletes_credential_unconditionally_on_every_c
     assert spy.deleted == ["prod", "prod"]
 
 
+def _raise_no_keyring_error(*args: object, **kwargs: object) -> None:
+    """Unconditionally raise `NoKeyringError` -- forces `KeyringCredentialStore` onto its
+    `FileCredentialStore` fallback regardless of what real OS keyring backend (if any) is
+    actually active on the machine running this test. Mirrors `test_cli.py:1046-1051`.
+    """
+    del args, kwargs
+    raise keyring.errors.NoKeyringError("no backend")
+
+
 def test_handle_config_set_context_credential_delete_resolves_under_ps_cli_config_dir_env_var(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -112,9 +122,22 @@ def test_handle_config_set_context_credential_delete_resolves_under_ps_cli_confi
     `FileCredentialStore`, bypassing keyring entirely. A second, sibling `tmp_path`-adjacent
     dir with its own seeded credential, asserted untouched afterward, rules out a false
     positive from a shared/global fallback path.
+
+    BASELINE.md root cause: on a machine with a real, working OS keychain backend, the
+    production `KeyringCredentialStore.delete_credential()` call reaches that real backend
+    first; since the seeded credential was only ever written to the file store, the real
+    keychain raises a benign `PasswordDeleteError` that `credentials.py` correctly treats as
+    a no-op -- so the file-store credential is never actually deleted, breaking this test's
+    premise on any such machine. The fix forces the real `keyring` module's functions to
+    fail before reaching any real backend, mirroring `test_cli.py:1085-1088`
+    (`_raise_no_keyring_error` at `:1046-1051`), so `KeyringCredentialStore` falls back to
+    `FileCredentialStore` regardless of what backend is actually installed.
     """
     primary_dir = tmp_path / "primary"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(primary_dir))
+    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
     FileCredentialStore(primary_dir).set_credential("dev", "seed-token")
 
     sibling_dir = tmp_path / "sibling"
@@ -165,8 +188,8 @@ def test_handle_config_use_context_raises_listing_valid_names_for_unknown_contex
 def test_handle_config_get_contexts_marks_current_context(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Two contexts, one current -- both appear in stdout; exactly one line starts with `*`,
-    the current context's line (AC-BI-007).
+    """Two contexts, one current -- both appear in stdout as a bordered table; exactly one
+    line carries `*`, the current context's line (AC-BI-005).
     """
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
@@ -174,20 +197,74 @@ def test_handle_config_get_contexts_marks_current_context(
 
     handle_config_get_contexts(config_dir=tmp_path)
 
-    out_lines = capsys.readouterr().out.splitlines()
-    assert "dev" in "\n".join(out_lines)
-    assert "http://ctx-dev:9000" in "\n".join(out_lines)
-    assert "prod" in "\n".join(out_lines)
-    assert "https://ps.example.com" in "\n".join(out_lines)
-    starred = [line for line in out_lines if line.startswith("*")]
-    assert len(starred) == 1
-    assert "prod" in starred[0]
+    out = capsys.readouterr().out
+    assert "Current" in out
+    assert "Name" in out
+    assert "URL" in out
+    assert "dev" in out
+    assert "http://ctx-dev:9000" in out
+    assert "prod" in out
+    assert "https://ps.example.com" in out
+    starred_lines = [line for line in out.splitlines() if "*" in line]
+    assert len(starred_lines) == 1
+    assert "prod" in starred_lines[0]
+
+
+def test_handle_config_get_contexts_does_not_truncate_a_wide_url(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-006, handler level: a 120-char context URL is never truncated."""
+    wide_url = "https://" + "a" * 112
+    assert len(wide_url) == 120
+    handle_config_set_context("dev", wide_url, config_dir=tmp_path)
+
+    handle_config_get_contexts(config_dir=tmp_path)
+
+    assert wide_url in capsys.readouterr().out
+
+
+def test_handle_config_get_contexts_renders_a_hostile_url_literally(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    r"""AC-BI-009, handler level: a hand-edited `targets.toml` carrying a control-sequence
+    URL renders literally, no crash.
+
+    `write_targets()`'s escaper (`toml_writer.escape_basic_string`) only escapes
+    backslash/quote/tab/newline/CR, not arbitrary control bytes -- a raw ESC byte cannot
+    round-trip through `write_targets()`/`handle_config_set_context()` at all (`tomllib`
+    rejects an unescaped control byte in a TOML string as invalid TOML; confirmed
+    empirically). The real threat model here is an operator hand-editing `targets.toml`
+    with a properly TOML-escaped control sequence (`\\u001b`, valid TOML, which `tomllib`
+    decodes back to a real ESC byte) -- so this test writes the file directly rather than
+    going through `handle_config_set_context()`.
+    """
+    (tmp_path / "targets.toml").write_text(
+        '[contexts]\ndev = "[bold]Injected[/bold] \\u001b[31mFakeAnsi\\u001b[0m"\n',
+        encoding="utf-8",
+    )
+
+    handle_config_get_contexts(config_dir=tmp_path)
+
+    out = capsys.readouterr().out
+    assert "[bold]Injected[/bold]" in out
+    assert "\x1b" not in out
 
 
 def test_handle_config_get_contexts_with_no_targets_toml_prints_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """No `targets.toml` -> empty stdout; not an error state (AC-BI-007)."""
+    handle_config_get_contexts(config_dir=tmp_path)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_handle_config_get_contexts_with_empty_contexts_table_prints_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-008 (empty-`[contexts]` sub-case): a targets.toml with no contexts prints nothing."""
+    write_targets(tmp_path, TargetsFile(current_context=None, contexts={}))
+
     handle_config_get_contexts(config_dir=tmp_path)
 
     assert capsys.readouterr().out == ""

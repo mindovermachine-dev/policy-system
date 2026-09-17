@@ -17,16 +17,35 @@ _BASIC_STRING_ESCAPES = {
     "\r": "\\r",
 }
 
+_C0_CONTROL_LIMIT = 0x20  # exclusive upper bound of the C0 control block (U+0000-U+001F)
+_DEL = 0x7F
+
+
+def _escape_char(char: str) -> str:
+    """Escape a single character per the TOML basic-string rule, or pass it through."""
+    if char in _BASIC_STRING_ESCAPES:
+        return _BASIC_STRING_ESCAPES[char]
+    codepoint = ord(char)
+    # TOML basic strings must escape every control character (U+0000-U+001F) and
+    # U+007F (DEL); literal tab (U+0009) is the one control char TOML permits
+    # unescaped, but it's already covered by the explicit short-form map above.
+    if codepoint < _C0_CONTROL_LIMIT or codepoint == _DEL:
+        return f"\\u{codepoint:04x}"
+    return char
+
 
 def escape_basic_string(value: str) -> str:
     r"""Escape `value` for use inside a TOML basic (double-quoted) string body.
 
-    Backslash and double-quote are escaped per the TOML spec; `\t`/`\n`/`\r`
-    control characters are escaped defensively even though URLs/context names/
-    credentials are not expected to contain them. The caller wraps the returned
-    text in double quotes (this function does not add them) — see PLAN.md D16.
+    Backslash and double-quote are escaped per the TOML spec. Every control
+    character (U+0000-U+001F, plus U+007F DEL) must also be escaped per the TOML
+    spec — `\t`/`\n`/`\r` use their short-form escapes for readability (TOML permits
+    this even though `\uXXXX` would also work); every other control character
+    (ESC, BEL, NUL, DEL, ...) uses a `\uXXXX` unicode escape, since TOML has no
+    short form for them. The caller wraps the returned text in double quotes (this
+    function does not add them) — see PLAN.md D16.
     """
-    return "".join(_BASIC_STRING_ESCAPES.get(char, char) for char in value)
+    return "".join(_escape_char(char) for char in value)
 
 
 def format_flat_table(table_name: str, pairs: dict[str, str]) -> str:
