@@ -34,7 +34,12 @@ from ps_service.ingestion.adapters.internal_seed.persist import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _DANGLING_EDGE_FIXTURE = (
-    _REPO_ROOT / "test-data" / "engineering-practices" / "engineering-practices-dangling-edge.json"
+    _REPO_ROOT
+    / "ps-service"
+    / "tests"
+    / "fixtures"
+    / "engineering-practices"
+    / "engineering-practices-dangling-edge.json"
 )
 _DANGLING_EDGE_DOCUMENT: dict[str, object] = json.loads(
     _DANGLING_EDGE_FIXTURE.read_text(encoding="utf-8")

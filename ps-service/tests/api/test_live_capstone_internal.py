@@ -107,8 +107,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _load_document(relative_path: str) -> dict[str, object]:
-    """Read and JSON-decode a `test-data/`-relative fixture document."""
-    return json.loads((_REPO_ROOT / "test-data" / relative_path).read_text(encoding="utf-8"))
+    """Read and JSON-decode a `ps-service/tests/fixtures/`-relative fixture document."""
+    fixture_path = _REPO_ROOT / "ps-service" / "tests" / "fixtures" / relative_path
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
 _SEED_RID = "AUTHGOV-1.0"

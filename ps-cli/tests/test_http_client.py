@@ -26,10 +26,11 @@ if TYPE_CHECKING:
 
 # Shared wire-contract literal (issue #91, CHANGES.md A2): both ps-service's and
 # ps-cli's own test suites read the internal-ingestion envelope's field name from
-# this one file, so a one-sided rename of `content` breaks the *other* side's
+# this one file (canonically owned by ps-service, since it defines the internal
+# envelope contract), so a one-sided rename of `content` breaks the *other* side's
 # test rather than going unnoticed by either.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_WIRE_CONTRACTS_DIR = _REPO_ROOT / "test-data" / "wire-contracts"
+_WIRE_CONTRACTS_DIR = _REPO_ROOT / "ps-service" / "tests" / "fixtures" / "wire-contracts"
 _ENVELOPE_CONTRACT_PATH = _WIRE_CONTRACTS_DIR / "ingest-internal-envelope.json"
 _ENVELOPE_CONTRACT: dict[str, object] = json.loads(_ENVELOPE_CONTRACT_PATH.read_text())
 

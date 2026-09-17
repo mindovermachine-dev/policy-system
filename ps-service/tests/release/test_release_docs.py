@@ -227,14 +227,14 @@ def test_contributing_delivery_process_mentions_rebase_after_release_commit() ->
 def test_user_guide_tip_uses_oci_install_with_no_git_pull() -> None:
     """AC-BI-010 (GH issue #80, supersedes #79's AC-BI-029 for this tip).
 
-    §5's install command and the "Updating to the latest version" tip both use the
+    §6's install command and the "Updating to the latest version" tip both use the
     `oci://` form with `--version`; neither contains a `git pull` step, a
     `--reset-values` flag, nor the retired "pinned by hand" hand-pin caveat -- the
     chart's `psService.image.tag` now falls back to `Chart.appVersion` on its own, so
     there is nothing left to hand-pin or reset.
     """
     deploy_section = _section(
-        USER_GUIDE_PATH.read_text(encoding="utf-8"), "5. Deploy Policy System"
+        USER_GUIDE_PATH.read_text(encoding="utf-8"), "6. Deploy Policy System"
     )
 
     assert "oci://ghcr.io/mindovermachine-dev/charts/policy-system" in deploy_section
@@ -249,14 +249,14 @@ def test_user_guide_tip_uses_oci_install_with_no_git_pull() -> None:
     assert "--version" in tip_text
 
 
-def test_user_guide_section_6_documents_pinning_and_rerun_upgrade_path() -> None:
+def test_user_guide_section_5_documents_pinning_and_rerun_upgrade_path() -> None:
     """AC-BI-010 (GH issue #81).
 
-    §6 states the installer resolves the latest release, shows `PS_CLI_VERSION=X`
+    §5 states the installer resolves the latest release, shows `PS_CLI_VERSION=X`
     for pinning a specific version, and names re-running the script as the
     documented upgrade path.
     """
-    section = _section(USER_GUIDE_PATH.read_text(encoding="utf-8"), "6. Install ps-cli")
+    section = _section(USER_GUIDE_PATH.read_text(encoding="utf-8"), "5. Install ps-cli")
 
     assert "PS_CLI_VERSION" in section
     assert any(re.search(r"PS_CLI_VERSION\s*=", block) for block in _fenced_code_blocks(section)), (

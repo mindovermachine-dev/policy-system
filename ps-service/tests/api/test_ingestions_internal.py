@@ -37,9 +37,14 @@ _REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
     ).read_text(encoding="utf-8")
 )
 _ENVELOPE_CONTRACT: dict[str, object] = json.loads(
-    (_REPO_ROOT / "test-data" / "wire-contracts" / "ingest-internal-envelope.json").read_text(
-        encoding="utf-8"
-    )
+    (
+        _REPO_ROOT
+        / "ps-service"
+        / "tests"
+        / "fixtures"
+        / "wire-contracts"
+        / "ingest-internal-envelope.json"
+    ).read_text(encoding="utf-8")
 )
 
 

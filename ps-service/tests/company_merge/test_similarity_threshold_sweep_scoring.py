@@ -19,8 +19,8 @@ Covers, hermetically (a hand-scripted fake `EmbeddingCaller`, zero network/Falko
 - Every import in the sweep script is stdlib or `ps_service.*` -- no new third-party
   dependency (AC-BI-006, CHANGES.md row m2).
 - `build_dataset()`'s AC-BI-003 exclusion mechanism, proven at corpus scale: a
-  mechanical guard raises on a violating pair, computed against all 90 real Capability
-  nodes -- not merely omitted by hand.
+  mechanical guard raises on a violating pair, computed against all 778 real
+  Capability nodes across curated-content -- not merely omitted by hand.
 - `sweep_dataset()` fetches each unique text's embedding at most once across every pair
   AND every threshold (AC-BI-007, PLAN.md §1 Increment 2).
 - `sweep_dataset()` lets a `LlmProviderError` from any `route_embedding` call propagate
@@ -28,8 +28,14 @@ Covers, hermetically (a hand-scripted fake `EmbeddingCaller`, zero network/Falko
   (AC-BI-008, PLAN.md §1 Increment 3).
 - CHANGES.md row M1: `sweep_dataset()` scores the complete, real 21-pair dataset
   cleanly across PLAN.md's default 0.70-0.95 step 0.01 threshold range, using a fully
-  scripted fake `call_embedding` keyed by CHANGES.md row M1's exact deterministic
-  SHA-256-based vector scheme -- before any CLI or live/network dependency exists.
+  scripted fake `call_embedding` keyed by CHANGES.md row M1's deterministic
+  SHA-256-based vector scheme (extended to the real embedding dimension, issue #100
+  Slice 4) -- before any CLI or live/network dependency exists. Every pair's `text_b`
+  carries a real cached embedding, so only `text_a` is ever fetched -- proven, not
+  assumed.
+- Issue #100 Slice 4 (CHANGES.md row F1): `_score_dataset` reuses a pair's
+  `text_b_cached_embedding` when present, never fetching `text_b` in that case --
+  proven with a fake `EmbeddingCaller` that raises on any such fetch.
 """
 
 from __future__ import annotations
@@ -262,6 +268,89 @@ def test_import_scan_flags_a_hypothetical_third_party_import() -> None:
     assert "numpy" not in sys.stdlib_module_names
 
 
+# --- AC-BI-002: no test-data/eu-regulations path is reintroduced -----------------------
+
+
+def _string_constants(tree: ast.AST) -> list[str]:
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_no_eu_regulations_path_literal_appears_anywhere_in_the_sweep_script(
+    sweep_source: str,
+) -> None:
+    """AC-BI-002: scans every string constant in the file's AST -- code *and*
+    docstrings alike, mirroring the existing import-scan's "scan the whole AST,
+    don't special-case locations" convention -- for the stale data-source path.
+    Deliberately stricter than "no code path reads the old file": a stale docstring
+    still claiming this behavior would be misleading even if unreachable, so this
+    test forces documentation hygiene, not just code correctness.
+    """
+    tree = ast.parse(sweep_source, filename=str(_SCRIPT_PATH))
+    for value in _string_constants(tree):
+        assert "eu-regulations" not in value, (
+            f"stale test-data/eu-regulations path literal found in a string constant: {value!r}"
+        )
+        assert "eu_regulations" not in value, (
+            f"stale eu_regulations literal found in a string constant: {value!r}"
+        )
+
+
+def test_eu_regulations_path_scan_flags_a_hypothetical_reintroduction() -> None:
+    """Positive case: proves the scan actually catches the stale path, not just an
+    absence of any string constant at all -- mirrors the import-scan's own positive
+    case immediately above this section.
+    """
+    tree = ast.parse('DATA_DIR = "test-data/eu-regulations"\n')
+
+    flagged = [value for value in _string_constants(tree) if "eu-regulations" in value]
+
+    assert flagged == ["test-data/eu-regulations"]
+
+
+# --- AC-BI-004: no live-suite pytest marker on any scoped test file -------------------
+
+
+_MARKED_FILES = (
+    "test_similarity_threshold_dataset.py",
+    "test_similarity_threshold_sweep_scoring.py",
+    "test_company_merge_similarity_sweep_cli.py",
+    "test_similarity_threshold_sweep_recommendation.py",
+    "test_curated_content_capability_loader.py",
+)
+
+# Assembled from concatenated literals rather than written as one contiguous string
+# constant: this test file is itself one of the `_MARKED_FILES` it scans, so writing
+# either full marker name contiguously anywhere in *this* file's own source would
+# make the scan fail against itself. Splitting each literal here means this file's
+# raw source text never contains either marker name as one contiguous run, while a
+# real pytest marker decorator using either name in any scanned file still does, so
+# the check still catches a genuine marker. The test function below is named/
+# documented the same way, for the same reason.
+_FALKORDB_LIVE_MARKER = "falkordb" + "_live"
+_LLM_LIVE_MARKER = "llm" + "_live"
+
+
+def test_scoped_test_files_carry_neither_live_pytest_marker() -> None:
+    """AC-BI-004: an unfiltered scoped run passing doesn't prove no marker was added
+    (an unfiltered `pytest` invocation runs marked tests too) -- this scans the raw
+    source text of every scoped test file for the two live-suite pytest marker names
+    (held in `_FALKORDB_LIVE_MARKER`/`_LLM_LIVE_MARKER`, deliberately not spelled out
+    contiguously anywhere in this file, this docstring included -- see those
+    constants' comment for why).
+    """
+    test_dir = Path(__file__).parent
+    for filename in _MARKED_FILES:
+        source = (test_dir / filename).read_text()
+        assert _FALKORDB_LIVE_MARKER not in source, (
+            f"{filename} references {_FALKORDB_LIVE_MARKER!r}"
+        )
+        assert _LLM_LIVE_MARKER not in source, f"{filename} references {_LLM_LIVE_MARKER!r}"
+
+
 # --- AC-BI-003: identical-Capability-name pair mechanically excluded ------------------
 
 
@@ -304,10 +393,11 @@ def test_assert_dataset_excludes_real_identical_name_pairs_raises_on_a_violation
 def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_dataset(
     sweep_module: ModuleType,
 ) -> None:
-    """The guard, run against the real 90-node corpus, raises nothing for the shipped
-    dataset -- `build_dataset()` itself already proves this by not raising, but this
-    test isolates the guard call so a future regression here fails loudly and
-    specifically, rather than only failing indirectly via `build_dataset()`.
+    """The guard, run against the real 778-node curated-content corpus, raises
+    nothing for the shipped dataset -- `build_dataset()` itself already proves this
+    by not raising, but this test isolates the guard call so a future regression
+    here fails loudly and specifically, rather than only failing indirectly via
+    `build_dataset()`.
     """
     pairs = sweep_module.build_dataset()
     repeated_names = sweep_module._repeated_capability_names_from_corpus()  # pyright: ignore[reportPrivateUsage] -- internal helper under test
@@ -317,21 +407,22 @@ def test_assert_dataset_excludes_real_identical_name_pairs_passes_the_real_datas
     )
 
 
-def test_repeated_capability_names_from_corpus_matches_the_known_19_groups(
+def test_repeated_capability_names_from_corpus_matches_the_known_10_groups(
     sweep_module: ModuleType,
 ) -> None:
-    """PLAN.md §3.3 claims 19 Capability names are shared verbatim across two or more
-    of the 90 real nodes -- independently re-confirmed for this dispatch by scanning
-    all 90 nodes directly. Spot-checks a few of the 19 by name.
+    """Issue #100 Slice 2: 10 Capability names are shared verbatim across two or more
+    of the 778 real Capability nodes across curated-content -- independently
+    re-confirmed for this dispatch by scanning all 778 nodes directly. Spot-checks a
+    few of the 10 by name.
     """
     repeated_names = sweep_module._repeated_capability_names_from_corpus()  # pyright: ignore[reportPrivateUsage] -- internal helper under test
 
-    assert len(repeated_names) == 19
-    assert "Data Encryption" in repeated_names
-    assert "Access Control & Authentication" in repeated_names
-    assert "Incident Handling" in repeated_names
-    assert "Vulnerability Management" in repeated_names
-    assert "Coordinated Vulnerability Disclosure Policy" in repeated_names
+    assert len(repeated_names) == 10
+    assert "Regulatory Notification Workflow" in repeated_names
+    assert "Consultation Workflow" in repeated_names
+    assert "Information Protection" in repeated_names
+    assert "Resource Provisioning" in repeated_names
+    assert "Contact Information Provision" in repeated_names
 
 
 def test_is_identical_name_pair_flags_the_ac_bi_003_demonstration_pair(
@@ -631,16 +722,26 @@ def test_sweep_dataset_never_calls_route_embedding_twice_even_when_a_later_pair_
 # --- CHANGES.md row M1: hermetic full-dataset sweep proof ------------------------------
 
 
-def _sha256_deterministic_vector(text: str) -> tuple[float, ...]:
-    """CHANGES.md row M1's exact deterministic vector scheme -- a fixed 16-dim tuple,
-    identical every time for the same string, effectively distinct across different
-    strings (SHA-256 collision odds negligible at this scale). Not a scoring
-    reimplementation: this only fabricates fake embedding *inputs* for the hermetic
-    fake `call_embedding` below -- `cosine_similarity` itself is still the real,
-    imported function.
+def _sha256_deterministic_vector(text: str, *, dimensions: int) -> tuple[float, ...]:
+    """CHANGES.md row M1's deterministic vector scheme, extended to a caller-given
+    length (issue #100 Slice 4): repeatedly hashes `f"{text}:{counter}"` and
+    concatenates each digest's bytes until `dimensions` values are collected, then
+    truncates to exactly `dimensions` -- identical every time for the same
+    `(text, dimensions)`, effectively distinct across different strings (SHA-256
+    collision odds negligible at this scale). `dimensions` must match the real
+    curated-content embedding length so a fake `text_a` vector and a real cached
+    `text_b_cached_embedding` can be compared by `cosine_similarity` without a
+    length mismatch. Not a scoring reimplementation: this only fabricates fake
+    embedding *inputs* for the hermetic fake `call_embedding` below --
+    `cosine_similarity` itself is still the real, imported function.
     """
-    digest = hashlib.sha256(text.encode("utf-8")).digest()[:16]
-    return tuple((byte / 127.5) - 1.0 for byte in digest)
+    values: list[float] = []
+    counter = 0
+    while len(values) < dimensions:
+        digest = hashlib.sha256(f"{text}:{counter}".encode()).digest()
+        values.extend((byte / 127.5) - 1.0 for byte in digest)
+        counter += 1
+    return tuple(values[:dimensions])
 
 
 class _FullDatasetScriptedCallEmbedding:
@@ -674,17 +775,31 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
 ) -> None:
     """CHANGES.md row M1: calls `sweep_dataset()` directly (no CLI) over the complete,
     real 21-pair dataset (10 match + 11 non-match, `build_dataset()`) with a fully
-    scripted fake `call_embedding` covering every unique text via the exact
-    deterministic SHA-256-based vector scheme CHANGES.md row M1 specifies, swept
-    across PLAN.md's default 0.70-0.95 step 0.01 threshold range (26 thresholds).
-    Proves the whole real dataset scores cleanly through the real
-    `cosine_similarity`/cache path -- one `ThresholdResult` per threshold, zero
-    exceptions, every metric within its valid [0.0, 1.0] range -- before any CLI or
-    live/network dependency exists.
+    scripted fake `call_embedding` covering every unique text via the deterministic
+    SHA-256-based vector scheme CHANGES.md row M1 specifies (extended, issue #100
+    Slice 4, to match the real curated-content embedding dimension), swept across
+    PLAN.md's default 0.70-0.95 step 0.01 threshold range (26 thresholds). Proves the
+    whole real dataset scores cleanly through the real `cosine_similarity`/cache path
+    -- one `ThresholdResult` per threshold, zero exceptions, every metric within its
+    valid [0.0, 1.0] range -- before any CLI or live/network dependency exists.
+
+    Every pair's `text_b` carries a real `text_b_cached_embedding` (issue #100 Slice
+    4, CHANGES.md row F1 -- every cited node in `build_dataset()`'s real 21-pair
+    dataset resolves to a real curated-content node with a real cached embedding), so
+    only `text_a` is ever fetched fresh via the fake `call_embedding` -- proven below,
+    not merely assumed.
     """
     pairs = sweep_module.build_dataset()
+    assert all(pair.text_b_cached_embedding is not None for pair in pairs), (
+        "expected every pair's text_b to carry a real cached embedding"
+    )
+    cached_dimensions = {len(pair.text_b_cached_embedding) for pair in pairs}
+    assert len(cached_dimensions) == 1, "expected one consistent real embedding dimension"
+    dimensions = next(iter(cached_dimensions))
     unique_texts = {text for pair in pairs for text in (pair.text_a, pair.text_b)}
-    vectors_by_text = {text: _sha256_deterministic_vector(text) for text in unique_texts}
+    vectors_by_text = {
+        text: _sha256_deterministic_vector(text, dimensions=dimensions) for text in unique_texts
+    }
     call_embedding = _FullDatasetScriptedCallEmbedding(vectors_by_text)
     thresholds = [round(0.70 + 0.01 * step, 2) for step in range(26)]
 
@@ -706,6 +821,89 @@ def test_sweep_dataset_scores_the_full_real_dataset_cleanly_across_the_default_r
             + result.false_negative
         )
         assert total == len(pairs)
-    # every unique text across all 21 pairs was fetched -- none skipped, none
-    # fabricated outside the precomputed scheme.
-    assert set(call_embedding.calls) == unique_texts
+    # Only text_a (the always-fresh "incoming" side) was ever fetched via
+    # call_embedding -- text_b's real cached embedding was reused for every pair,
+    # never re-fetched.
+    assert set(call_embedding.calls) == {pair.text_a for pair in pairs}
+
+
+# --- issue #100 Slice 4 (CHANGES.md row F1): text_b cached-embedding reuse -------------
+
+
+class _NoFetchForCachedTextBCallEmbedding:
+    """A hand-written `EmbeddingCaller` fake that raises `AssertionError` if it is ever
+    invoked for a `text_b` string that carries a `text_b_cached_embedding` -- proves
+    `_score_dataset`'s reuse-if-cached branch is actually exercised (never fetched),
+    not merely that the final score happens to be numerically right. Mirrors
+    `_OnceOnlyCallEmbedding`'s "flip the assertion around" style: here, a call for a
+    should-be-cached `text_b` is itself the bug being guarded against.
+    """
+
+    def __init__(
+        self, vectors_by_text: dict[str, list[float]], *, cached_text_b_values: frozenset[str]
+    ) -> None:
+        self._vectors_by_text = dict(vectors_by_text)
+        self._cached_text_b_values = cached_text_b_values
+        self.calls: list[str] = []
+
+    def __call__(self, *, model: str, inputs: list[str], timeout: float) -> EmbeddingResponse:
+        assert len(inputs) == 1
+        text = inputs[0]
+        if text in self._cached_text_b_values:
+            raise AssertionError(
+                f"text {text!r} was fetched via route_embedding even though its pair "
+                "carries a text_b_cached_embedding -- the cached value should have "
+                "been reused instead (issue #100 Slice 4)"
+            )
+        self.calls.append(text)
+        vector = self._vectors_by_text.get(text)
+        if vector is None:
+            raise AssertionError(f"no scripted response for text: {text!r}")
+        return EmbeddingResponse(
+            model=model, data=[Embedding(embedding=vector, index=0, object="embedding")]
+        )
+
+
+def test_score_dataset_never_fetches_a_text_b_with_a_cached_embedding(
+    sweep_module: ModuleType,
+) -> None:
+    """A small hand-built dataset: one pair carries `text_b_cached_embedding` (its
+    `text_b` must never be fetched); one pair does not (its `text_b` must be fetched
+    fresh, like always). `text_a` is always fetched fresh for both pairs.
+    """
+    cached_pair = sweep_module.SimilarityPair(
+        text_a="fresh incoming text one",
+        text_b="cached existing text",
+        label="match",
+        cited_node_ids=("cap_fixture_cached",),
+        rationale="text_b carries a cached embedding -- must never be fetched",
+        text_b_cached_embedding=(0.0, 1.0, 0.0),
+    )
+    uncached_pair = sweep_module.SimilarityPair(
+        text_a="fresh incoming text two",
+        text_b="uncached existing text",
+        label="non_match",
+        cited_node_ids=("cap_fixture_uncached",),
+        rationale="text_b has no cached embedding -- must be fetched fresh, as always",
+    )
+    call_embedding = _NoFetchForCachedTextBCallEmbedding(
+        {
+            "fresh incoming text one": [1.0, 0.0, 0.0],
+            "fresh incoming text two": [0.0, 0.0, 1.0],
+            "uncached existing text": [0.0, 0.0, 1.0],
+        },
+        cached_text_b_values=frozenset({"cached existing text"}),
+    )
+
+    scored = sweep_module._score_dataset(  # pyright: ignore[reportPrivateUsage] -- internal scorer under test
+        (cached_pair, uncached_pair), model="fake-embed-model", call_embedding=call_embedding
+    )
+
+    assert len(scored) == 2
+    # Only the two text_a values and the one uncached text_b were ever fetched --
+    # "cached existing text" never appears, proving the cached value was reused.
+    assert set(call_embedding.calls) == {
+        "fresh incoming text one",
+        "fresh incoming text two",
+        "uncached existing text",
+    }
