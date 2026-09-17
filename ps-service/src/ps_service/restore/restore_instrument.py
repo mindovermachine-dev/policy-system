@@ -11,7 +11,9 @@ Once verification passes, the remainder of D8's staged-write sequence runs
 (CHANGES2.md §3.7's parse step inserted between D10 and D8 step 2):
 
 1. Parse both blobs (`export.serialize.parse_serialized_graph_json`) -- only
-   now, after checksum/schema_version have already passed.
+   now, after checksum/schema_version have already passed -- then
+   content-validate BOTH parsed graphs (`_validate_content`, GH #104) before
+   either is staged, still with zero FalkorDB calls.
 2. Stage the native blob (`staging.stage_graph`, schema-allow-listed via
    `schema_allowlist.NATIVE_ALLOWED_*`) into a fresh `{short}_native__
    restoring__{token}` key -- D20: no dedup step for this leg at all.
@@ -108,6 +110,29 @@ def _verify_schema_version(artifact: RestoreArtifact) -> None:
             f"{manifest_version!r}, but this service requires schema_version "
             f"{DOMAIN_SCHEMA_VERSION!r}"
         )
+
+
+def _validate_content(native_graph: SerializedGraph, baseline_graph: SerializedGraph) -> None:
+    """Raise `ArtifactContentRejectedError` if EITHER parsed leg violates its allow-list.
+
+    GH #104 / AC-BI-006: both legs are content-validated here, before either
+    is staged, still with zero FalkorDB calls -- so a violation in the
+    baseline leg can never follow the native leg's staged-key write (which
+    `stage_graph`'s own per-leg validation alone could not prevent: it ran
+    after `{short}_native__restoring__{token}` had already been populated).
+    `stage_graph` re-validates its own leg -- idempotent, defense in depth.
+    Native first, then baseline, matching the staging order.
+    """
+    schema_allowlist.validate_serialized_graph(
+        native_graph,
+        allowed_labels=schema_allowlist.NATIVE_ALLOWED_LABELS,
+        allowed_relationship_types=schema_allowlist.NATIVE_ALLOWED_RELATIONSHIP_TYPES,
+    )
+    schema_allowlist.validate_serialized_graph(
+        baseline_graph,
+        allowed_labels=schema_allowlist.BASELINE_ALLOWED_LABELS,
+        allowed_relationship_types=schema_allowlist.BASELINE_ALLOWED_RELATIONSHIP_TYPES,
+    )
 
 
 def _emit_restore_log(
@@ -361,7 +386,8 @@ def restore_instrument(
     unconditionally, with zero FalkorDB calls of any kind -- a rejected
     artifact never reaches `db`, `single_tenant_graph_name`, or the audit
     log at all. Once verification passes, one `outcome="started"` audit log
-    entry is emitted, then both blobs are parsed and staged (D20: the native
+    entry is emitted, then both blobs are parsed, content-validated (both
+    legs, before either is staged -- GH #104) and staged (D20: the native
     leg is a straight load, no dedup), then `staging.stage_and_finalize_
     policy_system_leg` (CHANGES.md B1) runs the baseline merge and the
     atomic three-way finalize under WATCH-guarded optimistic concurrency.
@@ -400,6 +426,7 @@ def restore_instrument(
     try:
         native_graph = parse_serialized_graph_json(artifact.native_blob)
         baseline_graph = parse_serialized_graph_json(artifact.baseline_blob)
+        _validate_content(native_graph, baseline_graph)
 
         native_staged_name = stage_graph(
             db,

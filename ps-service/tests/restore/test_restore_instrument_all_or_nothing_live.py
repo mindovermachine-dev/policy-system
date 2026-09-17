@@ -134,10 +134,15 @@ def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
         assert live_falkordb.connection.exists(baseline_target) == 0
 
         # No orphaned staged keys left behind (all discarded on the raise).
-        staged_keys = live_falkordb.connection.keys(  # pyright: ignore[reportUnknownMemberType] -- redis-py: `.keys()`'s own stub signature carries an Unknown `**kwargs`
-            f"*{short_name}*__restoring__*"
-        )
-        assert staged_keys == []
+        # Patterns are built from the lowercased targets: `stage_graph` names
+        # staged keys `{short_name.lower()}_{leg}__restoring__{token}` and Redis
+        # `KEYS` globbing is case-sensitive, so a mixed-case `*{short_name}*`
+        # pattern could never observe a leaked key (GH #104 latent assertion).
+        for target in (native_target, baseline_target):
+            staged_keys = live_falkordb.connection.keys(  # pyright: ignore[reportUnknownMemberType] -- redis-py: `.keys()`'s own stub signature carries an Unknown `**kwargs`
+                f"{target}__restoring__*"
+            )
+            assert staged_keys == [], target
         snapshot_keys = live_falkordb.connection.keys(  # pyright: ignore[reportUnknownMemberType]
             f"{single_tenant_graph_name}__restoring__*"
         )

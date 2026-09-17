@@ -10,6 +10,14 @@ maliciously-crafted-but-checksum-consistent artifact attempting label/
 relationship-type Cypher injection -- AC-BI-010's "a tampered artifact
 can't inject unverified content" reads, under this redesign, as covering
 CONTENT safety, not just byte-integrity.
+
+The four lists below are deliberately hand-written literals (defense in
+depth: this sink-side layer stays independent of the intake boundary's
+`internal_seed/models.py::NodeLabel`/`EdgeType` `Literal` types, so widening
+the intake vocabulary never silently widens what an uploaded artifact may
+inject) and are pinned to that vocabulary by
+`tests/restore/test_schema_allowlist.py` -- drift fails the test and is
+widened here on purpose (GH #104).
 """
 
 from __future__ import annotations
@@ -33,6 +41,8 @@ BASELINE_ALLOWED_LABELS: frozenset[str] = frozenset(
         "Policy",
         "Standard",
         "Control",  # Policy/Standard/Control: internal-source only, D15
+        "PracticeArea",
+        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer, GH #93
     }
 )
 BASELINE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
@@ -45,6 +55,10 @@ BASELINE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
         "GOVERNED_BY",
         "SUPPORTED_BY",
         "IMPLEMENTED_BY",
+        "VERIFIED_BY",
+        "OWNS",
+        "COVERS",
+        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer, GH #93
     }
 )
 NATIVE_ALLOWED_LABELS: frozenset[str] = frozenset(
@@ -59,19 +73,26 @@ NATIVE_ALLOWED_LABELS: frozenset[str] = frozenset(
         "RECITAL",
         # Internal-source native shape (issue #54, B5): the internal-seed
         # adapter's `{short}_native` graph carries the customer's own
-        # submission verbatim, using the intake format's five spine labels
-        # -- a differently-shaped native leg than Cellar/ELI's structural
-        # element vocabulary above. Not previously allow-listed (#66's own
-        # allow-list only anticipated the baseline leg's Policy/Standard/
-        # Control, not this differently-shaped native leg) -- closed here so
-        # an internal instrument's native graph can be exported (#71) and
-        # restored (B6) once it exists.
+        # submission verbatim, using the full internal-seed intake vocabulary
+        # (`internal_seed/models.py::NodeLabel`/`EdgeType`, pinned by
+        # `tests/restore/test_schema_allowlist.py`) -- a differently-shaped
+        # native leg than Cellar/ELI's structural element vocabulary above.
+        # Not previously allow-listed (#66's own allow-list only anticipated
+        # the baseline leg's Policy/Standard/Control, not this
+        # differently-shaped native leg) -- closed here so an internal
+        # instrument's native graph can be exported (#71) and restored (B6)
+        # once it exists; widened to the whole vocabulary in GH #104.
         "Role",
         "Requirement",
         "Obligation",
         "Capability",
+        "Policy",
+        "Standard",
+        "Control",  # Policy/Standard/Control: authored governance layer, GH #76
+        "PracticeArea",
+        "RiskPath",  # PracticeArea/RiskPath: internal-source classification layer, GH #93
     }
-)  # mirrors ingestion/graph_writer.py::_KNOWN_ELEMENT_TYPES + RegulatoryInstrument
+)  # = internal-seed NodeLabel | ingestion/graph_writer.py::_KNOWN_ELEMENT_TYPES
 NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
     {
         "HAS",
@@ -80,8 +101,15 @@ NATIVE_ALLOWED_RELATIONSHIP_TYPES: frozenset[str] = frozenset(
         "EXPRESSES",
         "SATISFIED_BY",
         "REQUIRES",
+        "GOVERNED_BY",
+        "SUPPORTED_BY",
+        "IMPLEMENTED_BY",  # GOVERNED_BY/SUPPORTED_BY/IMPLEMENTED_BY: governance layer, GH #76
+        "VERIFIED_BY",
+        "OWNS",
+        "COVERS",
+        "MITIGATED_BY",  # VERIFIED_BY/OWNS/COVERS/MITIGATED_BY: classification layer, GH #93
     }
-)
+)  # = internal-seed EdgeType (Cellar/ELI's HAS is already a member)
 
 
 def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None:

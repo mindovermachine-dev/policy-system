@@ -19,13 +19,15 @@ from ps_service.api.dependencies import provide_restore_dependencies
 from ps_service.api.restore_orchestration import RestoreDependencies
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
-from ps_service.restore.errors import ArtifactIntegrityError
+from ps_service.restore.errors import ArtifactContentRejectedError, ArtifactIntegrityError
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
     from ps_service.restore.models import RestoreArtifact
+
+_REASON_MAX_LEN = 300  # error_handlers._REASON_MAX_LEN, pinned by tests/api/test_error_handlers.py
 
 _MANIFEST_PAYLOAD: dict[str, object] = {
     "instrument_id": "CRA-1.0",
@@ -143,6 +145,31 @@ def test_stage_failure_returns_502_naming_the_stage() -> None:
     body = response.json()
     assert body["error"]["code"] == "restore_stage_failed"
     assert body["error"]["failing_stage"]
+
+
+def test_content_rejection_returns_502_whose_message_names_the_rejected_label() -> None:
+    """GH #104 / AC-BI-007 end-to-end: FastAPI app -> route -> orchestration -> 502 handler.
+
+    The body's `error.message` (the AC's "reason") carries the validator's own text
+    naming the rejected label, never the generic `content_validation failed`.
+    """
+    stage = _FakeRestoreStage(
+        error=ArtifactContentRejectedError(
+            "node label 'PracticeArea' is not in the allow-list ['Capability', 'Control']"
+        )
+    )
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"]["code"] == "restore_stage_failed"
+    assert body["error"]["failing_stage"] == "content_validation"
+    message = body["error"]["message"]
+    assert "node label 'PracticeArea'" in message
+    assert message != "content_validation failed"
+    assert len(message) <= _REASON_MAX_LEN
 
 
 def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:

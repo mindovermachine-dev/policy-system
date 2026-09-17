@@ -768,10 +768,11 @@ def _persist_native(graph: GraphHandle, seed: InternalRegulationSeed) -> None:
 
     No remapping, no minting -- exactly the labels/ids/properties submitted.
     Labels/edge types interpolated below are already constrained to the
-    five-member allow-list by `SeedNode.label`/`SeedEdge.type`'s own
-    `Literal` type (enforced at `adapter.read_seed`'s Pydantic-parse
-    boundary) -- this function only ever issues the write, matching
-    `ingestion/graph_writer.py`'s own "validated upstream, write here" split.
+    internal-seed intake vocabulary (`NodeLabel`/`EdgeType`) by
+    `SeedNode.label`/`SeedEdge.type`'s own `Literal` type (enforced at
+    `adapter.read_seed`'s Pydantic-parse boundary) -- this function only
+    ever issues the write, matching `ingestion/graph_writer.py`'s own
+    "validated upstream, write here" split.
     """
     for node in seed.nodes:
         _execute_query(

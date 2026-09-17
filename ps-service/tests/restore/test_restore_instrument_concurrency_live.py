@@ -64,8 +64,6 @@ if TYPE_CHECKING:
 
     from company_merge._fakes import MakeEmitter
 
-    from ps_service.logging.emitter import LogEmitter
-
 _ACTOR = "test-actor"
 _SIMILARITY_THRESHOLD = 0.9
 _CAPABILITY_ID = "cap_concurrency_proof"
@@ -73,30 +71,26 @@ _CAPABILITY_ID = "cap_concurrency_proof"
 _REAL_RUN_BASELINE_MERGE = restore_instrument_module._run_baseline_merge  # pyright: ignore[reportPrivateUsage]
 
 
-def _call_real_run_baseline_merge(
-    db: FalkorDB,
-    baseline_staged_name: str,
-    regulatory_instrument_id: str,
-    incoming_embeddings: dict[str, tuple[float, ...]],
-    similarity_threshold: float,
-    snapshot_name: str,
-    emitter: LogEmitter | None,
-) -> None:
-    """Forward to the real `_run_baseline_merge`, with its own exact signature.
+def _spy_on_run_baseline_merge[**P](
+    real: Callable[P, None], before_each_call: Callable[[int], None]
+) -> Callable[P, None]:
+    """Wrap `real` so `before_each_call(n)` fires before its n-th invocation (1-based).
 
-    Exists purely so both spies below can call through with a precisely
-    typed signature (matching `_run_baseline_merge`'s own) rather than an
-    untyped `*args`/`**kwargs` forward, which `basedpyright` cannot verify.
+    A PEP 612 `ParamSpec` forward: the spy accepts exactly `real`'s own
+    signature, so it cannot rot when `_run_baseline_merge` gains a parameter
+    (it did -- `policy_incoming_embeddings` -- and the previous hand-copied
+    7-parameter spies broke with `TypeError: ... 8 were given`), and
+    basedpyright still verifies the call through end to end.
     """
-    _REAL_RUN_BASELINE_MERGE(
-        db,
-        baseline_staged_name,
-        regulatory_instrument_id,
-        incoming_embeddings,
-        similarity_threshold,
-        snapshot_name,
-        emitter,
-    )
+    call_count = 0
+
+    def spy(*args: P.args, **kwargs: P.kwargs) -> None:
+        nonlocal call_count
+        call_count += 1
+        before_each_call(call_count)
+        real(*args, **kwargs)
+
+    return spy
 
 
 def _second_connection() -> FalkorDB:
@@ -213,21 +207,12 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
         baseline_graph=_baseline_graph(instrument_id),
     )
 
-    merge_call_count = 0
+    merge_calls: list[int] = []
     concurrent_writer = _second_connection()
 
-    def spying_run_baseline_merge(
-        db: FalkorDB,
-        baseline_staged_name: str,
-        regulatory_instrument_id: str,
-        incoming_embeddings: dict[str, tuple[float, ...]],
-        similarity_threshold: float,
-        snapshot_name: str,
-        merge_emitter: LogEmitter | None,
-    ) -> None:
-        nonlocal merge_call_count
-        merge_call_count += 1
-        if merge_call_count == 1:
+    def _fire_concurrent_write_on_first_call(call_number: int) -> None:
+        merge_calls.append(call_number)
+        if call_number == 1:
             # Lands deterministically after WATCH + the attempt-1 snapshot
             # (this callback only ever runs strictly after both, and
             # strictly before pipe.multi()/pipe.execute()) but before
@@ -235,17 +220,12 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
             concurrent_writer.select_graph(single_tenant_graph_name).query(
                 "CREATE (:Test {id: 'concurrent'})"
             )
-        _call_real_run_baseline_merge(
-            db,
-            baseline_staged_name,
-            regulatory_instrument_id,
-            incoming_embeddings,
-            similarity_threshold,
-            snapshot_name,
-            merge_emitter,
-        )
 
-    monkeypatch.setattr(restore_instrument_module, "_run_baseline_merge", spying_run_baseline_merge)
+    monkeypatch.setattr(
+        restore_instrument_module,
+        "_run_baseline_merge",
+        _spy_on_run_baseline_merge(_REAL_RUN_BASELINE_MERGE, _fire_concurrent_write_on_first_call),
+    )
 
     try:
         restore_instrument(
@@ -257,7 +237,7 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
             emitter=emitter,
         )
 
-        assert merge_call_count == 2  # attempt 1 aborted on WatchError, attempt 2 retried+succeeded
+        assert merge_calls == [1, 2]  # attempt 1 aborted on WatchError, attempt 2 retried+succeeded
 
         node_ids = query_result_rows(
             live_falkordb, single_tenant_graph_name, "MATCH (n) RETURN n.id ORDER BY n.id"
@@ -298,35 +278,21 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
         baseline_graph=_baseline_graph(instrument_id),
     )
 
-    merge_call_count = 0
+    merge_calls: list[int] = []
     concurrent_writer = _second_connection()
 
-    def spying_run_baseline_merge(
-        db: FalkorDB,
-        baseline_staged_name: str,
-        regulatory_instrument_id: str,
-        incoming_embeddings: dict[str, tuple[float, ...]],
-        similarity_threshold: float,
-        snapshot_name: str,
-        merge_emitter: LogEmitter | None,
-    ) -> None:
-        nonlocal merge_call_count
-        merge_call_count += 1
+    def _fire_concurrent_write_on_every_call(call_number: int) -> None:
+        merge_calls.append(call_number)
         # A concurrent writer races EVERY attempt -- never lets EXEC win.
         concurrent_writer.select_graph(single_tenant_graph_name).query(
-            "CREATE (:Test {id: $id})", {"id": f"concurrent-{merge_call_count}"}
-        )
-        _call_real_run_baseline_merge(
-            db,
-            baseline_staged_name,
-            regulatory_instrument_id,
-            incoming_embeddings,
-            similarity_threshold,
-            snapshot_name,
-            merge_emitter,
+            "CREATE (:Test {id: $id})", {"id": f"concurrent-{call_number}"}
         )
 
-    monkeypatch.setattr(restore_instrument_module, "_run_baseline_merge", spying_run_baseline_merge)
+    monkeypatch.setattr(
+        restore_instrument_module,
+        "_run_baseline_merge",
+        _spy_on_run_baseline_merge(_REAL_RUN_BASELINE_MERGE, _fire_concurrent_write_on_every_call),
+    )
 
     try:
         with pytest.raises(RestoreConcurrencyConflictError) as exc_info:
@@ -340,7 +306,7 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
             )
 
         assert isinstance(exc_info.value.__cause__, redis.exceptions.WatchError)
-        assert merge_call_count == 3  # _MAX_POLICY_SYSTEM_MERGE_ATTEMPTS, then give up
+        assert merge_calls == [1, 2, 3]  # _MAX_POLICY_SYSTEM_MERGE_ATTEMPTS, then give up
 
         # All-or-nothing on exhausted retries: no {short}_native/{short}_baseline
         # target was ever created, and the live single-tenant graph holds ONLY

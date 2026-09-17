@@ -22,11 +22,11 @@ dependencies and TakT-compatible GitHub CLI tooling.
 
 ## Implementation steps
 
-Files in the template folder are all created, or updated/merged if they alreay exist.
+Files in the template folder are all created, or updated/merged if they already exist.
 
 In the following steps both a _source_ and a _target_ is named., Create the _target_ using the _source_ as an offset. All files in the template directory are valid, and in the event that the _target_ doesn't already exist, you can simply copy the file _source_ file over as _target_ without modifications.
 
-However, if the _target_ files already exists, it's likely that either the skill has already run before and that this is an update run. Or perhaps the repo is already somewhat TakT enabled, and this skill must then complete the setup. If target files exist then attempt to merge the content of the _source_ file into the existing _target_ file. Use a standard three-way-merge approach where _change lead;_ include sensible changes from both _ours_ and _theirs_ to create the _target_. If a clean merge seems impossible, mark the conflict it as a standard merge conflict and continue the processin of the rest of the steps. Notify the user to manually resolve any conflicts you marked.
+However, if the _target_ files already exists, it's likely that either the skill has already run before and that this is an update run. Or perhaps the repo is already somewhat TakT enabled, and this skill must then complete the setup. If target files exist then attempt to merge the content of the _source_ file into the existing _target_ file. Use a standard three-way-merge approach where _change lead;_ include sensible changes from both _ours_ and _theirs_ to create the _target_. If a clean merge seems impossible, mark the conflict it as a standard merge conflict and continue the processing of the rest of the steps. Notify the user to manually resolve any conflicts you marked.
 
 If changes are insignificant or senmantically indifferent, you should stive to act _idempotently_ and leave the file as is. If you are unsure, ask the user for guidance.
 

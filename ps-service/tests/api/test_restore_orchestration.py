@@ -12,13 +12,18 @@ import ast
 import base64
 import inspect
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
 from ps_service.api.models import RestorationManifestPayload, RestorationRequest
-from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
+from ps_service.api.restore_orchestration import (
+    _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  # test pins the cap this module applies
+    RestoreDependencies,
+    run_restoration,
+)
 from ps_service.restore.errors import (
     ArtifactContentRejectedError,
     ArtifactIntegrityError,
@@ -32,6 +37,13 @@ if TYPE_CHECKING:
 
     from ps_service.config import ServiceConfig
     from ps_service.restore.models import RestoreArtifact
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_INSTRUMENT_ID_MISMATCH_MESSAGE = (
+    "no RegulatoryInstrument node with id 'X-1.0' found in the staged baseline graph -- the "
+    "manifest's instrument_id must match the source graph's actual RegulatoryInstrument.id"
+)
 
 _MANIFEST_PAYLOAD: dict[str, object] = {
     "instrument_id": "CRA-1.0",
@@ -170,6 +182,81 @@ def test_run_restoration_translates_other_errors_to_stage_failed(delegate_error:
     with pytest.raises(RestoreStageFailedError) as excinfo:
         run_restoration(_valid_request(), config=_config(), actor="x", dependencies=dependencies)
     assert excinfo.value.stage
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "node label 'PracticeArea' is not in the allow-list ['Capability', 'Control']",
+        _INSTRUMENT_ID_MISMATCH_MESSAGE,  # restore_instrument.py's second raise site (id mismatch)
+    ],
+)
+def test_run_restoration_surfaces_whitelisted_content_rejections_verbatim(message: str) -> None:
+    """GH #104 / AC-BI-007: both `ArtifactContentRejectedError` raise sites reach the
+    caller verbatim (type-prefixed), never as the generic `content_validation failed`.
+    """
+    stage = _FakeRestoreStage(error=ArtifactContentRejectedError(message))
+
+    with pytest.raises(RestoreStageFailedError) as excinfo:
+        run_restoration(
+            _valid_request(), config=_config(), actor="x", dependencies=_build_dependencies(stage)
+        )
+
+    assert excinfo.value.stage == "content_validation"
+    assert excinfo.value.reason == f"ArtifactContentRejectedError: {message}"
+
+
+def test_run_restoration_cap_trims_the_reason_tail_never_the_rejected_label_prefix() -> None:
+    """GH #104 / AC-BI-008: the rejected name sits at a fixed offset (<= 60 chars) of a
+    message that is scrubbed then capped at 300 -- so the cap can only ever trim the
+    echoed allow-list tail. Bound: a label longer than ~240 chars would itself be cut,
+    and a path- or host:port-shaped label is rewritten by `_scrub_text` by design.
+    """
+    message = (
+        f"node label 'PracticeArea' is not in the allow-list {_REPO_ROOT}/x at 10.0.0.5:6379 "
+        + "Z" * 400
+    )
+    stage = _FakeRestoreStage(error=ArtifactContentRejectedError(message))
+
+    with pytest.raises(RestoreStageFailedError) as excinfo:
+        run_restoration(
+            _valid_request(), config=_config(), actor="x", dependencies=_build_dependencies(stage)
+        )
+
+    reason = excinfo.value.reason
+    assert excinfo.value.stage == "content_validation"
+    assert reason.startswith(
+        "ArtifactContentRejectedError: node label 'PracticeArea' is not in the allow-list"
+    )
+    assert "10.0.0.5:6379" not in reason
+    assert str(_REPO_ROOT) not in reason
+    assert len(reason) == _STAGE_REASON_MAX_LEN
+
+
+@pytest.mark.parametrize(
+    ("delegate_error", "expected_stage"),
+    [
+        (RestoreConcurrencyConflictError("exhausted retries on policy_system"), "concurrency"),
+        (RuntimeError("unexpected boom at 10.0.0.5:6379"), "restore"),
+    ],
+    ids=["concurrency_conflict", "runtime_error"],
+)
+def test_run_restoration_keeps_non_whitelisted_delegate_errors_generic(
+    delegate_error: Exception, expected_stage: str
+) -> None:
+    """GH #104 boundary: only `ArtifactContentRejectedError` joined the safe-verbatim
+    list. `RestoreConcurrencyConflictError` (its message embeds the single-tenant graph
+    name) and unexpected failures still collapse to the generic `<stage> failed`.
+    """
+    stage = _FakeRestoreStage(error=delegate_error)
+
+    with pytest.raises(RestoreStageFailedError) as excinfo:
+        run_restoration(
+            _valid_request(), config=_config(), actor="x", dependencies=_build_dependencies(stage)
+        )
+
+    assert excinfo.value.stage == expected_stage
+    assert excinfo.value.reason == f"{expected_stage} failed"
 
 
 def test_run_restoration_rejects_malformed_base64_before_calling_the_delegate() -> None:

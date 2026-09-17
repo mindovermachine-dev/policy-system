@@ -8,12 +8,15 @@ returns — for any ``ApiError`` subclass, a bare ``RuntimeError``, or a
 
 from __future__ import annotations
 
+import ast
+import inspect
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import ps_service.api.error_handlers as error_handlers_module
 from ps_service.api.error_handlers import (
     _error_body,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly
@@ -88,14 +91,42 @@ def test_error_body_has_the_fixed_shape() -> None:
 
 def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
     fake_domain_error: type[Exception] = type("DomainMapperExtractionError", (Exception,), {})
+    # GH #104 / AC-BI-007: ps_service.restore's content rejection is whitelisted by class
+    # name only, so this test never imports ps_service.restore either (AC-BI-008).
+    fake_content_rejected: type[Exception] = type("ArtifactContentRejectedError", (Exception,), {})
 
     assert is_safe_verbatim(CatalogIdentifierNotFoundError("nope"))
     assert is_safe_verbatim(IngestionConfigIncompleteError("nope"))
     assert is_safe_verbatim(PendingReviewNotFoundError("nope"))
     assert is_safe_verbatim(fake_domain_error("boom"))  # matched by class name, no deep import
+    assert is_safe_verbatim(
+        fake_content_rejected("node label 'PracticeArea' is not in the allow-list")
+    )
     assert not is_safe_verbatim(RuntimeError("boom"))
     assert not is_safe_verbatim(FalkorDBConnectionError("at localhost:6379"))
     assert not is_safe_verbatim(PipelineStageError(stage="merge", reason="x"))
+
+
+def test_error_handlers_module_never_imports_ps_service_restore() -> None:
+    """GH #104 / AC-BI-008: whitelisting `ArtifactContentRejectedError` by class name must
+    not add ANY `ps_service.restore` import to `error_handlers.py` -- top-level,
+    function-local, or inside `if TYPE_CHECKING:` (a `TYPE_CHECKING` import is still an
+    import the module "gains" textually, so `ast.walk` rather than `tree.body` is used,
+    mirroring `tests/test_main.py`'s AST-scan precedent).
+    """
+    source = inspect.getsource(error_handlers_module)
+    tree = ast.parse(source)
+
+    imported_names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_names.append(node.module)
+            imported_names.extend(f"{node.module}.{alias.name}" for alias in node.names)
+
+    offenders = [name for name in imported_names if name.startswith("ps_service.restore")]
+    assert offenders == [], f"error_handlers.py must not import ps_service.restore: {offenders}"
 
 
 _LEAKY_EXCEPTIONS: list[tuple[str, Exception]] = [

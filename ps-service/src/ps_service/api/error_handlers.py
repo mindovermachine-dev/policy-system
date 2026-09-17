@@ -104,18 +104,21 @@ _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
         "DomainMapperExtractionError",
         "DomainMapperDerivationError",
         "CompanyMergeConfigurationError",
+        "ArtifactContentRejectedError",  # ps_service.restore (GH #104) -- by name, never imported
     }
 )
 """Whitelisted domain-error class names, matched by name so this module never
-imports ``ps_service.domain_mapper`` / ``ps_service.company_merge`` at load time
-(layering + the Process Harness's no-transitive-pipeline-import guarantee)."""
+imports ``ps_service.domain_mapper`` / ``ps_service.company_merge`` /
+``ps_service.restore`` at load time (layering + the Process Harness's
+no-transitive-pipeline-import guarantee)."""
 
 
 def is_safe_verbatim(exc: BaseException) -> bool:
     """Return whether ``str(exc)`` may be surfaced to the caller (after scrubbing).
 
     True for the API-boundary types in :data:`_SAFE_VERBATIM` and, matched by
-    class name, the whitelisted Domain Mapper / Company Merge domain errors.
+    class name, the whitelisted Domain Mapper / Company Merge / Restore domain
+    errors.
     Everything else is treated as potentially detail-leaking. Used both here and
     by the orchestration's ``_run_stage`` when building a ``PipelineStageError``
     reason.
