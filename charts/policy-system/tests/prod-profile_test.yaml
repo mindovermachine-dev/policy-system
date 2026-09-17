@@ -5,7 +5,11 @@ set:
   llm.provider: azure
   llm.azure.apiKey: test-azure-key
   llm.azure.apiBase: https://example-test.openai.azure.com/
-templates: [falkordb-browser-service.yaml, ps-service-service.yaml, secret.yaml]
+templates:
+  - falkordb-browser-service.yaml
+  - ps-service-service.yaml
+  - secret.yaml
+  - ps-service-deployment.yaml
 tests:
   - it: falkordb browser service does not render under prod values
     template: falkordb-browser-service.yaml
@@ -40,3 +44,13 @@ tests:
       - equal:
           path: stringData.AZURE_API_BASE
           value: https://example-test.openai.azure.com/
+
+  - it: prod profile renders the Azure model pair by default
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: azure/gpt-5.4-mini
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: azure/text-embedding-3-large

@@ -61,18 +61,11 @@ spec:
               value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS
               value: {{ .Values.psService.localTestBypass.enabled | quote }}
-            {{- if eq .Values.llm.provider "azure" }}
             - name: PS_LLMINTERFACE_MODEL
-              value: "azure/gpt-5.4-mini"
+              value: {{ include "policy-system.llmModel" . | quote }}
             - name: PS_LLMINTERFACE_EMBED_MODEL
-              value: "azure/text-embedding-3-large"
-            {{- else }}
-            - name: PS_LLMINTERFACE_MODEL
-              value: "ollama/phi3:mini"
-            - name: PS_LLMINTERFACE_EMBED_MODEL
-              value: "ollama/nomic-embed-text"
-            {{- if .Values.llm.ollama.apiBase }}
+              value: {{ include "policy-system.llmEmbedModel" . | quote }}
+            {{- if and (ne .Values.llm.provider "azure") .Values.llm.ollama.apiBase }}
             - name: OLLAMA_API_BASE
               value: {{ .Values.llm.ollama.apiBase | quote }}
-            {{- end }}
             {{- end }}

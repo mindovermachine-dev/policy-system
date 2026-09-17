@@ -72,6 +72,91 @@ tests:
           path: spec.template.spec.containers[0].envFrom[0].secretRef.name
           value: my-existing-secret
 
+  # --- #103: llm.model / llm.embedModel overrides (AC-BI-002..010) ---
+
+  - it: llm.model with azure provider renders PS_LLMINTERFACE_MODEL as azure/<value>
+    set:
+      llm.provider: azure
+      llm.azure.apiKey: x
+      llm.azure.apiBase: y
+      llm.model: gpt-4o
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: azure/gpt-4o
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: azure/text-embedding-3-large
+
+  - it: llm.model with ollama provider renders PS_LLMINTERFACE_MODEL as ollama/<value>
+    set:
+      llm.provider: ollama
+      llm.model: llama3.1:8b
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: ollama/llama3.1:8b
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: ollama/nomic-embed-text
+
+  - it: llm.model needing YAML escaping renders valid YAML with the value passed through unmodified
+    set:
+      llm.provider: ollama
+      llm.model: "my model: v2 #beta"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: "ollama/my model: v2 #beta"
+
+  - it: llm.embedModel with azure provider renders PS_LLMINTERFACE_EMBED_MODEL as azure/<value>
+    set:
+      llm.provider: azure
+      llm.azure.apiKey: x
+      llm.azure.apiBase: y
+      llm.embedModel: text-embedding-ada-002
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: azure/text-embedding-ada-002
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: azure/gpt-5.4-mini
+
+  - it: llm.embedModel with ollama provider renders PS_LLMINTERFACE_EMBED_MODEL as ollama/<value>
+    set:
+      llm.provider: ollama
+      llm.embedModel: mxbai-embed-large
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: ollama/mxbai-embed-large
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: ollama/phi3:mini
+
+  - it: llm.embedModel needing YAML escaping renders valid YAML with the value passed through unmodified
+    set:
+      llm.provider: ollama
+      llm.embedModel: "embed: v1 #rc"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: "ollama/embed: v1 #rc"
+
+  - it: explicitly empty llm.model and llm.embedModel fall back to the ollama defaults
+    set:
+      llm.provider: ollama
+      llm.model: ""
+      llm.embedModel: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: ollama/phi3:mini
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: ollama/nomic-embed-text
+
   # --- B2 (CHANGES.md): OLLAMA_API_BASE + hostAliases ---
 
   - it: default values set OLLAMA_API_BASE and render no hostAliases

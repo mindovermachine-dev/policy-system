@@ -41,6 +41,14 @@ psService:
 llm:
   # ollama | azure
   provider: ollama
+  # Bare chat-model name — an Azure deployment name or an Ollama model tag —
+  # with NO "<provider>/" prefix; the chart prepends llm.provider itself.
+  # Empty = the provider's default (azure: gpt-5.4-mini, ollama: phi3:mini),
+  # see templates/_helpers.tpl "policy-system.llmModel".
+  model: ""
+  # Same rule for the embedding model (azure: text-embedding-3-large,
+  # ollama: nomic-embed-text) — "policy-system.llmEmbedModel".
+  embedModel: ""
   # Set to reuse an operator-managed Secret name instead of llm.azure.* below.
   existingSecret: ""
   azure:
