@@ -26,6 +26,7 @@
   - [Command reference](#command-reference)
   - [Running commands](#running-commands)
   - [Troubleshooting](#troubleshooting)
+  - [Uninstalling](#uninstalling)
 - [Policy Editor](#policy-editor)
 - [Configuration reference](#configuration-reference)
 - [Operations: Backup & Restore](#operations-backup--restore)
@@ -471,6 +472,32 @@ $ ps-cli get health
 ❌ PS Service is reachable but not ready (health='alive', ready='not_ready').
 💡 unhealthy dependencies: falkordb
 ```
+
+### Uninstalling
+
+`ps-cli` is installed as a `uv` tool, so it's removed the same way:
+
+```bash
+uv tool uninstall ps-cli
+```
+
+This removes the `ps-cli` executable and its isolated environment, but leaves your
+config and any stored credentials behind so a reinstall doesn't lose them. To remove
+those too:
+
+```bash
+rm -rf ~/.config/ps-cli   # or $PS_CLI_CONFIG_DIR, if you set that instead
+```
+
+This deletes `targets.toml` (your contexts) and the `credentials.toml` fallback store,
+if either exists. If credentials were instead stored in your OS keyring (see
+[Credential storage](#credential-storage) above), remove them per context — e.g. `keyring
+del ps-cli <context-name>`, or via your OS's keychain/Credential Manager UI — since
+`uv tool uninstall` has no visibility into the keyring.
+
+If you created a project-local `ps-cli.toml` (see
+[Single target (default)](#single-target-default) above), it isn't touched by any of
+the above — delete it directly wherever you created it.
 
 ---
 
