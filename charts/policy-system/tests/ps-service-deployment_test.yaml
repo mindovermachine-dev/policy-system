@@ -255,3 +255,11 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: ghcr.io/mindovermachine-dev/ps-service:1.2.3
+
+  # --- #107: imagePullPolicy (AC-BI-001, AC-BI-002) ---
+
+  - it: imagePullPolicy is Always on the default render, so a reused tag can't serve a stale cached digest
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always

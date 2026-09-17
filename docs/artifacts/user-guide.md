@@ -8,11 +8,12 @@
   - [2. Install Podman and start its machine](#2-install-podman-and-start-its-machine)
   - [3. Clone the repo](#3-clone-the-repo)
   - [4. Create the local cluster](#4-create-the-local-cluster)
-  - [5. Install ps-cli](#5-install-ps-cli)
-  - [6. Deploy Policy System](#6-deploy-policy-system)
-  - [7. Load regulations into the graph](#7-load-regulations-into-the-graph)
-  - [8. Install the Policy System plugin](#8-install-the-policy-system-plugin)
-  - [9. Ask a question](#9-ask-a-question)
+  - [5. Provision the Azure LLM backend](#5-provision-the-azure-llm-backend)
+  - [6. Install ps-cli](#6-install-ps-cli)
+  - [7. Deploy Policy System](#7-deploy-policy-system)
+  - [8. Load regulations into the graph](#8-load-regulations-into-the-graph)
+  - [9. Install the Policy System plugin](#9-install-the-policy-system-plugin)
+  - [10. Ask a question](#10-ask-a-question)
 - [ps-cli](#ps-cli)
   - [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
     - [Single target (default)](#single-target-default)
@@ -40,7 +41,7 @@ role-oriented view.
 | I want to... | Use | Status |
 | --- | --- | --- |
 | Try Policy System on my own laptop | [Local Test](#local-test) | ✅ Available |
-| Ask a compliance question in natural language | [Policy System plugin](#8-install-the-policy-system-plugin) | ✅ Available |
+| Ask a compliance question in natural language | [Policy System plugin](#9-install-the-policy-system-plugin) | ✅ Available |
 | Ingest a regulation or internal policy, check service health, administer an instance | [ps-cli](#ps-cli) | ✅ Available |
 | Author Policies, Standards, and Controls | Policy Editor | ❌ Not yet designed |
 
@@ -67,6 +68,8 @@ does not exist yet.                                                             
 | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        |
 | [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Provisions the Azure LLM backend (step 5)   |
+| [jq](https://jqlang.org/download/)                                   | Used by the Azure LLM bootstrap scripts (step 5) |
 
 
 ### 1. Install Claude Desktop
@@ -123,7 +126,68 @@ without a `kubectl port-forward` held open in a terminal.
 `KIND_CLUSTER_NAME` set from another project, which would otherwise silently override
 the config file's name.
 
-### 5. Install ps-cli
+### 5. Provision the Azure LLM backend
+
+> [!NOTE]
+> **Azure is the chart's default LLM provider**, for both the local-test and
+> production profiles. Step 7 (Deploy Policy System) fails to render its Secret
+> unless credentials exist first — that's why this step comes before it.
+
+This provisions a real Azure Cognitive Services (`AIServices`) account, two model
+deployments, and a Key Vault in your own Azure subscription, then syncs the
+resulting credentials into the kind cluster created in step 4. It's a one-time
+setup per subscription — both scripts are safe to re-run and no-op once nothing
+has changed. See [Customer-Managed Azure LLM
+Bootstrap](../architecture/customer-azure-llm-bootstrap.md) for the full design.
+
+You'll need an Azure subscription where your signed-in identity has `Owner` or
+`Contributor` at subscription scope:
+
+```bash
+az login
+```
+
+```bash
+scripts/deploy-llm.sh
+```
+
+This prints a confirmation table — region candidates, resource group, account,
+both model deployments, Key Vault, all resolved from `scripts/llm-defaults.conf`
+(edit that file first if you want different model names/capacities) — and
+prompts `Proceed with these values? [Y/n]`. It then verifies your subscription
+permissions, picks the first candidate region where both models are available at
+the required SKU, checks quota covers the configured capacities, and provisions
+everything, printing a summary line only — never a secret value. Pass `--yes` to
+skip the confirmation prompt.
+
+```bash
+scripts/sync-llm-secrets-to-kind.sh
+```
+
+This reads the three credentials back out of Key Vault and writes them into the
+active kind cluster as a `policy-system-llm-credentials` Secret. It refuses to run
+unless your current `kubectl` context is a `kind-*` context, so it can't land
+Azure credentials in the wrong cluster.
+
+> [!TIP]
+> **Rotating the key.** `scripts/deploy-llm.sh --rotate-key` regenerates whichever
+> API key slot isn't currently active in Key Vault; re-run
+> `sync-llm-secrets-to-kind.sh` afterward to push the new value into the cluster.
+>
+> **Cleanup.** Nothing here is torn down automatically:
+> ```bash
+> az group delete --name rg-policy-system-llm --yes
+> az keyvault list-deleted --query "[].name" -o tsv   # find the vault pending purge
+> az keyvault purge --name <vault-name>                # clears soft-delete retention
+> ```
+>
+> **Don't want Azure?** Pass `--set llm.provider=ollama` in step 7 instead of
+> `llm.existingSecret` — see [Ollama
+> values](./helm-chart-values-reference.md#ollama-values). The curated catalog
+> used in step 8 only works against Azure's `text-embedding-3-large` embeddings,
+> though.
+
+### 6. Install ps-cli
 
 `ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
 regulations from Cellar/ELI, ingest internal policies, and check service health and
@@ -164,7 +228,7 @@ There is no separate upgrade command — re-run `install.sh` (with or without
 `PS_CLI_VERSION`) whenever a newer release is available; re-running is the documented
 upgrade path and installs over whatever version is currently on `PATH`.
 
-### 6. Deploy Policy System
+### 7. Deploy Policy System
 
 ```bash
 brew install helm
@@ -172,10 +236,13 @@ brew install helm
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --version <X> --wait 
+  --version <X> --set llm.existingSecret=policy-system-llm-credentials --wait 
 ```
   
-X = the "PS-CLI Client Version" ps-cli --version printed in step 5, e.g. 1.4.0. This step can take a few minutes to complete as the container images are downloaded.
+X = the "PS-CLI Client Version" ps-cli --version printed in step 6, e.g. 1.4.0. `llm.existingSecret`
+points the chart at the credentials step 5 synced into this cluster — Azure is the chart's default
+provider, so this flag is required unless you opted into `llm.provider=ollama` instead (see step 5's
+tip). This step can take a few minutes to complete as the container images are downloaded.
 
 ```bash
 kubectl get pods
@@ -201,12 +268,12 @@ open http://localhost:3001/login
 > [!TIP]
 > **Updating to the latest version.** The chart is installed straight from GHCR as an
 > OCI artifact — no repo checkout or repo sync needed to upgrade. Re-run
-> [`ps-cli/install.sh`](../../ps-cli/install.sh) (step 5) to pick up the new client
+> [`ps-cli/install.sh`](../../ps-cli/install.sh) (step 6) to pick up the new client
 > version, then re-run the deploy command with that version:
 >
 > ```bash
 > helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
->   --version <new-X> --wait
+>   --version <new-X> --set llm.existingSecret=policy-system-llm-credentials --wait
 >
 > kubectl get pods -l app.kubernetes.io/component=ps-service \
 >   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
@@ -217,9 +284,9 @@ open http://localhost:3001/login
 > version and the image version can never disagree — there is no tag to hand-pin and no
 > flag needed to reset one. Your graph data is kept — FalkorDB persists to a
 > `PersistentVolumeClaim` (see [Operations: Backup & Restore](#operations-backup--restore)),
-> so regulations loaded in step 7 do not need to be re-seeded.
+> so regulations loaded in step 8 do not need to be re-seeded.
 
-### 7. Load regulations into the graph
+### 8. Load regulations into the graph
 
 A freshly deployed system has an empty graph and can answer nothing. Seed it:
 
@@ -231,7 +298,7 @@ ps-cli restore instrument <id>  # e.g. `ps-cli restore instrument CRA-1.0` just 
 
 Until something is seeded, the system answers questions with an explicit "graph is unseeded" error rather than an empty result.
 
-### 8. Install the Policy System plugin
+### 9. Install the Policy System plugin
 
 In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add
 this repo:
@@ -243,7 +310,7 @@ URL:  `https://github.com/mindovermachine-dev/policy-system`
 This installs the `ps-qna` skill. The plugin also declares a `policy-system-graph` MCP
 connector, but that half is for a **hosted** PS Service — Claude Desktop evaluates
 plugin and custom connectors from Anthropic's cloud, so it can never reach the
-`127.0.0.1:8000` instance you deployed in step 6. Until a hosted instance exists its
+`127.0.0.1:8000` instance you deployed in step 7. Until a hosted instance exists its
 URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
 unreachable; that is expected.
 
@@ -280,7 +347,7 @@ won't pick the connector up.
 > That path insists on HTTPS because it connects from Anthropic's servers, not your
 > machine — `localhost` is unreachable from there regardless of TLS.
 
-### 9. Ask a question
+### 10. Ask a question
 
 ```text
 What obligations does the Cyber Resilience Act place on manufacturers,

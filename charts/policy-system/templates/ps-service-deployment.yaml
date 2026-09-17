@@ -28,6 +28,10 @@ spec:
       containers:
         - name: ps-service
           image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
+          # Version tags are mutable across the release pipeline, and local kind/Podman
+          # nodes keep their own containerd image cache — IfNotPresent would silently
+          # keep serving a stale digest already cached under a reused tag name.
+          imagePullPolicy: Always
           securityContext:
             # Matches the non-root `ps` user (uid/gid 10001) Dockerfile:46-47
             # creates specifically for this Kubernetes runAsUser.
