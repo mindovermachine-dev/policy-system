@@ -28,11 +28,15 @@ tests:
           value: "0.59"
 
   - it: default (ollama) render has no envFrom
+    set:
+      llm.provider: ollama
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].envFrom
 
   - it: default (ollama) render sets the Ollama model pair
+    set:
+      llm.provider: ollama
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
@@ -44,6 +48,24 @@ tests:
   - it: azure provider renders exactly one envFrom secretRef and the Azure model pair
     set:
       llm.provider: azure
+      llm.azure.apiKey: x
+      llm.azure.apiBase: y
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers[0].envFrom
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: RELEASE-NAME-policy-system-llm-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_MODEL")].value
+          value: azure/gpt-5.4-mini
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
+          value: azure/text-embedding-3-large
+
+  - it: default provider (no --set llm.provider) with credentials renders the azure envFrom and model pair
+    set:
       llm.azure.apiKey: x
       llm.azure.apiBase: y
     asserts:
@@ -159,7 +181,9 @@ tests:
 
   # --- B2 (CHANGES.md): OLLAMA_API_BASE + hostAliases ---
 
-  - it: default values set OLLAMA_API_BASE and render no hostAliases
+  - it: ollama provider (explicit) sets OLLAMA_API_BASE and renders no hostAliases
+    set:
+      llm.provider: ollama
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="OLLAMA_API_BASE")].value
@@ -176,9 +200,10 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="OLLAMA_API_BASE")]
 
-  - it: ollamaHostGatewayIP set (with default ollama provider) renders the exact hostAliases entry
+  - it: ollamaHostGatewayIP set (ollama provider explicit) renders the exact hostAliases entry
     set:
       psService.ollamaHostGatewayIP: 10.88.0.1
+      llm.provider: ollama
     asserts:
       - equal:
           path: spec.template.spec.hostAliases

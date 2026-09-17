@@ -1,7 +1,7 @@
 <!-- © 2026 Cartman ApS. All rights reserved. -->
 # Policy System - Customer-Managed Azure LLM Bootstrap - Architecture
 
-**Status:** Draft
+**Status:** Shipped
 **Container:** Deployment Tooling (`scripts/`, `charts/policy-system`)
 
 ---

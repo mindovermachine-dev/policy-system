@@ -24,12 +24,13 @@ first place — this page is the values reference for that walkthrough, step 6 o
 | `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
 | `psService.companyMerge.similarityThreshold` | `0.59` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by issue #29's labeled precision/recall/F1 sweep, not an undocumented judgment call. |
 | `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass for local evaluation. Off by default even under the local-test profile; an evaluator flips it explicitly to use the plugin path (step 7 of the User Guide) without OIDC. |
-| **`llm.provider`** | `ollama` (`azure` in prod) | **(AC-BI-003)** Selects the LLM backend: `ollama` or `azure`. Drives `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` and whether a Secret renders. |
+| **`llm.provider`** | `azure` (`ollama` still available via `--set llm.provider=ollama`) | **(AC-BI-003)** Selects the LLM backend: `ollama` or `azure`. Drives `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` and whether a Secret renders. |
 | **`llm.model`** | `""` → `gpt-5.4-mini` (`azure`) / `phi3:mini` (`ollama`) | Chat model as a **bare name** — an Azure deployment name or an Ollama model tag — with **no `<provider>/` prefix**; the chart prepends `llm.provider/` itself to build `PS_LLMINTERFACE_MODEL`. Leave empty for the provider default shown. A name YAML would type as a number or boolean (e.g. `0`, `false`) must be quoted in a values file or passed with `--set-string`, or the chart treats it as unset. |
 | **`llm.embedModel`** | `""` → `text-embedding-3-large` (`azure`) / `nomic-embed-text` (`ollama`) | Embedding model, same bare-name / no-prefix rule as `llm.model`; becomes `PS_LLMINTERFACE_EMBED_MODEL`. |
 | **`llm.existingSecret`** | `""` | **(AC-BI-003)** Set to reuse an operator-managed Secret name instead of `llm.azure.*` below. |
 | **`llm.azure.apiKey`** | `""` | **(AC-BI-003)** Azure API key. Never set a real value here in a committed file — pass via `--set` or use `llm.existingSecret`. Rendered into a Kubernetes `Secret` (`templates/secret.yaml`), never a ConfigMap or plaintext env var. |
 | **`llm.azure.apiBase`** | `""` | **(AC-BI-003)** Azure API base URL. Same secret-backed handling as `apiKey`. |
+| `llm.azure.apiVersion` | `"preview"` | `AZURE_API_VERSION` — fixed literal matching the reference deployment (see [Customer-Managed Azure LLM Bootstrap](../architecture/customer-azure-llm-bootstrap.md)); not derived from the deployment, not treated as a secret. |
 | **`falkordb.persistence.enabled`** | `true` (both profiles) | **(AC-BI-008)** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral — data lost on pod restart). No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
 | `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
 | `falkordb.browser.enabled` | `true` (`false` in prod) | **(AC-BI-009)** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
@@ -60,10 +61,10 @@ you changed a FalkorDB-only value.
 
 ## Ollama values
 
-Ollama is the **local-test** profile's default LLM provider (`llm.provider=ollama`) — no
-API key needed, and it runs entirely on your machine. The production profile
-(`values-prod.yaml`) defaults to `llm.provider=azure` instead — see
-[Core values](#core-values) above for switching providers.
+Azure is the default LLM provider for both the **local-test** profile and the production
+profile (`values-prod.yaml`) — see [Azure values](#azure-values) below. Ollama is
+**opt-in**: pass `--set llm.provider=ollama` to run entirely on your own machine, no
+API key needed — see [Core values](#core-values) above for switching providers.
 
 If Ollama runs on your Podman host (not in-cluster), PS Service's pods cannot resolve
 `host.containers.internal` on their own — Podman only injects that hostname into the kind
@@ -95,14 +96,25 @@ stop at their pre-flight check with `LLM Interface is unavailable.`. See
 
 ## Azure values
 
-**Local test: kind cluster against Azure instead of Ollama.** The local-test profile
-defaults to Ollama (see [Ollama values](#ollama-values)). To run the same kind cluster
-against Azure instead — for example to use the provider and models production runs on —
-switch the provider, supply credentials, and (optionally) name your own deployments with
+**Local test: kind cluster against Azure.** Azure is now the local-test profile's
+default LLM provider (see [Ollama values](#ollama-values) for the Ollama opt-in). To
+run the same kind cluster against Azure — for example to use the provider and models
+production runs on — supply credentials, and (optionally) name your own deployments with
 the bare-name keys from [Core values](#core-values). Azure is also the only provider
 compatible with the curated content shipped in the repo (its embeddings were produced
 with `text-embedding-3-large`; re-embedding for another provider is out of scope for
 issue #103).
+
+**Recommended: provision real credentials with the bootstrap scripts.** Rather than
+hand-copying keys from the Azure Portal, run `scripts/deploy-llm.sh` against your own
+Azure subscription — it creates the resource group, `AIServices` account, both model
+deployments, and a Key Vault, and stores the resulting credentials there. Then run
+`scripts/sync-llm-secrets-to-kind.sh` to read them back out of Key Vault and write them
+into your active `kind` cluster as the `policy-system-llm-credentials` Secret, ready for
+`--set llm.existingSecret=policy-system-llm-credentials` below. See
+[Customer-Managed Azure LLM Bootstrap](../architecture/customer-azure-llm-bootstrap.md)
+for the full design. The rest of this section covers bringing your own credentials
+instead.
 
 Credentials never live in a committed file. The chart renders `AZURE_API_KEY` /
 `AZURE_API_BASE` into a Kubernetes `Secret` (`templates/secret.yaml`) from

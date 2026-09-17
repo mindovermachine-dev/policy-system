@@ -40,7 +40,7 @@ psService:
 
 llm:
   # ollama | azure
-  provider: ollama
+  provider: azure
   # Bare chat-model name — an Azure deployment name or an Ollama model tag —
   # with NO "<provider>/" prefix; the chart prepends llm.provider itself.
   # Empty = the provider's default (azure: gpt-5.4-mini, ollama: phi3:mini),
@@ -55,5 +55,6 @@ llm:
     # Never set a real value here — use --set or existingSecret.
     apiKey: ""
     apiBase: ""
+    apiVersion: "preview"
   ollama:
     apiBase: "http://host.containers.internal:11434"

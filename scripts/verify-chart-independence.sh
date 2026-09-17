@@ -47,12 +47,16 @@ check_independence() {
   local falkordb_changed="$WORKDIR/falkordb-changed.yaml"
   local psservice_changed="$WORKDIR/psservice-changed.yaml"
 
-  "$HELM" template "$CHART_DIR" > "$baseline"
   "$HELM" template "$CHART_DIR" \
+    --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
+    > "$baseline"
+  "$HELM" template "$CHART_DIR" \
+    --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
     --set falkordb.image.tag=9.9.9 \
     --set falkordb.persistence.enabled=true \
     > "$falkordb_changed"
   "$HELM" template "$CHART_DIR" \
+    --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
     --set psService.image.tag=9.9.9 \
     > "$psservice_changed"
 
