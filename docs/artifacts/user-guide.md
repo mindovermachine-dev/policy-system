@@ -172,14 +172,26 @@ brew install helm
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --version <X> --wait # X = the "PS-CLI Client Version" ps-cli --version printed in step 5, e.g. 1.4.0. This step can take a few minutes to complete as the container images are downloaded.
+  --version <X> --wait 
+```
+  
+X = the "PS-CLI Client Version" ps-cli --version printed in step 5, e.g. 1.4.0. This step can take a few minutes to complete as the container images are downloaded.
 
-kubectl get pods    # ps-service and falkordb should both be in "Running" state
+```bash
+kubectl get pods
+```
 
+ps-service and falkordb should both be in "Running" state
+
+```bash
 curl http://127.0.0.1:8000/health
+```
 
+```bash
 curl http://127.0.0.1:8000/ready
+```
 
+```bash
 open http://localhost:3001/login
 
 ```
