@@ -95,7 +95,7 @@ canonical_id` entries.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import redis.exceptions
 
@@ -106,6 +106,7 @@ if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
     from ps_service.company_merge.models import (
         BareEdge,
+        BaselineGraph,
         BaselineNode,
         CanonicalNodeProperties,
         CanonicalResolution,
@@ -114,11 +115,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "backfill_canonical_embeddings",
+    "classification_write_counts",
     "persist_canonical_nodes",
     "persist_obligation_passthrough",
+    "persist_practice_area_and_risk_path_passthrough",
     "persist_rewired_edges",
     "persist_role_and_requirement_passthrough",
     "persist_standard_and_control_passthrough",
+    "validate_classification_edge_endpoints",
 ]
 
 _REGULATORY_INSTRUMENT_LABEL = "RegulatoryInstrument"
@@ -129,13 +133,33 @@ _CAPABILITY_LABEL = "Capability"
 _POLICY_LABEL = "Policy"
 _STANDARD_LABEL = "Standard"
 _CONTROL_LABEL = "Control"
+_PRACTICE_AREA_LABEL = "PracticeArea"
+_RISK_PATH_LABEL = "RiskPath"
 
 # source_label, target_label per relationship_type -- the Edge Catalog shape
 # mirrored from domain_mapper.graph_writer.persist_obligation_and_capability_graph
-# (HAS/SATISFIED_BY/REQUIRES) and .persist_governance_graph (GOVERNED_BY/
-# SUPPORTED_BY/IMPLEMENTED_BY, issue #54 S4).
+# (HAS/SATISFIED_BY/REQUIRES), .persist_governance_graph (GOVERNED_BY/
+# SUPPORTED_BY/IMPLEMENTED_BY, issue #54 S4), and issue #106's
+# classification-layer edges (COVERS/OWNS/MITIGATED_BY/VERIFIED_BY). Adding
+# these four entries is the whole mechanism behind AC-BI-005: every function
+# below (`_dedupe_eligible_endpoint_ids`, `_validate_rewired_edge_endpoints`,
+# `persist_rewired_edges`) is already endpoint-label-generic, driven entirely
+# off this one table -- no other code change is needed to make a
+# `COVERS`/`MITIGATED_BY` edge's Capability target or an `OWNS` edge's Policy
+# target get rewritten onto its dedup-resolved canonical id.
 _EDGE_ENDPOINT_LABELS: dict[
-    Literal["HAS", "SATISFIED_BY", "REQUIRES", "GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTED_BY"],
+    Literal[
+        "HAS",
+        "SATISFIED_BY",
+        "REQUIRES",
+        "GOVERNED_BY",
+        "SUPPORTED_BY",
+        "IMPLEMENTED_BY",
+        "COVERS",
+        "OWNS",
+        "MITIGATED_BY",
+        "VERIFIED_BY",
+    ],
     tuple[str, str],
 ] = {
     "HAS": (_ROLE_LABEL, _OBLIGATION_LABEL),
@@ -144,23 +168,29 @@ _EDGE_ENDPOINT_LABELS: dict[
     "GOVERNED_BY": (_CAPABILITY_LABEL, _POLICY_LABEL),
     "SUPPORTED_BY": (_POLICY_LABEL, _STANDARD_LABEL),
     "IMPLEMENTED_BY": (_STANDARD_LABEL, _CONTROL_LABEL),
+    "COVERS": (_PRACTICE_AREA_LABEL, _CAPABILITY_LABEL),
+    "OWNS": (_PRACTICE_AREA_LABEL, _POLICY_LABEL),
+    "MITIGATED_BY": (_RISK_PATH_LABEL, _CAPABILITY_LABEL),
+    "VERIFIED_BY": (_RISK_PATH_LABEL, _CONTROL_LABEL),
 }
 
 
 def _execute_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """Wrap every `graph.query()` write in this module for connectivity-health recording.
+    """Wrap every `graph.query()` call in this module for connectivity-health recording.
 
-    The one call site every write goes through, so FalkorDB connectivity
-    failures get recorded in `ps_service.dependency_health` -- mirrors
+    The one call site every write (and, since issue #106's
+    `validate_classification_edge_endpoints`, the one pre-write read) goes
+    through, so FalkorDB connectivity failures get recorded in
+    `ps_service.dependency_health` -- mirrors
     `ps_service.domain_mapper.graph_writer._execute_query` exactly.
     """
     try:
         result = graph.query(query, params=params)
     except redis.exceptions.RedisError as exc:
         mark_unhealthy(FALKORDB, error=exc)
-        raise CompanyMergePersistenceError(f"FalkorDB write failed: {exc}") from exc
+        raise CompanyMergePersistenceError(f"FalkorDB query failed: {exc}") from exc
     mark_healthy(FALKORDB)
     return result
 
@@ -350,6 +380,136 @@ def persist_standard_and_control_passthrough(
         _upsert_passthrough_node(
             single_tenant_graph, _CONTROL_LABEL, control.id, control.properties
         )
+
+
+def persist_practice_area_and_risk_path_passthrough(
+    single_tenant_graph: GraphHandle,
+    practice_area_nodes: tuple[BaselineNode, ...],
+    risk_path_nodes: tuple[BaselineNode, ...],
+) -> None:
+    """Persist PracticeArea/RiskPath nodes (issue #106): exact-identity passthrough.
+
+    Unlike `persist_standard_and_control_passthrough` (weak entities,
+    unconditional `SET`), PracticeArea/RiskPath ids are content-hashed from
+    `name` alone and are EXPECTED to recur across separate baselines
+    (`ps-domain-concepts.md`'s identity notes) -- so this uses the same
+    `MERGE ... ON CREATE SET` shape as Capability/Policy
+    (`persist_canonical_nodes`) and Role/Requirement/Obligation
+    (`_upsert_passthrough_node(..., preserve_existing_properties=True)`),
+    making AC-BI-007's "an existing node's properties are never overwritten"
+    a database-engine guarantee, not application discipline.
+
+    No dedup call of any kind precedes this -- identity convergence is
+    structural (identical `name` -> identical hash -> identical `MERGE`
+    key), so there is nothing to compute (AC-BI-006).
+
+    A baseline with `practice_area_nodes == () and risk_path_nodes == ()`
+    issues zero `graph.query` calls (AC-BI-009's structural no-op for the
+    node half) -- the `for` loops below simply don't execute, no guard
+    needed.
+    """
+    for practice_area in practice_area_nodes:
+        _upsert_passthrough_node(
+            single_tenant_graph,
+            _PRACTICE_AREA_LABEL,
+            practice_area.id,
+            practice_area.properties,
+            preserve_existing_properties=True,
+        )
+    for risk_path in risk_path_nodes:
+        _upsert_passthrough_node(
+            single_tenant_graph,
+            _RISK_PATH_LABEL,
+            risk_path.id,
+            risk_path.properties,
+            preserve_existing_properties=True,
+        )
+
+
+def validate_classification_edge_endpoints(
+    single_tenant_graph: GraphHandle,
+    classification_edges: tuple[BareEdge, ...],
+    canonical_id_by_incoming_id: dict[str, str],
+) -> None:
+    """AC-BI-008: every classification edge endpoint must already exist.
+
+    Every `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` endpoint must already
+    exist, before any of these four edges is written.
+
+    Capability/Policy targets are covered by `canonical_id_by_incoming_id`
+    (built by Capability/Policy dedup, same as
+    `_validate_rewired_edge_endpoints`). PracticeArea/RiskPath sources and
+    `VERIFIED_BY`'s Control target are passthrough nodes with NO entry in
+    that dict by design -- but by the time this runs, `merge.py`/
+    `restore_instrument.py` has already persisted every passthrough node for
+    this baseline (Role/Requirement/Obligation/Capability/Policy/Standard/
+    Control/PracticeArea/RiskPath all write before any edge write -- the
+    same ordering invariant `persist_role_and_requirement_passthrough`'s own
+    docstring already states). So "absent from both the baseline and the
+    single-tenant graph" (AC-BI-008's wording) reduces, at this point in the
+    call sequence, to a single live existence check against
+    `single_tenant_graph` -- one batched read, before any classification
+    edge write.
+
+    This is a NEW, additional guarantee scoped explicitly to these four edge
+    types -- it deliberately does not reuse `_validate_rewired_edge_endpoints`
+    (which only ever checks dict membership, never queries the database):
+    for the six pre-existing edge types, a passthrough endpoint missing from
+    the graph has never been treated as an error (a zero-row `MATCH` there
+    silently produces no write, long-standing out-of-scope behavior this
+    issue does not change). Raises `CompanyMergePersistenceError` if any
+    endpoint absent from `canonical_id_by_incoming_id` is also absent from
+    `single_tenant_graph`.
+    """
+    unresolved_ids: set[str] = set()
+    for edge in classification_edges:
+        for endpoint_id in (edge.source_id, edge.target_id):
+            if endpoint_id not in canonical_id_by_incoming_id:
+                unresolved_ids.add(endpoint_id)
+    if not unresolved_ids:
+        return
+    result = _execute_query(
+        single_tenant_graph,
+        "UNWIND $ids AS id MATCH (n {id: id}) RETURN id",
+        params={"ids": sorted(unresolved_ids)},
+    )
+    existing_ids = {cast("str", row[0]) for row in cast("list[list[object]]", result.result_set)}
+    missing = unresolved_ids - existing_ids
+    if missing:
+        raise CompanyMergePersistenceError(
+            f"classification edge endpoint(s) {sorted(missing)!r} not found in "
+            "the single-tenant graph"
+        )
+
+
+def classification_write_counts(graph: BaselineGraph) -> dict[str, int]:
+    """AC-BI-011: PracticeArea/RiskPath node and classification-edge counts.
+
+    Counts of PracticeArea/RiskPath nodes and the four classification edge
+    types a `merge_baseline_graph`/`_run_baseline_merge` call writes for
+    `graph` -- attached to the caller's own `outcome="succeeded"` audit log
+    entry via `extra=`.
+
+    A public function in `graph_writer.py` (not a private helper in
+    `merge.py`) so both `merge.py` (live path) and, in a later slice,
+    `restore_instrument.py` (offline path) can compute the identical six
+    counts via a normal public import, without a cross-module private
+    import (`ruff`'s `SLF001` is not exempted for `src/`).
+    """
+    edge_counts = {
+        relationship_type: sum(
+            1 for edge in graph.classification_edges if edge.relationship_type == relationship_type
+        )
+        for relationship_type in ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY")
+    }
+    return {
+        "practice_area_count": len(graph.practice_area_nodes),
+        "risk_path_count": len(graph.risk_path_nodes),
+        "covers_count": edge_counts["COVERS"],
+        "owns_count": edge_counts["OWNS"],
+        "mitigated_by_count": edge_counts["MITIGATED_BY"],
+        "verified_by_count": edge_counts["VERIFIED_BY"],
+    }
 
 
 def persist_canonical_nodes(

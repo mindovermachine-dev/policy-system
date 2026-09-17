@@ -47,16 +47,31 @@ class BareEdge:
     Obligation-[:REQUIRES]->Capability | Capability-[:GOVERNED_BY]->Policy |
     Policy-[:SUPPORTED_BY]->Standard | Standard-[:IMPLEMENTED_BY]->Control
     (issue #54, S4 -- the governance edge types reuse this same type rather
-    than a parallel `GovernanceEdge` type). Endpoint ids here are
-    BASELINE-LOCAL -- since #42 only a `REQUIRES` edge's Capability target
-    (and, since #54, a `GOVERNED_BY` edge's Policy target) is rewritten to
-    its canonical id before being persisted; every other endpoint (Role,
-    Requirement, Obligation, Standard, Control) is a passthrough node whose
+    than a parallel `GovernanceEdge` type). `COVERS`, `OWNS`, `MITIGATED_BY`,
+    or `VERIFIED_BY`: PracticeArea-[:COVERS]->Capability |
+    PracticeArea-[:OWNS]->Policy | RiskPath-[:MITIGATED_BY]->Capability |
+    RiskPath-[:VERIFIED_BY]->Control (issue #106 -- the classification-layer
+    edge types reuse this same type rather than a parallel type). Endpoint
+    ids here are BASELINE-LOCAL -- since #42 only a `REQUIRES` edge's
+    Capability target (and, since #54, a `GOVERNED_BY` edge's Policy target,
+    and, since #106, a `COVERS`/`MITIGATED_BY` edge's Capability target and
+    an `OWNS` edge's Policy target) is rewritten to its canonical id before
+    being persisted; every other endpoint (Role, Requirement, Obligation,
+    Standard, Control, PracticeArea, RiskPath) is a passthrough node whose
     baseline-local id is already final (§6).
     """
 
     relationship_type: Literal[
-        "HAS", "SATISFIED_BY", "REQUIRES", "GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTED_BY"
+        "HAS",
+        "SATISFIED_BY",
+        "REQUIRES",
+        "GOVERNED_BY",
+        "SUPPORTED_BY",
+        "IMPLEMENTED_BY",
+        "COVERS",
+        "OWNS",
+        "MITIGATED_BY",
+        "VERIFIED_BY",
     ]
     source_id: str
     target_id: str
@@ -70,7 +85,11 @@ class BaselineGraph:
     input. `policy_nodes`/`standard_nodes`/`control_nodes`/`governance_edges`
     (issue #54, S4) are empty tuples for an external-sourced baseline --
     Policy/Standard/Control are only ever derived for `source_type:
-    "internal"` (`DeriveGovernanceArtifacts`, S3).
+    "internal"` (`DeriveGovernanceArtifacts`, S3). `practice_area_nodes`/
+    `risk_path_nodes`/`classification_edges` (issue #106) are likewise empty
+    tuples for a baseline that never went through `internal_seed` --
+    PracticeArea/RiskPath and their `COVERS`/`OWNS`/`MITIGATED_BY`/
+    `VERIFIED_BY` edges are only ever authored by that adapter today.
     """
 
     regulatory_instrument_id: str
@@ -85,6 +104,9 @@ class BaselineGraph:
     standard_nodes: tuple[BaselineNode, ...] = ()
     control_nodes: tuple[BaselineNode, ...] = ()
     governance_edges: tuple[BareEdge, ...] = ()
+    practice_area_nodes: tuple[BaselineNode, ...] = ()
+    risk_path_nodes: tuple[BaselineNode, ...] = ()
+    classification_edges: tuple[BareEdge, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

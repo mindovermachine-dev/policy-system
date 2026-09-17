@@ -11,9 +11,11 @@ only the target graph names (derived from ``short_name.lower()``) change. Cleanu
 three graphs this test names plus any FalkorDB-owned ``telemetry{...}`` key created for them,
 and the module's last assertion proves no key carrying the run token remains.
 
-Never assert ``PracticeArea`` in the single-tenant graph: Company Merge's ``graph_reader`` does
-not read the classification layer, so the merged leg carries none (PLAN A6 -- a follow-up, not
-a defect of this fix).
+GH #106 closes the classification-layer follow-up flagged above: Company Merge's
+``graph_reader``/``graph_writer`` now carry ``PracticeArea``/``RiskPath`` nodes and the
+``COVERS``/``OWNS``/``MITIGATED_BY``/``VERIFIED_BY`` edges through to the single-tenant graph,
+so this test asserts their counts directly against the shipped ``baseline.json`` artifact
+(AC-BI-004), not just the merged leg's ``Policy`` presence.
 """
 
 from __future__ import annotations
@@ -131,8 +133,36 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded() -> None:
         assert _count(db, native_target, "MATCH (n) RETURN count(n)") == expected_native_nodes
         # The widened list let the classification layer through (not a shortcut).
         assert _count(db, baseline_target, "MATCH (n:PracticeArea) RETURN count(n)") > 0
-        # The internal Policy merge pass ran (A6: never assert PracticeArea here).
+        # The internal Policy merge pass ran.
         assert _count(db, single_tenant_graph_name, "MATCH (n:Policy) RETURN count(n)") > 0
+
+        # AC-BI-004: the single-tenant graph carries the same PracticeArea/RiskPath node
+        # counts and the same count of each classification edge type as the shipped
+        # baseline.json artifact -- compared against the real parsed content, not a
+        # hand-maintained expected-count constant that could drift from the fixture.
+        baseline_blob_base64 = cast("str", body["baseline_blob_base64"])
+        baseline_parsed = parse_serialized_graph_json(base64.b64decode(baseline_blob_base64))
+        for label in ("PracticeArea", "RiskPath"):
+            expected = sum(1 for node in baseline_parsed.nodes if node.label == label)
+            assert expected > 0  # sanity: the shipped artifact really carries this label
+            assert (
+                _count(db, single_tenant_graph_name, f"MATCH (n:{label}) RETURN count(n)")
+                == expected
+            )
+        for relationship_type in ("COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"):
+            expected = sum(
+                1 for edge in baseline_parsed.edges if edge.relationship_type == relationship_type
+            )
+            assert expected > 0  # sanity: the shipped artifact really carries this edge type
+            assert (
+                _count(
+                    db,
+                    single_tenant_graph_name,
+                    f"MATCH ()-[r:{relationship_type}]->() RETURN count(r)",
+                )
+                == expected
+            )
+
         # No staged key leaked past the finalize step.
         assert _graph_keys(db, f"*{token}*__restoring__*") == []
     finally:

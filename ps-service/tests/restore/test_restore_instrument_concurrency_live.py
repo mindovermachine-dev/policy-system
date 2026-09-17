@@ -71,24 +71,29 @@ _CAPABILITY_ID = "cap_concurrency_proof"
 _REAL_RUN_BASELINE_MERGE = restore_instrument_module._run_baseline_merge  # pyright: ignore[reportPrivateUsage]
 
 
-def _spy_on_run_baseline_merge[**P](
-    real: Callable[P, None], before_each_call: Callable[[int], None]
-) -> Callable[P, None]:
+def _spy_on_run_baseline_merge[**P, R](
+    real: Callable[P, R], before_each_call: Callable[[int], None]
+) -> Callable[P, R]:
     """Wrap `real` so `before_each_call(n)` fires before its n-th invocation (1-based).
 
     A PEP 612 `ParamSpec` forward: the spy accepts exactly `real`'s own
     signature, so it cannot rot when `_run_baseline_merge` gains a parameter
     (it did -- `policy_incoming_embeddings` -- and the previous hand-copied
     7-parameter spies broke with `TypeError: ... 8 were given`), and
-    basedpyright still verifies the call through end to end.
+    basedpyright still verifies the call through end to end. The return
+    type is generic (`R`), not hard-coded `None`: issue #106 made
+    `_run_baseline_merge`'s return value load-bearing (`restore_instrument`'s
+    `_run_offline_merge` closure captures it into `classification_counts` for
+    the AC-BI-011 audit log entry) -- a spy that swallowed it would silently
+    corrupt that log entry every time this file's tests run.
     """
     call_count = 0
 
-    def spy(*args: P.args, **kwargs: P.kwargs) -> None:
+    def spy(*args: P.args, **kwargs: P.kwargs) -> R:
         nonlocal call_count
         call_count += 1
         before_each_call(call_count)
-        real(*args, **kwargs)
+        return real(*args, **kwargs)
 
     return spy
 

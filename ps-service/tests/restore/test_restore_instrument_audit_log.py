@@ -32,6 +32,8 @@ from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB
 
@@ -121,6 +123,92 @@ def test_succeeded_entry_carries_caller_and_schema_version(
         assert entry["caller"] == _ACTOR
         assert entry["schema_version"] == DOMAIN_SCHEMA_VERSION
         assert "actor" not in entry  # MA2's explicit correction: never extra["actor"]
+
+
+_CLASSIFICATION_COUNTS: dict[str, int] = {
+    "practice_area_count": 2,
+    "risk_path_count": 1,
+    "covers_count": 3,
+    "owns_count": 1,
+    "mitigated_by_count": 1,
+    "verified_by_count": 2,
+}
+
+
+def _run_baseline_merge_stub_with_classification_counts(
+    *_args: object, **_kwargs: object
+) -> dict[str, int]:
+    """Issue #106: stands in for the real `_run_baseline_merge` (already
+    covered elsewhere -- `test_restore_instrument_classification_
+    passthrough.py` -- for its own graph-writing correctness), returning a
+    canned six-key counts dict so this test can prove the WIRING: that
+    `restore_instrument`'s `"succeeded"` audit entry carries whatever
+    `_run_baseline_merge` returned, via `_run_offline_merge`'s `nonlocal
+    classification_counts` capture.
+    """
+    return dict(_CLASSIFICATION_COUNTS)
+
+
+def _stage_and_finalize_invokes_offline_merge_stub(
+    _db: object,
+    _connection: object,
+    _single_tenant_graph_name: str,
+    _token: str,
+    run_offline_merge: object,
+    _native: object,
+    _baseline: object,
+) -> None:
+    """A `stage_and_finalize_policy_system_leg` stand-in that, unlike
+    `_stage_and_finalize_noop_stub`, actually invokes its own
+    `run_offline_merge` callback (against a throwaway snapshot name) --
+    needed so `_run_offline_merge`'s `nonlocal classification_counts`
+    assignment actually fires in this test.
+    """
+    cast("Callable[[str], None]", run_offline_merge)("unused-snapshot-name")
+
+
+def test_succeeded_entry_carries_classification_write_counts(
+    make_emitter: MakeEmitter, read_lines: ReadLines, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-BI-011 (restore path): the restore's own `"succeeded"` audit log
+    entry carries the same six PracticeArea/RiskPath/classification-edge
+    write counts the live path's `merge_baseline_graph` attaches to its own
+    entry (`graph_writer.classification_write_counts`) -- computed here from
+    `_run_baseline_merge`'s return value, threaded through `_run_offline_
+    merge`'s `nonlocal classification_counts` capture into `_emit_restore_
+    log`'s `extra=` (PLAN.md §5 point 2).
+    """
+    emitter, log_path = make_emitter()
+    monkeypatch.setattr(restore_instrument_module, "stage_graph", _stage_graph_stub)
+    monkeypatch.setattr(
+        restore_instrument_module,
+        "_run_baseline_merge",
+        _run_baseline_merge_stub_with_classification_counts,
+    )
+    monkeypatch.setattr(
+        restore_instrument_module,
+        "stage_and_finalize_policy_system_leg",
+        _stage_and_finalize_invokes_offline_merge_stub,
+    )
+    monkeypatch.setattr(restore_instrument_module, "raw_connection", _raw_connection_stub)
+
+    restore_instrument(
+        _artifact(),
+        db=_NEVER_TOUCHED_DB,
+        single_tenant_graph_name="unused-single-tenant",
+        similarity_threshold=0.9,
+        actor=_ACTOR,
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    entries = _restore_log_entries(read_lines(log_path))
+    succeeded = next(entry for entry in entries if entry["outcome"] == "succeeded")
+    for key, expected in _CLASSIFICATION_COUNTS.items():
+        assert succeeded[key] == expected
+    # "started" never carries these -- no classification pass has run yet.
+    started = next(entry for entry in entries if entry["outcome"] == "started")
+    assert "practice_area_count" not in started
 
 
 def test_failed_entry_recorded_with_no_succeeded_entry_when_merge_step_raises(

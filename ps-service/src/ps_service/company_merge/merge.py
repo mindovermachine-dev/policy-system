@@ -24,13 +24,23 @@ Flow (§7, extended by #54 S4's item 3a):
     unconditional-`SET` passthrough nodes (weak entities, never deduped).
     An external-sourced baseline (`graph.policy_nodes == ()`) skips this
     step entirely -- a structural no-op.
+3b. (#106) Persist PracticeArea/RiskPath nodes as `ON CREATE SET`
+    passthrough, then validate every `COVERS`/`OWNS`/`MITIGATED_BY`/
+    `VERIFIED_BY` edge endpoint exists (AC-BI-008) before any of those four
+    edges is written. No dedup, no embedding call for PracticeArea/RiskPath
+    (AC-BI-006) -- identity convergence is structural. A baseline with no
+    classification-layer content skips this entirely -- a structural no-op
+    (AC-BI-009).
 4. Persist `HAS`/`SATISFIED_BY`/`REQUIRES`/`GOVERNED_BY`/`SUPPORTED_BY`/
-   `IMPLEMENTED_BY` edges in one `persist_rewired_edges` call, using the
-   combined Capability+Policy canonical-id mapping (only a `REQUIRES`
-   edge's Capability target and a `GOVERNED_BY` edge's Policy target are
-   ever rewritten -- see `graph_writer.persist_rewired_edges`); then
-   backfill Capability (and, if step 3a ran, Policy) embeddings.
-5. Emit one `outcome="succeeded"` entry for the whole call. No
+   `IMPLEMENTED_BY`/`COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges in one
+   `persist_rewired_edges` call, using the combined Capability+Policy
+   canonical-id mapping (a `REQUIRES`/`COVERS`/`MITIGATED_BY` edge's
+   Capability target and a `GOVERNED_BY`/`OWNS` edge's Policy target are
+   rewritten -- see `graph_writer.persist_rewired_edges`); then backfill
+   Capability (and, if step 3a ran, Policy) embeddings.
+5. Emit one `outcome="succeeded"` entry for the whole call, carrying the
+   PracticeArea/RiskPath/classification-edge write counts (AC-BI-011) via
+   `extra=graph_writer.classification_write_counts(graph)`. No
    `bind_run_context()` self-bind here -- `run_id` is whatever the caller
    already bound, or `None`.
 6. Emit one additional log entry per Capability (and Policy) dedup decision
@@ -122,6 +132,40 @@ def _run_policy_pass(
         {resolution.incoming_id: resolution.canonical_id for resolution in policy_dedup.resolutions}
     )
     return policy_dedup
+
+
+def _persist_classification_passthrough(
+    single_tenant_graph: GraphHandle,
+    graph: BaselineGraph,
+    canonical_id_by_incoming_id: dict[str, str],
+) -> None:
+    """Issue #106: PracticeArea/RiskPath node passthrough + pre-write edge validation.
+
+    No dedup, no embedding call (AC-BI-006) -- identity convergence is
+    structural (content-hashed ids minted upstream by `internal_seed`, per
+    `docs/artifacts/ps-domain-concepts.md`'s identity notes). A structural
+    no-op when the baseline carries no classification-layer content
+    (AC-BI-009): both loops in
+    `graph_writer.persist_practice_area_and_risk_path_passthrough` no-op on
+    empty input, and `graph_writer.validate_classification_edge_endpoints`
+    returns immediately when `classification_edges` is empty (no endpoints
+    to resolve).
+
+    `canonical_id_by_incoming_id` (mutated in place by the Capability/Policy
+    passes above) is passed straight through to
+    `validate_classification_edge_endpoints` (AC-BI-008): a `COVERS`/
+    `MITIGATED_BY` edge's Capability target or an `OWNS` edge's Policy
+    target already has an entry there when it was dedup-resolved; every
+    other endpoint (PracticeArea/RiskPath source, `VERIFIED_BY`'s Control
+    target) is checked directly against `single_tenant_graph`, since the
+    node passthrough call above has already persisted it by this point.
+    """
+    graph_writer.persist_practice_area_and_risk_path_passthrough(
+        single_tenant_graph, graph.practice_area_nodes, graph.risk_path_nodes
+    )
+    graph_writer.validate_classification_edge_endpoints(
+        single_tenant_graph, graph.classification_edges, canonical_id_by_incoming_id
+    )
 
 
 def _log_dedup_decisions(dedup_result: DedupResult | None, *, emitter: LogEmitter | None) -> None:
@@ -261,12 +305,19 @@ def merge_baseline_graph(
         canonical_id_by_incoming_id=canonical_id_by_incoming_id,
     )
 
-    # One rewiring call over BOTH the regulatory-spine edges and the
-    # governance edges -- governance_edges is empty for an external
-    # baseline, so this is unchanged from before S4 in that case.
+    # issue #106 -- PracticeArea/RiskPath node passthrough, a structural
+    # no-op for a baseline with no classification-layer content. Runs after
+    # Capability/Policy dedup+writes complete and before the edge rewiring
+    # call below, mirroring the Policy pass's own placement.
+    _persist_classification_passthrough(single_tenant_graph, graph, canonical_id_by_incoming_id)
+
+    # One rewiring call over the regulatory-spine edges, the governance
+    # edges, and the classification edges -- governance_edges/
+    # classification_edges are empty for an external baseline, so this is
+    # unchanged from before S4/#106 in that case.
     graph_writer.persist_rewired_edges(
         single_tenant_graph,
-        graph.bare_edges + graph.governance_edges,
+        graph.bare_edges + graph.governance_edges + graph.classification_edges,
         canonical_id_by_incoming_id,
     )
 
@@ -282,6 +333,7 @@ def merge_baseline_graph(
         action=_MERGE_ACTION,
         entity_id=regulatory_instrument_id,
         outcome="succeeded",
+        extra=graph_writer.classification_write_counts(graph),
         emitter=emitter,
     )
 

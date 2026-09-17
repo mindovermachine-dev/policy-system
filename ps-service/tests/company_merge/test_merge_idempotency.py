@@ -139,13 +139,20 @@ class _FakeBaselineGraph:
             "(n:Policy) RETURN" in q
             or "(n:Standard) RETURN" in q
             or "(n:Control) RETURN" in q
+            or "(n:PracticeArea) RETURN" in q
+            or "(n:RiskPath) RETURN" in q
             or "[:GOVERNED_BY]" in q
             or "[:SUPPORTED_BY]" in q
             or "[:IMPLEMENTED_BY]" in q
+            or "[:COVERS]" in q
+            or "[:OWNS]" in q
+            or "[:MITIGATED_BY]" in q
+            or "[:VERIFIED_BY]" in q
         ):
-            # issue #54, S4 -- this fixture is Capability-only; the
-            # governance queries `read_baseline_graph` now always issues
-            # answer empty (external-baseline shape).
+            # issue #54, S4 (and issue #106) -- this fixture is
+            # Capability-only; the governance/classification queries
+            # `read_baseline_graph` now always issues answer empty
+            # (external-baseline shape).
             return _FakeQueryResult([])
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)

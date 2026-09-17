@@ -255,6 +255,134 @@ def test_has_edge_obligation_target_absent_from_mapping_passes_through() -> None
     ]
 
 
+def test_covers_edge_target_is_rewritten_to_canonical_capability_id() -> None:
+    """AC-BI-005 (issue #106): a `COVERS` edge's Capability target that was
+    resolved by dedup onto a DIFFERENT existing canonical Capability id must
+    be written with the CANONICAL id as its target, never the baseline-local
+    one -- the identical mechanism as
+    `test_requires_edge_target_is_rewritten_to_canonical_capability_id`,
+    now driven by `_EDGE_ENDPOINT_LABELS`'s `COVERS` entry
+    (`(PracticeArea, Capability)`) with zero other code change.
+    """
+    graph = _FakeGraph()
+    edge = BareEdge(
+        relationship_type="COVERS",
+        source_id="pa_secure_sdlc_4a7c1d",
+        target_id="cap_baseline_local",
+    )
+    canonical_id_by_incoming_id = {"cap_baseline_local": "cap_canonical_existing"}
+
+    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert call.query == (
+        "MATCH (s:PracticeArea {id: $source_id}), (t:Capability {id: $target_id}) "
+        "MERGE (s)-[:COVERS]->(t)"
+    )
+    assert call.params == {
+        "source_id": "pa_secure_sdlc_4a7c1d",
+        "target_id": "cap_canonical_existing",
+    }
+
+
+def test_owns_edge_target_is_rewritten_to_canonical_policy_id() -> None:
+    """AC-BI-005 (issue #106): an `OWNS` edge's Policy target is rewritten
+    the same way `GOVERNED_BY`'s Policy target already is (`_EDGE_ENDPOINT_LABELS`'s
+    `OWNS` entry, `(PracticeArea, Policy)`).
+    """
+    graph = _FakeGraph()
+    edge = BareEdge(
+        relationship_type="OWNS",
+        source_id="pa_secure_sdlc_4a7c1d",
+        target_id="pol_baseline_local",
+    )
+    canonical_id_by_incoming_id = {"pol_baseline_local": "pol_canonical_existing"}
+
+    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert call.query == (
+        "MATCH (s:PracticeArea {id: $source_id}), (t:Policy {id: $target_id}) "
+        "MERGE (s)-[:OWNS]->(t)"
+    )
+    assert call.params == {
+        "source_id": "pa_secure_sdlc_4a7c1d",
+        "target_id": "pol_canonical_existing",
+    }
+
+
+def test_mitigated_by_edge_target_is_rewritten_to_canonical_capability_id() -> None:
+    """AC-BI-005 (issue #106): a `MITIGATED_BY` edge's Capability target is
+    rewritten the same way `REQUIRES`'s/`COVERS`'s Capability targets are
+    (`_EDGE_ENDPOINT_LABELS`'s `MITIGATED_BY` entry, `(RiskPath, Capability)`).
+    """
+    graph = _FakeGraph()
+    edge = BareEdge(
+        relationship_type="MITIGATED_BY",
+        source_id="rp_secure_build_release_d93f8a",
+        target_id="cap_baseline_local",
+    )
+    canonical_id_by_incoming_id = {"cap_baseline_local": "cap_canonical_existing"}
+
+    persist_rewired_edges(graph, (edge,), canonical_id_by_incoming_id)
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert call.query == (
+        "MATCH (s:RiskPath {id: $source_id}), (t:Capability {id: $target_id}) "
+        "MERGE (s)-[:MITIGATED_BY]->(t)"
+    )
+    assert call.params == {
+        "source_id": "rp_secure_build_release_d93f8a",
+        "target_id": "cap_canonical_existing",
+    }
+
+
+def test_verified_by_edge_control_target_passes_through_unchanged() -> None:
+    """`VERIFIED_BY`'s Control target is never canonically deduped (Control
+    is a weak entity, `_EDGE_ENDPOINT_LABELS`'s `VERIFIED_BY` entry is
+    `(RiskPath, Control)` -- neither endpoint is in
+    `_dedupe_eligible_endpoint_ids`'s `(Capability, Policy)` set) -- an empty
+    mapping doesn't break it, mirroring
+    `test_role_and_requirement_endpoints_pass_through_unchanged`.
+    """
+    graph = _FakeGraph()
+    edge = BareEdge(
+        relationship_type="VERIFIED_BY",
+        source_id="rp_secure_build_release_d93f8a",
+        target_id="ctrl_baseline_local",
+    )
+
+    persist_rewired_edges(graph, (edge,), {})
+
+    assert len(graph.calls) == 1
+    assert graph.calls[0].params == {
+        "source_id": "rp_secure_build_release_d93f8a",
+        "target_id": "ctrl_baseline_local",
+    }
+
+
+def test_covers_edge_target_missing_from_mapping_raises_before_any_write() -> None:
+    """AC-BI-005's flip side: a `COVERS` edge's Capability target with no
+    entry in `canonical_id_by_incoming_id` raises `CompanyMergePersistenceError`,
+    zero `graph.query` calls made -- mirrors
+    `test_requires_edge_target_missing_from_mapping_raises_before_any_write`.
+    """
+    graph = _FakeGraph()
+    edge = BareEdge(
+        relationship_type="COVERS",
+        source_id="pa_secure_sdlc_4a7c1d",
+        target_id="cap_unmapped",
+    )
+
+    with pytest.raises(CompanyMergePersistenceError, match="cap_unmapped"):
+        persist_rewired_edges(graph, (edge,), {})
+
+    assert graph.calls == []
+
+
 def test_requires_edge_target_missing_from_mapping_raises_before_any_write() -> None:
     """A REQUIRES edge whose Capability-typed TARGET has no entry in
     canonical_id_by_incoming_id raises CompanyMergePersistenceError, with

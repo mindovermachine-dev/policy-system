@@ -136,7 +136,13 @@ def _validate_content(native_graph: SerializedGraph, baseline_graph: SerializedG
 
 
 def _emit_restore_log(
-    *, instrument_id: str, outcome: str, actor: str, schema_version: str, emitter: LogEmitter | None
+    *,
+    instrument_id: str,
+    outcome: str,
+    actor: str,
+    schema_version: str,
+    emitter: LogEmitter | None,
+    extra: dict[str, int] | None = None,
 ) -> None:
     """Emit one D14/AC-BI-016 audit log entry, in MA2's corrected call shape.
 
@@ -147,13 +153,23 @@ def _emit_restore_log(
     Never `extra={"actor": ...}` -- MA2's explicit correction of D14's
     original wording, since `"caller"` is ingestion's real, existing key
     name.
+
+    Issue #106/AC-BI-011: the `"succeeded"` call site folds in the six
+    PracticeArea/RiskPath/classification-edge write counts
+    (`graph_writer.classification_write_counts`) via `extra=`, merged
+    alongside `caller`/`schema_version` rather than replacing them --
+    mirroring `company_merge/merge.py`'s own `"succeeded"` entry so the
+    requirement holds regardless of which of the two entry points (live
+    merge vs. restore) a given caller exercises. `"started"`/`"failed"`
+    never pass `extra`, since no classification pass has necessarily run by
+    those points.
     """
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,
         entity_id=instrument_id,
         outcome=outcome,
-        extra={"caller": actor, "schema_version": schema_version},
+        extra={"caller": actor, "schema_version": schema_version, **(extra or {})},
         emitter=emitter,
     )
 
@@ -261,7 +277,7 @@ def _run_baseline_merge(
     snapshot_name: str,
     emitter: LogEmitter | None,
     policy_incoming_embeddings: dict[str, tuple[float, ...]] | None = None,
-) -> None:
+) -> dict[str, int]:
     """D8 step 5 / D6: dedupe and merge the staged baseline graph into `snapshot_name`.
 
     Reads the already-staged baseline graph back via the EXISTING, unmodified
@@ -280,6 +296,16 @@ def _run_baseline_merge(
     `policy_incoming_embeddings` defaults to `None` (treated as `{}`) so
     existing callers that never restore an internal-sourced instrument (no
     Policy content in the artifact) need not pass it.
+
+    Issue #106: after the Policy pass, persists PracticeArea/RiskPath nodes
+    (exact-identity passthrough, no dedup call of any kind) and validates
+    every COVERS/OWNS/MITIGATED_BY/VERIFIED_BY edge endpoint exists before
+    any classification edge is written (AC-BI-008), then folds
+    `baseline.classification_edges` into the same `persist_rewired_edges`
+    call -- mirroring `merge.py::merge_baseline_graph`'s live-path placement
+    exactly (§5 of PLAN.md). Returns the six-key
+    `graph_writer.classification_write_counts(baseline)` dict (AC-BI-011)
+    for the caller to attach to its own `"succeeded"` audit log entry.
 
     This function is passed as `stage_and_finalize_policy_system_leg`'s
     `run_offline_merge` argument -- it writes only into `snapshot_name`
@@ -356,11 +382,27 @@ def _run_baseline_merge(
         canonical_id_by_incoming_id=canonical_id_by_incoming_id,
     )
 
-    # One rewiring call over BOTH the regulatory-spine edges and the
-    # governance edges -- governance_edges is empty for an external-sourced
-    # restore, so this is unchanged from before S6 in that case.
+    # issue #106 -- PracticeArea/RiskPath node passthrough, a structural
+    # no-op for a baseline with no classification-layer content. Runs after
+    # Capability/Policy dedup+writes complete and before the edge rewiring
+    # call below, mirroring merge.py's own live-path placement exactly: no
+    # dedup, no embedding call (AC-BI-006) -- identity convergence is
+    # structural (content-hashed ids minted upstream by `internal_seed`).
+    graph_writer.persist_practice_area_and_risk_path_passthrough(
+        snapshot_graph, baseline.practice_area_nodes, baseline.risk_path_nodes
+    )
+    graph_writer.validate_classification_edge_endpoints(
+        snapshot_graph, baseline.classification_edges, canonical_id_by_incoming_id
+    )
+
+    # One rewiring call over the regulatory-spine edges, the governance
+    # edges, and the classification edges -- governance_edges/
+    # classification_edges are empty for an external-sourced restore, so
+    # this is unchanged from before S6/#106 in that case.
     graph_writer.persist_rewired_edges(
-        snapshot_graph, baseline.bare_edges + baseline.governance_edges, canonical_id_by_incoming_id
+        snapshot_graph,
+        baseline.bare_edges + baseline.governance_edges + baseline.classification_edges,
+        canonical_id_by_incoming_id,
     )
     graph_writer.backfill_canonical_embeddings(
         snapshot_graph, kind="Capability", embeddings=dedup_result.embedding_backfills
@@ -369,6 +411,8 @@ def _run_baseline_merge(
         graph_writer.backfill_canonical_embeddings(
             snapshot_graph, kind="Policy", embeddings=policy_dedup.embedding_backfills
         )
+
+    return graph_writer.classification_write_counts(baseline)
 
 
 def restore_instrument(
@@ -423,6 +467,13 @@ def restore_instrument(
         emitter=emitter,
     )
 
+    # Issue #106/AC-BI-011: populated by `_run_offline_merge` below (via
+    # `_run_baseline_merge`'s own return value) once the offline merge
+    # completes -- default `{}` covers the (unreachable in practice, since
+    # `_run_baseline_merge` always returns the six-key dict, all-zero for an
+    # external-sourced restore) case where the merge step never ran at all.
+    classification_counts: dict[str, int] = {}
+
     try:
         native_graph = parse_serialized_graph_json(artifact.native_blob)
         baseline_graph = parse_serialized_graph_json(artifact.baseline_blob)
@@ -448,7 +499,8 @@ def restore_instrument(
         token = uuid.uuid4().hex
 
         def _run_offline_merge(snapshot_name: str) -> None:
-            _run_baseline_merge(
+            nonlocal classification_counts
+            classification_counts = _run_baseline_merge(
                 db,
                 baseline_staged_name,
                 instrument_id,
@@ -484,6 +536,7 @@ def restore_instrument(
         actor=actor,
         schema_version=manifest.schema_version,
         emitter=emitter,
+        extra=classification_counts,
     )
     return RestoreOutcome(
         instrument_id=instrument_id,

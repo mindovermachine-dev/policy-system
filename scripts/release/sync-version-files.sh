@@ -45,14 +45,22 @@ sync_uv_package_version() {
 # `appVersion:` (quoted) fields -- one line each, no other field touched.
 sync_chart_yaml() {
   local release_version="$1"
-  sed -i -E "s/^version: .*/version: ${release_version}/" "$CHART_YAML_PATH"
-  sed -i -E "s/^appVersion: .*/appVersion: \"${release_version}\"/" "$CHART_YAML_PATH"
+  local tmp
+  tmp="$(mktemp "${CHART_YAML_PATH}.XXXXXX")"
+  sed -E "s/^version: .*/version: ${release_version}/" "$CHART_YAML_PATH" \
+    | sed -E "s/^appVersion: .*/appVersion: \"${release_version}\"/" > "$tmp" \
+    && mv "$tmp" "$CHART_YAML_PATH" \
+    || { rm -f "$tmp"; return 1; }
 }
 
 # sync_plugin_json <release_version>: rewrites the single `"version": "..."` field.
 sync_plugin_json() {
   local release_version="$1"
-  sed -i -E "s/^(  \"version\": \")[^\"]*(\",)/\1${release_version}\2/" "$PLUGIN_JSON_PATH"
+  local tmp
+  tmp="$(mktemp "${PLUGIN_JSON_PATH}.XXXXXX")"
+  sed -E "s/^(  \"version\": \")[^\"]*(\",)/\1${release_version}\2/" "$PLUGIN_JSON_PATH" > "$tmp" \
+    && mv "$tmp" "$PLUGIN_JSON_PATH" \
+    || { rm -f "$tmp"; return 1; }
 }
 
 # assert_files_exist: fail fast, naming the missing path, before any sed/uv sink runs.

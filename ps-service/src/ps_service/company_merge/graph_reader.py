@@ -42,23 +42,35 @@ analogy:
   "always a fixed Python literal, never adapter/DB-sourced" design note.
 
 **Deviation from PLAN_REVIEWED.md's "six/seven queries" phrasing**: this
-implementation issues sixteen queries -- one RegulatoryInstrument, one each
-for Role/Requirement/Obligation/Capability/Policy/Standard/Control (seven),
-two provenance-edge queries (`DEFINES`, `EXPRESSES`) and six bare-edge
-queries (`HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`,
-`IMPLEMENTED_BY`, the last three added by issue #54's S4) -- rather than
-collapsing the edge reads into one combined query per category via a
-runtime `type(e)` dispatch. Each relationship type's Python-side literal is
-fixed by which query produced the row, never parsed/cast from a returned
-string, matching `graph_writer.py`'s own "no allow-list needed, always a
-fixed literal" precedent exactly and avoiding an unforced runtime-narrowing
-cast that a combined query would require. The plan's own count was written
-as an approximation ("six/seven") and does not fix a specific number.
+implementation issues twenty-two queries -- one RegulatoryInstrument, one
+each for Role/Requirement/Obligation/Capability/Policy/Standard/Control/
+PracticeArea/RiskPath (nine, the last two added by issue #106), two
+provenance-edge queries (`DEFINES`, `EXPRESSES`), six bare-edge queries
+(`HAS`, `SATISFIED_BY`, `REQUIRES`, `GOVERNED_BY`, `SUPPORTED_BY`,
+`IMPLEMENTED_BY`, the last three added by issue #54's S4), and four
+classification-edge queries (`COVERS`, `OWNS`, `MITIGATED_BY`, `VERIFIED_BY`,
+added by issue #106) -- rather than collapsing the edge reads into one
+combined query per category via a runtime `type(e)` dispatch. Each
+relationship type's Python-side literal is fixed by which query produced the
+row, never parsed/cast from a returned string, matching `graph_writer.py`'s
+own "no allow-list needed, always a fixed literal" precedent exactly and
+avoiding an unforced runtime-narrowing cast that a combined query would
+require. The plan's own count was written as an approximation ("six/seven")
+and does not fix a specific number.
+
+`_HANDLED_NODE_LABELS`/`_HANDLED_EDGE_TYPES` (issue #106, AC-BI-001) are a
+second, independent, hand-maintained record of exactly which labels/edge
+types this module reads -- compared directly against
+`ps_service.ingestion.adapters.internal_seed.models.NodeLabel`/`EdgeType` by
+`tests/company_merge/test_graph_reader_vocabulary_drift.py`, so a future
+vocabulary addition that forgets to also extend this module's queries fails
+a test loudly instead of silently dropping data (this issue's own root
+cause).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from ps_service.company_merge.models import (
     BareEdge,
@@ -102,6 +114,62 @@ _CONTROL_QUERY = (
 _GOVERNED_BY_QUERY = "MATCH (s:Capability)-[:GOVERNED_BY]->(t:Policy) RETURN s.id, t.id"
 _SUPPORTED_BY_QUERY = "MATCH (s:Policy)-[:SUPPORTED_BY]->(t:Standard) RETURN s.id, t.id"
 _IMPLEMENTED_BY_QUERY = "MATCH (s:Standard)-[:IMPLEMENTED_BY]->(t:Control) RETURN s.id, t.id"
+
+# issue #106 -- PracticeArea/RiskPath node passthrough (edge reads are a
+# later slice). Empty result sets for a baseline with no authored
+# classification-layer content (same tolerance as Policy/Standard/Control).
+_PRACTICE_AREA_QUERY = (
+    "MATCH (n:PracticeArea) RETURN n.id, n.name, n.status, n.description, n.version, n.owner_id"
+)
+_RISK_PATH_QUERY = (
+    "MATCH (n:RiskPath) RETURN n.id, n.name, n.status, n.description, n.risk_type, n.version"
+)
+
+# issue #106 -- COVERS/OWNS/MITIGATED_BY/VERIFIED_BY classification edges.
+# Empty result sets for a baseline with no authored classification-layer
+# content (same tolerance as the governance edges above).
+_COVERS_QUERY = "MATCH (s:PracticeArea)-[:COVERS]->(t:Capability) RETURN s.id, t.id"
+_OWNS_QUERY = "MATCH (s:PracticeArea)-[:OWNS]->(t:Policy) RETURN s.id, t.id"
+_MITIGATED_BY_QUERY = "MATCH (s:RiskPath)-[:MITIGATED_BY]->(t:Capability) RETURN s.id, t.id"
+_VERIFIED_BY_QUERY = "MATCH (s:RiskPath)-[:VERIFIED_BY]->(t:Control) RETURN s.id, t.id"
+
+# AC-BI-001's drift guard (issue #106): a second, independent,
+# hand-maintained record of exactly which labels/edge types this module
+# reads, compared directly against internal_seed.models.NodeLabel/EdgeType
+# by test_graph_reader_vocabulary_drift.py. Deliberately not derived by
+# introspecting the query strings above -- the whole point is to catch a
+# human adding a new label/edge type to NodeLabel/EdgeType without also
+# updating this module's queries (and this constant).
+_HANDLED_NODE_LABELS: frozenset[str] = frozenset(
+    {
+        "RegulatoryInstrument",
+        "Role",
+        "Requirement",
+        "Obligation",
+        "Capability",
+        "Policy",
+        "Standard",
+        "Control",
+        "PracticeArea",
+        "RiskPath",
+    }
+)
+_HANDLED_EDGE_TYPES: frozenset[str] = frozenset(
+    {
+        "DEFINES",
+        "EXPRESSES",
+        "HAS",
+        "SATISFIED_BY",
+        "REQUIRES",
+        "GOVERNED_BY",
+        "SUPPORTED_BY",
+        "IMPLEMENTED_BY",
+        "COVERS",
+        "OWNS",
+        "MITIGATED_BY",
+        "VERIFIED_BY",
+    }
+)
 
 
 class _RegulatoryInstrumentNode(Protocol):
@@ -148,6 +216,9 @@ def read_baseline_graph(
     standard_nodes = _read_standard_nodes(baseline_graph)
     control_nodes = _read_control_nodes(baseline_graph)
     governance_edges = _read_governance_edges(baseline_graph)
+    practice_area_nodes = _read_practice_area_nodes(baseline_graph)
+    risk_path_nodes = _read_risk_path_nodes(baseline_graph)
+    classification_edges = _read_classification_edges(baseline_graph)
 
     return BaselineGraph(
         regulatory_instrument_id=regulatory_instrument_id,
@@ -162,6 +233,9 @@ def read_baseline_graph(
         standard_nodes=standard_nodes,
         control_nodes=control_nodes,
         governance_edges=governance_edges,
+        practice_area_nodes=practice_area_nodes,
+        risk_path_nodes=risk_path_nodes,
+        classification_edges=classification_edges,
     )
 
 
@@ -472,4 +546,94 @@ def _read_governance_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
             )
         )
 
+    return tuple(edges)
+
+
+def _read_practice_area_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every PracticeArea node (issue #106). Empty for a baseline with no authored content.
+
+    Properties are `name`/`status` (required) and, when set, `description`/
+    `version`/`owner_id` -- mirroring `_read_standard_nodes`'s "optional
+    description" shape (`ps-domain-concepts.md`'s PracticeArea section).
+    """
+    result = baseline_graph.query(_PRACTICE_AREA_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        node_id, name, status, description, version, owner_id = row
+        properties: dict[str, str | float] = {
+            "name": cast("str", name),
+            "status": cast("str", status),
+        }
+        if description is not None:
+            properties["description"] = cast("str", description)
+        if version is not None:
+            properties["version"] = cast("str", version)
+        if owner_id is not None:
+            properties["owner_id"] = cast("str", owner_id)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+    return tuple(nodes)
+
+
+def _read_risk_path_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every RiskPath node (issue #106). Empty for a baseline with no authored content.
+
+    Properties are `name`/`status` (required) and, when set, `description`/
+    `risk_type`/`version` -- same "optional property omission" shape as
+    `_read_practice_area_nodes`, with `risk_type` in place of `owner_id`
+    (`ps-domain-concepts.md`'s RiskPath section).
+    """
+    result = baseline_graph.query(_RISK_PATH_QUERY)
+    rows = cast("list[list[object]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        node_id, name, status, description, risk_type, version = row
+        properties: dict[str, str | float] = {
+            "name": cast("str", name),
+            "status": cast("str", status),
+        }
+        if description is not None:
+            properties["description"] = cast("str", description)
+        if risk_type is not None:
+            properties["risk_type"] = cast("str", risk_type)
+        if version is not None:
+            properties["version"] = cast("str", version)
+        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+    return tuple(nodes)
+
+
+def _read_classification_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
+    """Read `COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY` edges (issue #106).
+
+    Empty for a baseline with no authored classification-layer content, with
+    no exception raised -- same contract as `_read_governance_edges`. Unlike
+    `_read_bare_edges`/`_read_governance_edges` (which write out one block
+    per relationship type), this loops over a tuple of `(literal, query)`
+    pairs -- an equally valid style per those functions' own docstrings,
+    used here to keep this function's own cyclomatic complexity within L1's
+    budget. `relationship_type` is still always a fixed Python literal
+    defined in this module, never parsed/cast from a returned Cypher type
+    string -- the loop variable is bound to one of the four literals below,
+    never to adapter/DB-sourced data.
+    """
+    edges: list[BareEdge] = []
+    for relationship_type, query in (
+        ("COVERS", _COVERS_QUERY),
+        ("OWNS", _OWNS_QUERY),
+        ("MITIGATED_BY", _MITIGATED_BY_QUERY),
+        ("VERIFIED_BY", _VERIFIED_BY_QUERY),
+    ):
+        result = baseline_graph.query(query)
+        for row in cast("list[list[object]]", result.result_set):
+            source_id, target_id = row
+            edges.append(
+                BareEdge(
+                    relationship_type=cast(
+                        'Literal["COVERS", "OWNS", "MITIGATED_BY", "VERIFIED_BY"]',
+                        relationship_type,
+                    ),
+                    source_id=cast("str", source_id),
+                    target_id=cast("str", target_id),
+                )
+            )
     return tuple(edges)

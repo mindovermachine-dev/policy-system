@@ -5,9 +5,9 @@ The fake `GraphHandle` dispatches by a distinctive substring of each query
 -- mirroring `tests/domain_mapper/test_derivation.py`'s own
 `_FakeBaselineGraph` dispatch style -- rather than importing this module's
 private query constants, keeping the test decoupled from the exact query
-string layout while still exercising each of the ten read-only queries
-`read_baseline_graph` issues (module docstring's "six/seven" deviation
-note).
+string layout while still exercising each of the twenty-two read-only
+queries `read_baseline_graph` issues (module docstring's "six/seven"
+deviation note).
 """
 
 from __future__ import annotations
@@ -44,11 +44,13 @@ class _FakeRegulatoryInstrumentNode:
 
 
 class _ScriptedFakeGraph:
-    """Satisfies `GraphHandle` structurally. Every one of the sixteen queries
-    `read_baseline_graph` issues is answered with its own scripted row set,
-    dispatched by a distinctive substring of the query text. The six
-    governance queries (issue #54, S4) default to an empty result set --
-    the external-baseline shape -- unless a test passes its own rows.
+    """Satisfies `GraphHandle` structurally. Every one of the twenty-two
+    queries `read_baseline_graph` issues is answered with its own scripted
+    row set, dispatched by a distinctive substring of the query text. The
+    six governance queries (issue #54, S4), the two PracticeArea/RiskPath
+    node queries, and the four classification-edge queries (issue #106)
+    default to an empty result set -- the external-baseline shape -- unless
+    a test passes its own rows.
     """
 
     def __init__(
@@ -70,6 +72,12 @@ class _ScriptedFakeGraph:
         governed_by_rows: list[object] | None = None,
         supported_by_rows: list[object] | None = None,
         implemented_by_rows: list[object] | None = None,
+        practice_area_rows: list[object] | None = None,
+        risk_path_rows: list[object] | None = None,
+        covers_rows: list[object] | None = None,
+        owns_rows: list[object] | None = None,
+        mitigated_by_rows: list[object] | None = None,
+        verified_by_rows: list[object] | None = None,
     ) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
         self._role_rows = role_rows
@@ -87,6 +95,12 @@ class _ScriptedFakeGraph:
         self._governed_by_rows = governed_by_rows or []
         self._supported_by_rows = supported_by_rows or []
         self._implemented_by_rows = implemented_by_rows or []
+        self._practice_area_rows = practice_area_rows or []
+        self._risk_path_rows = risk_path_rows or []
+        self._covers_rows = covers_rows or []
+        self._owns_rows = owns_rows or []
+        self._mitigated_by_rows = mitigated_by_rows or []
+        self._verified_by_rows = verified_by_rows or []
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         if "[e:DEFINES]" in q:
@@ -105,12 +119,24 @@ class _ScriptedFakeGraph:
             return _FakeQueryResult(self._supported_by_rows)
         if "[:IMPLEMENTED_BY]" in q:
             return _FakeQueryResult(self._implemented_by_rows)
+        if "[:COVERS]" in q:
+            return _FakeQueryResult(self._covers_rows)
+        if "[:OWNS]" in q:
+            return _FakeQueryResult(self._owns_rows)
+        if "[:MITIGATED_BY]" in q:
+            return _FakeQueryResult(self._mitigated_by_rows)
+        if "[:VERIFIED_BY]" in q:
+            return _FakeQueryResult(self._verified_by_rows)
         if "(n:Policy) RETURN" in q:
             return _FakeQueryResult(self._policy_rows)
         if "(n:Standard) RETURN" in q:
             return _FakeQueryResult(self._standard_rows)
         if "(n:Control) RETURN" in q:
             return _FakeQueryResult(self._control_rows)
+        if "(n:PracticeArea) RETURN" in q:
+            return _FakeQueryResult(self._practice_area_rows)
+        if "(n:RiskPath) RETURN" in q:
+            return _FakeQueryResult(self._risk_path_rows)
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
@@ -479,6 +505,150 @@ def test_external_baseline_yields_empty_governance_tuples() -> None:
     assert result.standard_nodes == ()
     assert result.control_nodes == ()
     assert result.governance_edges == ()
+
+
+def test_reads_practice_area_and_risk_path_nodes() -> None:
+    """Issue #106: `read_baseline_graph` reads PracticeArea/RiskPath nodes
+    onto `BaselineGraph.practice_area_nodes`/`risk_path_nodes`, omitting
+    `description`/`version`/`owner_id` (PracticeArea) or `description`/
+    `risk_type`/`version` (RiskPath) from `properties` when the query
+    returns them as `NULL` -- mirroring `_read_standard_nodes`'s "optional
+    description" shape.
+    """
+    graph = _empty_scripted_graph(
+        practice_area_rows=[
+            [
+                "pa_secure_sdlc_4a7c1d",
+                "Secure SDLC",
+                "active",
+                "Secure development lifecycle practices",
+                "1.0",
+                "role_ciso",
+            ],
+            ["pa_no_optional_fields", "Bare Practice Area", "draft", None, None, None],
+        ],
+        risk_path_rows=[
+            [
+                "rp_secure_build_release_d93f8a",
+                "Secure Build & Release",
+                "active",
+                "Risks in the build/release pipeline",
+                "operational",
+                "2.0",
+            ],
+            ["rp_no_optional_fields", "Bare Risk Path", "draft", None, None, None],
+        ],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.practice_area_nodes == (
+        BaselineNode(
+            id="pa_secure_sdlc_4a7c1d",
+            properties={
+                "name": "Secure SDLC",
+                "status": "active",
+                "description": "Secure development lifecycle practices",
+                "version": "1.0",
+                "owner_id": "role_ciso",
+            },
+        ),
+        BaselineNode(
+            id="pa_no_optional_fields",
+            properties={"name": "Bare Practice Area", "status": "draft"},
+        ),
+    )
+    assert result.risk_path_nodes == (
+        BaselineNode(
+            id="rp_secure_build_release_d93f8a",
+            properties={
+                "name": "Secure Build & Release",
+                "status": "active",
+                "description": "Risks in the build/release pipeline",
+                "risk_type": "operational",
+                "version": "2.0",
+            },
+        ),
+        BaselineNode(
+            id="rp_no_optional_fields",
+            properties={"name": "Bare Risk Path", "status": "draft"},
+        ),
+    )
+
+
+def test_reads_classification_edges() -> None:
+    """Issue #106: `read_baseline_graph` reads `COVERS`/`OWNS`/
+    `MITIGATED_BY`/`VERIFIED_BY` edges onto `BaselineGraph.classification_edges`
+    -- reusing `BareEdge` (no parallel type), same shape as
+    `test_reads_policy_standard_control_and_governance_edges`.
+    """
+    graph = _empty_scripted_graph(
+        practice_area_rows=[["pa_secure_sdlc_4a7c1d", "Secure SDLC", "active", None, None, None]],
+        risk_path_rows=[
+            ["rp_secure_build_release_d93f8a", "Secure Build & Release", "active", None, None, None]
+        ],
+        covers_rows=[["pa_secure_sdlc_4a7c1d", "cap_engineering_review_abc"]],
+        owns_rows=[["pa_secure_sdlc_4a7c1d", "pol_engineering_practices_xyz"]],
+        mitigated_by_rows=[["rp_secure_build_release_d93f8a", "cap_engineering_review_abc"]],
+        verified_by_rows=[
+            ["rp_secure_build_release_d93f8a", "ctrl_std_pol_engineering_practices_xyz_v1_manual"]
+        ],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.classification_edges == (
+        BareEdge(
+            relationship_type="COVERS",
+            source_id="pa_secure_sdlc_4a7c1d",
+            target_id="cap_engineering_review_abc",
+        ),
+        BareEdge(
+            relationship_type="OWNS",
+            source_id="pa_secure_sdlc_4a7c1d",
+            target_id="pol_engineering_practices_xyz",
+        ),
+        BareEdge(
+            relationship_type="MITIGATED_BY",
+            source_id="rp_secure_build_release_d93f8a",
+            target_id="cap_engineering_review_abc",
+        ),
+        BareEdge(
+            relationship_type="VERIFIED_BY",
+            source_id="rp_secure_build_release_d93f8a",
+            target_id="ctrl_std_pol_engineering_practices_xyz_v1_manual",
+        ),
+    )
+
+
+def test_external_baseline_yields_empty_classification_edges_tuple() -> None:
+    """Issue #106: a baseline with no authored classification-layer content
+    yields an empty `classification_edges` tuple, no exception raised --
+    same tolerance as the existing empty-governance-edges path.
+    """
+    graph = _empty_scripted_graph(
+        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.classification_edges == ()
+
+
+def test_external_baseline_yields_empty_practice_area_and_risk_path_tuples() -> None:
+    """Issue #106: a baseline with no authored classification-layer content
+    (no PracticeArea/RiskPath rows) yields empty tuples for both fields, no
+    exception raised -- same tolerance as the existing Policy/Standard/
+    Control empty path.
+    """
+    graph = _empty_scripted_graph(
+        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.practice_area_nodes == ()
+    assert result.risk_path_nodes == ()
 
 
 @pytest.mark.falkordb_live

@@ -123,6 +123,15 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._standard_rows)
         if "(n:Control) RETURN" in q:
             return _FakeQueryResult(self._control_rows)
+        if "(n:PracticeArea) RETURN" in q:
+            return _FakeQueryResult([])
+        if "(n:RiskPath) RETURN" in q:
+            return _FakeQueryResult([])
+        if "[:COVERS]" in q or "[:OWNS]" in q or "[:MITIGATED_BY]" in q or "[:VERIFIED_BY]" in q:
+            # issue #106 -- this fixture carries no classification-layer
+            # content; the four new edge queries `read_baseline_graph` now
+            # always issues answer empty (external-baseline shape).
+            return _FakeQueryResult([])
         if "n.role_id" in q:
             return _FakeQueryResult([])  # Requirement
         if "n.description" in q:

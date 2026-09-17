@@ -102,7 +102,10 @@ report_failure() {
   printf '  %s\n' "${offending_headers[@]}"
   printf 'expected form: %s\n' "$CONVENTIONAL_HEADER_EXPECTED_FORM"
   local hint
-  for hint in "${offending_hints[@]}"; do
+  # `${offending_hints[@]+"${offending_hints[@]}"}` (not a bare `[@]}"`) because bash 3.2's
+  # `set -u` treats a zero-element array's `[@]` expansion as an unbound variable (macOS ships
+  # no newer bash); the `+` alternate-value form sidesteps that without requiring bash 4+.
+  for hint in "${offending_hints[@]+"${offending_hints[@]}"}"; do
     printf 'hint: %s\n' "$hint"
   done
   summary_append "### lint-commit-header: failed"
@@ -110,7 +113,10 @@ report_failure() {
   for offender in "${offending_headers[@]}"; do
     summary_append "- \`$offender\`"
   done
-  for hint in "${offending_hints[@]}"; do
+  # `${offending_hints[@]+"${offending_hints[@]}"}` (not a bare `[@]}"`) because bash 3.2's
+  # `set -u` treats a zero-element array's `[@]` expansion as an unbound variable (macOS ships
+  # no newer bash); the `+` alternate-value form sidesteps that without requiring bash 4+.
+  for hint in "${offending_hints[@]+"${offending_hints[@]}"}"; do
     summary_append "- hint: $hint"
   done
   release_log error lint_failed outcome=failed offenders="$offender_count"
