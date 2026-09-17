@@ -3,22 +3,17 @@
 ## Table of Contents
 
 - [Local Test](#local-test)
-  - [Status of this path](#status-of-this-path)
   - [Prerequisites](#prerequisites)
   - [1. Install Claude Desktop](#1-install-claude-desktop)
   - [2. Install Podman and start its machine](#2-install-podman-and-start-its-machine)
   - [3. Clone the repo](#3-clone-the-repo)
   - [4. Create the local cluster](#4-create-the-local-cluster)
-  - [5. Deploy Policy System](#5-deploy-policy-system)
-  - [6. Install ps-cli](#6-install-ps-cli)
+  - [5. Install ps-cli](#5-install-ps-cli)
+  - [6. Deploy Policy System](#6-deploy-policy-system)
   - [7. Load regulations into the graph](#7-load-regulations-into-the-graph)
   - [8. Install the Policy System plugin](#8-install-the-policy-system-plugin)
   - [9. Ask a question](#9-ask-a-question)
-  - [Troubleshooting (Local Test)](#troubleshooting-local-test)
-- [Ollama / Local Model Support](#ollama--local-model-support)
-- [Policy System plugin (ps-qna)](#policy-system-plugin-ps-qna)
 - [ps-cli](#ps-cli)
-  - [Install](#install)
   - [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
     - [Single target (default)](#single-target-default)
     - [Multiple named targets (contexts)](#multiple-named-targets-contexts)
@@ -45,7 +40,7 @@ role-oriented view.
 | I want to... | Use | Status |
 | --- | --- | --- |
 | Try Policy System on my own laptop | [Local Test](#local-test) | ✅ Available |
-| Ask a compliance question in natural language | [Policy System plugin](#policy-system-plugin-ps-qna) | ✅ Available |
+| Ask a compliance question in natural language | [Policy System plugin](#8-install-the-policy-system-plugin) | ✅ Available |
 | Ingest a regulation or internal policy, check service health, administer an instance | [ps-cli](#ps-cli) | ✅ Available |
 | Author Policies, Standards, and Controls | Policy Editor | ❌ Not yet designed |
 
@@ -128,49 +123,7 @@ without a `kubectl port-forward` held open in a terminal.
 `KIND_CLUSTER_NAME` set from another project, which would otherwise silently override
 the config file's name.
 
-### 5. Deploy Policy System
-
-```bash
-brew install helm
-```
-
-```bash
-helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --version <X> --wait # X = the release version, e.g. 0.12.0. This step can take a few minutes to complete as the container images are downloaded.
-
-kubectl get pods    # ps-service and falkordb should both be in "Running" state
-
-curl http://127.0.0.1:8000/health
-
-curl http://127.0.0.1:8000/ready
-
-open http://localhost:3001/login
-
-```
-
-`localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
-
-> [!TIP]
-> **Updating to the latest version.** The chart is installed straight from GHCR as an
-> OCI artifact — no repo checkout or repo sync needed to upgrade. Re-run the same
-> command with the new release version:
->
-> ```bash
-> helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
->   --version <new-X> --wait
->
-> kubectl get pods -l app.kubernetes.io/component=ps-service \
->   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
-> ```
->
-> The chart's `psService.image.tag` defaults to empty and falls back to `Chart.appVersion`
-> (see the [Helm Chart Values Reference](./helm-chart-values-reference.md)), so the chart
-> version and the image version can never disagree — there is no tag to hand-pin and no
-> flag needed to reset one. Your graph data is kept — FalkorDB persists to a
-> `PersistentVolumeClaim` (see [Operations: Backup & Restore](#operations-backup--restore)),
-> so regulations loaded in step 7 do not need to be re-seeded.
-
-### 6. Install ps-cli
+### 5. Install ps-cli
 
 `ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
 regulations from Cellar/ELI, ingest internal policies, and check service health and
@@ -190,11 +143,16 @@ and puts it on `PATH` through `uv`'s tool-install shims. Verify:
 ```
 $ ps-cli --version
 PS-CLI Client Version: 1.4.0
-PS-Service Version: 1.4.0
+PS-Service Version: unavailable (...)
 ```
 
-If PS Service isn't reachable yet, the second line reports `unavailable (...)`
-instead and `ps-cli --version` still exits 0.
+PS Service isn't deployed yet at this point, so the second line reports
+`unavailable (...)` — that's expected here, and `ps-cli --version` still exits 0.
+
+**The client version is the version to deploy next.** `ps-cli`, PS Service, and the
+Helm chart are released in lockstep by the same automated job, so the
+`PS-CLI Client Version` this just printed (`1.4.0` above) is also the chart version to
+pass as `--version` in the next step.
 
 To install a specific version instead of the latest, set `PS_CLI_VERSION`:
 
@@ -205,6 +163,49 @@ curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/m
 There is no separate upgrade command — re-run `install.sh` (with or without
 `PS_CLI_VERSION`) whenever a newer release is available; re-running is the documented
 upgrade path and installs over whatever version is currently on `PATH`.
+
+### 6. Deploy Policy System
+
+```bash
+brew install helm
+```
+
+```bash
+helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
+  --version <X> --wait # X = the "PS-CLI Client Version" ps-cli --version printed in step 5, e.g. 1.4.0. This step can take a few minutes to complete as the container images are downloaded.
+
+kubectl get pods    # ps-service and falkordb should both be in "Running" state
+
+curl http://127.0.0.1:8000/health
+
+curl http://127.0.0.1:8000/ready
+
+open http://localhost:3001/login
+
+```
+
+`localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
+
+> [!TIP]
+> **Updating to the latest version.** The chart is installed straight from GHCR as an
+> OCI artifact — no repo checkout or repo sync needed to upgrade. Re-run
+> [`ps-cli/install.sh`](../../ps-cli/install.sh) (step 5) to pick up the new client
+> version, then re-run the deploy command with that version:
+>
+> ```bash
+> helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
+>   --version <new-X> --wait
+>
+> kubectl get pods -l app.kubernetes.io/component=ps-service \
+>   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
+> ```
+>
+> The chart's `psService.image.tag` defaults to empty and falls back to `Chart.appVersion`
+> (see the [Helm Chart Values Reference](./helm-chart-values-reference.md)), so the chart
+> version and the image version can never disagree — there is no tag to hand-pin and no
+> flag needed to reset one. Your graph data is kept — FalkorDB persists to a
+> `PersistentVolumeClaim` (see [Operations: Backup & Restore](#operations-backup--restore)),
+> so regulations loaded in step 7 do not need to be re-seeded.
 
 ### 7. Load regulations into the graph
 
@@ -230,7 +231,7 @@ URL:  `https://github.com/mindovermachine-dev/policy-system`
 This installs the `ps-qna` skill. The plugin also declares a `policy-system-graph` MCP
 connector, but that half is for a **hosted** PS Service — Claude Desktop evaluates
 plugin and custom connectors from Anthropic's cloud, so it can never reach the
-`127.0.0.1:8000` instance you deployed in step 5. Until a hosted instance exists its
+`127.0.0.1:8000` instance you deployed in step 6. Until a hosted instance exists its
 URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
 unreachable; that is expected.
 

@@ -4,7 +4,7 @@ Every operator-facing key in `charts/policy-system/values.yaml` (local-test defa
 `charts/policy-system/values-prod.yaml` (production override file, passed via
 `-f values-prod.yaml`). See the [User Guide](./user-guide.md)'s
 [Local Test](./user-guide.md#local-test) walkthrough for how to deploy the chart in the
-first place — this page is the values reference for that walkthrough, step 5 onward.
+first place — this page is the values reference for that walkthrough, step 6 onward.
 
 ## Table of Contents
 
