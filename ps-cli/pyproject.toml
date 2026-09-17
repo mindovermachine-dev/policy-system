@@ -1,6 +1,6 @@
 [project]
 name = "ps-cli"
-version = "2.4.2"
+version = "2.4.3"
 description = "Policy System CLI: thin operator client driving PS Service's REST API for regulation ingestion (UC-1/UC-2)"
 requires-python = ">=3.14"
 dependencies = [
