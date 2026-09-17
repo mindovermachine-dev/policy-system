@@ -1240,7 +1240,7 @@ wheels = [
 
 [[package]]
 name = "ps-cli"
-version = "2.6.0"
+version = "2.6.1"
 source = { editable = "ps-cli" }
 dependencies = [
     { name = "httpx" },
@@ -1259,7 +1259,7 @@ requires-dist = [
 
 [[package]]
 name = "ps-service"
-version = "2.6.0"
+version = "2.6.1"
 source = { editable = "ps-service" }
 dependencies = [
     { name = "defusedxml" },
