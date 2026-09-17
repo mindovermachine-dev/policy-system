@@ -619,32 +619,33 @@ class PsServiceClient:
     def check_health(self) -> str:
         """`GET /health`: whether the ASGI server is accepting connections.
 
-        Raises `PsCliError` if PS Service cannot be reached (connection refused
-        or a connect timeout) or if the response body does not match the
-        expected shape. Never checks external dependencies (D6) — a healthy
-        result here does not imply `check_readiness()` will also succeed.
+        Raises `PsCliError` if PS Service cannot be reached or the connection
+        is interrupted (refused, reset, or timed out) or if the response body
+        does not match the expected shape. Never checks external dependencies
+        (D6) — a healthy result here does not imply `check_readiness()` will
+        also succeed.
         """
         try:
             response = self._client.get(_HEALTH_PATH)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         return _parse_health_body(response.json())
 
     def get_service_version(self) -> str:
         """`GET /health`: PS Service's installed package version.
 
-        Raises `PsCliError` if PS Service cannot be reached (connection refused
-        or a connect timeout) or if the response body does not match the
-        expected shape.
+        Raises `PsCliError` if PS Service cannot be reached or the connection
+        is interrupted (refused, reset, or timed out) or if the response body
+        does not match the expected shape.
         """
         try:
             response = self._client.get(_HEALTH_PATH)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         return _parse_service_version_body(response.json())
 
     def check_readiness(self) -> ReadinessResult:
@@ -653,16 +654,16 @@ class PsServiceClient:
         Reports whether PS Service's startup checks completed, and which
         dependencies (if any) are currently recorded unhealthy.
 
-        Raises `PsCliError` if PS Service cannot be reached (connection refused
-        or a connect timeout) or if the response body does not match the
-        expected shape.
+        Raises `PsCliError` if PS Service cannot be reached or the connection
+        is interrupted (refused, reset, or timed out) or if the response body
+        does not match the expected shape.
         """
         try:
             response = self._client.get(_READY_PATH)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         return _parse_readiness_body(response.json())
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
@@ -687,10 +688,10 @@ class PsServiceClient:
                 json=body,
                 timeout=_INGESTION_REQUEST_TIMEOUT,
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
@@ -736,10 +737,10 @@ class PsServiceClient:
                 json=body,
                 timeout=_RESTORATION_REQUEST_TIMEOUT,
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_restoration_response(response.json())
@@ -767,10 +768,10 @@ class PsServiceClient:
                 json={"instrument_id": instrument_id},
                 timeout=_EXPORT_REQUEST_TIMEOUT,
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_export_response(response.json())
@@ -780,7 +781,8 @@ class PsServiceClient:
 
         No request body -- the sweep always covers the whole tracked catalog
         (issue #73, PLAN.md §1 D13). Raises `PsCliError` if PS Service cannot
-        be reached (connection refused or a connect timeout), if it returns a
+        be reached or the connection is interrupted (refused, reset, or timed
+        out), if it returns a
         non-2xx response (parsed per D5's error-body mapping -- `/change-checks`
         can still fail with the standard structured `ErrorBody` shape, e.g. a
         generic 500 from an unguarded graph-open failure, D12/D14), or if a 200
@@ -791,10 +793,10 @@ class PsServiceClient:
                 _CHANGE_CHECKS_PATH,
                 timeout=_CHANGE_CHECK_REQUEST_TIMEOUT,
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_change_check_response(response.json())
@@ -842,10 +844,10 @@ class PsServiceClient:
                 json={"source": "internal", "content": content},
                 timeout=_INGESTION_REQUEST_TIMEOUT,
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
@@ -853,16 +855,16 @@ class PsServiceClient:
     def list_pending_reviews(self) -> PendingReviewsResult:
         """`GET /near-misses`: every unresolved near-miss `PendingReview` (issue #35, AC-BI-003).
 
-        Raises `PsCliError` if PS Service cannot be reached (connection refused
-        or a connect timeout) or if the response body does not match the
-        expected shape.
+        Raises `PsCliError` if PS Service cannot be reached or the connection
+        is interrupted (refused, reset, or timed out) or if the response body
+        does not match the expected shape.
         """
         try:
             response = self._client.get(_NEAR_MISSES_PATH)
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_pending_reviews_body(response.json())
@@ -877,7 +879,8 @@ class PsServiceClient:
         loser canonical node onto the deterministically-chosen winner,
         deletes the loser, and deletes the pending review, atomically
         (AC-BI-005/006/007). Raises `PsCliError` if PS Service cannot be
-        reached (connection refused or a connect timeout), if it returns a
+        reached or the connection is interrupted (refused, reset, or timed
+        out), if it returns a
         non-2xx response (parsed per D5's error-body mapping -- a not-found,
         already-resolved, or (merge only) stale `review_id` surfaces as
         `pending_review_not_found`, AC-BI-008), or if a 200 response body
@@ -888,10 +891,10 @@ class PsServiceClient:
                 f"{_NEAR_MISSES_PATH}/{review_id}/resolve",
                 json={"decision": decision},
             )
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            _raise_connection_error(self._base_url, exc)
         except httpx.ReadTimeout as exc:
             _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_resolve_review_response(response.json())

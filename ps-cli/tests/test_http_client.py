@@ -92,6 +92,10 @@ def _connect_error_handler(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
 
 
+def _read_error_handler(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadError("[Errno 54] Connection reset by peer", request=request)
+
+
 _NEAR_MISSES_BODY = {
     "reviews": [
         {
@@ -1137,6 +1141,26 @@ class TestGetServiceVersion:
         """A transport-level ConnectError maps to PsCliError per D5/D6's mapping."""
         client = PsServiceClient(
             "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.get_service_version()
+
+        assert "Could not reach PS Service at" in excinfo.value.msg
+        assert "http://127.0.0.1:8000" in excinfo.value.msg
+        assert excinfo.value.hint is not None
+        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
+
+    def test_get_service_version_raises_ps_cli_error_on_connection_reset(self) -> None:
+        """A transport-level ReadError (e.g. connection reset) maps to PsCliError too.
+
+        Not just ConnectError/ConnectTimeout/ReadTimeout. Regression test: this used to
+        propagate as a raw httpx.ReadError, crashing `ps-cli --version` with a traceback
+        instead of the documented "unavailable" line, even though AC-BI-008 requires
+        `--version` to exit 0 whenever PS Service is unreachable.
+        """
+        client = PsServiceClient(
+            "http://127.0.0.1:8000", transport=httpx.MockTransport(_read_error_handler)
         )
 
         with pytest.raises(PsCliError) as excinfo:
