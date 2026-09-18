@@ -1,10 +1,11 @@
-"""Capacity-range validation against the selected region's live-reported range (AC-BI-006;
-PLAN.md §5/S6).
+"""Capacity-range validation against LLM_REGION's live-reported range (AC-BI-006; superseded by
+issue #110 -- see `fail_region_not_viable` in scripts/deploy-llm.sh).
 
-Runs only at the region `select_region` already found -- a capacity outside the range that
-region's `model list` response reports for the required SKU is a hard stop showing the actual
-range; it is not retried against a different candidate region (a bad capacity is an evaluator
-config mistake, not a per-region property, PLAN.md §0.1 step 6).
+Runs only at the configured `LLM_REGION` -- a capacity outside the range that region's `model
+list` response reports for the required SKU is a hard stop showing the actual range. LLM_REGION
+itself is never auto-switched to a different region on this failure, but every other
+LLM_REGION_CANDIDATES entry is probed for full viability so the error can report which ones would
+actually work.
 """
 
 from __future__ import annotations
@@ -25,15 +26,15 @@ def test_chat_capacity_above_reported_maximum_fails_showing_actual_range(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
     deploy_llm_fixture.seed_subscription()
-    # Config's LLM_CHAT_MODEL_CAPACITY is 1000 -- a reported maximum of 500 is below it.
+    # Config's LLM_CHAT_MODEL_CAPACITY is 300 -- a reported maximum of 200 is below it.
     deploy_llm_fixture.seed_model_availability(
-        "swedencentral", chat_ga=True, embed_ga=True, chat_capacity_range=(1, 500)
+        "swedencentral", chat_ga=True, embed_ga=True, chat_capacity_range=(1, 200)
     )
 
     run = deploy_llm_fixture.run_deploy("--yes", expect=1)
 
     assert "LLM_CHAT_MODEL_CAPACITY" in run.stderr
-    assert "1-500" in run.stderr
+    assert "1-200" in run.stderr
 
 
 def test_embed_capacity_below_reported_minimum_fails_showing_actual_range(
@@ -57,16 +58,25 @@ def test_capacity_within_range_passes(deploy_llm_fixture: DeployLlmFixture) -> N
     deploy_llm_fixture.run_deploy("--yes", expect=0)
 
 
-def test_capacity_failure_does_not_try_a_different_region(
+def test_capacity_failure_reports_other_viable_regions(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
     deploy_llm_fixture.seed_subscription()
     deploy_llm_fixture.seed_model_availability(
-        "swedencentral", chat_ga=True, embed_ga=True, chat_capacity_range=(1, 500)
+        "swedencentral", chat_ga=True, embed_ga=True, chat_capacity_range=(1, 200)
     )
 
-    deploy_llm_fixture.run_deploy("--yes", expect=1)
+    run = deploy_llm_fixture.run_deploy("--yes", expect=1)
 
+    # LLM_REGION itself is never auto-switched, but every other candidate (still fully viable
+    # per seed_subscription's baseline) is probed to report it as a working alternative.
     assert _model_list_calls(deploy_llm_fixture) == [
         "cognitiveservices model list --location swedencentral",
+        "cognitiveservices model list --location francecentral",
+        "cognitiveservices model list --location westeurope",
+        "cognitiveservices model list --location germanywestcentral",
     ]
+    assert (
+        "Regions that would work instead: francecentral, westeurope, germanywestcentral"
+        in run.stderr
+    )

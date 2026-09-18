@@ -21,6 +21,7 @@ BASH_SHEBANG = "#!/usr/bin/env bash"
 VALID_CONFIG = """# scripts/llm-defaults.conf — evaluator-tunable Azure LLM bootstrap defaults
 # (issue #105). No secrets. See docs/architecture/customer-azure-llm-bootstrap.md.
 
+LLM_REGION=swedencentral
 LLM_REGION_CANDIDATES=(swedencentral francecentral westeurope germanywestcentral)
 LLM_CHAT_MODEL_NAME=gpt-5.4-mini
 LLM_CHAT_MODEL_CAPACITY=1000
@@ -124,7 +125,10 @@ def test_valid_config_does_not_exit_on_validation(deploy_llm_fixture: DeployLlmF
     run = deploy_llm_fixture.run_deploy(expect=None)
 
     assert run.returncode != 1, run.output
-    assert CONFIG_DISPLAY_PATH not in run.output
+    # `log_step` unconditionally announces "==> Loading and validating {CONFIG_DISPLAY_PATH}" at
+    # startup (issue #110), so CONFIG_DISPLAY_PATH alone always appears in output -- a
+    # fail_validation message is distinguished by the trailing colon (`"%s: %s\n"`).
+    assert f"{CONFIG_DISPLAY_PATH}:" not in run.output
 
 
 def test_deploy_llm_sh_has_bash_shebang_executable_bit_and_strict_mode() -> None:

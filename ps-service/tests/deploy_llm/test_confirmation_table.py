@@ -64,7 +64,7 @@ def test_table_shows_both_deployments_with_sku_and_capacity(
 
     assert "gpt-5.4-mini" in run.stdout
     assert "GlobalStandard" in run.stdout
-    assert "1000" in run.stdout
+    assert "300" in run.stdout
     assert "text-embedding-3-large" in run.stdout
     assert "DataZoneStandard" in run.stdout
     assert "350" in run.stdout

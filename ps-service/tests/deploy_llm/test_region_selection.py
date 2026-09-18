@@ -1,10 +1,11 @@
-"""Region selection: GA probing in configured order + no-candidate failure (AC-BI-005,
-AC-BI-008; PLAN.md §5/S5).
+"""Region targeting: LLM_REGION used as configured, never auto-switched (AC-BI-005/AC-BI-008
+superseded by issue #110 -- see `verify_target_region`/`fail_region_not_viable` in
+scripts/deploy-llm.sh).
 
-The loop tries candidates from `LLM_REGION_CANDIDATES` in order, stops at the first one where
-both models are `GenerallyAvailable` at the required SKU, and never probes candidates after the
-one it selects. If no candidate qualifies, every candidate *was* tried before the explicit
-failure (distinguishing this from S7's quota check, which never tries a second region).
+The script checks only the configured `LLM_REGION` for both models being `GenerallyAvailable` at
+the required SKU; it is never replaced by a different region. When that check fails, every other
+`LLM_REGION_CANDIDATES` entry is probed for full viability (GA + capacity range + quota) purely to
+report which ones would actually work -- the script still hard-stops.
 """
 
 from __future__ import annotations
@@ -23,50 +24,61 @@ def _model_list_calls(fixture: DeployLlmFixture) -> list[str]:
     ]
 
 
-def test_selects_first_candidate_with_both_models_generally_available(
-    deploy_llm_fixture: DeployLlmFixture,
-) -> None:
+def test_uses_configured_region_directly(deploy_llm_fixture: DeployLlmFixture) -> None:
     deploy_llm_fixture.seed_subscription()  # GA everywhere by default (conftest baseline)
 
     deploy_llm_fixture.run_deploy("--yes", expect=0)
 
+    # Only LLM_REGION (swedencentral) is ever checked when it already satisfies both models --
+    # no candidate probing happens on the success path.
     assert _model_list_calls(deploy_llm_fixture) == [
         "cognitiveservices model list --location swedencentral",
     ]
 
 
-def test_skips_a_candidate_missing_one_model_and_tries_the_next(
+def test_region_not_generally_available_fails_and_reports_working_alternatives(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
     deploy_llm_fixture.seed_subscription()
-    # Embed model not GA in the first candidate -> must be skipped even though chat is GA there.
+    # Embed model not GA at LLM_REGION -> hard stop, LLM_REGION is not swapped for a candidate.
     deploy_llm_fixture.seed_model_availability("swedencentral", chat_ga=True, embed_ga=False)
 
-    deploy_llm_fixture.run_deploy("--yes", expect=0)
+    run = deploy_llm_fixture.run_deploy("--yes", expect=1)
 
+    assert (
+        "Region swedencentral does not have both gpt-5.4-mini (GlobalStandard) and "
+        "text-embedding-3-large (DataZoneStandard) Generally Available." in run.stderr
+    )
+    assert (
+        "Regions that would work instead: francecentral, westeurope, germanywestcentral"
+        in run.stderr
+    )
+    # Every other candidate (still fully viable per seed_subscription's baseline) is probed for
+    # the report, in LLM_REGION_CANDIDATES order.
     assert _model_list_calls(deploy_llm_fixture) == [
         "cognitiveservices model list --location swedencentral",
         "cognitiveservices model list --location francecentral",
+        "cognitiveservices model list --location westeurope",
+        "cognitiveservices model list --location germanywestcentral",
     ]
 
 
-def test_stops_probing_once_a_candidate_satisfies_both_models(
+def test_reports_only_the_alternatives_that_are_actually_viable(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
     deploy_llm_fixture.seed_subscription()
     deploy_llm_fixture.seed_model_availability("swedencentral", chat_ga=False, embed_ga=False)
-    # francecentral stays GA (conftest baseline) and must satisfy the loop -- westeurope and
-    # germanywestcentral must never be probed if the loop truly stops here.
+    # westeurope is also broken -- it must be excluded from the "would work instead" list even
+    # though it's still probed.
+    deploy_llm_fixture.seed_model_availability("westeurope", chat_ga=True, embed_ga=False)
+    # francecentral/germanywestcentral stay GA (conftest baseline) and must be reported.
 
-    deploy_llm_fixture.run_deploy("--yes", expect=0)
+    run = deploy_llm_fixture.run_deploy("--yes", expect=1)
 
-    assert _model_list_calls(deploy_llm_fixture) == [
-        "cognitiveservices model list --location swedencentral",
-        "cognitiveservices model list --location francecentral",
-    ]
+    assert "Regions that would work instead: francecentral, germanywestcentral" in run.stderr
 
 
-def test_no_candidate_available_fails_explicitly_and_tries_every_region(
+def test_no_candidate_available_fails_explicitly_and_probes_every_region(
     deploy_llm_fixture: DeployLlmFixture,
 ) -> None:
     deploy_llm_fixture.seed_subscription()
@@ -78,4 +90,6 @@ def test_no_candidate_available_fails_explicitly_and_tries_every_region(
     assert _model_list_calls(deploy_llm_fixture) == [
         f"cognitiveservices model list --location {region}" for region in ALL_CANDIDATES
     ]
-    assert "swedencentral, francecentral, westeurope, germanywestcentral" in run.stderr
+    assert "No other candidate region in LLM_REGION_CANDIDATES currently works either." in (
+        run.stderr
+    )

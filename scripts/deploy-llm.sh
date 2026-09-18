@@ -11,12 +11,23 @@
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
 #                 (the "inactive" slot) and write its new value back. Branches immediately after
 #                 flag parsing -- skips config validation, the confirmation table, RBAC
-#                 preflight, and region/quota selection entirely (none of those matter for
+#                 preflight, and region/quota verification entirely (none of those matter for
 #                 rotating an already-provisioned account's key).
 #
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success -- including
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
 set -euo pipefail
+
+# Every hard-stop failure message goes through print_error (below), which is red only when
+# stderr is a terminal -- piping to a file/CI log leaves plain text, no stray ANSI codes
+# (respects NO_COLOR, https://no-color.org).
+if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+  readonly COLOR_RED=$'\033[31m'
+  readonly COLOR_RESET=$'\033[0m'
+else
+  readonly COLOR_RED=""
+  readonly COLOR_RESET=""
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/deploy-llm-common.sh
@@ -51,7 +62,7 @@ parse_args() {
       --yes) skip_confirmation=true ;;
       --rotate-key) rotate_key=true ;;
       *)
-        printf 'unknown flag: %s\n%s\n' "$1" "$USAGE" >&2
+        print_error 'unknown flag: %s\n%s\n' "$1" "$USAGE"
         exit "$EXIT_USAGE"
         ;;
     esac
@@ -62,11 +73,27 @@ parse_args() {
 # load_config: sources the checked-in defaults file, failing fast if it is missing.
 load_config() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
-    printf '%s: file not found\n' "$CONFIG_FILE_DISPLAY_PATH" >&2
+    print_error '%s: file not found\n' "$CONFIG_FILE_DISPLAY_PATH"
     exit "$EXIT_FAILURE"
   fi
   # shellcheck source=llm-defaults.conf
   source "$CONFIG_FILE"
+}
+
+# print_error <format> [args...]: like `printf <format> >&2`, wrapped in COLOR_RED/COLOR_RESET
+# (empty strings when stderr isn't a terminal, so this degrades to plain printf). Every hard-stop
+# failure message in this script goes through this instead of a bare `printf ... >&2`.
+print_error() {
+  local format="$1"
+  shift
+  printf "${COLOR_RED}${format}${COLOR_RESET}" "$@" >&2
+}
+
+# log_step <message>: prints a "==> <message>" progress line to stderr. Called right before each
+# major phase starts (not after it finishes), so if the script crashes mid-step -- e.g. inside an
+# `az` call -- the last line printed names the step that was running, not just a bash line number.
+log_step() {
+  printf '==> %s\n' "$1" >&2
 }
 
 # join_comma_space <items...>: prints items comma-and-space joined, in argument order.
@@ -84,7 +111,7 @@ join_comma_space() {
 # fail_validation <message>: prints a field+file-scoped config error and exits (AC-BI-001).
 fail_validation() {
   local message="$1"
-  printf '%s: %s\n' "$CONFIG_FILE_DISPLAY_PATH" "$message" >&2
+  print_error '%s: %s\n' "$CONFIG_FILE_DISPLAY_PATH" "$message"
   exit "$EXIT_FAILURE"
 }
 
@@ -98,17 +125,21 @@ is_supported_region() {
   return 1
 }
 
+# validate_region_field <field_name> <region>: fails unless <region> is one of SUPPORTED_REGIONS
+# (shared by LLM_REGION and every LLM_REGION_CANDIDATES entry).
+validate_region_field() {
+  local field_name="$1" region="$2"
+  if ! is_supported_region "$region"; then
+    fail_validation \
+      "$field_name \"$region\" is not one of the supported EU regions: $(join_comma_space "${SUPPORTED_REGIONS[@]}")"
+  fi
+}
+
 # validate_region_candidates: every LLM_REGION_CANDIDATES entry must be a supported EU region.
 validate_region_candidates() {
-  local supported_list
-  supported_list="$(join_comma_space "${SUPPORTED_REGIONS[@]}")"
   local index
   for index in "${!LLM_REGION_CANDIDATES[@]}"; do
-    local region="${LLM_REGION_CANDIDATES[$index]}"
-    if ! is_supported_region "$region"; then
-      fail_validation \
-        "LLM_REGION_CANDIDATES[$index] \"$region\" is not one of the supported EU regions: $supported_list"
-    fi
+    validate_region_field "LLM_REGION_CANDIDATES[$index]" "${LLM_REGION_CANDIDATES[$index]}"
   done
 }
 
@@ -134,6 +165,7 @@ validate_positive_integer() {
 
 # validate_config: runs every AC-BI-001 validation rule against the loaded config, in order.
 validate_config() {
+  validate_region_field "LLM_REGION" "$LLM_REGION"
   validate_region_candidates
   validate_non_empty "LLM_CHAT_MODEL_NAME" "$LLM_CHAT_MODEL_NAME"
   validate_non_empty "LLM_EMBED_MODEL_NAME" "$LLM_EMBED_MODEL_NAME"
@@ -149,14 +181,16 @@ fetch_subscription_id() {
 }
 
 # print_confirmation_table <account_name> <vault_name>: prints every resolved value (AC-BI-002).
-# The region row shows the configured candidate list, not a resolved region -- region selection
-# runs later in the flow, after this table (PLAN.md §0.2).
+# The region row shows LLM_REGION -- the single region that will actually be used, not probed
+# in any order -- plus the LLM_REGION_CANDIDATES pool that's only consulted for a suggestion if
+# LLM_REGION itself turns out not to work (PLAN.md §0.2).
 print_confirmation_table() {
   local account_name="$1"
   local vault_name="$2"
 
   printf 'The following Azure LLM resources will be used:\n\n'
-  printf '  Region candidates (in order): %s\n' "$(join_comma_space "${LLM_REGION_CANDIDATES[@]}")"
+  printf '  Region:                       %s\n' "$LLM_REGION"
+  printf '  Fallback candidates:          %s\n' "$(join_comma_space "${LLM_REGION_CANDIDATES[@]}")"
   printf '  Resource group:               %s\n' "$LLM_RESOURCE_GROUP_NAME"
   printf '  AIServices account:           %s\n' "$account_name"
   printf '  Chat deployment:              %s (%s, capacity %s)\n' \
@@ -209,17 +243,17 @@ has_sufficient_role() {
 
 # rbac_preflight <subscription_id>: hard-stops unless the signed-in user has Owner or
 # Contributor at subscription scope, with an actionable fix command (AC-BI-004). Runs before
-# region selection (PLAN.md §0.1 step 5).
+# region verification (PLAN.md §0.1 step 5).
 rbac_preflight() {
   local subscription_id="$1"
   local upn roles
   upn="$(fetch_signed_in_user_upn)"
   roles="$(fetch_role_assignments "$upn" "$subscription_id")"
   if ! has_sufficient_role "$roles"; then
-    printf 'RBAC preflight failed: %s has neither Owner nor Contributor at subscription scope.\n' \
-      "$upn" >&2
-    printf 'Fix: az role assignment create --assignee %s --role Contributor --scope /subscriptions/%s\n' \
-      "$upn" "$subscription_id" >&2
+    print_error 'RBAC preflight failed: %s has neither Owner nor Contributor at subscription scope.\n' \
+      "$upn"
+    print_error 'Fix: az role assignment create --assignee %s --role Contributor --scope /subscriptions/%s\n' \
+      "$upn" "$subscription_id"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -243,71 +277,131 @@ both_models_generally_available() {
     && model_generally_available "$model_list" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU"
 }
 
-# fail_no_region_available: hard-stops when no candidate region has both models Generally
-# Available at the required SKU (AC-BI-008) -- reached only after every candidate was tried.
-fail_no_region_available() {
-  printf 'No candidate region has both %s (%s) and %s (%s) Generally Available. Tried: %s\n' \
-    "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
-    "$(join_comma_space "${LLM_REGION_CANDIDATES[@]}")" >&2
-  exit "$EXIT_FAILURE"
-}
-
-# select_region: probes LLM_REGION_CANDIDATES in configured order, stopping at the first
-# candidate where both models are Generally Available (AC-BI-005) -- a flat loop with an early
-# exit, not nested conditionals (docs/coding-standards/level1-coding-principles.md, cyclomatic
-# complexity). Prints "<region>\n<model_list_json>" so a caller capturing this via command
-# substitution (which runs in a subshell -- a plain variable set here would not survive back to
-# the caller) gets both the selected region and its already-fetched `model list` response,
-# letting later steps (capacity validation) reuse it instead of re-querying the same region.
-# Fails explicitly if no candidate qualifies (AC-BI-008).
-select_region() {
-  local candidate model_list
-  for candidate in "${LLM_REGION_CANDIDATES[@]}"; do
-    model_list="$(az cognitiveservices model list --location "$candidate")"
-    if both_models_generally_available "$model_list"; then
-      printf '%s\n%s' "$candidate" "$model_list"
-      return 0
-    fi
-  done
-  fail_no_region_available
-}
-
-# model_capacity_range <model_list_json> <model_name> <sku>: prints "<minimum> <maximum>" for
-# <model_name>'s <sku> SKU, per that region's `model list` response.
-model_capacity_range() {
-  local model_list="$1" model_name="$2" sku="$3"
-  jq -r --arg name "$model_name" --arg sku "$sku" \
-    '.[] | select(.model.name == $name) | .model.skus[]? | select(.name == $sku)
-      | "\(.capacity.minimum) \(.capacity.maximum)"' \
-    <<< "$model_list" | head -n1
-}
-
-# validate_model_capacity <model_list_json> <field_name> <model_name> <sku> <capacity>: hard
-# stops unless <capacity> falls within the [minimum, maximum] range <model_name>'s <sku> SKU
-# reports in <model_list_json> (AC-BI-006).
-validate_model_capacity() {
-  local model_list="$1" field_name="$2" model_name="$3" sku="$4" capacity="$5"
+# capacity_in_range <model_list_json> <model_name> <sku> <capacity>: true if <capacity> falls
+# within <model_name>'s <sku> SKU's [minimum, maximum] range, per <model_list_json>. Boolean
+# sibling of validate_model_capacity below -- shared with region_is_viable's fallback probe,
+# which needs a plain true/false with no message/exit side effect.
+capacity_in_range() {
+  local model_list="$1" model_name="$2" sku="$3" capacity="$4"
   local range minimum maximum
   range="$(model_capacity_range "$model_list" "$model_name" "$sku")"
   minimum="${range%% *}"
   maximum="${range##* }"
-  if (( capacity < minimum || capacity > maximum )); then
-    printf '%s: %s "%s" is outside the allowed range for %s (%s) in this region: %s-%s\n' \
-      "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$capacity" "$model_name" "$sku" \
-      "$minimum" "$maximum" >&2
-    exit "$EXIT_FAILURE"
+  (( capacity >= minimum && capacity <= maximum ))
+}
+
+# quota_sufficient <usage_json> <usage_key> <capacity>: true if <usage_key>'s remaining quota in
+# <usage_json> covers <capacity>. Boolean sibling of validate_model_quota below -- same reuse
+# rationale as capacity_in_range.
+quota_sufficient() {
+  local usage="$1" usage_key="$2" capacity="$3"
+  local remaining
+  remaining="$(model_remaining_quota "$usage" "$usage_key")"
+  (( remaining >= capacity ))
+}
+
+# region_is_viable <region>: true only if <region> passes all three checks LLM_REGION itself
+# must pass -- both models Generally Available, configured capacities within their SKU ranges,
+# and enough remaining quota for both. Used exclusively by fail_region_not_viable's fallback
+# probe below, never for LLM_REGION itself (that path needs per-check messages, not a bool).
+region_is_viable() {
+  local region="$1"
+  local model_list usage
+  model_list="$(az cognitiveservices model list --location "$region")"
+  both_models_generally_available "$model_list" || return 1
+  capacity_in_range "$model_list" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" \
+    "$LLM_CHAT_MODEL_CAPACITY" || return 1
+  capacity_in_range "$model_list" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
+    "$LLM_EMBED_MODEL_CAPACITY" || return 1
+  usage="$(az cognitiveservices usage list --location "$region")"
+  quota_sufficient "$usage" "chat" "$LLM_CHAT_MODEL_CAPACITY" || return 1
+  quota_sufficient "$usage" "embed" "$LLM_EMBED_MODEL_CAPACITY" || return 1
+  return 0
+}
+
+# fail_region_not_viable <excluded_region>: shared tail call for every way LLM_REGION can fail
+# (not Generally Available, capacity out of range, insufficient quota). Probes every OTHER
+# LLM_REGION_CANDIDATES entry for full viability (region_is_viable) and reports which ones would
+# actually work, instead of the script silently picking one (AC-BI-005/008 superseded: LLM_REGION
+# is never auto-switched). Always exits -- callers append no code after invoking this.
+fail_region_not_viable() {
+  local excluded_region="$1"
+  local candidate working=()
+  for candidate in "${LLM_REGION_CANDIDATES[@]}"; do
+    [[ "$candidate" == "$excluded_region" ]] && continue
+    if region_is_viable "$candidate"; then
+      working+=("$candidate")
+    fi
+  done
+  if [[ "${#working[@]}" -gt 0 ]]; then
+    print_error 'Regions that would work instead: %s\n' "$(join_comma_space "${working[@]}")"
+  else
+    print_error 'No other candidate region in LLM_REGION_CANDIDATES currently works either.\n'
+  fi
+  exit "$EXIT_FAILURE"
+}
+
+# verify_target_region <region>: checks only that both configured models are Generally
+# Available in <region> -- LLM_REGION is used as configured, never auto-switched (AC-BI-005
+# superseded). Prints the `model list` response on success so a caller capturing this via
+# command substitution (a subshell -- a plain variable set here would not survive back to the
+# caller) can reuse it for validate_capacity_range instead of re-querying the same region. Fails
+# via fail_region_not_viable, which reports working alternatives, if the models aren't GA.
+verify_target_region() {
+  local region="$1"
+  local model_list
+  model_list="$(az cognitiveservices model list --location "$region")"
+  if ! both_models_generally_available "$model_list"; then
+    print_error 'Region %s does not have both %s (%s) and %s (%s) Generally Available.\n' \
+      "$region" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU"
+    fail_region_not_viable "$region"
+  fi
+  printf '%s' "$model_list"
+}
+
+# model_capacity_range <model_list_json> <model_name> <sku>: prints "<minimum> <maximum>" for
+# <model_name>'s <sku> SKU, per that region's `model list` response. Azure reports
+# capacity.minimum as JSON null for SKUs like GlobalStandard/DataZoneStandard (no lower bound
+# beyond the positive-integer check validate_config already runs) -- `// 0` / `// 999999999999`
+# substitute a real number so the bash arithmetic in capacity_in_range never sees the literal
+# string "null" (which crashes under set -u: bash treats an unquoted non-numeric arithmetic
+# operand as a variable name, and `null` is never a shell variable).
+model_capacity_range() {
+  local model_list="$1" model_name="$2" sku="$3"
+  jq -r --arg name "$model_name" --arg sku "$sku" \
+    '.[] | select(.model.name == $name) | .model.skus[]? | select(.name == $sku)
+      | "\(.capacity.minimum // 0) \(.capacity.maximum // 999999999999)"' \
+    <<< "$model_list" | head -n1
+}
+
+# validate_model_capacity <model_list_json> <field_name> <model_name> <sku> <capacity> <region>:
+# hard stops unless <capacity> falls within the [minimum, maximum] range <model_name>'s <sku>
+# SKU reports in <model_list_json> (AC-BI-006). Reports working alternative regions via
+# fail_region_not_viable rather than a bare exit, since this is one of the three ways LLM_REGION
+# itself can fail.
+validate_model_capacity() {
+  local model_list="$1" field_name="$2" model_name="$3" sku="$4" capacity="$5" region="$6"
+  if ! capacity_in_range "$model_list" "$model_name" "$sku" "$capacity"; then
+    local range minimum maximum
+    range="$(model_capacity_range "$model_list" "$model_name" "$sku")"
+    minimum="${range%% *}"
+    maximum="${range##* }"
+    print_error '%s: %s "%s" is outside the allowed range for %s (%s) in %s: %s-%s\n' \
+      "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$capacity" "$model_name" "$sku" "$region" \
+      "$minimum" "$maximum"
+    fail_region_not_viable "$region"
   fi
 }
 
-# validate_capacity_range <model_list_json>: validates the configured chat/embed capacities
-# against the selected region's live-reported ranges (AC-BI-006) -- reuses the `model list`
-# response select_region already fetched, no second call for the same region.
+# validate_capacity_range <model_list_json> <region>: validates the configured chat/embed
+# capacities against <region>'s live-reported ranges (AC-BI-006) -- reuses the `model list`
+# response verify_target_region already fetched, no second call for the same region.
 validate_capacity_range() {
-  local model_list="$1"
+  local model_list="$1" region="$2"
   validate_model_capacity "$model_list" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_NAME" \
-    "$CHAT_MODEL_SKU" "$LLM_CHAT_MODEL_CAPACITY"
+    "$CHAT_MODEL_SKU" "$LLM_CHAT_MODEL_CAPACITY" "$region"
   validate_model_capacity "$model_list" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_NAME" \
-    "$EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_CAPACITY"
+    "$EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_CAPACITY" "$region"
 }
 
 # model_remaining_quota <usage_json> <usage_key>: prints the remaining quota (limit minus
@@ -322,30 +416,33 @@ model_remaining_quota() {
   printf '%s' "$((limit - current))"
 }
 
-# validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity>: hard stops
-# with a quota-increase message unless <usage_key>'s remaining quota covers
-# <requested_capacity> (AC-BI-007).
+# validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity> <region>: hard
+# stops with a quota-increase message unless <usage_key>'s remaining quota covers
+# <requested_capacity> (AC-BI-007). Reports working alternative regions via
+# fail_region_not_viable rather than a bare exit, since this is one of the three ways LLM_REGION
+# itself can fail.
 validate_model_quota() {
-  local usage="$1" usage_key="$2" field_name="$3" requested_capacity="$4"
+  local usage="$1" usage_key="$2" field_name="$3" requested_capacity="$4" region="$5"
   local remaining
   remaining="$(model_remaining_quota "$usage" "$usage_key")"
   if (( remaining < requested_capacity )); then
-    printf '%s: insufficient Azure quota for %s: requested %s, only %s remaining in this region.\n' \
-      "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$requested_capacity" "$remaining" >&2
-    printf 'Request a quota increase for this subscription/region and re-run -- no other region is tried.\n' >&2
-    exit "$EXIT_FAILURE"
+    print_error '%s: insufficient Azure quota for %s: requested %s, only %s remaining in %s.\n' \
+      "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$requested_capacity" "$remaining" "$region"
+    print_error 'Request a quota increase for %s, or use one of the working alternatives below.\n' \
+      "$region"
+    fail_region_not_viable "$region"
   fi
 }
 
 # check_quota <region>: hard-stops if either model's remaining quota at <region> is less than
-# its configured capacity (AC-BI-007) -- runs once, at the already-selected region only; never
-# tried against a different region (unlike S5's model-availability loop).
+# its configured capacity (AC-BI-007) -- runs once, against LLM_REGION only; a failure reports
+# working alternatives instead of trying one automatically.
 check_quota() {
   local region="$1"
   local usage
   usage="$(az cognitiveservices usage list --location "$region")"
-  validate_model_quota "$usage" "chat" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_CAPACITY"
-  validate_model_quota "$usage" "embed" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY"
+  validate_model_quota "$usage" "chat" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_CAPACITY" "$region"
+  validate_model_quota "$usage" "embed" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY" "$region"
 }
 
 # resource_group_exists: true if the fixed-name resource group already exists.
@@ -496,15 +593,22 @@ provision_resources() {
   local region="$1" account_name="$2" vault_name="$3"
   local key1
 
+  log_step "Ensuring resource group $LLM_RESOURCE_GROUP_NAME"
   ensure_resource_group "$region"
+  log_step "Ensuring AIServices account $account_name"
   ensure_account "$account_name" "$region"
+  log_step "Ensuring chat deployment $LLM_CHAT_MODEL_NAME"
   ensure_deployment "$account_name" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" \
     "$LLM_CHAT_MODEL_CAPACITY"
+  log_step "Ensuring embedding deployment $LLM_EMBED_MODEL_NAME"
   ensure_deployment "$account_name" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
     "$LLM_EMBED_MODEL_CAPACITY"
+  log_step "Ensuring Key Vault $vault_name"
   ensure_keyvault "$vault_name" "$region"
+  log_step "Granting Key Vault access to the signed-in identity"
   grant_keyvault_access "$vault_name"
 
+  log_step "Writing secrets to $vault_name"
   key1="$(fetch_account_key1 "$account_name")"
   write_secret_if_changed "$vault_name" "AZURE-API-BASE" "$account_endpoint"
   write_secret_if_changed "$vault_name" "AZURE-API-KEY" "$key1"
@@ -528,8 +632,8 @@ require_account_exists() {
   local account_name="$1"
   if ! az cognitiveservices account show --name "$account_name" \
       --resource-group "$LLM_RESOURCE_GROUP_NAME" >/dev/null 2>&1; then
-    printf 'Azure AIServices account %s not found. Run scripts/deploy-llm.sh first.\n' \
-      "$account_name" >&2
+    print_error 'Azure AIServices account %s not found. Run scripts/deploy-llm.sh first.\n' \
+      "$account_name"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -538,7 +642,7 @@ require_account_exists() {
 require_keyvault_exists() {
   local vault_name="$1"
   if ! keyvault_exists "$vault_name"; then
-    printf 'Key Vault %s not found. Run scripts/deploy-llm.sh first.\n' "$vault_name" >&2
+    print_error 'Key Vault %s not found. Run scripts/deploy-llm.sh first.\n' "$vault_name"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -575,10 +679,12 @@ rotate_key_main() {
   account_name="$(llm_account_name "$subscription_id")"
   vault_name="$(llm_keyvault_name "$subscription_id")"
 
+  log_step "Checking AIServices account and Key Vault exist"
   require_account_exists "$account_name"
   require_keyvault_exists "$vault_name"
 
   local stored_value keys_json key2_value active_slot inactive_slot new_value
+  log_step "Determining active key slot"
   stored_value="$(read_secret_value "$vault_name" "AZURE-API-KEY")"
   keys_json="$(az cognitiveservices account keys list --name "$account_name" \
     --resource-group "$LLM_RESOURCE_GROUP_NAME")"
@@ -586,10 +692,12 @@ rotate_key_main() {
   active_slot="$(active_key_slot "$stored_value" "$key2_value")"
   inactive_slot="$(inactive_key_slot "$active_slot")"
 
+  log_step "Regenerating inactive key slot ($inactive_slot)"
   keys_json="$(az cognitiveservices account keys regenerate --name "$account_name" \
     --resource-group "$LLM_RESOURCE_GROUP_NAME" --key-name "$inactive_slot")"
   new_value="$(jq -r --arg slot "$inactive_slot" '.[$slot]' <<< "$keys_json")"
 
+  log_step "Writing rotated key to $vault_name"
   az keyvault secret set --vault-name "$vault_name" --name "AZURE-API-KEY" \
     --value "$new_value" >/dev/null
 
@@ -605,6 +713,7 @@ main() {
     return
   fi
 
+  log_step "Loading and validating $CONFIG_FILE_DISPLAY_PATH"
   load_config
   validate_config
 
@@ -618,16 +727,20 @@ main() {
   print_confirmation_table "$account_name" "$vault_name"
   confirm_or_exit
 
+  log_step "Checking RBAC role assignment on subscription $subscription_id"
   rbac_preflight "$subscription_id"
 
-  local region_selection selected_region selected_region_model_list
-  region_selection="$(select_region)"
-  selected_region="${region_selection%%$'\n'*}"
-  selected_region_model_list="${region_selection#*$'\n'}"
-  validate_capacity_range "$selected_region_model_list"
-  check_quota "$selected_region"
+  local region="$LLM_REGION"
+  local model_list
+  log_step "Checking model availability in $region"
+  model_list="$(verify_target_region "$region")"
+  log_step "Validating configured capacity against $region's reported ranges"
+  validate_capacity_range "$model_list" "$region"
+  log_step "Checking remaining Azure quota in $region"
+  check_quota "$region"
 
-  provision_resources "$selected_region" "$account_name" "$vault_name"
+  log_step "Provisioning Azure resources in $region"
+  provision_resources "$region" "$account_name" "$vault_name"
   print_provisioning_summary
 }
 
