@@ -63,6 +63,16 @@ class ServiceConfig:
     entrypoint (`main.py`) and by tests for components that have nothing to
     do with Company Merge, so this layer must never fail closed on the env
     var simply being absent. See PLAN_REVIEWED.md §8 (issue #16, B1's fix).
+
+    `auth_issuer`/`auth_audience`/`auth_cli_client_id`/`auth_scopes` (from
+    `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE`/`PS_AUTH_CLI_CLIENT_ID`/`PS_AUTH_SCOPES`,
+    issue #58) follow the exact same "record what the environment resolved
+    to, absence is not an error here" shape as
+    `company_merge_similarity_threshold` -- whether both `auth_issuer` and
+    `auth_audience` are *required* (fail-closed when the local-test bypass,
+    issue #67, is inactive) is enforced by
+    `ps_service.auth.startup.resolve_auth_context`'s own call site inside
+    `create_app`, not by `load_config()`.
     """
 
     host: str
@@ -78,6 +88,10 @@ class ServiceConfig:
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
+    auth_issuer: str | None = None
+    auth_audience: str | None = None
+    auth_cli_client_id: str | None = None
+    auth_scopes: tuple[str, ...] = ()
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -302,6 +316,33 @@ def _parse_model_string(raw: str, *, env_var_name: str) -> str:
     return raw
 
 
+def _parse_auth_string(raw: str, *, env_var_name: str) -> str:
+    """Validate a `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE`/`PS_AUTH_CLI_CLIENT_ID` value.
+
+    Mirrors `_parse_host`'s "never widen to a fallback" style: rejects an
+    explicitly-set empty/whitespace-only value rather than silently treating
+    it as unset. Only called when the env var is actually set -- absence is
+    not an error at this layer; whether `auth_issuer`/`auth_audience` are
+    *required* is enforced by `ps_service.auth.startup.resolve_auth_context`,
+    not here (see `ServiceConfig`'s docstring).
+    """
+    if not raw.strip():
+        message = f"{env_var_name} must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
+def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
+    """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
+
+    Split on commas and whitespace, discarding empty entries -- never
+    enforced as authorization (issue #58's TASK.md: "audience check only").
+    Only called when the env var is actually set; unset resolves to `()` in
+    `load_config()` directly, without calling this function.
+    """
+    return tuple(part for part in raw.replace(",", " ").split() if part)
+
+
 def load_config() -> ServiceConfig:
     """Resolve `PS_SERVICE_*`/`PS_LOGGING_DIR` into a `ServiceConfig`.
 
@@ -363,6 +404,27 @@ def load_config() -> ServiceConfig:
         os.environ.get("PS_QUERY_ROW_CAP", str(_DEFAULT_QUERY_ROW_CAP))
     )
 
+    auth_issuer_raw = os.environ.get("PS_AUTH_ISSUER")
+    auth_issuer = (
+        _parse_auth_string(auth_issuer_raw, env_var_name="PS_AUTH_ISSUER")
+        if auth_issuer_raw is not None
+        else None
+    )
+    auth_audience_raw = os.environ.get("PS_AUTH_AUDIENCE")
+    auth_audience = (
+        _parse_auth_string(auth_audience_raw, env_var_name="PS_AUTH_AUDIENCE")
+        if auth_audience_raw is not None
+        else None
+    )
+    auth_cli_client_id_raw = os.environ.get("PS_AUTH_CLI_CLIENT_ID")
+    auth_cli_client_id = (
+        _parse_auth_string(auth_cli_client_id_raw, env_var_name="PS_AUTH_CLI_CLIENT_ID")
+        if auth_cli_client_id_raw is not None
+        else None
+    )
+    auth_scopes_raw = os.environ.get("PS_AUTH_SCOPES")
+    auth_scopes = _parse_auth_scopes(auth_scopes_raw) if auth_scopes_raw is not None else ()
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -377,4 +439,8 @@ def load_config() -> ServiceConfig:
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,
         query_row_cap=query_row_cap,
+        auth_issuer=auth_issuer,
+        auth_audience=auth_audience,
+        auth_cli_client_id=auth_cli_client_id,
+        auth_scopes=auth_scopes,
     )

@@ -23,6 +23,7 @@ from importlib import resources
 from typing import TYPE_CHECKING
 
 from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
 
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.logging import bind_run_context, emit_log_entry
@@ -162,6 +163,29 @@ def _resolve_graph(config: ServiceConfig) -> GraphHandle:
         raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
 
 
+def _resolve_principal(config: ServiceConfig) -> str | None:
+    """Resolve the `cypher` tool's caller identity (issue #58, AC-BI-007; issue #67).
+
+    A verified bearer token's `sub` always wins when one is present --
+    `get_access_token()` reads the `AccessToken` the MCP SDK's own
+    `AuthContextMiddleware` stashed on a contextvar for this request/task,
+    installed automatically by the SDK whenever `token_verifier` is set
+    (`ps_service.mcp_interface.http_transport.build_streamable_http_app`).
+    Falls back to the fixed local-test principal only when no token was
+    verified for this call AND the bypass (#67) is active -- the bypass's
+    existing, unchanged contract. Otherwise `None`, exactly as before this
+    issue (no real auth configured and no bypass: unreachable in practice,
+    since `ps_service.main.create_app` fails closed at startup in that
+    case, but this function makes no such assumption itself).
+    """
+    access_token = get_access_token()
+    if access_token is not None:
+        return access_token.subject
+    if config.is_local_test_bypass_active:
+        return LOCAL_TEST_PRINCIPAL_ID
+    return None
+
+
 @server.tool()
 def cypher(query: str) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.
@@ -181,7 +205,7 @@ def cypher(query: str) -> dict[str, object] | str:
     except McpGraphUnavailableError, ServiceConfigurationError:
         emit_log_entry(component=_COMPONENT, action=_ACTION, outcome="unavailable")
         return _GRAPH_UNAVAILABLE_MESSAGE
-    principal = LOCAL_TEST_PRINCIPAL_ID if config.is_local_test_bypass_active else None
+    principal = _resolve_principal(config)
     return handle_mcp_tool_call(
         query,
         graph=graph,

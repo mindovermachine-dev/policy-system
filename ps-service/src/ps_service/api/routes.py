@@ -19,6 +19,7 @@ from ps_service.api.change_check_orchestration import (
     run_change_check_sweep,
 )
 from ps_service.api.dependencies import (
+    get_principal,
     get_service_config,
     provide_change_check_dependencies,
     provide_export_dependencies,
@@ -58,6 +59,9 @@ from ps_service.api.near_miss_review_orchestration import (
 )
 from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
 from ps_service.api.run_status import get_stage
+from ps_service.auth import (
+    Principal,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
+)
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
@@ -153,7 +157,9 @@ async def create_ingestion(
     return _to_accepted_response(effective_run_id, outcome)
 
 
-async def list_curated_catalog() -> CuratedCatalogResponse:
+async def list_curated_catalog(
+    principal: Annotated[Principal | None, Depends(get_principal)] = None,
+) -> CuratedCatalogResponse:
     """Return every curated instrument (external and internal), AC-BI-011.
 
     This is **not** CELEX-filtered -- it reads
@@ -163,9 +169,22 @@ async def list_curated_catalog() -> CuratedCatalogResponse:
     ``TestClient`` call against an app with neither wired still succeeds
     (AC-BI-011's "no LLM provider configured").
 
+    ``principal`` (issue #58, AC-BI-005) is the representative route this
+    plan proves the ``get_principal`` dependency against end to end: the
+    verified caller identity ``RestAuthMiddleware`` bound to this request, or
+    ``None`` under the local-test bypass (#67). This endpoint has no
+    identity-scoped behavior of its own, so the value is accepted but
+    otherwise unused here -- the dependency is equally importable by any
+    other route that does need it.
+
+    Args:
+        principal: The request's verified identity, injected by
+            :func:`ps_service.api.dependencies.get_principal`.
+
     Returns:
         A :class:`CuratedCatalogResponse` listing every curated entry.
     """
+    del principal  # unused on this representative route; see docstring above
     return CuratedCatalogResponse(
         instruments=[
             CatalogInstrumentEntry(

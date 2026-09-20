@@ -347,6 +347,27 @@ class ResolveReviewResponse(BaseModel):
     loser_id: str | None = None
 
 
+class ProtectedResourceMetadata(BaseModel):
+    """RFC 9728 (OAuth 2.0 Protected Resource Metadata) document (issue #58, AC-BI-010).
+
+    Served unauthenticated at ``GET /.well-known/oauth-protected-resource``
+    (``ps_service.auth.protected_resource``) -- the exact URL
+    ``RestAuthMiddleware``'s own ``WWW-Authenticate: Bearer
+    resource_metadata="..."`` header (Slice 3) already points at.
+    ``ps_cli_client_id`` is this project's own extension field, not part of
+    RFC 9728 itself; the route registers this model with
+    ``response_model_exclude_none=True`` so the field is omitted entirely,
+    never rendered as ``null``, whenever ``PS_AUTH_CLI_CLIENT_ID`` is unset.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    resource: str = Field(min_length=1)
+    authorization_servers: list[str]
+    scopes_supported: list[str]
+    ps_cli_client_id: str | None = None
+
+
 class ErrorDetail(BaseModel):
     """The ``error`` object inside a structured error body."""
 

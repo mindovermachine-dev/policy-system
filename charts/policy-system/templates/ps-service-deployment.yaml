@@ -5,6 +5,9 @@ metadata:
   labels:
     {{- include "policy-system.labels" . | nindent 4 }}
     app.kubernetes.io/component: ps-service
+{{- if and (not .Values.psService.localTestBypass.enabled) (or (not .Values.psService.auth.issuer) (not .Values.psService.auth.audience)) }}
+{{- fail "psService.auth.issuer and psService.auth.audience must both be set when psService.localTestBypass.enabled=false: set both (production requires real OIDC auth against your IdP), or set psService.localTestBypass.enabled=true for local-only evaluation. See docs/artifacts/idp-configuration-contract.md." }}
+{{- end }}
 spec:
   replicas: 1
   selector:
@@ -72,4 +75,16 @@ spec:
             {{- if and (ne .Values.llm.provider "azure") .Values.llm.ollama.apiBase }}
             - name: OLLAMA_API_BASE
               value: {{ .Values.llm.ollama.apiBase | quote }}
+            {{- end }}
+            {{- if .Values.psService.auth.issuer }}
+            - name: PS_AUTH_ISSUER
+              value: {{ .Values.psService.auth.issuer | quote }}
+            {{- end }}
+            {{- if .Values.psService.auth.audience }}
+            - name: PS_AUTH_AUDIENCE
+              value: {{ .Values.psService.auth.audience | quote }}
+            {{- end }}
+            {{- if .Values.psService.auth.cliClientId }}
+            - name: PS_AUTH_CLI_CLIENT_ID
+              value: {{ .Values.psService.auth.cliClientId | quote }}
             {{- end }}

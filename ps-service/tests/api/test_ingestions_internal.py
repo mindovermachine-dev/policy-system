@@ -75,6 +75,7 @@ def _app_config() -> ServiceConfig:
         llm_interface_model="azure/gpt-4o",
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_similarity_threshold=0.83,
+        is_local_test_bypass_active=True,
     )
 
 

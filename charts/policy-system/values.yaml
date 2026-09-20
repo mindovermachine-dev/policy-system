@@ -32,6 +32,14 @@ psService:
     # Opt-in only — even under the local-test profile this stays off by
     # default; an evaluator flips it with --set psService.localTestBypass.enabled=true.
     enabled: false
+  auth:
+    # issuer/audience are required (render fails naming them) whenever
+    # localTestBypass.enabled=false — see templates/ps-service-deployment.yaml's
+    # fail() guard. cliClientId is optional (informational, RFC 9728 metadata
+    # only). See docs/artifacts/idp-configuration-contract.md.
+    issuer: ""
+    audience: ""
+    cliClientId: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
   # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
   # entry so pods can resolve host.containers.internal when llm.provider is

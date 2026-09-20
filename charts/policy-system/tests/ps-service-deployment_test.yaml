@@ -3,6 +3,11 @@ templates:
   - ps-service-deployment.yaml
 chart:
   appVersion: 9.9.9
+set:
+  # Default this suite to local-only bypass so the fail-closed OIDC guard
+  # (#58) doesn't block tests that aren't about auth. The Slice 11 tests
+  # below override this per-case to exercise the guard itself.
+  psService.localTestBypass.enabled: true
 tests:
   # --- S7: FalkorDB DNS + LLM env wiring (AC-BI-007, AC-BI-003) ---
 
@@ -263,3 +268,51 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: Always
+
+  # --- #58 Slice 11: psService.auth.* -> PS_AUTH_* env vars + fail-closed guard (AC-BI-012, AC-BI-013) ---
+
+  - it: auth.issuer/audience/cliClientId all set render all three PS_AUTH_* env vars
+    set:
+      llm.provider: ollama
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+      psService.auth.cliClientId: cli-123
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")].value
+          value: https://example-issuer.test
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_AUDIENCE")].value
+          value: ps-service
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_CLI_CLIENT_ID")].value
+          value: cli-123
+
+  - it: cliClientId unset (issuer/audience set) omits PS_AUTH_CLI_CLIENT_ID entirely, not empty
+    set:
+      llm.provider: ollama
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_CLI_CLIENT_ID")]
+
+  - it: default render (localTestBypass.enabled=false, no auth values) fails naming the missing values
+    set:
+      llm.provider: ollama
+      psService.localTestBypass.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.auth\.issuer and psService\.auth\.audience
+
+  - it: localTestBypass.enabled=true with no auth values renders cleanly (guard exempted)
+    set:
+      llm.provider: ollama
+      psService.localTestBypass.enabled: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_ISSUER")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_AUDIENCE")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_CLI_CLIENT_ID")]

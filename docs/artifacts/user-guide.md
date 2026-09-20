@@ -435,9 +435,10 @@ file path — never the credential value:
 > place this already runs is `config set-context`: re-running it for an existing
 > context name with a new `--url` always clears any credential previously stored for
 > that name, so nothing is ever silently carried over to a new URL once one *is*
-> stored. Full credential use is pending Auth0 device-flow login
-> ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57)) and PS
-> Service's bearer-token validation
+> stored. Full credential use is pending PS-Cli's own OIDC device-authorization
+> login ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57));
+> PS Service's side — generic OIDC bearer-token validation against any
+> OIDC-compliant provider (no single vendor's IdP is assumed) — is implemented
 > ([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)).
 
 ### Command reference

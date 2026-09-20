@@ -58,6 +58,7 @@ def _app_config(max_bytes: int) -> ServiceConfig:
         graceful_shutdown_seconds=10,
         logging_dir=None,
         max_request_body_bytes=max_bytes,
+        is_local_test_bypass_active=True,
     )
 
 

@@ -25,6 +25,7 @@ def _make_app() -> FastAPI:
             port=8000,
             graceful_shutdown_seconds=10,
             logging_dir=None,
+            is_local_test_bypass_active=True,
         )
     )
 

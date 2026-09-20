@@ -112,7 +112,7 @@ def _wrapped_test_client(*, host: str = "127.0.0.1") -> TestClient:
     manager (PLAN.md §1 F2) -- the outer wrapper's `lifespan` must enter
     `mcp_asgi_app.router.lifespan_context(mcp_asgi_app)` explicitly.
     """
-    mcp_asgi_app = build_streamable_http_app(host=host)
+    mcp_asgi_app = build_streamable_http_app(host=host, verifier=None, auth_context=None)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncGenerator[None]:
@@ -175,7 +175,7 @@ def _initialize_session(client: TestClient) -> str:
 
 
 def test_build_streamable_http_app_returns_a_starlette_app() -> None:
-    app = build_streamable_http_app(host="127.0.0.1")
+    app = build_streamable_http_app(host="127.0.0.1", verifier=None, auth_context=None)
 
     assert isinstance(app, Starlette)
 

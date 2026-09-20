@@ -5,6 +5,11 @@ set:
   llm.provider: azure
   llm.azure.apiKey: test-azure-key
   llm.azure.apiBase: https://example-test.openai.azure.com/
+  # Prod never uses localTestBypass — simulate a real IdP config so the
+  # ps-service-deployment.yaml fail-closed guard (#58) doesn't block
+  # unrelated assertions in this suite.
+  psService.auth.issuer: https://example-issuer.test
+  psService.auth.audience: ps-service
 templates:
   - falkordb-browser-service.yaml
   - ps-service-service.yaml

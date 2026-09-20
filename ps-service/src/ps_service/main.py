@@ -27,6 +27,10 @@ from ps_service.api.error_handlers import (
 )
 from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.routes import build_api_router
+from ps_service.auth.middleware import RestAuthMiddleware
+from ps_service.auth.protected_resource import protected_resource_metadata
+from ps_service.auth.startup import resolve_auth_context
+from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
     CELLAR_ELI,
@@ -220,11 +224,15 @@ def create_app(config: ServiceConfig) -> FastAPI:
     `/health` and `/ready` stay on `app.add_api_route` — they predate the
     router and carry no request models.
 
-    Since issue #39, `build_streamable_http_app(host=config.host)` builds MCP
-    Interface's Streamable HTTP ASGI sub-app (wrapping the same
-    `mcp_server.server` singleton `mcp_interface` defines), mounted
-    unconditionally at `MCP_HTTP_MOUNT_PATH` (`/mcp`) alongside the REST
-    router — the same process/port, never a second service (AC-BI-002).
+    Since issue #39, `build_streamable_http_app(host=config.host, verifier=...,
+    auth_context=...)` builds MCP Interface's Streamable HTTP ASGI sub-app
+    (wrapping the same `mcp_server.server` singleton `mcp_interface`
+    defines), mounted unconditionally at `MCP_HTTP_MOUNT_PATH` (`/mcp`)
+    alongside the REST router — the same process/port, never a second
+    service (AC-BI-002). Since issue #58, `verifier`/`auth_context` are the
+    exact same instances passed to `RestAuthMiddleware` below, so `/mcp`
+    requests go through the MCP SDK's own `token_verifier=` gate
+    (AC-BI-006), sharing the one process-wide verifier/JWKS cache.
     Because Starlette does not propagate a mounted sub-app's own `lifespan`
     (verified directly against this repo's installed `starlette` version),
     `lifespan` below explicitly enters
@@ -233,6 +241,27 @@ def create_app(config: ServiceConfig) -> FastAPI:
     `_refuse_non_loopback_bypass_bind`, `configure(...)`, and the startup
     warning entries have already run — preserving AC-BI-004/005's fail-fast
     ordering.
+
+    Since issue #58, `resolve_auth_context(config)` runs unconditionally
+    here (AC-BI-001/AC-BI-002): if the local-test bypass (issue #67) is
+    inactive and `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` are not both set, this
+    raises `AuthConfigurationError` and `create_app` never returns an app --
+    the exception propagates straight out of `main()`'s call site. The
+    resolved (possibly `None`, for an active bypass) result is stashed on
+    `app.state.auth_context`. `RestAuthMiddleware` (AC-BI-003/AC-BI-004) is
+    then added, wired to a `PsTokenVerifier` built from that same
+    `AuthContext` (or `None`, when the bypass is active -- every request is
+    let through unauthenticated, matching issue #67's existing contract):
+    every path other than `/health`, `/ready`, `/.well-known/*`, and `/mcp*`
+    (delegated to the MCP SDK's own `token_verifier=` gate, Slice 5) now
+    requires a verified bearer token.
+
+    Since Slice 8 (AC-BI-010), `GET /.well-known/oauth-protected-resource`
+    is registered here too, alongside `/health`/`/ready` -- the exact URL
+    `RestAuthMiddleware`'s `WWW-Authenticate` header already names. It is
+    the *only* route publishing RFC 9728 metadata: `build_streamable_http_app`
+    leaves `AuthSettings.resource_server_url=None` (Slice 5), so the MCP SDK
+    never auto-registers a competing one under `/mcp`.
     """
 
     @asynccontextmanager
@@ -318,13 +347,34 @@ def create_app(config: ServiceConfig) -> FastAPI:
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
-    app.add_middleware(_MaxBodySizeMiddleware, max_bytes=config.max_request_body_bytes)
     app.state.ready = False
     app.state.config = config
+    # AC-BI-001/AC-BI-002: resolved synchronously here, not inside the async `lifespan`
+    # closure, so that a bare (never-entered) `TestClient`/ASGI middleware added in a
+    # later slice still has a concrete auth decision the moment the app exists. Stashed
+    # on `app.state` for a later slice's middleware/route wiring to consume.
+    auth_context = resolve_auth_context(config)
+    app.state.auth_context = auth_context
+    # One `PsTokenVerifier` instance per `create_app()` call, never module-level (the
+    # import-time-hazard rule PLAN.md §0.1 documents) -- this exact instance is what
+    # both `RestAuthMiddleware` below and, from Slice 5 onward, the MCP
+    # `token_verifier=` wiring share, so there is one discovery fetch, one
+    # `PyJWKClient`, one JWKS cache per process, never two parallel verifiers.
+    verifier = PsTokenVerifier(auth_context) if auth_context is not None else None
+    # `RestAuthMiddleware` is added *before* `_MaxBodySizeMiddleware` so the latter
+    # stays the outermost, first-to-run layer (CHANGES.md item 6): `add_middleware`
+    # makes the most-recently-added call the outermost, so an oversized request gets
+    # a cheap 413 on its `Content-Length` header before any JWT/RSA verification work
+    # happens -- there is no data dependency the other way (the size check never reads
+    # `Authorization`), so this ordering costs nothing and avoids wasted verify work.
+    app.add_middleware(RestAuthMiddleware, verifier=verifier, auth_context=auth_context)
+    app.add_middleware(_MaxBodySizeMiddleware, max_bytes=config.max_request_body_bytes)
     register_exception_handlers(app)
     app.include_router(build_api_router())
 
-    mcp_asgi_app = build_streamable_http_app(host=config.host)
+    mcp_asgi_app = build_streamable_http_app(
+        host=config.host, verifier=verifier, auth_context=auth_context
+    )
     app.mount(MCP_HTTP_MOUNT_PATH, mcp_asgi_app)
 
     async def health() -> dict[str, str]:
@@ -388,6 +438,12 @@ def create_app(config: ServiceConfig) -> FastAPI:
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/ready", ready, methods=["GET"])
+    app.add_api_route(
+        "/.well-known/oauth-protected-resource",
+        protected_resource_metadata,
+        methods=["GET"],
+        response_model_exclude_none=True,
+    )
 
     return app
 

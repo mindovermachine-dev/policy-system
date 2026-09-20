@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 
 import ps_service.main as main_module
 from ps_service import dependency_health
+from ps_service.auth.errors import AuthConfigurationError
+from ps_service.auth.models import AuthContext
 from ps_service.config import ServiceConfig
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
@@ -38,6 +40,8 @@ if TYPE_CHECKING:
 
     import httpx
     from starlette.applications import Starlette
+
+    from ps_service.auth.verifier import PsTokenVerifier
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -91,13 +95,70 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     )
 
 
+def _stub_resolve_auth_context(config: ServiceConfig) -> AuthContext | None:
+    """Stand-in for the real `resolve_auth_context`'s OIDC-discovery branch (issue #58, Slice 2).
+
+    This file exercises the process harness (logging, readiness, the #67
+    local-test bypass, uvicorn wiring) -- none of its tests are about OIDC
+    discovery itself, which is `tests/auth/test_startup_fail_closed.py`'s
+    job. Without this stub, `_complete_config()`'s fake
+    `https://issuer.example.com` pair (and `_delenv_all_ps_service_vars`'s
+    equivalent env vars) would make `create_app` attempt a real,
+    doomed-to-fail network fetch for nearly every test in this file, since
+    Slice 2 replaced Slice 1's placeholder-`AuthContext` "both set" branch
+    with a real `fetch_discovery_document` call. Reproduces
+    `resolve_auth_context`'s exact bypass/presence semantics, minus the
+    real discovery fetch -- no test in this file inspects
+    `app.state.auth_context`'s contents, only whether `create_app` raises.
+    """
+    if config.is_local_test_bypass_active:
+        return None
+    if config.auth_issuer is None or config.auth_audience is None:
+        raise AuthConfigurationError(
+            "PS_AUTH_ISSUER and PS_AUTH_AUDIENCE are unset; set both PS_AUTH_ISSUER and "
+            "PS_AUTH_AUDIENCE, or set PS_SERVICE_LOCAL_TEST_BYPASS=true for local-only "
+            "evaluation."
+        )
+    return AuthContext(
+        issuer=config.auth_issuer,
+        audience=config.auth_audience,
+        cli_client_id=config.auth_cli_client_id,
+        scopes=config.auth_scopes,
+        jwks_uri="https://issuer.example.com/jwks.json",
+        allowed_algorithms=frozenset({"RS256"}),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_auth_discovery(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Autouse: replace real OIDC discovery with `_stub_resolve_auth_context` for this file.
+
+    See `_stub_resolve_auth_context`'s own docstring for why this file, specifically,
+    needs it. A test that wants to exercise real discovery behavior belongs in
+    `tests/auth/test_startup_fail_closed.py`, not here.
+    """
+    monkeypatch.setattr(main_module, "resolve_auth_context", _stub_resolve_auth_context)
+
+
 def _complete_config(**overrides: object) -> ServiceConfig:
     """A `ServiceConfig` with every `INGESTION_REQUIRED_CONFIG_FIELDS` value set.
 
     The baseline for `app` below and any other fixture that needs `/ready`'s
     startup gate to be reachable — the readiness-gated-on-config-completeness
     tests further down build their own incomplete configs directly instead of
-    using this helper.
+    using this helper. `auth_issuer`/`auth_audience` default to a fake
+    placeholder pair (issue #58): `create_app` now fails closed
+    (`AuthConfigurationError`) unless the local-test bypass is active or both
+    are set, and this helper's own callers have nothing to do with auth or
+    the bypass -- defaulting the auth pair here (rather than forcing the
+    bypass on) deliberately leaves `is_local_test_bypass_active` at its own
+    `False` default, so this file's many bypass-semantics tests (which build
+    `ServiceConfig`/call `_complete_config` expecting bypass-inactive
+    behavior) are undisturbed. A test exercising the new fail-closed
+    behavior overrides the auth pair directly via
+    `_complete_config(auth_issuer=None, auth_audience=None)`.
     """
     defaults: dict[str, object] = {
         "host": "127.0.0.1",
@@ -107,6 +168,8 @@ def _complete_config(**overrides: object) -> ServiceConfig:
         "llm_interface_model": "azure/gpt-5.4-mini",
         "llm_interface_embed_model": "azure/text-embedding-3-small",
         "company_merge_similarity_threshold": 0.85,
+        "auth_issuer": "https://issuer.example.com",
+        "auth_audience": "https://api.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
@@ -408,9 +471,21 @@ def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
 
 
 def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clear every `PS_SERVICE_*` env var, giving `load_config()` a clean-env precondition."""
+    """Clear every `PS_SERVICE_*` env var, giving `load_config()` a clean-env precondition.
+
+    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58):
+    these tests call `main()` end to end (real `load_config()`, not
+    `_complete_config()`), have nothing to do with auth, and don't set the
+    local-test bypass -- without a fake pair, `create_app` would now fail
+    closed (`AuthConfigurationError`). Kept deliberately independent of the
+    bypass (never set here) so a host override to a non-loopback address
+    (see the parametrized test below) never collides with
+    `_refuse_non_loopback_bypass_bind`'s bypass-active-only guard.
+    """
     for name in ("PS_SERVICE_HOST", "PS_SERVICE_PORT", "PS_SERVICE_GRACEFUL_SHUTDOWN_SECONDS"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PS_AUTH_ISSUER", "https://issuer.example.com")
+    monkeypatch.setenv("PS_AUTH_AUDIENCE", "https://api.example.com")
 
 
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
@@ -551,6 +626,7 @@ def test_create_app_instances_have_independent_readiness_state() -> None:
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
+        is_local_test_bypass_active=True,
     )
     started_app = create_app(config)
     untouched_app = create_app(config)
@@ -599,6 +675,7 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=tmp_path,
+        is_local_test_bypass_active=True,
     )
     scoped_app = create_app(config)
 
@@ -637,12 +714,14 @@ def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=first_logging_dir,
+        is_local_test_bypass_active=True,
     )
     second_config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=second_logging_dir,
+        is_local_test_bypass_active=True,
     )
     first_app = create_app(first_config)
     second_app = create_app(second_config)
@@ -691,6 +770,7 @@ def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
+        is_local_test_bypass_active=True,
     )
     scoped_app = create_app(config)
 
@@ -825,8 +905,12 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
     entered = False
     real_build_streamable_http_app = main_module.build_streamable_http_app
 
-    def wrapped_build_streamable_http_app(*, host: str) -> Starlette:
-        mcp_asgi_app = real_build_streamable_http_app(host=host)
+    def wrapped_build_streamable_http_app(
+        *, host: str, verifier: PsTokenVerifier | None, auth_context: AuthContext | None
+    ) -> Starlette:
+        mcp_asgi_app = real_build_streamable_http_app(
+            host=host, verifier=verifier, auth_context=auth_context
+        )
 
         @asynccontextmanager
         async def recording_lifespan_context(app: object) -> AsyncGenerator[None]:
@@ -1487,8 +1571,17 @@ def test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path() -> None
     the transport is wired through the real composition root, not just the
     standalone factory already proven by `tests/mcp_interface/test_http_transport.py`
     (Slice 3).
+
+    Builds with the local-test bypass active (issue #58, Slice 5): this test
+    is about transport wiring, not authentication -- `tests/mcp_interface/
+    test_mcp_auth.py` covers the genuinely auth-armed mount. Without the
+    bypass, `_complete_config()`'s default fake (but non-`None`)
+    `auth_issuer`/`auth_audience` pair, combined with this file's own
+    `_stub_resolve_auth_context` autouse fixture, would produce a real,
+    armed `AuthContext`, and this unauthenticated request would now get 401
+    from the MCP SDK's own gate (AC-BI-006) instead of reaching `initialize`.
     """
-    app = create_app(_complete_config())
+    app = create_app(_complete_config(is_local_test_bypass_active=True))
 
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         response = client.post(
@@ -1519,6 +1612,11 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     the `psdomain://concepts` resource are reachable over the mounted transport
     in the same session — composing the fact in one test, not two disconnected
     ones (mirrors #67's own established convention).
+
+    Builds with the local-test bypass active (issue #58, Slice 5) for the
+    same reason as `test_create_app_mounts_mcp_streamable_http_transport_at_fixed_path`
+    above: this test is about tool/resource reachability, not
+    authentication.
     """
     fake_graph = _FakeGraphHandle(result=_FakeQueryResult(header=[[0, "id"]], result_set=[["a"]]))
 
@@ -1531,7 +1629,7 @@ def test_cypher_and_domain_concepts_both_reachable_via_mounted_transport(
     md_file.write_text("# PS domain concepts\n\nRegulation -> Obligation\n", encoding="utf-8")
     monkeypatch.setattr(mcp_server, "_domain_concepts_path", lambda: md_file)
 
-    app = create_app(_complete_config())
+    app = create_app(_complete_config(is_local_test_bypass_active=True))
 
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         session_id = _initialize_mcp_session(client)

@@ -98,6 +98,7 @@ def _app_config() -> ServiceConfig:
         graceful_shutdown_seconds=10,
         logging_dir=None,
         company_merge_similarity_threshold=0.83,
+        is_local_test_bypass_active=True,
     )
 
 

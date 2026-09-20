@@ -179,6 +179,7 @@ def _app_config(*, embed_model: str | None = "azure/text-embedding-3-large") -> 
         graceful_shutdown_seconds=10,
         logging_dir=None,
         llm_interface_embed_model=embed_model,
+        is_local_test_bypass_active=True,
     )
 
 

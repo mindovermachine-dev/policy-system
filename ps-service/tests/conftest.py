@@ -16,11 +16,18 @@ duplicate. The two pre-existing local copies are left as-is (out of scope
 for this batch to touch); pytest resolves the nearer conftest.py first, so
 they simply shadow this one for tests in their own directories, no
 conflict.
+
+Also registers `tests` itself as a real (if minimal) package in
+`sys.modules` -- see `_register_tests_package_for_cross_package_imports`'s
+own docstring for why (issue #58 Slice 3 regression).
 """
 
 from __future__ import annotations
 
 import json
+import sys
+import types
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,9 +40,47 @@ from ps_service.logging.facade import reset_for_tests
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
     from ps_service.logging.emitter import TextSink
+
+
+def _register_tests_package_for_cross_package_imports() -> None:
+    """Make `tests` a real package in `sys.modules`, rooted at this directory.
+
+    `ps-service/tests` deliberately has no `__init__.py` of its own (root
+    `pyproject.toml`'s INP001 comment, tied to issue #52's fix for a
+    same-basename collision across uv-workspace members) -- so under
+    `--import-mode=importlib`, pytest never puts this directory on
+    `sys.path` and never gives `tests` a package of its own. A same-package
+    absolute import (e.g. `tests/restore/test_x.py` doing
+    `from restore._fixtures import ...`) happens to work because pytest
+    itself loads `restore/__init__.py` into `sys.modules` before running
+    that test module. A *cross*-package import has no such guarantee: it
+    depends on collection order, which is exactly why
+    `tests/api/test_rest_auth_middleware.py`'s
+    `from tests.auth.mock_oidc_provider import ...` (issue #58 Slice 3)
+    raised `ModuleNotFoundError: No module named 'tests'` when run from the
+    repo root (the canonical invocation) -- "tests" was never loaded at
+    all, by anything, since nothing else ever imports it by that name.
+
+    Registering `tests` here -- once, before any test module in this suite
+    is collected, with `__path__` pointing at this directory -- makes it a
+    real (if empty) package. Python's normal import machinery then resolves
+    any `tests.<subpackage>.<module>` import (e.g. `tests.auth.mock_oidc_
+    provider`) against the real files on disk, exactly as if `tests/
+    __init__.py` existed, without adding that file: nothing on the
+    filesystem changes, so this doesn't touch the INP001 convention, and it
+    is local to `ps-service` (`ps-cli/tests` is untouched, so no risk of
+    reintroducing issue #52's collision).
+    """
+    if "tests" in sys.modules:
+        return
+    module = types.ModuleType("tests")
+    module.__path__ = [str(Path(__file__).parent)]
+    sys.modules["tests"] = module
+
+
+_register_tests_package_for_cross_package_imports()
 
 
 @pytest.fixture(autouse=True)

@@ -72,12 +72,20 @@ def configured_logging(tmp_path: Path) -> Iterator[Path]:
 
 @pytest.fixture
 def app_config() -> ServiceConfig:
-    """A loopback ``ServiceConfig`` for building a test app (``logging_dir=None``)."""
+    """A loopback ``ServiceConfig`` for building a test app (``logging_dir=None``).
+
+    ``is_local_test_bypass_active=True`` by default (issue #58): most tests
+    funnelling through this fixture have nothing to do with auth, and
+    ``create_app`` now fails closed (``AuthConfigurationError``) unless the
+    bypass is active or ``PS_AUTH_ISSUER``/``PS_AUTH_AUDIENCE`` are both set.
+    A test exercising the new fail-closed behavior overrides this directly.
+    """
     return ServiceConfig(
         host="127.0.0.1",
         port=8000,
         graceful_shutdown_seconds=10,
         logging_dir=None,
+        is_local_test_bypass_active=True,
     )
 
 

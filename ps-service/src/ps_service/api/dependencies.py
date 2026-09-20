@@ -39,6 +39,7 @@ from ps_service.api.restore_orchestration import (
     RestoreDependencies,
     build_default_restore_dependencies,
 )
+from ps_service.auth import Principal
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
@@ -58,6 +59,33 @@ def get_service_config(request: Request) -> ServiceConfig:
     """
     config: ServiceConfig = request.app.state.config
     return config
+
+
+def get_principal(request: Request) -> Principal | None:
+    """Return the request's verified identity, or ``None`` under the local-test bypass (#67).
+
+    ``RestAuthMiddleware`` (issue #58, AC-BI-005) stashes the verified
+    ``Principal`` directly on ``request.scope["ps_principal"]`` *before*
+    FastAPI's dependency-injection machinery even runs -- a plain ASGI
+    middleware writes into ``scope``, not ``app.state`` (which is
+    process/app-lifetime state, not per-request). This dependency is purely
+    the read side of that contract: it never verifies a token itself, it
+    only surfaces what the middleware already established for this request.
+
+    Args:
+        request: The incoming request (FastAPI injects it).
+
+    Returns:
+        The verified :class:`Principal`, or ``None`` when the local-test
+        bypass is active (no token was ever checked for this request).
+    """
+    principal = request.scope.get("ps_principal")
+    if principal is not None and not isinstance(principal, Principal):
+        # Defensive only: `RestAuthMiddleware` never stores anything else under this
+        # key, and a bare `TestClient`/ASGI caller that never runs the middleware at
+        # all simply never sets the key, so `.get(...)` already returns `None` here.
+        return None
+    return principal
 
 
 async def provide_run_id(request: Request) -> AsyncIterator[str]:
