@@ -20,10 +20,10 @@ would still leave a type-checking gap.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
-import socket
 import subprocess
 import time
 import tomllib
@@ -261,8 +261,17 @@ def test_runtime_image_contains_no_test_modules_or_fixtures(
 #
 # `on_semver.yml`'s build job runs this module against the image it just built, and only a
 # green run lets the publish job push. The four tests below are that gate: A proves the service
-# answers through the published port, B' pins `/ready`'s exact answer and the exact reason for
-# it, C' proves FalkorDB specifically was healthy, and D is C's negative control.
+# answers, B' pins `/ready`'s exact answer and the exact reason for it, C' proves FalkorDB
+# specifically was healthy, and D is C's negative control.
+#
+# Issue #58 made `create_app` fail closed without OIDC config (AC-BI-002), so every container
+# this module starts now runs with the local-test bypass (issue #67) -- and the bypass is itself
+# refused on a non-loopback bind (`main._refuse_non_loopback_bypass_bind`), which the image's own
+# baked-in default (`PS_SERVICE_HOST=0.0.0.0`, AC-BI-008) is. So these containers now bind
+# loopback and every test reaches them via `docker exec` (`_get_from_container`), inside their
+# own network namespace, instead of through a published port. AC-BI-008's env-baking half is
+# still proven live by `test_container_env_sets_ps_service_host_to_all_interfaces`; its
+# published-port-reachability half has no live coverage left in this module.
 #
 # Why `/ready` is asserted `not_ready` and not `ready` (the F-03 residual, stated once here):
 # `app.state.ready` also requires the Cellar/ELI probe, whose endpoint is a hardcoded module
@@ -297,29 +306,14 @@ _PULL_TIMEOUT_SECONDS = 900.0
 
 @dataclass(frozen=True)
 class _RunningService:
-    """A started `ps-service` container plus the host-side base URL of its published port."""
+    """A started `ps-service` container, bound to loopback inside its own network namespace."""
 
     name: str
-    base_url: str
 
 
 def _unique(prefix: str) -> str:
     """Return a collision-free container/network name, so parallel runs never clash."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
-
-
-def _free_host_port() -> int:
-    """Return a currently-free localhost TCP port for `--publish`.
-
-    Bind-then-release rather than a fixed port: a hardcoded port collides with whatever else
-    the runner (or the developer's laptop) happens to be running. The gap between release and
-    the container's bind is a theoretical race no runner has ever lost in practice, and the
-    alternative -- a fixed port -- fails deterministically instead of theoretically.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-    return port
 
 
 def _remove_container(cli: str, name: str) -> None:
@@ -424,17 +418,54 @@ def _wait_for_falkordb(cli: str, container: str) -> None:
     )
 
 
+def _get_from_container(
+    cli: str, container: str, path: str, *, port: int = _SERVICE_CONTAINER_PORT
+) -> httpx.Response:
+    """GET `path` from inside `container`'s own network namespace via `docker exec`.
+
+    These containers bind loopback only (local-test bypass, AC-BI-002), so the host cannot
+    reach them through a published port -- this execs `python` inside the container and issues
+    the request from its own network namespace instead, via the image's own `httpx` install
+    (a genuine runtime dependency, not a dev-only one -- see `_DEV_ONLY_MODULES`). A non-zero
+    exit (typically `ConnectionRefusedError` while the service has not started listening yet)
+    surfaces as `httpx.ConnectError`, matching the exception type a direct `httpx.get` would
+    have raised, so every poll-loop call site needs no change in kind.
+    """
+    snippet = (
+        "import base64, httpx; "
+        f"r = httpx.get('http://127.0.0.1:{port}{path}', timeout={_HTTP_TIMEOUT_SECONDS}); "
+        "print(r.status_code); "
+        "print(base64.b64encode(r.content).decode())"
+    )
+    result = _run_container_cli(
+        cli,
+        ["exec", container, "python", "-c", snippet],
+        timeout=_INSPECT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise httpx.ConnectError(result.stderr.strip() or "docker exec probe failed")
+    status_line, body_line = result.stdout.splitlines()[:2]
+    return httpx.Response(status_code=int(status_line), content=base64.b64decode(body_line))
+
+
 def _start_service(
     cli: str, image_ref: str, *, network: str, falkordb_host: str, name: str
 ) -> _RunningService:
-    """Start the image under test on `network`, publishing its port on a free localhost port.
+    """Start the image under test on `network`, bound to loopback with the local-test bypass.
+
+    `PS_SERVICE_LOCAL_TEST_BYPASS=true` is needed because these tests carry no OIDC credentials
+    (issue #67) and `create_app` now fails closed without one (issue #58, AC-BI-002). The bypass
+    is itself refused on a non-loopback bind (`main._refuse_non_loopback_bypass_bind`) -- and the
+    image's own baked-in default is `PS_SERVICE_HOST=0.0.0.0` (AC-BI-008) -- so `PS_SERVICE_HOST`
+    is pinned to loopback here explicitly. That means no `--publish`ed port can reach this
+    container from the host; every test against it goes through `_get_from_container` instead.
 
     `PS_FALKORDB_HOST` is always passed explicitly rather than relying on the source default
     (`127.0.0.1`), which reaches FalkorDB from no container that has its own network namespace
     -- neither a CI runner's nor the devcontainer's, which sets `PS_FALKORDB_HOST=falkordb`
     for exactly this reason.
     """
-    port = _free_host_port()
     result = _run_container_cli(
         cli,
         [
@@ -444,10 +475,12 @@ def _start_service(
             name,
             "--network",
             network,
-            "--publish",
-            f"127.0.0.1:{port}:{_SERVICE_CONTAINER_PORT}",
             "--env",
             f"PS_FALKORDB_HOST={falkordb_host}",
+            "--env",
+            "PS_SERVICE_HOST=127.0.0.1",
+            "--env",
+            "PS_SERVICE_LOCAL_TEST_BYPASS=true",
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,
@@ -457,20 +490,16 @@ def _start_service(
         f"starting {image_ref} as {name} failed (exit {result.returncode}):\n"
         f"{result.stdout}\n{result.stderr}"
     )
-    return _RunningService(name=name, base_url=f"http://127.0.0.1:{port}")
+    return _RunningService(name=name)
 
 
 def _wait_for_liveness(cli: str, service: _RunningService) -> httpx.Response:
-    """Poll `/health` through the published port until it answers 200, then return the response.
-
-    Every request crosses the container boundary from the host, so a success here is itself
-    evidence for AC-BI-008 (the image binds every interface, not loopback).
-    """
+    """Poll `/health` inside the container until it answers 200, then return the response."""
     deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
     last_failure = "no response"
     while time.monotonic() < deadline:
         try:
-            response = httpx.get(f"{service.base_url}/health", timeout=_HTTP_TIMEOUT_SECONDS)
+            response = _get_from_container(cli, service.name, "/health")
         except httpx.HTTPError as exc:
             last_failure = repr(exc)
         else:
@@ -479,7 +508,7 @@ def _wait_for_liveness(cli: str, service: _RunningService) -> httpx.Response:
             last_failure = f"HTTP {response.status_code}: {response.text}"
         time.sleep(_POLL_INTERVAL_SECONDS)
     pytest.fail(
-        f"{service.base_url}/health never answered {_HTTP_OK} within "
+        f"{service.name}'s /health never answered {_HTTP_OK} within "
         f"{_LIVENESS_DEADLINE_SECONDS}s (last: {last_failure}):\n"
         f"{_container_logs(cli, service.name)}"
     )
@@ -549,19 +578,17 @@ def smoke_service(
         _remove_container(container_cli, name)
 
 
-def test_health_returns_200_alive_through_the_published_port(
-    smoke_service: _RunningService,
-) -> None:
-    """A (AC-BI-007, AC-BI-008): `/health` answers 200 `alive` from outside the container.
+def test_health_returns_200_alive(container_cli: str, smoke_service: _RunningService) -> None:
+    """A (AC-BI-007): `/health` answers 200 `alive`.
 
     AC-BI-002 (built-image half): `version` must match `ps-service/pyproject.toml`'s own
     declared `[project] version` -- the real, non-editable wheel install baked into the image
     (see CHANGES.md C-02) carries hatchling-stamped metadata equal to that source-tree value.
     """
-    response = httpx.get(f"{smoke_service.base_url}/health", timeout=_HTTP_TIMEOUT_SECONDS)
+    response = _get_from_container(container_cli, smoke_service.name, "/health")
 
     assert response.status_code == _HTTP_OK, (
-        f"/health answered {response.status_code} through the published port: {response.text}"
+        f"/health answered {response.status_code}: {response.text}"
     )
     with (_REPO_ROOT / "ps-service/pyproject.toml").open("rb") as pyproject_file:
         expected_version = tomllib.load(pyproject_file)["project"]["version"]
@@ -570,7 +597,7 @@ def test_health_returns_200_alive_through_the_published_port(
 
 
 def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
-    smoke_service: _RunningService,
+    container_cli: str, smoke_service: _RunningService
 ) -> None:
     """B' (AC-BI-007): `/ready` answers 503 `not_ready`.
 
@@ -584,7 +611,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     `test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable` proves the
     reason is not FalkorDB. Each is its own test so a failure names which half broke.
     """
-    response = httpx.get(f"{smoke_service.base_url}/ready", timeout=_HTTP_TIMEOUT_SECONDS)
+    response = _get_from_container(container_cli, smoke_service.name, "/ready")
 
     assert response.status_code == _HTTP_SERVICE_UNAVAILABLE, (
         f"/ready answered {response.status_code}: {response.text}"
@@ -631,7 +658,7 @@ def test_no_falkordb_startup_warning_is_emitted_when_falkordb_is_reachable(
 
 
 def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
-    """Poll `/catalog` through the published port until it answers 200, then return it.
+    """Poll `/catalog` until it answers 200, then return it.
 
     New Slice 6.8 (CHANGES.md MA3): `GET /catalog` needs no FalkorDB/LLM
     dependency (AC-BI-011), so this polls the same way `_wait_for_liveness`
@@ -641,7 +668,7 @@ def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
     last_failure = "no response"
     while time.monotonic() < deadline:
         try:
-            response = httpx.get(f"{service.base_url}/catalog", timeout=_HTTP_TIMEOUT_SECONDS)
+            response = _get_from_container(cli, service.name, "/catalog")
         except httpx.HTTPError as exc:
             last_failure = repr(exc)
         else:
@@ -650,7 +677,7 @@ def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
             last_failure = f"HTTP {response.status_code}: {response.text}"
         time.sleep(_POLL_INTERVAL_SECONDS)
     pytest.fail(
-        f"{service.base_url}/catalog never answered {_HTTP_OK} within "
+        f"{service.name}'s /catalog never answered {_HTTP_OK} within "
         f"{_LIVENESS_DEADLINE_SECONDS}s (last: {last_failure}):\n"
         f"{_container_logs(cli, service.name)}"
     )
@@ -664,10 +691,10 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
     so this deliberately does *not* reuse `smoke_service` (which wires a
     FalkorDB container) -- a bare, single-container start is the whole point
     of the proof: the route answers with real content with no dependency
-    stack running at all.
+    stack running at all. Bound to loopback with the local-test bypass, same
+    reasoning as `_start_service` (issue #58, AC-BI-002).
     """
     name = _unique("ps-smoke-catalog")
-    port = _free_host_port()
     result = _run_container_cli(
         container_cli,
         [
@@ -675,8 +702,10 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
             "--detach",
             "--name",
             name,
-            "--publish",
-            f"127.0.0.1:{port}:{_SERVICE_CONTAINER_PORT}",
+            "--env",
+            "PS_SERVICE_HOST=127.0.0.1",
+            "--env",
+            "PS_SERVICE_LOCAL_TEST_BYPASS=true",
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,
@@ -686,7 +715,7 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
         f"starting {image_ref} as {name} failed (exit {result.returncode}):\n"
         f"{result.stdout}\n{result.stderr}"
     )
-    service = _RunningService(name=name, base_url=f"http://127.0.0.1:{port}")
+    service = _RunningService(name=name)
     try:
         _wait_for_liveness(container_cli, service)
         yield service
@@ -758,7 +787,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
             f"expected both dependencies unhealthy; got {sorted(unhealthy)}"
         )
 
-        response = httpx.get(f"{service.base_url}/ready", timeout=_HTTP_TIMEOUT_SECONDS)
+        response = _get_from_container(container_cli, service.name, "/ready")
         assert response.status_code == _HTTP_SERVICE_UNAVAILABLE
         assert response.json() == {
             "status": "not_ready",
