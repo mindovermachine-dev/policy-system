@@ -17,6 +17,7 @@ set-context` to rewrite it, rather than an unhandled `AttributeError`/`TypeError
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,7 +92,9 @@ def _parse_auth_overrides(raw_auth: dict[str, object]) -> AuthOverrides:
     )
 
 
-def _parse_context_entry(targets_path: Path, name: str, raw_value: object) -> ContextEntry:
+def _parse_context_entry(
+    targets_path: Path, name: str, raw_value: object, *, strict: bool
+) -> ContextEntry | None:
     """Parse one `[contexts.<name>]` table into a `ContextEntry`.
 
     Raises `PsCliError` naming `targets_path` if `raw_value` is not a table -- the
@@ -99,8 +102,23 @@ def _parse_context_entry(targets_path: Path, name: str, raw_value: object) -> Co
     `[contexts]`; a deliberate, explicit "old targets.toml format" error instead of a
     raw `AttributeError`/`TypeError` from treating a `str` as a `dict` (L1 "Fail Fast
     at Boundaries"). See PLAN.md (issue #57) §2 Slice 1, D-57-2.
+
+    When `strict=False`, an old-format entry is skipped (returns `None`) with a
+    warning to stderr instead of raising -- the seam `set_context`'s own recovery
+    path (`handle_config_set_context`) needs: fixing *one* context by name must not
+    be blocked by some *other*, unrelated context still being in the old format,
+    otherwise the error's own hint ("re-run `set-context` for each context") is
+    impossible to follow one context at a time.
     """
     if not isinstance(raw_value, dict):
+        if not strict:
+            print(
+                f"⚠️  {targets_path} uses the old targets.toml format for context "
+                f"'{name}' (a plain string, not a table) -- dropping it; "
+                f"re-run 'ps-cli config set-context {name} --url <url>' to restore it",
+                file=sys.stderr,
+            )
+            return None
         raise PsCliError(
             msg=(
                 f"{targets_path} uses the old targets.toml format for context "
@@ -117,7 +135,7 @@ def _parse_context_entry(targets_path: Path, name: str, raw_value: object) -> Co
     return ContextEntry(url=url, auth=auth)
 
 
-def load_targets(config_dir: Path) -> TargetsFile | None:
+def load_targets(config_dir: Path, *, strict: bool = True) -> TargetsFile | None:
     """Load and parse `<config_dir>/targets.toml`.
 
     Returns `None` if the file does not exist — `targets.toml` is entirely optional;
@@ -126,9 +144,16 @@ def load_targets(config_dir: Path) -> TargetsFile | None:
     exists but contains invalid TOML (AC-BI-010) — a deliberate divergence from
     `ps-cli.toml`'s unwrapped-crash behavior for malformed TOML today: `targets.toml`
     is operator-hand-edited, so a parse failure here is a user-facing error, not a
-    packaging/environment bug. See PLAN.md (issue #56) §1 D4. Also raises `PsCliError`
-    if a context's value is the pre-issue-#57 flat-string shape (see
-    `_parse_context_entry`).
+    packaging/environment bug. See PLAN.md (issue #56) §1 D4.
+
+    With the default `strict=True`, also raises `PsCliError` if any context's value
+    is the pre-issue-#57 flat-string shape (see `_parse_context_entry`) -- correct
+    for every read-only or select-a-context caller (`load_config()`,
+    `use-context`), which must not silently proceed against a file it cannot fully
+    trust. `handle_config_set_context()` passes `strict=False`: its whole job is
+    fixing one named context, which an unrelated old-format sibling must not block
+    (see `_parse_context_entry`'s own docstring) -- old-format entries are dropped
+    with a warning rather than blocking the write.
     """
     targets_path = config_dir / _TARGETS_FILE_NAME
     if not targets_path.is_file():
@@ -145,12 +170,14 @@ def load_targets(config_dir: Path) -> TargetsFile | None:
     # rather than re-validating it defensively, matching `config.py`'s own `cast`
     # usage for trusted, internally-produced TOML shapes. A context value that is
     # *not* this trusted shape (the pre-#57 flat string) is still explicitly
-    # detected and rejected by `_parse_context_entry` above, not silently cast away.
+    # detected and rejected (or, non-strict, dropped) by `_parse_context_entry`
+    # above, not silently cast away.
     raw_contexts = cast("dict[str, object]", raw.get("contexts", {}))
-    contexts = {
-        name: _parse_context_entry(targets_path, name, raw_value)
+    parsed = {
+        name: _parse_context_entry(targets_path, name, raw_value, strict=strict)
         for name, raw_value in raw_contexts.items()
     }
+    contexts = {name: entry for name, entry in parsed.items() if entry is not None}
     current_context = cast("str | None", raw.get("current_context"))
 
     return TargetsFile(current_context=current_context, contexts=contexts)

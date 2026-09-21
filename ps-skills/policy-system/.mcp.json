@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "policy-system-graph": {
-      "type": "http",
-      "url": "https://ps.example.com/mcp/"
+      "type": "stdio",
+      "command": "ps-cli-mcp-bridge"
     }
   }
 }

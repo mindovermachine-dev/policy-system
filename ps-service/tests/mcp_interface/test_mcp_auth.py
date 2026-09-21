@@ -4,7 +4,7 @@ Drives the *real* mounted Streamable HTTP ASGI app -- the same
 `build_streamable_http_app` production code path `ps_service.main.create_app`
 uses -- through a real `TestClient`, against the shared `MockOidcProvider`
 test infra (`tests/auth/mock_oidc_provider.py`, AC-BI-017: generic, no
-Auth0/Entra shape). No second, MCP-specific mock IdP.
+Entra-specific shape). No second, MCP-specific mock IdP.
 
 AC-BI-006: an MCP request to `/mcp` with no/invalid token is rejected by the
 same `PsTokenVerifier`, via the MCP SDK's own `MCPServer(token_verifier=...)`

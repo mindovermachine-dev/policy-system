@@ -158,3 +158,22 @@ up to that point reproducible without guesswork.
   (**Allow public client flows: Yes**) was skipped.
 - **Consent prompt blocks non-interactive login**: means Step 3.11 (admin
   consent) was skipped or granted against the wrong app registration.
+- **Scripting Steps 2–3 via Graph API/`az ad app create` instead of the
+  Portal**: two Portal behaviors are easy to miss when scripting this
+  worked example instead of clicking through it:
+  - **`AADSTS650052` ("lacks a service principal")** on first login:
+    `POST /applications` (what `az ad app create` calls) creates only the
+    **application** object, not its tenant **service principal** — the
+    Portal's "New registration" wizard creates both. Run
+    `az ad sp create --id <app-id>` for each app registration (API,
+    CLI, and any connector app) after creating it via the API/CLI.
+  - **v1 tokens issued despite configuring `psService.auth.issuer` for
+    v2**: a Graph-API-created app registration's
+    `api.requestedAccessTokenVersion` defaults to unset (v1); the Portal's
+    "Expose an API" flow sets it to v2 automatically. Set it explicitly —
+    `az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/<object-id> --body '{"api":{"requestedAccessTokenVersion":2}}'`
+    — and expect roughly a minute of propagation delay before it takes
+    effect. Once on v2, the token's `aud` claim is the bare app ID
+    (`<api-app-client-id>`), **not** the `api://<api-app-client-id>` form
+    — set `psService.auth.audience` to match whichever form the token
+    actually carries, not whichever form was set as the identifier URI.

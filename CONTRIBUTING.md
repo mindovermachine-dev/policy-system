@@ -359,9 +359,14 @@ instance it targets, named contexts, credential storage), see
 the [user guide](./docs/artifacts/user-guide.md#ps-cli). The rest of this section covers the
 contributor-only path: running `ps-cli` straight from a repo checkout.
 
-Auth0-based OIDC login (OAuth 2.0 Device Authorization Grant) for
-individual-operator identity, once targeting a non-local PS Service instance,
-is still planned, not yet implemented.
+IdP-agnostic OIDC login (OAuth 2.0 Device Authorization Grant) for
+individual-operator identity, for reaching a non-local PS Service instance,
+is implemented (issue #57) — `ps-cli auth login` discovers the issuer from PS
+Service's own protected-resource metadata and works against any
+OIDC-compliant IdP a deployment configures (issue #58), not a specific one;
+Microsoft Entra ID is the reference IdP for Azure-hosted customers, validated
+directly (see the
+[IdP configuration contract](./docs/artifacts/idp-configuration-contract.md)).
 
 #### Run from a repo checkout (local development)
 

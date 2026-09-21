@@ -150,7 +150,7 @@ case "${1:-} ${2:-}" in
           list) cat "$state/accounts/$name-keys.json" ;;
           regenerate)
             key_name="$(get_arg --key-name "$@")"
-            new_value="FAKE-${key_name^^}-REGEN-$RANDOM"
+            new_value="FAKE-$(printf '%s' "$key_name" | tr '[:lower:]' '[:upper:]')-REGEN-$RANDOM"
             jq --arg k "$key_name" --arg v "$new_value" '.[$k] = $v' \
               "$state/accounts/$name-keys.json" > "$state/accounts/$name-keys.json.tmp"
             mv "$state/accounts/$name-keys.json.tmp" "$state/accounts/$name-keys.json"

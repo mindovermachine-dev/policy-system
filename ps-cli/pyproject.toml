@@ -12,6 +12,10 @@ dependencies = [
 
 [project.scripts]
 ps-cli = "ps_cli.cli:main"
+# Not a subcommand of ps-cli, and never run manually -- an MCP host (a Claude
+# plugin's `.mcp.json`) spawns this as a `type: "stdio"` server. See
+# ps_cli/mcp_bridge.py's own docstring.
+ps-cli-mcp-bridge = "ps_cli.mcp_bridge:main"
 
 [dependency-groups]
 dev = ["ps-test-support"]

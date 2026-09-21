@@ -307,45 +307,25 @@ this repo:
 URL:  `https://github.com/mindovermachine-dev/policy-system`
 ```
 
-This installs the `ps-qna` skill. The plugin also declares a `policy-system-graph` MCP
-connector, but that half is for a **hosted** PS Service — Claude Desktop evaluates
-plugin and custom connectors from Anthropic's cloud, so it can never reach the
-`127.0.0.1:8000` instance you deployed in step 7. Until a hosted instance exists its
-URL is a placeholder (`https://ps.example.com/mcp/`) and the connector will show as
-unreachable; that is expected.
+This installs the `ps-qna` skill and its `policy-system-graph` MCP connector. Unlike a
+typical remote connector, this one runs **locally** — the plugin declares it as a
+`stdio` server backed by `ps-cli-mcp-bridge` (installed alongside `ps-cli` in step 6,
+never run by hand), which reaches whichever PS Service instance `ps-cli`'s current
+context points at ([Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)).
+That's why it works against the local `127.0.0.1:8000` instance from step 7 with no
+extra setup: local-test PS Service runs with no auth required at all, and the bridge
+sends no `Authorization` header when nothing is stored — the same shape as every other
+unauthenticated `ps-cli` call.
 
-**For local test, register PS Service as a local MCP server instead, under the name
-`policy-system-graph-local`.** Claude Desktop launches local servers over stdio, so
-`mcp-remote` bridges to the HTTP endpoint on your laptop. The `-local` suffix is
-deliberate: the plugin's own connector is already named `policy-system-graph`, and two
-connectors sharing one name lets the unreachable hosted one shadow the working local one
-in a chat's toolset. The `ps-qna` skill accepts either name. Requires
-[Node.js](https://nodejs.org/) (`node --version`).
+Against a non-local, auth-required PS Service instance, run `ps-cli auth login` once
+first (see [Credential storage](#credential-storage)); the bridge then attaches
+whatever token is stored, refreshing it as needed.
 
-In Claude Desktop: **Claude menu (menu bar)** → **Settings…** → **Developer** →
-**Edit Config**, and add an `mcpServers` key alongside whatever is already there:
-
-```json
-{
-  "mcpServers": {
-    "policy-system-graph-local": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "http://127.0.0.1:8000/mcp/", "--transport", "http-only"]
-    }
-  }
-}
-```
-
-Quit Claude Desktop fully (⌘Q) and relaunch. `policy-system-graph-local` should appear
-under the **+** button → **Connectors** → **Manage connectors**, exposing two tools,
-`domain_concepts` and `cypher`. If it doesn't, `tail -f ~/Library/Logs/Claude/mcp*.log` shows why. Tools bind
-when a conversation starts, so open a **new** chat after relaunching — an existing chat
-won't pick the connector up.
-
-> [!NOTE]
-> Do **not** use **Settings → Connectors → Add custom connector** for a local instance.
-> That path insists on HTTPS because it connects from Anthropic's servers, not your
-> machine — `localhost` is unreachable from there regardless of TLS.
+Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat
+— tools bind when a conversation starts, so an already-open chat won't pick up a
+plugin installed mid-session. `policy-system-graph` should expose two tools,
+`domain_concepts` and `cypher`. If it doesn't, check `~/Library/Logs/Claude/mcp*.log`
+and, separately, the bridge's own diagnostics on stderr (surfaced in the same log).
 
 ### 10. Ask a question
 
@@ -429,17 +409,25 @@ file path — never the credential value:
 ⚠️  no OS keyring backend available; using /home/you/.config/ps-cli/credentials.toml instead (mode 0600). This is less secure than an OS keyring.
 ```
 
-> ❌ **No command stores a credential yet.** This is infrastructure ahead of the
-> authentication work that will use it — today, PS Service's REST API takes no
-> credential at all (loopback-only, no auth), so `ps-cli` never sends one. The one
-> place this already runs is `config set-context`: re-running it for an existing
-> context name with a new `--url` always clears any credential previously stored for
-> that name, so nothing is ever silently carried over to a new URL once one *is*
-> stored. Full credential use is pending PS-Cli's own OIDC device-authorization
-> login ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57));
-> PS Service's side — generic OIDC bearer-token validation against any
-> OIDC-compliant provider (no single vendor's IdP is assumed) — is implemented
-> ([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)).
+Log in with `ps-cli auth login` (requires a named context — `config
+set-context`/`use-context` first, since a stored credential is keyed per context
+name). This runs an OIDC device-authorization flow ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57)):
+`ps-cli` prints a verification URL and code, you complete sign-in in a browser, and
+the resulting token is stored under the current context. `ps-cli auth status` shows
+whether you're logged in (context, issuer, subject, expiry) without contacting
+anything; `ps-cli auth logout` removes the stored credential.
+
+Whether login is required at all depends on the target PS Service instance:
+generic OIDC bearer-token validation against any OIDC-compliant provider (no
+single vendor's IdP is assumed) is implemented server-side
+([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)), but a
+given deployment only enforces it once configured with an issuer/audience — the
+local-test deployment from step 7 runs with no auth required at all, so every
+`ps-cli` command (and the plugin's `policy-system-graph` connector — see
+[step 9](#9-install-the-policy-system-plugin)) works there with no login needed.
+Re-running `config set-context` for an existing context name with a new `--url`
+always clears any credential previously stored for that name, so nothing is
+ever silently carried over to a new URL.
 
 ### Command reference
 
@@ -460,6 +448,11 @@ Global flags, usable before or after any subcommand:
 | `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli check regulations` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
+| `ps-cli near-misses list` | — | List every unresolved near-miss pending review from the company-merge dedup workflow. |
+| `ps-cli near-misses resolve <review_id> --decision <decision>` | `review_id`; `--decision` (required) — `keep-separate` or `merge` | Resolve one pending review. `keep-separate` clears it with no other graph change; `merge` re-points every edge from the loser node onto the winner, deletes the loser, and deletes the pending review, atomically. |
+| `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
+| `ps-cli auth status` | — | Show the current context's login status (issuer, subject, expiry) — reads the local store only, no network call. |
+| `ps-cli auth logout` | — | Remove the current context's stored credential. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
 | `ps-cli config get-contexts` | — | List every named context, marking the current one. |
@@ -598,10 +591,12 @@ Authoring Policies, Standards, and Controls, and linking them to Capabilities.
 | `ps-cli.toml` (`service_url`, in current directory) | ps-cli | none shipped | Project-local single-target override, lowest precedence. |
 | `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` / `credentials.toml` are read/written. |
 | `targets.toml` (`[contexts]`, `current_context`) | ps-cli | none until `config set-context` is run | Named PS Service targets and which one is current. Never contains a credential. |
-| `credentials.toml` | ps-cli | none until a credential is stored | Per-context credential fallback when no OS keyring backend is available. Not yet used by any command — see [Credential storage](#credential-storage). |
+| `credentials.toml` | ps-cli | none until a credential is stored | Per-context credential fallback when no OS keyring backend is available, written by `ps-cli auth login` — see [Credential storage](#credential-storage). |
 
-This table covers `ps-cli` only — a row for the Policy System plugin's MCP endpoint
-configuration will be added once it exists ([#53](https://github.com/mindovermachine-dev/policy-system/issues/53)).
+This table covers `ps-cli` only. The Policy System plugin's `policy-system-graph`
+connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`
+process (see [step 9](#9-install-the-policy-system-plugin)) that reuses whichever
+`ps-cli` context is current, so every row above already governs it too.
 
 ---
 

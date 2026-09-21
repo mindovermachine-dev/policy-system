@@ -115,7 +115,12 @@ def handle_config_set_context(
         else build_credential_store(resolved_config_dir)
     )
 
-    existing = load_targets(resolved_config_dir)
+    # strict=False: fixing (or adding) *this* context by name must not be blocked
+    # by some *other*, unrelated context still being in the pre-#57 old format --
+    # see `targets.load_targets`/`_parse_context_entry`'s own docstrings. An
+    # old-format sibling is dropped (with a warning) rather than blocking this
+    # write; it round-trips back once its own `set-context` call is made.
+    existing = load_targets(resolved_config_dir, strict=False)
     contexts = dict(existing.contexts) if existing is not None else {}
     existing_entry = contexts.get(name)
     merged_auth = _merge_auth_overrides(

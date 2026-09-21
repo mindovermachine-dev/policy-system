@@ -7,7 +7,7 @@ ephemeral loopback port -- a real local HTTP server, not a monkeypatched
 transport, because ``jwt.PyJWKClient.fetch_data`` calls
 ``urllib.request.urlopen`` directly with no injectable seam (PLAN.md §0.2).
 
-Deliberately generic: nothing here is shaped like Auth0 or Entra ID (no
+Deliberately generic: nothing here is shaped like any one real-world IdP (no
 tenant ids, no vendor-specific claim names) -- the **one** mock OIDC provider
 AC-BI-017 requires, reused unchanged by every later slice
 (Slice 4: 200 path/principal; Slice 5: MCP; Slice 6: `rotate_key` for the
