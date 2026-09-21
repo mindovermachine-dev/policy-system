@@ -17,6 +17,12 @@ dependencies = [
     "uvicorn==0.52.4",
 ]
 
+[dependency-groups]
+dev = ["ps-test-support"]
+
+[tool.uv.sources]
+ps-test-support = { workspace = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

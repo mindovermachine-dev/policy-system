@@ -36,6 +36,7 @@ class CliConfig:
 
     service_url: str
     curated_repo_path: Path = Path("./curated-content")
+    context_name: str | None = None
 
 
 def _read_packaged_default() -> dict[str, object]:
@@ -185,6 +186,7 @@ def load_config(
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
     targets = load_targets(resolved_config_dir)
     contexts = targets.contexts if targets is not None else {}
+    context_name: str | None = None
 
     # Case 2's validation happens unconditionally, ahead of the env-var check
     # below, so an invalid `--context` name always errors — even when
@@ -213,8 +215,9 @@ def load_config(
         source = f"the {_ENV_VAR_NAME} environment variable"
     elif context is not None:
         # Already validated as a member of `contexts` above.
-        service_url = contexts[context]
+        service_url = contexts[context].url
         source = f"the '{context}' context (targets.toml, via --context)"
+        context_name = context
     elif targets is not None and targets.current_context is not None:
         current_context = targets.current_context
         assert_contract(
@@ -228,8 +231,9 @@ def load_config(
                 else "no contexts are defined in targets.toml"
             ),
         )
-        service_url = contexts[current_context]
+        service_url = contexts[current_context].url
         source = f"the current context '{current_context}' (targets.toml)"
+        context_name = current_context
     else:
         override = _read_project_override(resolved_cwd)
         merged = _deep_merge(_read_packaged_default(), override)
@@ -255,4 +259,5 @@ def load_config(
     return CliConfig(
         service_url=service_url,
         curated_repo_path=curated_repo_path,
+        context_name=context_name,
     )

@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, cast
 from ps_cli.config import load_config
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import PsServiceClient
+from ps_cli.modules.auth_handlers import AUTH_DISPATCH
 from ps_cli.modules.config_handlers import CONFIG_DISPATCH
 from ps_cli.modules.handlers import DISPATCH, NO_CLIENT_DISPATCH
 from ps_cli.modules.parser import build_parser
@@ -112,24 +113,30 @@ def _dispatch_command(
 ) -> None:
     """Route `command` to the matching dispatch table, resolving a client only if needed.
 
-    Three mutually exclusive routes, in priority order: `CONFIG_DISPATCH`
+    Four mutually exclusive routes, in priority order: `CONFIG_DISPATCH`
     (`config` subcommands manage `targets.toml`/`credentials.toml` only --
     they must never construct a `PsServiceClient` or call `load_config()`,
     PLAN.md issue #56 §1 D8, critical: `load_config()` can legitimately raise
     on a broken `targets.toml`, which must not block the very commands an
     operator would use to fix it, and `PsServiceClient`'s constructor has an
     "insecure URL" stderr side effect that makes no sense for a command that
-    never contacts PS Service); `NO_CLIENT_DISPATCH` (`get_catalog`, issue
-    #66 D13, reads the local curated-content repo only -- like `config_*`
-    above it must never construct a `PsServiceClient`, but unlike `config_*`
-    its own dispatch adapter still resolves `curated_repo_path` via
-    `load_config()` internally; `.service_url` is simply never touched);
+    never contacts PS Service); `AUTH_DISPATCH` (`auth` subcommands, issue #57
+    Slice 13 -- `auth login`/`status`/`logout` must never go through
+    `_resolve_client` either: after Slice 15, `_resolve_client`'s
+    `PsServiceClient` requires an *already-valid* token for every business
+    call, which would make `auth login` itself circular); `NO_CLIENT_DISPATCH`
+    (`get_catalog`, issue #66 D13, reads the local curated-content repo only --
+    like `config_*`/`auth_*` above it must never construct a `PsServiceClient`,
+    but unlike those its own dispatch adapter still resolves `curated_repo_path`
+    via `load_config()` internally; `.service_url` is simply never touched);
     otherwise `DISPATCH`, resolving `client` via `_resolve_client` first.
     Extracted out of `run()` to keep its own cyclomatic complexity under
     `level1-coding-principles.md`'s cap of 8.
     """
     if command in CONFIG_DISPATCH:
         CONFIG_DISPATCH[command](args)
+    elif command in AUTH_DISPATCH:
+        AUTH_DISPATCH[command](args)
     elif command in NO_CLIENT_DISPATCH:
         NO_CLIENT_DISPATCH[command](args)
     else:

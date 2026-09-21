@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import base64
 import sys
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, cast
 from urllib.parse import urlparse
 
 import httpx
 
+from ps_cli import device_flow
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
@@ -33,6 +35,8 @@ from ps_cli.models import (
 
 if TYPE_CHECKING:
     from ps_cli.catalog_repo import CuratedArtifact
+    from ps_cli.credentials import CredentialStore
+    from ps_cli.targets import AuthOverrides
 
 _LOOPBACK_HOSTNAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -48,6 +52,11 @@ _UNEXPECTED_ERROR_RESPONSE_MSG = (
 )
 
 _CONNECTION_ERROR_HINT = "check PS_CLI_SERVICE_URL / ps-cli.toml, and that ps-service is running"
+
+# AC-BI-014's literal actionable wording -- checked before `_raise_from_error_body`
+# (D-57 group 3, Slice 15/18) so a 401's own structured error body, if PS Service's
+# error middleware ever attached one, never leaks into this message.
+_AUTHENTICATION_REJECTED_MSG = "authentication rejected by {base_url}; run `ps-cli auth login`"
 
 _READ_TIMEOUT_MSG = "PS Service at {base_url} did not respond in time."
 
@@ -600,21 +609,146 @@ class PsServiceClientProtocol(Protocol):
 class PsServiceClient:
     """Thin REST client over PS Service's `POST /ingestions` and related endpoints."""
 
-    def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        credential_store: CredentialStore | None = None,
+        context: str | None = None,
+        auth_override: AuthOverrides | None = None,
+    ) -> None:
         """Construct the client, warning on stderr once if `base_url` looks insecure.
 
         `transport` is the constructor-injection seam tests use to substitute
         `httpx.MockTransport` for a real network connection (L2 Common: "no DI
         framework... take dependencies as constructor/function arguments").
+
+        `credential_store`/`context`/`auth_override` (issue #57 Slice 15, AC-BI-011)
+        are all optional and default to `None`, so every pre-#57 construction site
+        (`PsServiceClient(base_url)`, `PsServiceClient(base_url, transport=...)`) is
+        byte-for-byte unaffected. When `credential_store` and `context` are both
+        given, every authenticated call (`_authenticated_get`/`_authenticated_post`)
+        attaches a bearer token; when either is `None`, no header is ever attached
+        and `check_health`/`get_service_version`/`check_readiness` never attach one
+        regardless (D-57-6).
         """
         if _should_warn_insecure(base_url):
             print(_INSECURE_URL_WARNING.format(url=base_url), file=sys.stderr)
         self._base_url = base_url
+        self._credential_store = credential_store
+        self._context = context
+        self._auth_override = auth_override
         self._client = httpx.Client(
             base_url=base_url,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
             transport=transport,
         )
+
+    def _authorization_headers(self) -> dict[str, str]:
+        """`{"Authorization": "Bearer <token>"}` when credentials are configured, else `{}`.
+
+        Refreshes (or fails closed) via `device_flow.ensure_valid_access_token` --
+        AC-BI-012/013. Returns `{}` -- no network call, no store read -- whenever
+        `credential_store` or `context` was not given at construction (D-57-6's
+        unauthenticated-call shape, also relied on by `check_health`/
+        `get_service_version`/`check_readiness` via `_get`/`_post`, which never
+        call this method at all).
+        """
+        if self._credential_store is None or self._context is None:
+            return {}
+        access_token = device_flow.ensure_valid_access_token(
+            context=self._context,
+            service_url=self._base_url,
+            auth_override=self._auth_override,
+            credential_store=self._credential_store,
+        )
+        return {"Authorization": f"Bearer {access_token}"}
+
+    def _raise_if_unauthorized(self, response: httpx.Response) -> None:
+        """Raise AC-BI-014's actionable `PsCliError` on a 401, before any other check.
+
+        Called by `_authenticated_get`/`_authenticated_post` immediately after the
+        request returns, strictly before `_raise_from_error_body` -- so a 401's own
+        structured error body (`code`/`message`), if PS Service's error middleware
+        ever attached one, is never parsed or surfaced.
+        """
+        if response.status_code == HTTPStatus.UNAUTHORIZED:
+            raise PsCliError(msg=_AUTHENTICATION_REJECTED_MSG.format(base_url=self._base_url))
+
+    def _get(self, path: str, *, timeout: httpx.Timeout | None = None) -> httpx.Response:
+        """Un-authenticated `GET path` (D-57-6): no bearer header, no 401 special-case.
+
+        Used only by `check_health`/`get_service_version`/`check_readiness` --
+        endpoints exempt from the login-required contract. `timeout=None` (the
+        default) uses the client-wide default timeout, matching every pre-#57
+        call site that never passed an explicit `timeout` either.
+        """
+        try:
+            if timeout is None:
+                return self._client.get(path)
+            return self._client.get(path, timeout=timeout)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
+
+    def _post(
+        self, path: str, *, json: object | None = None, timeout: httpx.Timeout | None = None
+    ) -> httpx.Response:
+        """Un-authenticated `POST path` (D-57-6): no bearer header, no 401 special-case."""
+        try:
+            if timeout is None:
+                return self._client.post(path, json=json)
+            return self._client.post(path, json=json, timeout=timeout)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
+
+    def _authenticated_get(
+        self, path: str, *, timeout: httpx.Timeout | None = None
+    ) -> httpx.Response:
+        """`GET path` with a bearer header attached when configured (AC-BI-011).
+
+        Raises `PsCliError` on a connect failure/read timeout (unchanged wording),
+        or on a 401 (AC-BI-014, before any other status check) -- callers still run
+        their own `if not response.is_success: _raise_from_error_body(response)`
+        check afterward for every other non-2xx status.
+        """
+        headers = self._authorization_headers()
+        try:
+            if timeout is None:
+                response = self._client.get(path, headers=headers)
+            else:
+                response = self._client.get(path, headers=headers, timeout=timeout)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
+        self._raise_if_unauthorized(response)
+        return response
+
+    def _authenticated_post(
+        self, path: str, *, json: object | None = None, timeout: httpx.Timeout | None = None
+    ) -> httpx.Response:
+        """`POST path` with a bearer header attached when configured (AC-BI-011).
+
+        See `_authenticated_get`'s own docstring -- identical shape, `POST` instead
+        of `GET`.
+        """
+        headers = self._authorization_headers()
+        try:
+            if timeout is None:
+                response = self._client.post(path, json=json, headers=headers)
+            else:
+                response = self._client.post(path, json=json, headers=headers, timeout=timeout)
+        except httpx.ReadTimeout as exc:
+            _raise_read_timeout_error(self._base_url, exc)
+        except httpx.TransportError as exc:
+            _raise_connection_error(self._base_url, exc)
+        self._raise_if_unauthorized(response)
+        return response
 
     def check_health(self) -> str:
         """`GET /health`: whether the ASGI server is accepting connections.
@@ -625,12 +759,7 @@ class PsServiceClient:
         (D6) — a healthy result here does not imply `check_readiness()` will
         also succeed.
         """
-        try:
-            response = self._client.get(_HEALTH_PATH)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._get(_HEALTH_PATH)
         return _parse_health_body(response.json())
 
     def get_service_version(self) -> str:
@@ -640,12 +769,7 @@ class PsServiceClient:
         is interrupted (refused, reset, or timed out) or if the response body
         does not match the expected shape.
         """
-        try:
-            response = self._client.get(_HEALTH_PATH)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._get(_HEALTH_PATH)
         return _parse_service_version_body(response.json())
 
     def check_readiness(self) -> ReadinessResult:
@@ -658,12 +782,7 @@ class PsServiceClient:
         is interrupted (refused, reset, or timed out) or if the response body
         does not match the expected shape.
         """
-        try:
-            response = self._client.get(_READY_PATH)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._get(_READY_PATH)
         return _parse_readiness_body(response.json())
 
     def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
@@ -682,16 +801,11 @@ class PsServiceClient:
         body: dict[str, str] = {"source": "catalog", "celex": celex}
         if run_id is not None:
             body["run_id"] = run_id
-        try:
-            response = self._client.post(
-                _INGESTIONS_PATH,
-                json=body,
-                timeout=_INGESTION_REQUEST_TIMEOUT,
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            _INGESTIONS_PATH,
+            json=body,
+            timeout=_INGESTION_REQUEST_TIMEOUT,
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
@@ -731,16 +845,11 @@ class PsServiceClient:
             "baseline_blob_base64": base64.b64encode(artifact.baseline_blob).decode("ascii"),
             "native_blob_base64": base64.b64encode(artifact.native_blob).decode("ascii"),
         }
-        try:
-            response = self._client.post(
-                _RESTORATIONS_PATH,
-                json=body,
-                timeout=_RESTORATION_REQUEST_TIMEOUT,
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            _RESTORATIONS_PATH,
+            json=body,
+            timeout=_RESTORATION_REQUEST_TIMEOUT,
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_restoration_response(response.json())
@@ -762,16 +871,11 @@ class PsServiceClient:
         `_EXPORT_REQUEST_TIMEOUT` (D8) -- export always runs a real LLM
         embeddings backfill, unlike `restore_instrument()`'s shorter one.
         """
-        try:
-            response = self._client.post(
-                _EXPORTS_PATH,
-                json={"instrument_id": instrument_id},
-                timeout=_EXPORT_REQUEST_TIMEOUT,
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            _EXPORTS_PATH,
+            json={"instrument_id": instrument_id},
+            timeout=_EXPORT_REQUEST_TIMEOUT,
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_export_response(response.json())
@@ -788,15 +892,10 @@ class PsServiceClient:
         generic 500 from an unguarded graph-open failure, D12/D14), or if a 200
         response body does not match the expected success shape.
         """
-        try:
-            response = self._client.post(
-                _CHANGE_CHECKS_PATH,
-                timeout=_CHANGE_CHECK_REQUEST_TIMEOUT,
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            _CHANGE_CHECKS_PATH,
+            timeout=_CHANGE_CHECK_REQUEST_TIMEOUT,
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_change_check_response(response.json())
@@ -809,10 +908,23 @@ class PsServiceClient:
         non-JSON or wrong-shaped body) is swallowed and reported as `None`,
         never raised as `PsCliError` or any other exception, so a poll
         failure can never affect the caller's own `ingest_catalog()` result.
+
+        Attaches a bearer header only from an already-cached, still-valid
+        token (`device_flow.peek_cached_access_token`, D-57-7) -- unlike
+        every other authenticated method, this never triggers a refresh or a
+        credential-store write; a poll is best-effort and must not race or
+        interfere with a real call's own token lifecycle.
         """
+        access_token = None
+        if self._credential_store is not None and self._context is not None:
+            access_token = device_flow.peek_cached_access_token(
+                context=self._context, credential_store=self._credential_store
+            )
+        headers = {"Authorization": f"Bearer {access_token}"} if access_token is not None else {}
         try:
             response = self._client.get(
                 f"{_INGESTIONS_PATH}/{run_id}",
+                headers=headers,
                 timeout=_STATUS_POLL_TIMEOUT,
             )
         except httpx.HTTPError:
@@ -838,16 +950,11 @@ class PsServiceClient:
         lands), or if a 200 response body does not match the expected
         success shape.
         """
-        try:
-            response = self._client.post(
-                _INGESTIONS_PATH,
-                json={"source": "internal", "content": content},
-                timeout=_INGESTION_REQUEST_TIMEOUT,
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            _INGESTIONS_PATH,
+            json={"source": "internal", "content": content},
+            timeout=_INGESTION_REQUEST_TIMEOUT,
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_ingestion_response(response.json())
@@ -859,12 +966,7 @@ class PsServiceClient:
         is interrupted (refused, reset, or timed out) or if the response body
         does not match the expected shape.
         """
-        try:
-            response = self._client.get(_NEAR_MISSES_PATH)
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_get(_NEAR_MISSES_PATH)
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_pending_reviews_body(response.json())
@@ -886,15 +988,10 @@ class PsServiceClient:
         `pending_review_not_found`, AC-BI-008), or if a 200 response body
         does not match the expected success shape.
         """
-        try:
-            response = self._client.post(
-                f"{_NEAR_MISSES_PATH}/{review_id}/resolve",
-                json={"decision": decision},
-            )
-        except httpx.ReadTimeout as exc:
-            _raise_read_timeout_error(self._base_url, exc)
-        except httpx.TransportError as exc:
-            _raise_connection_error(self._base_url, exc)
+        response = self._authenticated_post(
+            f"{_NEAR_MISSES_PATH}/{review_id}/resolve",
+            json={"decision": decision},
+        )
         if not response.is_success:
             _raise_from_error_body(response)
         return _parse_resolve_review_response(response.json())

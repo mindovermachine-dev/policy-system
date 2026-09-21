@@ -28,9 +28,6 @@ from typing import TYPE_CHECKING, cast
 
 from fastapi.testclient import TestClient
 from starlette.applications import Starlette
-from tests.auth.mock_oidc_provider import (
-    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-)
 
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
@@ -40,16 +37,19 @@ from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
 )
+from ps_test_support.mock_oidc_provider import (
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     import pytest
-    from tests.auth.mock_oidc_provider import MockOidcProvider
 
     from ps_service.logging.emitter import LogEmitter
     from ps_service.query_engine.falkordb_client import GraphHandle
     from ps_service.query_engine.models import QueryResult
+    from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _BASE_URL = "http://127.0.0.1:8000"
 _JSON_RPC_ACCEPT = "application/json, text/event-stream"

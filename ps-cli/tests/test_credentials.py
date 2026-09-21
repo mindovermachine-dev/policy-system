@@ -2,9 +2,9 @@
 `FileCredentialStore` (PLAN.md issue #56 §1 D9, D15 -- Slice 15; D14 -- Slice 16).
 
 Slice 16 adds the fallback-warning tests (D14): `FileCredentialStore` prints a warning to
-stderr naming the `credentials.toml` path -- never the credential value (AC-BI-015) -- on
-every call to `get_credential`/`set_credential`/`delete_credential`, not once per process
-(AC-BI-011's literal "every use" wording).
+stderr naming the `credentials.toml` path -- never a token value (AC-BI-015) -- on every
+call to `get_tokens`/`set_tokens`/`delete_tokens`, not once per process (AC-BI-011's
+literal "every use" wording).
 
 Slices 17-21 add `KeyringCredentialStore` (D9, D11, D12) and `build_credential_store()`
 (D9). Slice 18's test design follows CHANGES.md (issue #56) F1 in full, not PLAN.md's
@@ -13,6 +13,12 @@ portable primary proof (`_AlwaysNoKeyringErrorBackend`, an injected fake -- true
 platform) and demotes the original real-module test to an explicitly informational,
 self-skipping regression check (`skipif keyring.get_keyring().priority > 0`), since a
 contributor with a real, working OS keyring backend must not fail the mandatory fast gate.
+
+Issue #57 Slice 2 (D-57-1) rewrites the credential shape from an opaque string to a
+structured `TokenBundle`: `get_credential`/`set_credential`/`delete_credential` are
+renamed `get_tokens`/`set_tokens`/`delete_tokens`, and every prior `set_credential("dev",
+"tok")`/`get_credential("dev") == "tok"` pair becomes `set_tokens("dev",
+TokenBundle(...))`/`get_tokens("dev") == TokenBundle(...)`.
 """
 
 from __future__ import annotations
@@ -26,11 +32,19 @@ import pytest
 from ps_cli.credentials import (
     FileCredentialStore,
     KeyringCredentialStore,
+    TokenBundle,
     build_credential_store,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+_TOKENS = TokenBundle(
+    access_token="tok",
+    refresh_token="refresh-tok",
+    expires_at=1_700_000_000,
+    issuer="https://issuer.example",
+)
 
 
 class _InMemoryKeyringBackend:
@@ -61,7 +75,7 @@ class _InMemoryKeyringBackend:
 def test_keyring_credential_store_happy_path_never_touches_fallback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`set_credential` then `get_credential` round-trips via the fake backend alone.
+    """`set_tokens` then `get_tokens` round-trips via the fake backend alone.
 
     The `FileCredentialStore` fallback's warning must never print (`capsys` stderr empty)
     -- proves the happy path bypasses the fallback entirely (PLAN.md Slice 17).
@@ -70,9 +84,9 @@ def test_keyring_credential_store_happy_path_never_touches_fallback(
         fallback=FileCredentialStore(tmp_path), keyring_backend=_InMemoryKeyringBackend()
     )
 
-    store.set_credential("dev", "tok")
+    store.set_tokens("dev", _TOKENS)
 
-    assert store.get_credential("dev") == "tok"
+    assert store.get_tokens("dev") == _TOKENS
     assert capsys.readouterr().err == ""
 
 
@@ -103,30 +117,30 @@ class _AlwaysNoKeyringErrorBackend:
 def test_keyring_credential_store_falls_back_to_file_when_backend_raises_no_keyring_error_get(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`get_credential` falls back to the file store when the backend raises `NoKeyringError`.
+    """`get_tokens` falls back to the file store when the backend raises `NoKeyringError`.
 
     Portable primary AC-BI-011 proof (CHANGES.md F1) -- uses an injected fake, not the
     real `keyring` module, so it is true on every platform. `"dev"` is pre-seeded directly
-    into the `FileCredentialStore` fallback; `KeyringCredentialStore.get_credential`
+    into the `FileCredentialStore` fallback; `KeyringCredentialStore.get_tokens`
     returns that seeded value, no exception escapes, and the fallback warning prints.
     """
     fallback = FileCredentialStore(tmp_path)
-    fallback.set_credential("dev", "seeded-tok")
+    fallback.set_tokens("dev", _TOKENS)
     capsys.readouterr()  # discard the seeding call's own warning
     store = KeyringCredentialStore(
         fallback=fallback, keyring_backend=_AlwaysNoKeyringErrorBackend()
     )
 
-    result = store.get_credential("dev")
+    result = store.get_tokens("dev")
 
-    assert result == "seeded-tok"
+    assert result == _TOKENS
     assert str(tmp_path / "credentials.toml") in capsys.readouterr().err
 
 
 def test_keyring_credential_store_falls_back_to_file_when_backend_raises_no_keyring_error_set(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`set_credential` falls back to the file store when the backend raises `NoKeyringError`.
+    """`set_tokens` falls back to the file store when the backend raises `NoKeyringError`.
 
     Portable primary AC-BI-011 proof (CHANGES.md F1). The write must actually land in
     `credentials.toml`, and the fallback warning must print.
@@ -135,10 +149,10 @@ def test_keyring_credential_store_falls_back_to_file_when_backend_raises_no_keyr
         fallback=FileCredentialStore(tmp_path), keyring_backend=_AlwaysNoKeyringErrorBackend()
     )
 
-    store.set_credential("dev", "tok-1")
+    store.set_tokens("dev", _TOKENS)
 
     assert str(tmp_path / "credentials.toml") in capsys.readouterr().err
-    assert FileCredentialStore(tmp_path).get_credential("dev") == "tok-1"
+    assert FileCredentialStore(tmp_path).get_tokens("dev") == _TOKENS
 
 
 @pytest.mark.skipif(
@@ -161,16 +175,16 @@ def test_real_keyring_module_has_no_backend_informational_devcontainer_only(
     """
     store = KeyringCredentialStore(fallback=FileCredentialStore(tmp_path), keyring_backend=keyring)
 
-    store.set_credential("dev", "tok-1")
+    store.set_tokens("dev", _TOKENS)
 
     set_captured = capsys.readouterr()
     assert str(tmp_path / "credentials.toml") in set_captured.err
-    assert FileCredentialStore(tmp_path).get_credential("dev") == "tok-1"
+    assert FileCredentialStore(tmp_path).get_tokens("dev") == _TOKENS
 
-    result = store.get_credential("dev")
+    result = store.get_tokens("dev")
 
     get_captured = capsys.readouterr()
-    assert result == "tok-1"
+    assert result == _TOKENS
     assert str(tmp_path / "credentials.toml") in get_captured.err
 
 
@@ -200,33 +214,33 @@ class _UncallableFileCredentialStore(FileCredentialStore):
     """A `FileCredentialStore` stand-in whose methods must never be called.
 
     Same style as `test_cli.py`'s `_UncallableIngestClient` -- fails the test if reached,
-    proving `KeyringCredentialStore.delete_credential` never falls back on a benign
+    proving `KeyringCredentialStore.delete_tokens` never falls back on a benign
     `PasswordDeleteError` (D12).
     """
 
-    def get_credential(self, context: str) -> str | None:
+    def get_tokens(self, context: str) -> TokenBundle | None:
         """Fail the test if reached."""
-        msg = f"get_credential must not be called, got context={context!r}"
+        msg = f"get_tokens must not be called, got context={context!r}"
         raise AssertionError(msg)
 
-    def set_credential(self, context: str, credential: str) -> None:
+    def set_tokens(self, context: str, tokens: TokenBundle) -> None:
         """Fail the test if reached."""
-        del credential
-        msg = f"set_credential must not be called, got context={context!r}"
+        del tokens
+        msg = f"set_tokens must not be called, got context={context!r}"
         raise AssertionError(msg)
 
-    def delete_credential(self, context: str) -> None:
+    def delete_tokens(self, context: str) -> None:
         """Fail the test if reached."""
-        msg = f"delete_credential must not be called, got context={context!r}"
+        msg = f"delete_tokens must not be called, got context={context!r}"
         raise AssertionError(msg)
 
 
-def test_delete_credential_with_password_delete_error_is_benign_noop_not_fallback(
+def test_delete_tokens_with_password_delete_error_is_benign_noop_not_fallback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`PasswordDeleteError` is a benign no-op (D12) -- not a fallback trigger.
 
-    The fallback's `delete_credential` must never be called (an uncallable double fails
+    The fallback's `delete_tokens` must never be called (an uncallable double fails
     the test if reached), and no warning is printed -- the backend works fine, there was
     simply nothing stored for this context.
     """
@@ -235,38 +249,38 @@ def test_delete_credential_with_password_delete_error_is_benign_noop_not_fallbac
         keyring_backend=_AlwaysPasswordDeleteErrorBackend(),
     )
 
-    store.delete_credential("dev")  # must not raise, must not call the fallback
+    store.delete_tokens("dev")  # must not raise, must not call the fallback
 
     assert capsys.readouterr().err == ""
 
 
-def test_delete_credential_with_no_keyring_error_falls_back_and_warns(
+def test_delete_tokens_with_no_keyring_error_falls_back_and_warns(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A genuinely unusable backend (`NoKeyringError`) still falls back and warns (D12).
 
     The opposite comparison case to the benign-no-op test above -- proves the two
     `keyring.errors` subclasses are not treated identically. `"dev"` is pre-seeded
-    directly into the file fallback so the fallback's own `delete_credential` has
+    directly into the file fallback so the fallback's own `delete_tokens` has
     something to actually remove.
     """
     fallback = FileCredentialStore(tmp_path)
-    fallback.set_credential("dev", "seeded-tok")
+    fallback.set_tokens("dev", _TOKENS)
     capsys.readouterr()  # discard the seeding call's own warning
     store = KeyringCredentialStore(
         fallback=fallback, keyring_backend=_AlwaysNoKeyringErrorBackend()
     )
 
-    store.delete_credential("dev")
+    store.delete_tokens("dev")
 
     assert str(tmp_path / "credentials.toml") in capsys.readouterr().err
-    assert FileCredentialStore(tmp_path).get_credential("dev") is None
+    assert FileCredentialStore(tmp_path).get_tokens("dev") is None
 
 
 def test_keyring_credential_store_isolates_credentials_per_context_name(tmp_path: Path) -> None:
     """Two different context names can never collide (AC-BI-013, D11).
 
-    `set_credential("dev", ...)` then `get_credential("prod")` must never return `"dev"`'s
+    `set_tokens("dev", ...)` then `get_tokens("prod")` must never return `"dev"`'s
     value -- proves the injected fake's own `(service_name, username)` keying, which
     mirrors exactly what the real `keyring_backend.get_password("ps-cli", context)` call
     does.
@@ -275,9 +289,9 @@ def test_keyring_credential_store_isolates_credentials_per_context_name(tmp_path
         fallback=FileCredentialStore(tmp_path), keyring_backend=_InMemoryKeyringBackend()
     )
 
-    store.set_credential("dev", "dev-tok")
+    store.set_tokens("dev", _TOKENS)
 
-    assert store.get_credential("prod") is None
+    assert store.get_tokens("prod") is None
 
 
 def test_build_credential_store_wraps_file_fallback_and_real_keyring_module(tmp_path: Path) -> None:
@@ -300,26 +314,47 @@ def test_build_credential_store_wraps_file_fallback_and_real_keyring_module(tmp_
 
 
 def test_file_credential_store_set_then_get_round_trips(tmp_path: Path) -> None:
-    """`set_credential` then `get_credential` for the same context returns the same value."""
+    """`set_tokens` then `get_tokens` for the same context returns the same value."""
     store = FileCredentialStore(tmp_path)
 
-    store.set_credential("dev", "tok-1")
+    store.set_tokens("dev", _TOKENS)
 
-    assert store.get_credential("dev") == "tok-1"
+    assert store.get_tokens("dev") == _TOKENS
+
+
+def test_file_credential_store_set_then_get_round_trips_with_no_refresh_token(
+    tmp_path: Path,
+) -> None:
+    """A `TokenBundle` with `refresh_token=None` round-trips -- the key is omitted, not written
+    as an empty string.
+    """
+    store = FileCredentialStore(tmp_path)
+    tokens = TokenBundle(
+        access_token="tok",
+        refresh_token=None,
+        expires_at=1_700_000_000,
+        issuer="https://issuer.example",
+    )
+
+    store.set_tokens("dev", tokens)
+
+    written_text = (tmp_path / "credentials.toml").read_text(encoding="utf-8")
+    assert "refresh_token" not in written_text
+    assert store.get_tokens("dev") == tokens
 
 
 def test_file_credential_store_get_returns_none_for_missing_context(tmp_path: Path) -> None:
     """A context with no stored credential resolves to `None`, not an exception."""
     store = FileCredentialStore(tmp_path)
 
-    assert store.get_credential("missing") is None
+    assert store.get_tokens("missing") is None
 
 
 def test_file_credential_store_writes_with_mode_0600(tmp_path: Path) -> None:
     """`credentials.toml` is written with mode 0600 after any write (PLAN.md D15)."""
     store = FileCredentialStore(tmp_path)
 
-    store.set_credential("dev", "tok-1")
+    store.set_tokens("dev", _TOKENS)
 
     credentials_path = tmp_path / "credentials.toml"
     assert oct(credentials_path.stat().st_mode)[-3:] == "600"
@@ -328,49 +363,73 @@ def test_file_credential_store_writes_with_mode_0600(tmp_path: Path) -> None:
 def test_file_credential_store_delete_removes_entry_then_get_returns_none(
     tmp_path: Path,
 ) -> None:
-    """`delete_credential` removes a stored entry; a subsequent `get_credential` returns `None`."""
+    """`delete_tokens` removes a stored entry; a subsequent `get_tokens` returns `None`."""
     store = FileCredentialStore(tmp_path)
-    store.set_credential("dev", "tok-1")
+    store.set_tokens("dev", _TOKENS)
 
-    store.delete_credential("dev")
+    store.delete_tokens("dev")
 
-    assert store.get_credential("dev") is None
+    assert store.get_tokens("dev") is None
 
 
 def test_file_credential_store_delete_absent_context_is_noop(tmp_path: Path) -> None:
     """Deleting a context that was never stored is a no-op -- no exception raised."""
     store = FileCredentialStore(tmp_path)
 
-    store.delete_credential("never-set")  # must not raise
+    store.delete_tokens("never-set")  # must not raise
+
+
+def test_file_credential_store_two_contexts_do_not_clobber_each_other(tmp_path: Path) -> None:
+    """Two different contexts' token bundles round-trip independently (per-context sub-tables)."""
+    store = FileCredentialStore(tmp_path)
+    dev_tokens = _TOKENS
+    prod_tokens = TokenBundle(
+        access_token="prod-tok",
+        refresh_token=None,
+        expires_at=1_800_000_000,
+        issuer="https://prod-issuer.example",
+    )
+
+    store.set_tokens("dev", dev_tokens)
+    store.set_tokens("prod", prod_tokens)
+
+    assert store.get_tokens("dev") == dev_tokens
+    assert store.get_tokens("prod") == prod_tokens
 
 
 def test_file_credential_store_warns_on_every_call_naming_path_not_value(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every call warns on stderr, naming the file path -- the credential value never appears.
+    """Every call warns on stderr, naming the file path -- the token value never appears.
 
-    AC-BI-011 (warning half) + AC-BI-015: `get_credential`/`set_credential`/
-    `delete_credential` each print a warning naming `credentials.toml`'s path; a
-    distinctive, never-otherwise-used secret string passed to `set_credential` must not
-    appear anywhere in captured stdout/stderr across any of the three calls below.
+    AC-BI-011 (warning half) + AC-BI-015: `get_tokens`/`set_tokens`/`delete_tokens` each
+    print a warning naming `credentials.toml`'s path; a distinctive, never-otherwise-used
+    secret string embedded in `access_token` must not appear anywhere in captured
+    stdout/stderr across any of the three calls below.
     """
     store = FileCredentialStore(tmp_path)
     credentials_path = tmp_path / "credentials.toml"
     secret_value = "super-secret-token-value-should-never-print"
+    secret_tokens = TokenBundle(
+        access_token=secret_value,
+        refresh_token=None,
+        expires_at=1_700_000_000,
+        issuer="https://issuer.example",
+    )
 
-    store.set_credential("dev", secret_value)
+    store.set_tokens("dev", secret_tokens)
     set_captured = capsys.readouterr()
     assert str(credentials_path) in set_captured.err
     assert secret_value not in set_captured.err
     assert secret_value not in set_captured.out
 
-    store.get_credential("dev")
+    store.get_tokens("dev")
     get_captured = capsys.readouterr()
     assert str(credentials_path) in get_captured.err
     assert secret_value not in get_captured.err
     assert secret_value not in get_captured.out
 
-    store.delete_credential("dev")
+    store.delete_tokens("dev")
     delete_captured = capsys.readouterr()
     assert str(credentials_path) in delete_captured.err
     assert secret_value not in delete_captured.err
@@ -384,8 +443,8 @@ def test_file_credential_store_warns_every_time_not_only_once(
     store = FileCredentialStore(tmp_path)
     credentials_path = tmp_path / "credentials.toml"
 
-    store.get_credential("dev")
-    store.get_credential("dev")
+    store.get_tokens("dev")
+    store.get_tokens("dev")
 
     stderr = capsys.readouterr().err
     assert stderr.count(str(credentials_path)) == 2

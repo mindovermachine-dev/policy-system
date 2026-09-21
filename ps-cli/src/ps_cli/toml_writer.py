@@ -1,10 +1,17 @@
-"""ps-cli's minimal, hand-rolled TOML writer: escaper + flat-table formatter.
+"""ps-cli's minimal, hand-rolled TOML writer: escaper + array/flat-table formatters.
 
-New module introduced by issue #56. Python's stdlib `tomllib` (`ps-cli`'s sole TOML
-dependency) is read-only — there is no stdlib TOML writer. Rather than add a new
-runtime dependency (`tomli-w`, `toml`) for a two-line-shaped serialization need, this
-module provides the minimal pair of functions both `targets.py::write_targets()` and
-`credentials.py`'s file writer need. See PLAN.md (issue #56) §1 D16.
+New module introduced by issue #56, extended by issue #57 (D-57-1/D-57-2 nested
+per-context tables). Python's stdlib `tomllib` (`ps-cli`'s sole TOML dependency) is
+read-only — there is no stdlib TOML writer. Rather than add a new runtime dependency
+(`tomli-w`, `toml`) for a small serialization need, this module provides
+`escape_basic_string` (the one escaper every writer needs), `format_flat_table`
+(issue #56's original flat single-level table formatter), and `format_string_array`
+(issue #57, for `auth.scopes`). Nested per-context tables
+(`targets.py::write_targets()`'s `[contexts.<name>]`/`[contexts.<name>.auth]`,
+`credentials.py`'s `[credentials.<context>]`) are hand-rolled inline at each of their
+two call sites rather than generalized into a shared nested-table writer — see
+PLAN.md (issue #57) Slice 1's DRY-threshold citation (`http_client.py:289-291`).
+See PLAN.md (issue #56) §1 D16.
 """
 
 from __future__ import annotations
@@ -59,3 +66,14 @@ def format_flat_table(table_name: str, pairs: dict[str, str]) -> str:
     lines = [f"[{table_name}]"]
     lines.extend(f'{key} = "{escape_basic_string(pairs[key])}"' for key in sorted(pairs))
     return "\n".join(lines) + "\n"
+
+
+def format_string_array(values: tuple[str, ...]) -> str:
+    """Render `values` as a TOML string array: `["a", "b"]`.
+
+    Each element passes through `escape_basic_string` and is wrapped in double quotes;
+    the caller places the returned text on the right-hand side of a `key = ...` line
+    (this function renders only the array literal itself). See PLAN.md (issue #57)
+    Slice 1, D-57-2.
+    """
+    return "[" + ", ".join(f'"{escape_basic_string(value)}"' for value in values) + "]"

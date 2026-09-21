@@ -1,12 +1,16 @@
 """Tests for ps_cli.modules.config_handlers: `handle_config_set_context()` (issue #56).
 
 Slice 22: writes `targets.toml`, never a credential (AC-BI-012, PLAN.md §4 Slice 22).
-Slice 23: `delete_credential` on every re-run, unconditionally (AC-BI-014, PLAN.md §4
+Slice 23: `delete_tokens` on every re-run, unconditionally (AC-BI-014, PLAN.md §4
 Slice 23, D13). Slice 23.5 (CHANGES.md F7, not in PLAN.md): end-to-end proof that
 `PS_CLI_CONFIG_DIR` also drives `credentials.toml` resolution when both `config_dir` and
 `credential_store` are omitted, mirroring Slice 11's `targets.toml`-half proof.
 Slice 25: `handle_config_use_context()` -- success + unknown-name error (AC-BI-005 half,
 AC-BI-009 command half, PLAN.md §4 Slice 25).
+
+Issue #57 Slice 1 (D-57-2) rewrites `targets.toml`'s `[contexts]` shape from flat
+`name = "url"` strings to nested `[contexts.<name>]` tables with a `url` key; every
+fixture and assertion below that touched the old flat shape is updated to the new one.
 """
 
 from __future__ import annotations
@@ -16,14 +20,27 @@ from typing import TYPE_CHECKING
 import keyring.errors
 import pytest
 
-from ps_cli.credentials import FileCredentialStore
+from ps_cli.credentials import FileCredentialStore, TokenBundle
 from ps_cli.errors import PsCliError
 from ps_cli.modules.config_handlers import (
     handle_config_get_contexts,
     handle_config_set_context,
     handle_config_use_context,
 )
-from ps_cli.targets import TargetsFile, load_targets, write_targets
+from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, load_targets, write_targets
+
+_SEED_TOKENS = TokenBundle(
+    access_token="seed-token",
+    refresh_token=None,
+    expires_at=1_700_000_000,
+    issuer="https://issuer.example",
+)
+_SIBLING_TOKENS = TokenBundle(
+    access_token="sibling-token",
+    refresh_token=None,
+    expires_at=1_700_000_000,
+    issuer="https://issuer.example",
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +53,7 @@ def test_handle_config_set_context_writes_url_creates_new_entry(tmp_path: Path) 
     targets = load_targets(tmp_path)
 
     assert targets is not None
-    assert targets.contexts == {"prod": "https://ps.example.com"}
+    assert targets.contexts == {"prod": ContextEntry(url="https://ps.example.com", auth=None)}
 
 
 # A set of fake-credential marker strings used elsewhere in this test suite
@@ -64,22 +81,22 @@ def test_handle_config_set_context_file_content_never_contains_a_credential_valu
 
 
 class _RecordingCredentialStore:
-    """A `CredentialStore` spy recording every `delete_credential` call, in call order."""
+    """A `CredentialStore` spy recording every `delete_tokens` call, in call order."""
 
     def __init__(self) -> None:
         """Initialize with no recorded deletions yet."""
         self.deleted: list[str] = []
 
-    def get_credential(self, context: str) -> str | None:
+    def get_tokens(self, context: str) -> TokenBundle | None:
         """Unused by this spy's tests; return `None` unconditionally."""
         del context
         return None
 
-    def set_credential(self, context: str, credential: str) -> None:
+    def set_tokens(self, context: str, tokens: TokenBundle) -> None:
         """Unused by this spy's tests; no-op."""
-        del context, credential
+        del context, tokens
 
-    def delete_credential(self, context: str) -> None:
+    def delete_tokens(self, context: str) -> None:
         """Record `context`, in call order -- never raises."""
         self.deleted.append(context)
 
@@ -87,7 +104,7 @@ class _RecordingCredentialStore:
 def test_handle_config_set_context_deletes_credential_unconditionally_on_every_call(
     tmp_path: Path,
 ) -> None:
-    """`delete_credential` fires on every `set-context` call, including the first (AC-BI-014).
+    """`delete_tokens` fires on every `set-context` call, including the first (AC-BI-014).
 
     D13: deletion is unconditional, not "only when the name already existed" -- a recording
     spy proves both the brand-new-context call and the re-run call each trigger a delete.
@@ -124,7 +141,7 @@ def test_handle_config_set_context_credential_delete_resolves_under_ps_cli_confi
     positive from a shared/global fallback path.
 
     BASELINE.md root cause: on a machine with a real, working OS keychain backend, the
-    production `KeyringCredentialStore.delete_credential()` call reaches that real backend
+    production `KeyringCredentialStore.delete_tokens()` call reaches that real backend
     first; since the seeded credential was only ever written to the file store, the real
     keychain raises a benign `PasswordDeleteError` that `credentials.py` correctly treats as
     a no-op -- so the file-store credential is never actually deleted, breaking this test's
@@ -138,20 +155,101 @@ def test_handle_config_set_context_credential_delete_resolves_under_ps_cli_confi
     monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
     monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
     monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
-    FileCredentialStore(primary_dir).set_credential("dev", "seed-token")
+    FileCredentialStore(primary_dir).set_tokens("dev", _SEED_TOKENS)
 
     sibling_dir = tmp_path / "sibling"
-    FileCredentialStore(sibling_dir).set_credential("dev", "sibling-token")
+    FileCredentialStore(sibling_dir).set_tokens("dev", _SIBLING_TOKENS)
 
     handle_config_set_context(
         "dev", "https://ps.example.com", config_dir=None, credential_store=None
     )
 
-    assert FileCredentialStore(primary_dir).get_credential("dev") is None
-    assert FileCredentialStore(sibling_dir).get_credential("dev") == "sibling-token"
+    assert FileCredentialStore(primary_dir).get_tokens("dev") is None
+    assert FileCredentialStore(sibling_dir).get_tokens("dev") == _SIBLING_TOKENS
 
 
 # --- issue #56 Slice 25: handle_config_use_context() -----------------------------------
+
+
+def test_handle_config_set_context_writes_auth_issuer_override(tmp_path: Path) -> None:
+    """`auth_issuer="https://issuer.example"` writes `ContextEntry.auth.issuer` (AC-BI-006)."""
+    handle_config_set_context(
+        "prod",
+        "https://ps.example.com",
+        config_dir=tmp_path,
+        auth_issuer="https://issuer.example",
+    )
+
+    targets = load_targets(tmp_path)
+
+    assert targets is not None
+    assert targets.contexts["prod"].auth == AuthOverrides(
+        issuer="https://issuer.example", client_id=None, scopes=None, audience=None
+    )
+
+
+def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_given_again(
+    tmp_path: Path,
+) -> None:
+    """Re-running `set-context` with only `--url` (no `--auth-*` flags) leaves the
+    context's existing `auth` table untouched (AC-BI-006: omitted flags never clear).
+    """
+    handle_config_set_context(
+        "prod",
+        "https://ps.example.com",
+        config_dir=tmp_path,
+        auth_issuer="https://issuer.example",
+        auth_client_id="cli-client-id",
+    )
+
+    handle_config_set_context("prod", "https://ps.example.com/v2", config_dir=tmp_path)
+
+    targets = load_targets(tmp_path)
+    assert targets is not None
+    assert targets.contexts["prod"].url == "https://ps.example.com/v2"
+    assert targets.contexts["prod"].auth == AuthOverrides(
+        issuer="https://issuer.example", client_id="cli-client-id", scopes=None, audience=None
+    )
+
+
+def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving_others_intact(
+    tmp_path: Path,
+) -> None:
+    """Passing only `--auth-audience` on a re-run overwrites just that field, leaving
+    `issuer`/`client_id`/`scopes` exactly as they were (AC-BI-006's per-field wording).
+    """
+    handle_config_set_context(
+        "prod",
+        "https://ps.example.com",
+        config_dir=tmp_path,
+        auth_issuer="https://issuer.example",
+        auth_client_id="cli-client-id",
+        auth_scopes=("openid", "profile"),
+    )
+
+    handle_config_set_context(
+        "prod", "https://ps.example.com", config_dir=tmp_path, auth_audience="ps-service"
+    )
+
+    targets = load_targets(tmp_path)
+    assert targets is not None
+    assert targets.contexts["prod"].auth == AuthOverrides(
+        issuer="https://issuer.example",
+        client_id="cli-client-id",
+        scopes=("openid", "profile"),
+        audience="ps-service",
+    )
+
+
+def test_handle_config_set_context_no_auth_flags_and_no_existing_auth_stays_none(
+    tmp_path: Path,
+) -> None:
+    """A brand-new context with no `--auth-*` flags gets `auth=None`, not an empty table."""
+    handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
+
+    targets = load_targets(tmp_path)
+    assert targets is not None
+    assert targets.contexts["prod"].auth is None
 
 
 def test_handle_config_use_context_sets_current_context(tmp_path: Path) -> None:
@@ -164,7 +262,10 @@ def test_handle_config_use_context_sets_current_context(tmp_path: Path) -> None:
     targets = load_targets(tmp_path)
     assert targets is not None
     assert targets.current_context == "prod"
-    assert targets.contexts == {"dev": "http://ctx-dev:9000", "prod": "https://ps.example.com"}
+    assert targets.contexts == {
+        "dev": ContextEntry(url="http://ctx-dev:9000", auth=None),
+        "prod": ContextEntry(url="https://ps.example.com", auth=None),
+    }
 
 
 def test_handle_config_use_context_raises_listing_valid_names_for_unknown_context(
@@ -239,7 +340,7 @@ def test_handle_config_get_contexts_renders_a_hostile_url_literally(
     going through `handle_config_set_context()`.
     """
     (tmp_path / "targets.toml").write_text(
-        '[contexts]\ndev = "[bold]Injected[/bold] \\u001b[31mFakeAnsi\\u001b[0m"\n',
+        '[contexts.dev]\nurl = "[bold]Injected[/bold] \\u001b[31mFakeAnsi\\u001b[0m"\n',
         encoding="utf-8",
     )
 
@@ -248,6 +349,36 @@ def test_handle_config_get_contexts_renders_a_hostile_url_literally(
     out = capsys.readouterr().out
     assert "[bold]Injected[/bold]" in out
     assert "\x1b" not in out
+
+
+def test_handle_config_get_contexts_shows_auth_overrides_column(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The "Auth Overrides" column lists field *names* only, never their values
+    (issue #57 Slice 8): "-" for a context with no overrides, "issuer, audience" for
+    one with those two fields set, and the literal override values themselves never
+    appear anywhere in stdout.
+    """
+    handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
+    handle_config_set_context(
+        "prod",
+        "https://ps.example.com",
+        config_dir=tmp_path,
+        auth_issuer="https://issuer.example",
+        auth_audience="ps-service",
+    )
+
+    handle_config_get_contexts(config_dir=tmp_path)
+
+    out = capsys.readouterr().out
+    assert "Auth Overrides" in out
+    lines = out.splitlines()
+    dev_line = next(line for line in lines if "dev" in line)
+    prod_line = next(line for line in lines if "prod" in line)
+    assert "-" in dev_line
+    assert "issuer, audience" in prod_line
+    assert "https://issuer.example" not in out
+    assert "ps-service" not in out
 
 
 def test_handle_config_get_contexts_with_no_targets_toml_prints_nothing(

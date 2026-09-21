@@ -2,6 +2,13 @@
 
 Increment 4: packaged default only. Increment 5: project-root override file merge.
 Increment 6: env var precedence + URL validation. See PLAN.md §1 D3 / §3.
+
+Issue #57 Slice 1 (D-57-2) rewrites `targets.toml`'s `[contexts]` shape from flat
+`name = "url"` strings to nested `[contexts.<name>]` tables with a `url` key -- every
+test below that hand-writes a `targets.toml` fixture is updated to that shape.
+Issue #57 also adds `CliConfig.context_name` (D-57-5, CHANGES.md F1): populated from
+`context` (the `--context` param) or `targets.current_context`, whichever resolved the
+URL; `None` otherwise.
 """
 
 from __future__ import annotations
@@ -172,12 +179,12 @@ def test_load_config_resolves_url_from_current_context_when_no_env_var_or_contex
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev:9000"\n'
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev:9000"\n'
     )
 
     config = load_config(cwd=tmp_path, config_dir=config_dir)
 
-    assert config == CliConfig(service_url="http://ctx-dev:9000")
+    assert config == CliConfig(service_url="http://ctx-dev:9000", context_name="dev")
 
 
 def test_load_config_env_var_overrides_context_param_and_current_context(
@@ -187,9 +194,9 @@ def test_load_config_env_var_overrides_context_param_and_current_context(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\n'
-        'dev = "http://ctx-dev:9000"\n'
-        'prod = "https://ctx-prod.example"\n'
+        'current_context = "dev"\n\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
     )
     monkeypatch.setenv("PS_CLI_SERVICE_URL", "https://env-wins.example")
 
@@ -209,7 +216,8 @@ def test_load_config_raises_on_invalid_context_param_even_when_env_var_would_win
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        '[contexts]\ndev = "http://ctx-dev:9000"\nprod = "https://ctx-prod.example"\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
     )
     monkeypatch.setenv("PS_CLI_SERVICE_URL", "https://env-wins.example")
 
@@ -230,14 +238,14 @@ def test_load_config_context_param_overrides_current_context(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\n'
-        'dev = "http://ctx-dev:9000"\n'
-        'prod = "https://ctx-prod.example"\n'
+        'current_context = "dev"\n\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
     )
 
     config = load_config(cwd=tmp_path, context="prod", config_dir=config_dir)
 
-    assert config == CliConfig(service_url="https://ctx-prod.example")
+    assert config == CliConfig(service_url="https://ctx-prod.example", context_name="prod")
 
 
 def test_load_config_raises_when_current_context_names_missing_context(
@@ -248,9 +256,9 @@ def test_load_config_raises_when_current_context_names_missing_context(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        'current_context = "staging"\n\n[contexts]\n'
-        'dev = "http://ctx-dev:9000"\n'
-        'prod = "https://ctx-prod.example"\n'
+        'current_context = "staging"\n\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
     )
 
     with pytest.raises(PsCliError) as excinfo:
@@ -270,7 +278,8 @@ def test_load_config_raises_when_context_param_names_missing_context_lists_valid
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        '[contexts]\ndev = "http://ctx-dev:9000"\nprod = "https://ctx-prod.example"\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
     )
 
     with pytest.raises(PsCliError) as excinfo:
@@ -295,19 +304,19 @@ def test_load_config_config_dir_param_selects_which_targets_toml_is_read(
     config_dir_a = tmp_path / "config-a"
     config_dir_a.mkdir()
     (config_dir_a / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev-a:9000"\n'
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev-a:9000"\n'
     )
     config_dir_b = tmp_path / "config-b"
     config_dir_b.mkdir()
     (config_dir_b / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev-b:9000"\n'
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev-b:9000"\n'
     )
 
     config_a = load_config(cwd=tmp_path, config_dir=config_dir_a)
     config_b = load_config(cwd=tmp_path, config_dir=config_dir_b)
 
-    assert config_a == CliConfig(service_url="http://ctx-dev-a:9000")
-    assert config_b == CliConfig(service_url="http://ctx-dev-b:9000")
+    assert config_a == CliConfig(service_url="http://ctx-dev-a:9000", context_name="dev")
+    assert config_b == CliConfig(service_url="http://ctx-dev-b:9000", context_name="dev")
 
 
 def test_load_config_uses_ps_cli_config_dir_env_var_when_config_dir_omitted(
@@ -322,13 +331,13 @@ def test_load_config_uses_ps_cli_config_dir_env_var_when_config_dir_omitted(
     env_config_dir = tmp_path / "env-config"
     env_config_dir.mkdir()
     (env_config_dir / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev-env:9000"\n'
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev-env:9000"\n'
     )
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(env_config_dir))
 
     config = load_config(cwd=tmp_path)
 
-    assert config == CliConfig(service_url="http://ctx-dev-env:9000")
+    assert config == CliConfig(service_url="http://ctx-dev-env:9000", context_name="dev")
 
 
 def test_load_config_with_no_override_file_and_no_env_var_returns_packaged_curated_repo_path(
@@ -404,7 +413,7 @@ def test_load_config_curated_repo_path_resolves_independently_of_current_context
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "targets.toml").write_text(
-        'current_context = "dev"\n\n[contexts]\ndev = "http://ctx-dev:9000"\n'
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev:9000"\n'
     )
 
     config = load_config(cwd=tmp_path, config_dir=config_dir)
@@ -412,4 +421,50 @@ def test_load_config_curated_repo_path_resolves_independently_of_current_context
     assert config == CliConfig(
         service_url="http://ctx-dev:9000",
         curated_repo_path=Path("/env/curated-content"),
+        context_name="dev",
     )
+
+
+def test_load_config_populates_context_name_from_current_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`context_name` is set to `current_context` when it resolves the URL (D-57-5)."""
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "targets.toml").write_text(
+        'current_context = "dev"\n\n[contexts.dev]\nurl = "http://ctx-dev:9000"\n'
+    )
+
+    config = load_config(cwd=tmp_path, config_dir=config_dir)
+
+    assert config.context_name == "dev"
+
+
+def test_load_config_populates_context_name_from_context_param(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`context_name` is set to the `--context` param when it resolves the URL (D-57-5)."""
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "targets.toml").write_text(
+        'current_context = "dev"\n\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ctx-prod.example"\n'
+    )
+
+    config = load_config(cwd=tmp_path, context="prod", config_dir=config_dir)
+
+    assert config.context_name == "prod"
+
+
+def test_load_config_context_name_stays_none_when_env_var_resolves_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`context_name` stays `None` when neither `context` nor `current_context` resolved the URL."""
+    monkeypatch.setenv("PS_CLI_SERVICE_URL", "https://env-wins.example")
+
+    config = load_config()
+
+    assert config.context_name is None

@@ -1,16 +1,18 @@
-"""Tests for ps_cli.toml_writer: escape_basic_string(), format_flat_table().
+"""Tests for ps_cli.toml_writer: escape_basic_string(), format_flat_table(),
+format_string_array().
 
 New module introduced by issue #56, D16: a minimal hand-rolled TOML writer (no new
-runtime dependency — stdlib `tomllib` is read-only). Shared by `targets.py::
-write_targets()` and `credentials.py`'s file writer. See PLAN.md (issue #56) §1 D16,
-§4 Slice 12.
+runtime dependency — stdlib `tomllib` is read-only). `escape_basic_string()` is shared
+by every writer; `format_string_array()` (issue #57, D-57-2) is added for
+`targets.py::write_targets()`'s `auth.scopes` field. See PLAN.md (issue #56) §1 D16,
+§4 Slice 12; PLAN.md (issue #57) §2 Slice 1.
 """
 
 from __future__ import annotations
 
 import tomllib
 
-from ps_cli.toml_writer import escape_basic_string, format_flat_table
+from ps_cli.toml_writer import escape_basic_string, format_flat_table, format_string_array
 
 
 def test_escape_basic_string_round_trips_through_tomllib_when_quoted() -> None:
@@ -83,3 +85,23 @@ def test_format_flat_table_with_empty_pairs_renders_header_only() -> None:
     rendered = format_flat_table("contexts", {})
 
     assert rendered == "[contexts]\n"
+
+
+def test_format_string_array_renders_bracketed_quoted_elements() -> None:
+    """`format_string_array` renders a TOML string-array literal, elements in order."""
+    rendered = format_string_array(("openid", "profile"))
+
+    assert rendered == '["openid", "profile"]'
+
+
+def test_format_string_array_with_empty_tuple_renders_empty_brackets() -> None:
+    """An empty tuple renders `[]`, not `[""]` or a crash."""
+    assert format_string_array(()) == "[]"
+
+
+def test_format_string_array_escapes_each_element_and_round_trips_through_tomllib() -> None:
+    """Each element is escaped via `escape_basic_string`; the whole array round-trips."""
+    rendered = format_string_array(('a "quoted" value', "plain"))
+    reparsed = tomllib.loads(f"value = {rendered}\n")
+
+    assert reparsed == {"value": ['a "quoted" value', "plain"]}

@@ -72,6 +72,47 @@ def test_build_parser_parses_config_set_context_with_url() -> None:
     assert args.url == "https://ps.example.com"
 
 
+def test_set_context_parser_accepts_auth_flags() -> None:
+    """`--auth-issuer`/`--auth-client-id`/`--auth-audience`/`--auth-scopes` all parse
+    (issue #57 Slice 8, AC-BI-006). `--auth-scopes "openid,profile"` splits into a
+    `tuple[str, ...]`.
+    """
+    args = build_parser().parse_args(
+        [
+            "config",
+            "set-context",
+            "prod",
+            "--url",
+            "https://ps.example.com",
+            "--auth-issuer",
+            "https://issuer.example",
+            "--auth-client-id",
+            "cli-client-id",
+            "--auth-audience",
+            "ps-service",
+            "--auth-scopes",
+            "openid,profile",
+        ]
+    )
+
+    assert args.auth_issuer == "https://issuer.example"
+    assert args.auth_client_id == "cli-client-id"
+    assert args.auth_audience == "ps-service"
+    assert args.auth_scopes == ("openid", "profile")
+
+
+def test_set_context_parser_auth_flags_default_to_none() -> None:
+    """Omitting every `--auth-*` flag leaves all four `args.auth_*` as `None`."""
+    args = build_parser().parse_args(
+        ["config", "set-context", "prod", "--url", "https://ps.example.com"]
+    )
+
+    assert args.auth_issuer is None
+    assert args.auth_client_id is None
+    assert args.auth_audience is None
+    assert args.auth_scopes is None
+
+
 def test_build_parser_config_set_context_with_malformed_url_exits_two(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

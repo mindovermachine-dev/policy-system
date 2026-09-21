@@ -5,6 +5,13 @@ named contexts (e.g. "dev", "prod") to PS Service URLs and records which context
 currently selected (`current_context`). See PLAN.md (issue #56) §1 D1 for the file
 schema, D2 for config-directory resolution, and D4 for why a malformed `targets.toml`
 raises `PsCliError` (unlike `ps-cli.toml`'s unwrapped-crash behavior today).
+
+Issue #57 Slice 1 (D-57-2) rewrites the `[contexts]` table's shape from flat
+`name = "url"` strings to nested `[contexts.<name>]` tables (`url` required, an
+optional `[contexts.<name>.auth]` sub-table for per-context OIDC parameter overrides).
+`ContextEntry`/`AuthOverrides` are the parsed shape; a pre-#57 flat-string context
+value raises `PsCliError` naming the file, pointing the operator at `config
+set-context` to rewrite it, rather than an unhandled `AttributeError`/`TypeError`.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from pathlib import Path
 from typing import cast
 
 from ps_cli.errors import PsCliError
-from ps_cli.toml_writer import escape_basic_string, format_flat_table
+from ps_cli.toml_writer import escape_basic_string, format_string_array
 
 _TARGETS_FILE_NAME = "targets.toml"
 
@@ -35,6 +42,31 @@ def resolve_config_dir() -> Path:
 
 
 @dataclass(frozen=True)
+class AuthOverrides:
+    """Per-context OIDC parameter overrides, layered onto device-flow discovery.
+
+    Every field is `None` when not overridden by the operator -- `write_targets()`
+    omits a `None` field's line entirely rather than writing it empty. See PLAN.md
+    (issue #57) §2 Slice 1, D-57-2. Override-resolution logic (merging these onto
+    discovered defaults) is a later slice's job -- this dataclass only carries the
+    parsed shape.
+    """
+
+    issuer: str | None
+    client_id: str | None
+    scopes: tuple[str, ...] | None
+    audience: str | None
+
+
+@dataclass(frozen=True)
+class ContextEntry:
+    """One named context's PS Service URL, plus any per-context auth overrides."""
+
+    url: str
+    auth: AuthOverrides | None
+
+
+@dataclass(frozen=True)
 class TargetsFile:
     """Parsed contents of `targets.toml`: named contexts plus the currently-selected one.
 
@@ -44,7 +76,45 @@ class TargetsFile:
     """
 
     current_context: str | None
-    contexts: dict[str, str]
+    contexts: dict[str, ContextEntry]
+
+
+def _parse_auth_overrides(raw_auth: dict[str, object]) -> AuthOverrides:
+    """Parse a `[contexts.<name>.auth]` table into `AuthOverrides`."""
+    raw_scopes = raw_auth.get("scopes")
+    scopes = tuple(cast("list[str]", raw_scopes)) if raw_scopes is not None else None
+    return AuthOverrides(
+        issuer=cast("str | None", raw_auth.get("issuer")),
+        client_id=cast("str | None", raw_auth.get("client_id")),
+        scopes=scopes,
+        audience=cast("str | None", raw_auth.get("audience")),
+    )
+
+
+def _parse_context_entry(targets_path: Path, name: str, raw_value: object) -> ContextEntry:
+    """Parse one `[contexts.<name>]` table into a `ContextEntry`.
+
+    Raises `PsCliError` naming `targets_path` if `raw_value` is not a table -- the
+    pre-issue-#57 shape wrote a bare string (`dev = "http://..."`) directly under
+    `[contexts]`; a deliberate, explicit "old targets.toml format" error instead of a
+    raw `AttributeError`/`TypeError` from treating a `str` as a `dict` (L1 "Fail Fast
+    at Boundaries"). See PLAN.md (issue #57) §2 Slice 1, D-57-2.
+    """
+    if not isinstance(raw_value, dict):
+        raise PsCliError(
+            msg=(
+                f"{targets_path} uses the old targets.toml format for context "
+                f"'{name}' (a plain string, not a table)"
+            ),
+            hint="re-run 'ps-cli config set-context' for each context to rewrite the file",
+        )
+    raw_table = cast("dict[str, object]", raw_value)
+    url = cast("str", raw_table["url"])
+    raw_auth = raw_table.get("auth")
+    auth = (
+        _parse_auth_overrides(cast("dict[str, object]", raw_auth)) if raw_auth is not None else None
+    )
+    return ContextEntry(url=url, auth=auth)
 
 
 def load_targets(config_dir: Path) -> TargetsFile | None:
@@ -56,7 +126,9 @@ def load_targets(config_dir: Path) -> TargetsFile | None:
     exists but contains invalid TOML (AC-BI-010) — a deliberate divergence from
     `ps-cli.toml`'s unwrapped-crash behavior for malformed TOML today: `targets.toml`
     is operator-hand-edited, so a parse failure here is a user-facing error, not a
-    packaging/environment bug. See PLAN.md (issue #56) §1 D4.
+    packaging/environment bug. See PLAN.md (issue #56) §1 D4. Also raises `PsCliError`
+    if a context's value is the pre-issue-#57 flat-string shape (see
+    `_parse_context_entry`).
     """
     targets_path = config_dir / _TARGETS_FILE_NAME
     if not targets_path.is_file():
@@ -68,31 +140,69 @@ def load_targets(config_dir: Path) -> TargetsFile | None:
         raise PsCliError(msg=f"{targets_path} contains invalid TOML: {exc}") from exc
 
     # `tomllib.loads` returns `dict[str, Any]`; `targets.toml`'s own writer
-    # (`write_targets()`, a later slice) is this file's only producer and always
-    # emits this exact shape, so a `cast` here documents the trusted shape rather
-    # than re-validating it defensively — matches config.py's own `cast` usage for
-    # trusted, internally-produced TOML shapes.
-    contexts = cast("dict[str, str]", raw.get("contexts", {}))
+    # (`write_targets()`) is this file's only producer of the current schema and
+    # always emits this exact shape -- a `cast` here documents the trusted shape
+    # rather than re-validating it defensively, matching `config.py`'s own `cast`
+    # usage for trusted, internally-produced TOML shapes. A context value that is
+    # *not* this trusted shape (the pre-#57 flat string) is still explicitly
+    # detected and rejected by `_parse_context_entry` above, not silently cast away.
+    raw_contexts = cast("dict[str, object]", raw.get("contexts", {}))
+    contexts = {
+        name: _parse_context_entry(targets_path, name, raw_value)
+        for name, raw_value in raw_contexts.items()
+    }
     current_context = cast("str | None", raw.get("current_context"))
 
     return TargetsFile(current_context=current_context, contexts=contexts)
 
 
+def _format_auth_table(name: str, auth: AuthOverrides) -> str:
+    """Render `[contexts.<name>.auth]`, one line per non-`None` `AuthOverrides` field.
+
+    Hand-rolled inline rather than via a shared generic nested-table writer -- see
+    PLAN.md (issue #57) Slice 1's DRY-threshold citation (`http_client.py:289-291`):
+    only two nested-table call sites exist in this codebase (this one, and
+    `credentials.py`'s per-context `[credentials.<context>]` token-bundle table),
+    under this codebase's own stated "extract... once a pattern repeats a third
+    time" threshold. Fields are emitted alphabetically for deterministic,
+    diff-friendly output, mirroring `format_flat_table`'s sorted-key convention.
+    """
+    lines = [f"[contexts.{name}.auth]"]
+    if auth.audience is not None:
+        lines.append(f'audience = "{escape_basic_string(auth.audience)}"')
+    if auth.client_id is not None:
+        lines.append(f'client_id = "{escape_basic_string(auth.client_id)}"')
+    if auth.issuer is not None:
+        lines.append(f'issuer = "{escape_basic_string(auth.issuer)}"')
+    if auth.scopes is not None:
+        lines.append(f"scopes = {format_string_array(auth.scopes)}")
+    return "\n".join(lines) + "\n"
+
+
 def write_targets(config_dir: Path, targets: TargetsFile) -> None:
     """Serialize `targets` to `<config_dir>/targets.toml`, creating `config_dir` if needed.
 
-    Uses `toml_writer`'s hand-rolled escaper/formatter (D16) rather than a new
+    Uses `toml_writer`'s hand-rolled escaper/array-formatter (D16) rather than a new
     TOML-writing dependency. `current_context=None` omits the `current_context` line
     entirely (not `current_context = ""`) so it round-trips back to `None`, not an
     empty string, matching `load_targets()`'s own None-vs-empty-string distinction.
-    See PLAN.md (issue #56) §1 D1, D16.
+    Each context is written as a nested `[contexts.<name>]` table (`url`, required),
+    followed by `[contexts.<name>.auth]` only when `auth` is not `None` -- a `None`
+    `AuthOverrides` field is omitted entirely, mirroring `current_context`'s own
+    None-omission convention. `url` is never omitted -- always required. Contexts are
+    written sorted by name for deterministic, diff-friendly output. See PLAN.md
+    (issue #56) §1 D1, D16; PLAN.md (issue #57) §2 Slice 1, D-57-2.
     """
     config_dir.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
     if targets.current_context is not None:
         lines.append(f'current_context = "{escape_basic_string(targets.current_context)}"\n')
-    lines.append(format_flat_table("contexts", targets.contexts))
+    for name in sorted(targets.contexts):
+        entry = targets.contexts[name]
+        lines.append(f'[contexts.{name}]\nurl = "{escape_basic_string(entry.url)}"\n')
+        if entry.auth is not None:
+            lines.append(_format_auth_table(name, entry.auth))
 
     targets_path = config_dir / _TARGETS_FILE_NAME
     targets_path.write_text("\n".join(lines), encoding="utf-8")

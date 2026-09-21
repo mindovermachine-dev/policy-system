@@ -87,6 +87,18 @@ def _service_url_type(value: str) -> str:
     return value
 
 
+def _auth_scopes_type(value: str) -> tuple[str, ...]:
+    """`type=` callback for `--auth-scopes`: a comma-separated string -> `tuple[str, ...]`.
+
+    Chosen over `action="append"` repeated-flag style since `targets.toml`'s own
+    `scopes` field (`ps_cli.targets.AuthOverrides.scopes`) is a TOML array either
+    way, and a single comma-separated flag reads more naturally next to `--url` on
+    one command line (issue #57 Slice 8, flagged as a non-load-bearing UX choice).
+    Each comma-separated element is stripped of surrounding whitespace.
+    """
+    return tuple(item.strip() for item in value.split(","))
+
+
 def _instrument_id_type(value: str) -> str:
     """`type=` callback for the `instrument_id` positional (`restore instrument`).
 
@@ -164,6 +176,150 @@ def _add_export_parser(
         ),
     )
     export_instrument_parser.set_defaults(command="export_instrument")
+
+
+def _add_config_parser(
+    top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
+    verbose_parent_parser: argparse.ArgumentParser,
+) -> None:
+    """Add the `config` subcommand group to `top_level_subparsers` (issue #56, PLAN.md §1 D7).
+
+    Manages named PS Service targets (contexts) in `targets.toml`. `set-context`
+    (Slice 14; issue #57 Slice 8's `--auth-*` flags), `use-context` (Slice 25), and
+    `get-contexts` (Slice 28) are all wired here. This is the one exception to the
+    verb-then-resource shape every other group follows -- it mirrors kubectl's own
+    `kubectl config` subcommands, whose leaves are verb-noun compounds
+    (`set-context`/`use-context`/`get-contexts`), not nested `config <verb>
+    <resource>`. Extracted out of `build_parser()` itself purely to keep that
+    already-large function under ruff's `PLR0915` statement-count budget -- no
+    behavioral difference from inlining, same rationale as `_add_export_parser()`.
+    """
+    config_parser = top_level_subparsers.add_parser(
+        "config",
+        parents=[verbose_parent_parser],
+        help="Manage named PS Service targets (contexts) -- kubectl-style config verbs.",
+    )
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+
+    set_context_parser = config_subparsers.add_parser(
+        "set-context",
+        parents=[verbose_parent_parser],
+        help="Create or update a named context's PS Service URL.",
+    )
+    set_context_parser.add_argument(
+        "name",
+        type=_context_name_type,
+        help="The context name.",
+    )
+    set_context_parser.add_argument(
+        "--url",
+        required=True,
+        type=_service_url_type,
+        help="The PS Service URL for this context.",
+    )
+    _add_set_context_auth_flags(set_context_parser)
+    set_context_parser.set_defaults(command="config_set_context")
+
+    use_context_parser = config_subparsers.add_parser(
+        "use-context",
+        parents=[verbose_parent_parser],
+        help="Select the named context used by every subsequent command.",
+    )
+    use_context_parser.add_argument(
+        "name",
+        type=_context_name_type,
+        help="The context name to select.",
+    )
+    use_context_parser.set_defaults(command="config_use_context")
+
+    get_contexts_parser = config_subparsers.add_parser(
+        "get-contexts",
+        parents=[verbose_parent_parser],
+        help="List every named context, marking the currently-selected one.",
+    )
+    get_contexts_parser.set_defaults(command="config_get_contexts")
+
+
+def _add_set_context_auth_flags(set_context_parser: argparse.ArgumentParser) -> None:
+    """Add the four `--auth-*` override flags to `set_context_parser` (issue #57 Slice 8).
+
+    Extracted out of `build_parser()` itself purely to keep that already-large
+    function under ruff's `PLR0915` statement-count budget -- no behavioral
+    difference from inlining, same rationale as `_add_export_parser()`. Per-context
+    OIDC parameter overrides, layered onto device-flow discovery
+    (`ps_cli.oidc_discovery.resolve_auth_parameters`). All four default to `None` --
+    omitting a flag leaves that field untouched by `handle_config_set_context`'s
+    per-field merge, it does not clear it (AC-BI-006).
+    """
+    set_context_parser.add_argument(
+        "--auth-issuer",
+        default=None,
+        help="Override the discovered OIDC issuer for this context.",
+    )
+    set_context_parser.add_argument(
+        "--auth-client-id",
+        default=None,
+        help="Override the discovered OIDC client id for this context.",
+    )
+    set_context_parser.add_argument(
+        "--auth-audience",
+        default=None,
+        help="The OIDC audience to request for this context (no discovered default).",
+    )
+    set_context_parser.add_argument(
+        "--auth-scopes",
+        default=None,
+        type=_auth_scopes_type,
+        help="Comma-separated OIDC scopes to override for this context, e.g. 'openid,profile'.",
+    )
+
+
+def _add_auth_parser(
+    top_level_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],  # pyright: ignore[reportPrivateUsage]  # argparse: no public alias for add_subparsers()'s return type
+    verbose_parent_parser: argparse.ArgumentParser,
+) -> None:
+    """Add the `auth` command group to `top_level_subparsers` (issue #57 Slice 13).
+
+    Mirrors `gh auth login/status/logout` -- L2's own stated precedent for this group
+    ("adapted from the proven shape of gh-tt"), not kubectl. `config` is the closest
+    existing exception-group precedent in this repo (`_add_config_parser`'s own
+    docstring), but `auth`'s three leaves are plain verbs, not verb-noun compounds.
+    `login` (Slice 13) takes only the shared `-v`/`--context` parents -- the context to
+    authenticate is resolved exactly like every other command (D-57-5). `status`/
+    `logout` (Slices 19/20) get their parser leaves now too, since later slices need
+    them, but only `login`'s `AUTH_DISPATCH` entry has a real handler this slice --
+    see `auth_handlers.py`'s own module docstring for why `status`/`logout` still get
+    placeholder dispatch entries rather than being left out of the dict entirely.
+    Extracted out of `build_parser()` itself purely to keep that already-large function
+    under ruff's `PLR0915` statement-count budget, same rationale as `_add_export_parser`.
+    """
+    auth_parser = top_level_subparsers.add_parser(
+        "auth",
+        parents=[verbose_parent_parser],
+        help="Manage OIDC device-flow login for the current context.",
+    )
+    auth_subparsers = auth_parser.add_subparsers(dest="auth_command", required=True)
+
+    login_parser = auth_subparsers.add_parser(
+        "login",
+        parents=[verbose_parent_parser],
+        help="Log in to the current context via OIDC device-flow.",
+    )
+    login_parser.set_defaults(command="auth_login")
+
+    status_parser = auth_subparsers.add_parser(
+        "status",
+        parents=[verbose_parent_parser],
+        help="Show the current context's login status.",
+    )
+    status_parser.set_defaults(command="auth_status")
+
+    logout_parser = auth_subparsers.add_parser(
+        "logout",
+        parents=[verbose_parent_parser],
+        help="Log out of the current context.",
+    )
+    logout_parser.set_defaults(command="auth_logout")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -295,56 +451,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_document_parser.set_defaults(command="ingest_document")
 
-    # `config` subcommand group (issue #56, PLAN.md §1 D7): manages named
-    # PS Service targets (contexts) in `targets.toml`. `set-context` (Slice 14),
-    # `use-context` (Slice 25), and `get-contexts` (Slice 28) are all wired here.
-    # This is the one exception to the verb-then-resource shape every other group
-    # follows -- it mirrors kubectl's own `kubectl config` subcommands, whose leaves
-    # are verb-noun compounds (`set-context`/`use-context`/`get-contexts`), not
-    # nested `config <verb> <resource>`.
-    config_parser = top_level_subparsers.add_parser(
-        "config",
-        parents=[verbose_parent_parser],
-        help="Manage named PS Service targets (contexts) -- kubectl-style config verbs.",
-    )
-    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+    # `config` subcommand group (issue #56, PLAN.md §1 D7; issue #57 Slice 8's
+    # `--auth-*` flags). Extracted into `_add_config_parser()` purely to keep
+    # `build_parser()` itself under ruff's `PLR0915` statement-count budget -- no
+    # behavioral difference from inlining, same rationale as `_add_export_parser()`.
+    _add_config_parser(top_level_subparsers, verbose_parent_parser)
 
-    set_context_parser = config_subparsers.add_parser(
-        "set-context",
-        parents=[verbose_parent_parser],
-        help="Create or update a named context's PS Service URL.",
-    )
-    set_context_parser.add_argument(
-        "name",
-        type=_context_name_type,
-        help="The context name.",
-    )
-    set_context_parser.add_argument(
-        "--url",
-        required=True,
-        type=_service_url_type,
-        help="The PS Service URL for this context.",
-    )
-    set_context_parser.set_defaults(command="config_set_context")
-
-    use_context_parser = config_subparsers.add_parser(
-        "use-context",
-        parents=[verbose_parent_parser],
-        help="Select the named context used by every subsequent command.",
-    )
-    use_context_parser.add_argument(
-        "name",
-        type=_context_name_type,
-        help="The context name to select.",
-    )
-    use_context_parser.set_defaults(command="config_use_context")
-
-    get_contexts_parser = config_subparsers.add_parser(
-        "get-contexts",
-        parents=[verbose_parent_parser],
-        help="List every named context, marking the currently-selected one.",
-    )
-    get_contexts_parser.set_defaults(command="config_get_contexts")
+    # `auth` subcommand group (issue #57 Slice 13): OIDC device-flow login. See
+    # `_add_auth_parser`'s own docstring for why it, like `config`, is factored into a
+    # helper rather than inlined.
+    _add_auth_parser(top_level_subparsers, verbose_parent_parser)
 
     # `restore` (restore a curated instrument's artifact into PS Service): reads the
     # artifact off `curated_repo_path` locally and uploads it (`POST /restorations`),

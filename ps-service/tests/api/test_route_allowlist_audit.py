@@ -44,22 +44,22 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-# `mock_oidc_provider_fixture` registers pytest's "mock_oidc_provider" fixture
-# (see `tests.auth.mock_oidc_provider`'s module docstring for why it is
-# imported under this name, not `mock_oidc_provider` itself, which every test
-# below declares as a same-named parameter instead) -- never called directly.
-from tests.auth.mock_oidc_provider import (
-    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-)
-
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 
+# `mock_oidc_provider_fixture` registers pytest's "mock_oidc_provider" fixture
+# (see `tests.auth.mock_oidc_provider`'s module docstring for why it is
+# imported under this name, not `mock_oidc_provider` itself, which every test
+# below declares as a same-named parameter instead) -- never called directly.
+from ps_test_support.mock_oidc_provider import (
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from tests.auth.mock_oidc_provider import MockOidcProvider
+    from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _AUDIENCE = "ps-service"
 

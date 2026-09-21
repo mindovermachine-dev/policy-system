@@ -6,13 +6,17 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
+from ps_cli import oidc_discovery
 from ps_cli.catalog_repo import CuratedArtifact, CuratedInstrumentManifest
+from ps_cli.credentials import TokenBundle
+from ps_cli.device_flow import poll_for_token, request_device_authorization
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import (
     _UNEXPECTED_RESPONSE_SHAPE_MSG,  # pyright: ignore[reportPrivateUsage]  # asserted verbatim, per check_health()'s existing precedent
@@ -20,9 +24,15 @@ from ps_cli.http_client import (
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
 )
 from ps_cli.models import ChangeCheckResult, ReadinessResult
+from ps_cli.oidc_discovery import ResolvedAuthParameters
+from ps_test_support.mock_oidc_provider import (
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 # Shared wire-contract literal (issue #91, CHANGES.md A2): both ps-service's and
 # ps-cli's own test suites read the internal-ingestion envelope's field name from
@@ -1333,3 +1343,304 @@ class TestRunChangeCheck:
             client.run_change_check()
 
         assert "internal_error" in excinfo.value.msg
+
+
+# --- Issue #57 Group 3 (AC-BI-011/012/013/014): token use ---------------------------
+
+
+class _FakeCredentialStore:
+    """A minimal dict-backed `CredentialStore` double for Slices 15/17/18's tests.
+
+    Structural match only (no inheritance) -- mirrors this repo's own precedent
+    for a hand-written `CredentialStore` double (`test_config_handlers.py`'s
+    `_RecordingCredentialStore`).
+    """
+
+    def __init__(self) -> None:
+        """Start with no tokens stored for any context."""
+        self._tokens: dict[str, TokenBundle] = {}
+
+    def get_tokens(self, context: str) -> TokenBundle | None:
+        """Return the stored `TokenBundle` for `context`, or `None` if none is stored."""
+        return self._tokens.get(context)
+
+    def set_tokens(self, context: str, tokens: TokenBundle) -> None:
+        """Store `tokens` for `context`, overwriting any existing value."""
+        self._tokens[context] = tokens
+
+    def delete_tokens(self, context: str) -> None:
+        """Remove `context`'s stored token bundle; a no-op if none exists."""
+        self._tokens.pop(context, None)
+
+
+def _seed_valid_bundle(store: _FakeCredentialStore, *, context: str, access_token: str) -> None:
+    """Seed `store` with a non-expired `TokenBundle` for `context`."""
+    store.set_tokens(
+        context,
+        TokenBundle(
+            access_token=access_token,
+            refresh_token="rt-unused",
+            expires_at=int(time.time()) + 3600,
+            issuer="http://issuer.example",
+        ),
+    )
+
+
+class TestAuthenticatedRequestsAttachBearerHeader:
+    """Issue #57 Slice 15 (AC-BI-011): bearer attachment, already-valid-token path."""
+
+    def test_ingest_catalog_attaches_authorization_header_when_credential_store_given(
+        self,
+    ) -> None:
+        """`credential_store`+`context` given -> the request carries `Authorization: Bearer`."""
+        captured_headers: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_headers.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+
+        store = _FakeCredentialStore()
+        _seed_valid_bundle(store, context="dev", access_token="tok-abc")
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        client.ingest_catalog("32016R0679")
+
+        assert captured_headers == ["Bearer tok-abc"]
+
+    def test_check_health_attaches_no_authorization_header_even_with_credential_store_given(
+        self,
+    ) -> None:
+        """D-57-6: `check_health` is exempt -- never attaches a header, even given credentials."""
+        captured_headers: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_headers.append(request.headers.get("authorization"))
+            return httpx.Response(200, json={"status": "alive"})
+
+        store = _FakeCredentialStore()
+        _seed_valid_bundle(store, context="dev", access_token="tok-abc")
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        client.check_health()
+
+        assert captured_headers == [None]
+
+    def test_construction_with_no_auth_params_is_byte_for_byte_unaffected(self) -> None:
+        """The pre-#57 construction shapes still work: no header is ever attached.
+
+        Proves the load-bearing backward-compatibility property: every existing
+        construction site (`PsServiceClient(base_url)`,
+        `PsServiceClient(base_url, transport=...)`) is unaffected by the three new
+        optional parameters.
+        """
+        captured_headers: list[str | None] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            captured_headers.append(request.headers.get("authorization"))
+            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        client.ingest_catalog("32016R0679")
+
+        assert captured_headers == [None]
+
+
+class TestAuthenticationFailsClosed:
+    """Issue #57 Slice 17 (AC-BI-013): no-token / refresh-fails fail closed."""
+
+    def test_ingest_catalog_with_no_stored_credential_raises_without_sending_request(
+        self,
+    ) -> None:
+        """No stored bundle at all -> fail closed; the PS Service transport is never touched."""
+        store = _FakeCredentialStore()
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_unused_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_catalog("32016R0679")
+
+        assert "no stored credentials for context 'dev'" in excinfo.value.msg
+        assert "ps-cli auth login" in (excinfo.value.hint or "")
+
+    def test_ingest_catalog_with_expired_token_and_no_refresh_token_raises_without_sending_request(
+        self,
+    ) -> None:
+        """An expired bundle with no `refresh_token` -> fail closed, no request sent."""
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(
+                access_token="stale",
+                refresh_token=None,
+                expires_at=int(time.time()) - 10,
+                issuer="http://issuer.example",
+            ),
+        )
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_unused_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_catalog("32016R0679")
+
+        assert excinfo.value.msg == "stored credentials could not be refreshed"
+        assert "ps-cli auth login" in (excinfo.value.hint or "")
+
+    def test_ingest_catalog_with_refresh_that_the_mock_provider_rejects_raises_without_sending_request(  # noqa: E501
+        self,
+        mock_oidc_provider: MockOidcProvider,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A stale (already-rotated) `refresh_token` -> the real provider's own
+        `invalid_grant` rejection surfaces as the same fail-closed error, and
+        `PsServiceClient`'s own transport (to PS Service itself, as opposed to the
+        IdP) is never invoked -- proving the underlying `httpx.Client` call to PS
+        Service is skipped entirely once the refresh attempt itself fails.
+        """
+        client_id = "ps-cli-test-client"
+        params = ResolvedAuthParameters(
+            issuer=mock_oidc_provider.issuer,
+            client_id=client_id,
+            scopes=("openid",),
+            audience=None,
+            device_authorization_endpoint=f"{mock_oidc_provider.base_url}/device_authorization",
+            token_endpoint=f"{mock_oidc_provider.base_url}/token",
+        )
+        device_auth = request_device_authorization(params)
+        mock_oidc_provider.complete_device_flow(device_auth.device_code)
+        token_response = poll_for_token(
+            params, device_auth, sleep=lambda _: pytest.fail("must not sleep")
+        )
+        assert token_response.refresh_token is not None
+        stale_refresh_token = token_response.refresh_token
+        # Rotate once via a real refresh -- `stale_refresh_token` is now invalid.
+        with httpx.Client() as real_client:
+            rotate_response = real_client.post(
+                params.token_endpoint,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": stale_refresh_token,
+                    "client_id": client_id,
+                },
+            )
+        assert rotate_response.status_code == httpx.codes.OK
+
+        def _fake_resolve_auth_parameters(
+            service_url: str, override: object, *, transport: object = None
+        ) -> ResolvedAuthParameters:
+            del service_url, override, transport
+            return params
+
+        monkeypatch.setattr(
+            oidc_discovery,
+            "resolve_auth_parameters",
+            _fake_resolve_auth_parameters,
+        )
+
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(
+                access_token=token_response.access_token,
+                refresh_token=stale_refresh_token,
+                expires_at=int(time.time()) - 10,
+                issuer=mock_oidc_provider.issuer,
+            ),
+        )
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_unused_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_catalog("32016R0679")
+
+        assert excinfo.value.msg == "stored credentials could not be refreshed"
+        assert "ps-cli auth login" in (excinfo.value.hint or "")
+
+
+class TestUnauthorizedResponseMapping:
+    """Issue #57 Slice 18 (AC-BI-014): a 401 maps to one actionable error, never the body."""
+
+    def test_ingest_catalog_maps_401_response_to_actionable_error_not_generic_http_error(
+        self,
+    ) -> None:
+        """A bare 401, with PS Service's own structured error body attached, still maps
+        to exactly the AC-BI-014 wording -- the body's own `code`/`message` never leak
+        into `.msg` or `.hint`, proving the 401 check runs before
+        `_raise_from_error_body` would otherwise parse and surface that body.
+        """
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "code": "invalid_token",
+                        "message": "the access token is expired or invalid",
+                        "failing_stage": None,
+                    },
+                    "run_id": None,
+                },
+            )
+
+        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_catalog("32016R0679")
+
+        assert (
+            excinfo.value.msg
+            == "authentication rejected by http://127.0.0.1:8000; run `ps-cli auth login`"
+        )
+        assert "invalid_token" not in excinfo.value.msg
+        assert "the access token is expired or invalid" not in excinfo.value.msg
+        assert excinfo.value.hint is None
+
+    def test_401_error_never_contains_the_bearer_token_value_that_was_sent(self) -> None:
+        """Issue #57 Slice 22 (AC-BI-018): a marker access token, already attached as
+        the request's own bearer header when the 401 comes back, never leaks into
+        `.msg`/`.hint` -- a proof pass over Slice 18's actual code, not a new
+        behavior.
+        """
+        marker_access_token = "marker-access-token-should-never-print-79c3"
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(401, json={"error": {"code": "invalid_token"}})
+
+        store = _FakeCredentialStore()
+        _seed_valid_bundle(store, context="dev", access_token=marker_access_token)
+        client = PsServiceClient(
+            "http://127.0.0.1:8000",
+            transport=httpx.MockTransport(_handler),
+            credential_store=store,
+            context="dev",
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            client.ingest_catalog("32016R0679")
+
+        assert marker_access_token not in excinfo.value.msg
+        assert marker_access_token not in (excinfo.value.hint or "")

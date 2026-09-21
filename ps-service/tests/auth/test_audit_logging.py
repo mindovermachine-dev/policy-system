@@ -27,13 +27,13 @@ import time
 from typing import TYPE_CHECKING
 
 import jwt
-from tests.auth.mock_oidc_provider import (
-    MockOidcProvider,
-    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-)
 
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_test_support.mock_oidc_provider import (
+    MockOidcProvider,
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable

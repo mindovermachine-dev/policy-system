@@ -1,0 +1,16 @@
+[project]
+name = "ps-test-support"
+version = "2.9.0"
+description = "Policy System shared test-support fixtures: mock OIDC provider used by ps-service and ps-cli test suites"
+requires-python = ">=3.14"
+dependencies = [
+    "pyjwt[crypto]==2.13.0",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ps_test_support"]

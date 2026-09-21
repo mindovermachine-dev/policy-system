@@ -392,7 +392,7 @@ def test_run_version_reports_unavailable_when_config_resolution_itself_fails(
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     (tmp_path / "targets.toml").write_text(
-        'current_context = "missing"\n\n[contexts]\ndev = "http://127.0.0.1:8000"\n'
+        'current_context = "missing"\n\n[contexts.dev]\nurl = "http://127.0.0.1:8000"\n'
     )
 
     exit_code = run(["--version"], client=None)
@@ -1028,7 +1028,7 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     """
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     (tmp_path / "targets.toml").write_text(
-        'current_context = "missing"\n\n[contexts]\ndev = "http://127.0.0.1:8000"\n'
+        'current_context = "missing"\n\n[contexts.dev]\nurl = "http://127.0.0.1:8000"\n'
     )
     uncallable_client = _UnusedPsServiceClientMethods()
 
@@ -1040,7 +1040,7 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     assert exit_code == 0
     targets = load_targets(tmp_path)
     assert targets is not None
-    assert targets.contexts["prod"] == "https://ps.example.com"
+    assert targets.contexts["prod"].url == "https://ps.example.com"
 
 
 def _raise_no_keyring_error(*args: object, **kwargs: object) -> None:
@@ -1190,7 +1190,8 @@ def test_run_config_get_contexts_never_constructs_ps_service_client_and_prints_c
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     (tmp_path / "targets.toml").write_text(
         'current_context = "missing"\n\n'
-        '[contexts]\ndev = "http://ctx-dev:9000"\nprod = "https://ps.example.com"\n'
+        '[contexts.dev]\nurl = "http://ctx-dev:9000"\n\n'
+        '[contexts.prod]\nurl = "https://ps.example.com"\n'
     )
     uncallable_client = _UnusedPsServiceClientMethods()
 

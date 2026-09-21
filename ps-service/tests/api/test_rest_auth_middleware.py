@@ -38,20 +38,20 @@ import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
-# `mock_oidc_provider_fixture` registers pytest's "mock_oidc_provider" fixture
-# (see `tests.auth.mock_oidc_provider`'s module docstring for why it is
-# imported under this name, not `mock_oidc_provider` itself, which every test
-# below declares as a same-named parameter instead) -- never called directly.
-from tests.auth.mock_oidc_provider import (
-    MockOidcProvider,
-    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
-)
-
 from ps_service.api.dependencies import get_principal
 from ps_service.api.models import CuratedCatalogResponse
 from ps_service.auth import Principal
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
+
+# `mock_oidc_provider_fixture` registers pytest's "mock_oidc_provider" fixture
+# (see `tests.auth.mock_oidc_provider`'s module docstring for why it is
+# imported under this name, not `mock_oidc_provider` itself, which every test
+# below declares as a same-named parameter instead) -- never called directly.
+from ps_test_support.mock_oidc_provider import (
+    MockOidcProvider,
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
