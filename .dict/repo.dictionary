@@ -31,3 +31,7 @@ uvicorn
 venv
 workon
 wrapup
+nmap
+gitleaks
+secops
+exploitability

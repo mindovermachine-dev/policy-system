@@ -1,0 +1,68 @@
+# Policy System — SecOps Regression Baseline
+# Grows run-to-run. The agent appends to `findings` and `runs`.
+#
+# PHILOSOPHY: this registry is NEVER pre-populated with "expected" findings. That would bias
+# discovery (see ../secops/README.md and the ps-pentest skill). Only ACTUAL findings are recorded,
+# as they are found. `findings` and `runs` therefore start EMPTY on purpose.
+#
+# A finding's `id` is STABLE across runs so we can diff (new vs. known / regression vs. re-find).
+
+version: 1
+
+# --- Severity model (post-hoc; two axes -> level) ------------------------------
+severity:
+  levels: [critical, high, medium, low, info]
+  axes: [exploitability, impact]        # exploitability is SCENARIO-RELATIVE
+  notes: >
+    Each finding is scored on Exploitability (given the scenario that surfaced it) x
+    Impact (worst-case consequence in the blast radius). A finding is tagged with the
+    scenario(s) that surfaced it; the posture score is driven by Scenario A and reflects the
+    worst severity a finding is observed in.
+
+# --- Scoring config (presentation only; NOT a discovery bias) ------------------
+scoring:
+  baseline: 100
+  floor: 0
+  weights:
+    critical: 20
+    high: 10
+    medium: 4
+    low: 1
+    info: 0.5
+  primary_scenario: A                   # posture is driven by the unauth / external surface
+  sub_signals: [B]                      # B contributes an authz-integrity sub-signal
+
+# --- Triage signal (3 booleans; NOT a blocking gate) ---------------------------
+# 1) any NEW critical/high since the last run?
+# 2) net REGRESSION (more/severer open findings than the last run)?
+# 3) coverage SHRANK or a phase was SKIPPED?
+# Any true -> the run is "needs attention" (routes to a human), not "failed".
+
+# --- Known-findings registry (starts EMPTY on purpose) -------------------------
+# Entry shape (left as a comment so `findings` is genuinely empty until a finding is real):
+#  - id: PS-0001                       # stable identifier
+#    surface: api.auth                # where it lives (matches threat-coverage-map surfaces)
+#    severity: high                   # re-evaluated per run; record worst-across-scenarios
+#    scenarios: [A]                   # surface(s) that surfaced it
+#    status: open                    # open | mitigated | closed
+#    first_seen: 2025-01-01          # ISO date of the run that discovered it
+#    last_seen: 2025-01-01
+#    title: "..."
+#    summary: "..."
+#    repro: "..."
+#    impact_in_blast_radius: "..."
+#    remediation_target: "..."        # post-hoc target-state; NOT a pre-test bar
+#  # regression status is COMPUTED by diffing `first_seen`/status against `runs`.
+findings: []
+
+# --- Run history (append-only; one row per completed run) ----------------------
+#  - run_id: "2025-01-01-A-B"
+#    date: 2025-01-01
+#    posture_A: 100
+#    authz_integrity_B: 100
+#    open_counts: {critical: 0, high: 0, medium: 0, low: 0, info: 0}
+#    new_critical_high: []
+#    regressed: false
+#    coverage_status: complete          # or "shrank:<reason>" / "skipped:<phase>"
+#    triage_needs_attention: false
+runs: []
