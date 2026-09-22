@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "policy-system-test": {
+      "type": "stdio",
+      "command": "ps-test-plugin-mcp"
+    }
+  }
+}
