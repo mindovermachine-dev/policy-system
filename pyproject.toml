@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["ps-service", "ps-cli", "ps-test-support", "ps-test-plugin"]
+members = ["ps-service", "ps-cli", "ps-test-support"]
 
 [dependency-groups]
 dev = [
@@ -12,7 +12,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["ps-service/tests", "ps-cli/tests", "ps-test-support/tests", "ps-test-plugin/tests"]
+testpaths = ["ps-service/tests", "ps-cli/tests", "ps-test-support/tests"]
 # Workspace root pytest RCA (issue #52): "prepend" (pytest's default import mode) requires
 # a globally-unique basename for every test module when no `__init__.py` chain disambiguates
 # it, because it imports each file as a bare top-level module keyed by filename and inserts
@@ -46,7 +46,7 @@ markers = [
 [tool.ruff]
 line-length = 100          # AC-BI-001; dissolves ~908 E501 once `ruff format` runs
 target-version = "py314"   # AC-BI-001; matches requires-python of both members (accepted by ruff 0.16.4)
-src = ["ps-service/src", "ps-cli/src", "ps-test-support/src", "ps-test-plugin/src"]  # first-party roots for import sorting (I)
+src = ["ps-service/src", "ps-cli/src", "ps-test-support/src"]  # first-party roots for import sorting (I)
 extend-exclude = ["spikes"]  # nested git repo; no .py today; also keeps basedpyright-parity of scope explicit (ruff already skips it via .gitignore)
 
 [tool.ruff.lint]
@@ -138,8 +138,6 @@ include = [
     "ps-cli/tests",            # dir does not exist yet; harmless, future-proofs
     "ps-test-support/src",
     "ps-test-support/tests",
-    "ps-test-plugin/src",
-    "ps-test-plugin/tests",
     "tools",                   # D-1: tools/ is IN strict scope (238 errors → B21, required, last priority)
     "docs/regulations",        # D-9: convert_to_markdown.py is IN strict scope (7 errors → B21)
 ]

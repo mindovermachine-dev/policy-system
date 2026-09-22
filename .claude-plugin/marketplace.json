@@ -7,12 +7,6 @@
       "displayName": "Policy System",
       "description": "ps-qna skill + PS Service MCP connector for compliance Q&A against the knowledge graph.",
       "source": "./ps-skills/policy-system"
-    },
-    {
-      "name": "policy-system-test",
-      "displayName": "Policy System Test Plugin",
-      "description": "Local stdio MCP server exposing a single HelloWorld tool -- a disposable reference for validating plugin/MCP packaging.",
-      "source": "./ps-skills/policy-system-test"
     }
   ]
 }

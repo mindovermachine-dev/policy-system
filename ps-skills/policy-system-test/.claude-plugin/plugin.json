@@ -1,9 +1,0 @@
-{
-  "name": "policy-system-test",
-  "displayName": "Policy System Test Plugin",
-  "description": "Local stdio MCP server exposing a single HelloWorld tool -- a disposable reference for validating plugin/MCP packaging.",
-  "version": "0.1.0",
-  "author": { "name": "Mind Over Machine" },
-  "repository": "https://github.com/mindovermachine-dev/policy-system",
-  "keywords": ["test", "mcp", "stdio"]
-}
