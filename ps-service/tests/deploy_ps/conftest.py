@@ -69,7 +69,7 @@ ACCESS_AS_USER_SCOPE_VALUE = "access_as_user"
 # Mirrors scripts/deploy-ps.sh's own fixed AKS-node-shape literals (S12, PLAN.md §0.6) --
 # hardcoded here rather than parsed from the script, same precedent as the constants above.
 AKS_NODE_VM_SIZE = "Standard_D4as_v7"
-AKS_NODE_VM_SIZE_FAMILY = "standardDASv7Family"
+AKS_NODE_VM_SIZE_FAMILY = "StandardDasv7Family"
 AKS_NODE_COUNT = 2
 AKS_NODE_VM_SIZE_VCPUS = 4
 

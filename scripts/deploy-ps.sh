@@ -366,7 +366,7 @@ readonly ACCESS_AS_USER_SCOPE_VALUE="access_as_user"
 # count (the Dasv7-series specification), used only to compute the total vCPUs this fixed 2-node
 # shape needs: AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS = 2 x 4 = 8.
 readonly AKS_NODE_VM_SIZE="Standard_D4as_v7"
-readonly AKS_NODE_VM_SIZE_FAMILY="standardDASv7Family"
+readonly AKS_NODE_VM_SIZE_FAMILY="StandardDasv7Family"
 readonly AKS_NODE_COUNT=2
 readonly AKS_NODE_VM_SIZE_VCPUS=4
 
@@ -998,7 +998,8 @@ fetch_vm_usage_json() {
 vm_family_quota_remaining() {
   local usage_json="$1"
   jq -r --arg family "$AKS_NODE_VM_SIZE_FAMILY" \
-    '([.[] | select(.name.value == $family)][0] | ((.limit - .currentValue) | floor)) // 0' \
+    '([.[] | select(.name.value == $family)][0]
+      | (((.limit // 0) | tonumber) - ((.currentValue // 0) | tonumber) | floor)) // 0' \
     <<< "$usage_json"
 }
 

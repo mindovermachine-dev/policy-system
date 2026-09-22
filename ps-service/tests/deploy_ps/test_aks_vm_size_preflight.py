@@ -84,7 +84,7 @@ def test_size_allowed_but_insufficient_family_quota_fails_with_quota_message_bef
     run = deploy_ps_fixture.run_deploy("--yes", expect=1)
 
     assert "Standard_D4as_v7" in run.stderr
-    assert "standardDASv7Family" in run.stderr
+    assert "StandardDasv7Family" in run.stderr
     assert SELECTED_REGION in run.stderr
     assert "need 8 vCPUs" in run.stderr
     assert "only 5 remaining" in run.stderr
