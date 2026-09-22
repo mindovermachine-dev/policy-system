@@ -1,0 +1,67 @@
+suite: falkordb durable storage class
+templates:
+  - falkordb-storageclass.yaml
+  - falkordb-pvc.yaml
+tests:
+  - it: durableStorageClass disabled (default) renders no StorageClass resource
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: falkordb-storageclass.yaml
+
+  - it: durableStorageClass enabled renders a StorageClass with reclaimPolicy Retain
+    set:
+      falkordb.persistence.durableStorageClass.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: falkordb-storageclass.yaml
+      - isKind:
+          of: StorageClass
+        template: falkordb-storageclass.yaml
+      - equal:
+          path: reclaimPolicy
+          value: Retain
+        template: falkordb-storageclass.yaml
+      - equal:
+          path: provisioner
+          value: disk.csi.azure.com
+        template: falkordb-storageclass.yaml
+      - equal:
+          path: volumeBindingMode
+          value: WaitForFirstConsumer
+        template: falkordb-storageclass.yaml
+
+  - it: durableStorageClass enabled renders Premium_LRS skuName parameter
+    set:
+      falkordb.persistence.durableStorageClass.enabled: true
+    asserts:
+      - equal:
+          path: parameters.skuName
+          value: Premium_LRS
+        template: falkordb-storageclass.yaml
+
+  - it: durableStorageClass enabled makes the PVC reference the same computed StorageClass name
+    set:
+      falkordb.persistence.durableStorageClass.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-falkordb-durable
+        template: falkordb-storageclass.yaml
+      - equal:
+          path: spec.storageClassName
+          value: RELEASE-NAME-policy-system-falkordb-durable
+        template: falkordb-pvc.yaml
+
+  - it: durableStorageClass disabled and storageClassName set falls back to the plain string (unchanged pre-#111 behavior)
+    set:
+      falkordb.persistence.storageClassName: my-plain-storage-class
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: my-plain-storage-class
+        template: falkordb-pvc.yaml
+      - hasDocuments:
+          count: 0
+        template: falkordb-storageclass.yaml

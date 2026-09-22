@@ -2,8 +2,8 @@
 
 PS Service is a generic OIDC resource server (issue #58): it validates bearer
 tokens against **any** OIDC-compliant identity provider via standard OIDC
-discovery — there is no provider-specific code. A deployment supplies exactly
-three configuration values (as `PS_AUTH_*` environment variables, or as the
+discovery — there is no provider-specific code. A deployment supplies up to
+four configuration values (as `PS_AUTH_*` environment variables, or as the
 corresponding `psService.auth.*` Helm values — see the
 [Helm Chart Values Reference](./helm-chart-values-reference.md)). This page
 documents what each value is, what IdP-side artifact it corresponds to, and a
@@ -14,16 +14,20 @@ If neither this configuration nor the local-test bypass
 (`PS_SERVICE_LOCAL_TEST_BYPASS=true`, evaluation only — never for a
 network-reachable deployment) is present, PS Service refuses to start.
 
-## The three values
+## The four values
 
 | Value | Env var | Helm value | What it is |
 | --- | --- | --- | --- |
 | Issuer | `PS_AUTH_ISSUER` | `psService.auth.issuer` | The OIDC authorization server's base URL. PS Service fetches `<issuer>/.well-known/openid-configuration` from it at startup to discover the JWKS endpoint and the signing algorithms it trusts, and every presented token's `iss` claim must match this value exactly (character for character). |
 | Audience | `PS_AUTH_AUDIENCE` | `psService.auth.audience` | The identifier of PS Service itself as an OIDC *resource server* — i.e. the API app registration's own identifier, never the CLI client's. Every presented token's `aud` claim must match this value exactly. |
 | CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** app registration that PS-Cli authenticates as (device-authorization flow, issue #57). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
+| Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. the `access_as_user` delegated scope on the API app registration. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login (issue #57) sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs — Entra included (`AADSTS900144`) — reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
 
 Only `issuer` and `audience` are required for PS Service to validate tokens at
-all; `cliClientId` is a convenience for client discovery.
+all; `cliClientId` is a convenience for client discovery. `scopes` is likewise
+optional from PS Service's own validation standpoint, but omitting it breaks
+PS-Cli login end-to-end — treat it as required for any deployment a CLI or
+Claude Desktop client will actually log into.
 
 ## Worked example: Microsoft Entra ID
 
@@ -58,8 +62,9 @@ depends on a specific tenant.
 6. Open the new registration's **Expose an API** blade.
 7. Next to **Application ID URI**, click **Add** (or **Set**). Accept the
    offered default (`api://<api-app-client-id>`) or set a custom identifier
-   URI — either is fine, but note the exact value: this becomes
-   `psService.auth.audience`, verbatim.
+   URI — either is fine, and this URI form (`<Application ID URI>/access_as_user`)
+   is what a client requests as its OAuth *scope*. It is **not** what becomes
+   `psService.auth.audience` — see Step 10.
 8. Still on **Expose an API**, click **Add a scope** and fill in:
    - **Scope name**: `access_as_user`
    - **Who can consent**: Admins and users
@@ -67,8 +72,16 @@ depends on a specific tenant.
    - **Admin consent description**: e.g. `Allows PS-Cli to call Policy System on behalf of the signed-in user`
    - **State**: **Enabled**
 9. Click **Add scope**.
-10. Note the exact **Application ID URI** from step 7 (→ `psService.auth.audience`)
-    and the tenant ID from Step 1. The OIDC discovery issuer for an Entra v2
+10. Note the **Application (client) ID** from the **Overview** blade (the bare
+    GUID, *not* the Application ID URI from step 7) → this becomes
+    `psService.auth.audience`. Confirmed against a real tenant: for the
+    self-referencing `api://<own-client-id>` URI pattern, Entra normalizes a
+    device-flow-issued token's `aud` claim to the bare client ID GUID, not the
+    URI — configuring `psService.auth.audience` as the URI causes every real
+    token to be rejected (`aud` mismatch) even though login itself succeeds.
+    A custom (non-self-referencing) Application ID URI may not have this
+    quirk; verify against your own tenant before assuming otherwise. Also
+    note the tenant ID from Step 1. The OIDC discovery issuer for an Entra v2
     tenant is:
     ```
     https://login.microsoftonline.com/<tenant-id>/v2.0
@@ -106,14 +119,15 @@ depends on a specific tenant.
 12. Open the **Overview** blade and note the **Application (client) ID** —
     this becomes `psService.auth.cliClientId`.
 
-### Step 4 — Configure PS Service with the three values
+### Step 4 — Configure PS Service with the four values
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
   -f values-prod.yaml \
   --set psService.auth.issuer=https://login.microsoftonline.com/<tenant-id>/v2.0 \
-  --set psService.auth.audience=api://<api-app-client-id> \
-  --set psService.auth.cliClientId=<cli-app-client-id>
+  --set psService.auth.audience=<api-app-client-id> \
+  --set psService.auth.cliClientId=<cli-app-client-id> \
+  --set psService.auth.scopes=api://<api-app-client-id>/access_as_user
 ```
 
 (Or set the equivalent `PS_AUTH_ISSUER` / `PS_AUTH_AUDIENCE` /
@@ -144,10 +158,13 @@ up to that point reproducible without guesswork.
 ### Common pitfalls
 
 - **Audience mismatch**: the token's `aud` claim must equal
-  `psService.auth.audience` exactly, including the `api://` prefix if one was
-  used. A token requested against a different scope/resource than the
-  Application ID URI set in Step 2 will carry a different `aud` and be
-  rejected.
+  `psService.auth.audience` exactly. For the self-referencing
+  `api://<own-client-id>` Application ID URI pattern this walkthrough uses,
+  Entra sets `aud` to the **bare client ID GUID**, not the `api://...` URI —
+  confirmed against a real tenant (Step 10). Decode a real token
+  (`jwt.io` or any base64-JSON decode of its payload segment) and compare
+  its `aud` to `psService.auth.audience` verbatim if login succeeds but every
+  API call still 401s.
 - **Issuer mismatch**: Entra issues both v1 (`https://sts.windows.net/<tenant-id>/`)
   and v2 (`https://login.microsoftonline.com/<tenant-id>/v2.0`) tokens
   depending on how the client requests them. `psService.auth.issuer` must

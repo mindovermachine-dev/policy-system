@@ -191,7 +191,7 @@ print_confirmation_table() {
   printf 'The following Azure LLM resources will be used:\n\n'
   printf '  Region:                       %s\n' "$LLM_REGION"
   printf '  Fallback candidates:          %s\n' "$(join_comma_space "${LLM_REGION_CANDIDATES[@]}")"
-  printf '  Resource group:               %s\n' "$LLM_RESOURCE_GROUP_NAME"
+  printf '  Resource group:               %s\n' "$RESOURCE_GROUP_NAME"
   printf '  AIServices account:           %s\n' "$account_name"
   printf '  Chat deployment:              %s (%s, capacity %s)\n' \
     "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" "$LLM_CHAT_MODEL_CAPACITY"
@@ -447,7 +447,7 @@ check_quota() {
 
 # resource_group_exists: true if the fixed-name resource group already exists.
 resource_group_exists() {
-  az group show --name "$LLM_RESOURCE_GROUP_NAME" >/dev/null 2>&1
+  az group show --name "$RESOURCE_GROUP_NAME" >/dev/null 2>&1
 }
 
 # ensure_resource_group <region>: create-if-absent (AC-BI-009, AC-BI-010) -- the first link in
@@ -458,7 +458,7 @@ ensure_resource_group() {
   if resource_group_exists; then
     return 0
   fi
-  az group create --name "$LLM_RESOURCE_GROUP_NAME" --location "$region" >/dev/null
+  az group create --name "$RESOURCE_GROUP_NAME" --location "$region" >/dev/null
   made_changes=true
 }
 
@@ -475,12 +475,12 @@ ensure_account() {
   local account_name="$1" region="$2"
   local account_json
   if account_json="$(az cognitiveservices account show --name "$account_name" \
-      --resource-group "$LLM_RESOURCE_GROUP_NAME" 2>/dev/null)"; then
+      --resource-group "$RESOURCE_GROUP_NAME" 2>/dev/null)"; then
     account_endpoint="$(fetch_account_endpoint "$account_json")"
     return 0
   fi
   account_json="$(az cognitiveservices account create --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME" --location "$region" --kind AIServices \
+    --resource-group "$RESOURCE_GROUP_NAME" --location "$region" --kind AIServices \
     --sku S0 --custom-domain "$account_name" --yes)"
   account_endpoint="$(fetch_account_endpoint "$account_json")"
   made_changes=true
@@ -490,7 +490,7 @@ ensure_account() {
 deployment_exists() {
   local account_name="$1" deployment_name="$2"
   az cognitiveservices account deployment show --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME" --deployment-name "$deployment_name" \
+    --resource-group "$RESOURCE_GROUP_NAME" --deployment-name "$deployment_name" \
     >/dev/null 2>&1
 }
 
@@ -503,7 +503,7 @@ ensure_deployment() {
     return 0
   fi
   az cognitiveservices account deployment create --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME" --deployment-name "$deployment_name" \
+    --resource-group "$RESOURCE_GROUP_NAME" --deployment-name "$deployment_name" \
     --model-name "$deployment_name" --model-format OpenAI --sku-name "$sku" \
     --sku-capacity "$capacity" >/dev/null
   made_changes=true
@@ -522,7 +522,7 @@ ensure_keyvault() {
   if keyvault_exists "$vault_name"; then
     return 0
   fi
-  az keyvault create --name "$vault_name" --resource-group "$LLM_RESOURCE_GROUP_NAME" \
+  az keyvault create --name "$vault_name" --resource-group "$RESOURCE_GROUP_NAME" \
     --location "$region" --sku standard --enable-rbac-authorization false >/dev/null
   made_changes=true
 }
@@ -551,7 +551,7 @@ fetch_account_key1() {
   local account_name="$1"
   local keys_json
   keys_json="$(az cognitiveservices account keys list --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME")"
+    --resource-group "$RESOURCE_GROUP_NAME")"
   jq -r '.key1' <<< "$keys_json"
 }
 
@@ -593,7 +593,7 @@ provision_resources() {
   local region="$1" account_name="$2" vault_name="$3"
   local key1
 
-  log_step "Ensuring resource group $LLM_RESOURCE_GROUP_NAME"
+  log_step "Ensuring resource group $RESOURCE_GROUP_NAME"
   ensure_resource_group "$region"
   log_step "Ensuring AIServices account $account_name"
   ensure_account "$account_name" "$region"
@@ -631,7 +631,7 @@ print_provisioning_summary() {
 require_account_exists() {
   local account_name="$1"
   if ! az cognitiveservices account show --name "$account_name" \
-      --resource-group "$LLM_RESOURCE_GROUP_NAME" >/dev/null 2>&1; then
+      --resource-group "$RESOURCE_GROUP_NAME" >/dev/null 2>&1; then
     print_error 'Azure AIServices account %s not found. Run scripts/deploy-llm.sh first.\n' \
       "$account_name"
     exit "$EXIT_FAILURE"
@@ -687,14 +687,14 @@ rotate_key_main() {
   log_step "Determining active key slot"
   stored_value="$(read_secret_value "$vault_name" "AZURE-API-KEY")"
   keys_json="$(az cognitiveservices account keys list --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME")"
+    --resource-group "$RESOURCE_GROUP_NAME")"
   key2_value="$(jq -r '.key2' <<< "$keys_json")"
   active_slot="$(active_key_slot "$stored_value" "$key2_value")"
   inactive_slot="$(inactive_key_slot "$active_slot")"
 
   log_step "Regenerating inactive key slot ($inactive_slot)"
   keys_json="$(az cognitiveservices account keys regenerate --name "$account_name" \
-    --resource-group "$LLM_RESOURCE_GROUP_NAME" --key-name "$inactive_slot")"
+    --resource-group "$RESOURCE_GROUP_NAME" --key-name "$inactive_slot")"
   new_value="$(jq -r --arg slot "$inactive_slot" '.[$slot]' <<< "$keys_json")"
 
   log_step "Writing rotated key to $vault_name"

@@ -65,3 +65,12 @@ azure/{{ .Values.llm.embedModel | default "text-embedding-3-large" }}
 ollama/{{ .Values.llm.embedModel | default "nomic-embed-text" }}
 {{- end -}}
 {{- end }}
+
+{{/*
+Name of the durable (Premium SSD, Retain) StorageClass for FalkorDB's PVC
+(AC-BI-014, issue #111). Computed once here so falkordb-storageclass.yaml and
+falkordb-pvc.yaml never duplicate the literal name string.
+*/}}
+{{- define "policy-system.falkordbStorageClassName" -}}
+{{- printf "%s-falkordb-durable" (include "policy-system.fullname" .) -}}
+{{- end }}

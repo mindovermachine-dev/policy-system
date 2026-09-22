@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from conftest import DeployLlmFixture
 
 SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
-RESOURCE_GROUP = "rg-policy-system-llm"
+RESOURCE_GROUP = "rg-policy-system"
 DEFAULT_REGION = "swedencentral"
 CHAT_MODEL_NAME = "gpt-5.4-mini"
 EMBED_MODEL_NAME = "text-embedding-3-large"

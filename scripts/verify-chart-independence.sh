@@ -49,14 +49,17 @@ check_independence() {
 
   "$HELM" template "$CHART_DIR" \
     --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
+    --set psService.localTestBypass.enabled=true \
     > "$baseline"
   "$HELM" template "$CHART_DIR" \
     --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
+    --set psService.localTestBypass.enabled=true \
     --set falkordb.image.tag=9.9.9 \
     --set falkordb.persistence.enabled=true \
     > "$falkordb_changed"
   "$HELM" template "$CHART_DIR" \
     --set llm.provider=azure --set llm.existingSecret=test-independence-secret \
+    --set psService.localTestBypass.enabled=true \
     --set psService.image.tag=9.9.9 \
     > "$psservice_changed"
 
@@ -104,7 +107,8 @@ check_no_credential_leak() {
   out="$("$HELM" template "$CHART_DIR" \
     --set llm.provider=azure \
     --set llm.azure.apiKey="$sentinel" \
-    --set llm.azure.apiBase=https://example.test/)"
+    --set llm.azure.apiBase=https://example.test/ \
+    --set psService.localTestBypass.enabled=true)"
 
   local total in_secret
   total="$(grep -c "$sentinel" <<<"$out")"

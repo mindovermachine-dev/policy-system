@@ -48,7 +48,7 @@ DEFAULT_EMBED_MODEL_SKU = "DataZoneStandard"
 AMPLE_QUOTA_LIMIT = 10_000
 # Mirrors scripts/lib/deploy-llm-common.sh's LLM_RESOURCE_GROUP_NAME (PLAN.md §0.4) -- default
 # for seed_existing_resource_group() below.
-DEFAULT_RESOURCE_GROUP_NAME = "rg-policy-system-llm"
+DEFAULT_RESOURCE_GROUP_NAME = "rg-policy-system"
 
 
 def _model_availability_entry(

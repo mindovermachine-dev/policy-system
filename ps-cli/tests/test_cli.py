@@ -10,6 +10,9 @@ import ast
 import base64
 import json
 import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +22,7 @@ import pytest
 from ps_cli import cli
 from ps_cli.cli import run
 from ps_cli.config import load_config
+from ps_cli.credentials import TokenBundle, build_credential_store
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
@@ -770,6 +774,90 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
     assert exit_code == 1
     assert "Could not reach PS Service at" in captured.err
     assert "Traceback" not in captured.err
+
+
+def _build_near_misses_handler(
+    captured_auth_headers: list[str | None],
+) -> type[BaseHTTPRequestHandler]:
+    """Build a handler class serving `GET /near-misses`, recording each request's `Authorization`.
+
+    Closure-based factory -- `HTTPServer` requires a handler *class*, not an
+    instance, so `captured_auth_headers` must be captured some way other than
+    `self`. Mirrors `test_integration_auth_full_cycle.py::_build_resource_metadata_
+    handler`'s own recipe.
+    """
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            """Silence `BaseHTTPRequestHandler`'s default stderr access log."""
+
+        def do_GET(self) -> None:
+            captured_auth_headers.append(self.headers.get("Authorization"))
+            payload = json.dumps({"reviews": []}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    return _Handler
+
+
+def test_resolve_client_attaches_a_stored_bearer_token_to_a_real_business_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #111 Slice 2: closes a real coverage gap on already-shipped AC-BI-003 code.
+
+    Every existing test either injects a fake client (bypassing `_resolve_client`'s
+    `PsServiceClient(...)` construction entirely) or uses `client=None` only against
+    an unreachable closed port (`test_run_with_unreachable_real_service_returns_one_
+    without_crashing` above -- no header assertion possible there). Neither proves
+    `_resolve_client` (`cli.py`) actually wires `credential_store`/`context`/
+    `auth_override` into the client it builds -- exactly the site of the bug that
+    made every authenticated business command silently send no `Authorization`
+    header at all (see `_resolve_client`'s own docstring). This test runs a real
+    local `http.server.HTTPServer` that records the `Authorization` header of every
+    request, seeds a real `FileCredentialStore`-backed token via `build_credential_
+    store(config_dir).set_tokens(...)`, and calls `run(["near-misses", "list"],
+    client=None)` -- the exact `client=None` path that forces `_resolve_client` to
+    build a real `PsServiceClient` -- pointed at that local server.
+    """
+    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
+    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
+    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+
+    captured_auth_headers: list[str | None] = []
+    server = HTTPServer(("127.0.0.1", 0), _build_near_misses_handler(captured_auth_headers))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+        (tmp_path / "targets.toml").write_text(
+            f'current_context = "test"\n\n[contexts.test]\nurl = "{base_url}"\n'
+        )
+        credential_store = build_credential_store(tmp_path)
+        credential_store.set_tokens(
+            "test",
+            TokenBundle(
+                access_token="stored-test-token",
+                refresh_token=None,
+                # Far in the future -- `device_flow.ensure_valid_access_token`'s
+                # not-expired path returns the stored token unchanged, no refresh
+                # network call, so this test needs no OIDC provider at all.
+                expires_at=int(time.time()) + 3600,
+                issuer="https://issuer.example",
+            ),
+        )
+
+        exit_code = run(["near-misses", "list"], client=None)
+
+        assert exit_code == 0
+        assert captured_auth_headers == ["Bearer stored-test-token"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 # The exact, current string from ps_service/api/routes.py's

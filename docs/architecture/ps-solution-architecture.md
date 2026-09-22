@@ -55,9 +55,9 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 - The PS Service is deployed as a Container and can be run in Podman, Kubernetes etc.
 - The PS Service depends on FalkorDB which should be deployed in a separate container. This allows for patching FalkorDB without rebuilding and deploying the PS Service.
 - PS Service is single-tenant
-- Local development deploys both containers via a Helm chart onto a local `kind` cluster running under Podman (planned, not yet implemented)
-- Production targets a managed or on-prem Kubernetes cluster (Azure, AWS, or on-prem) — the same Helm chart, a different cluster
-- PS-Cli runs on the same machine as both containers during local development; in production it is a separately-installed client reaching PS Service over the network
+- **Local Test** deploys both containers via the same Helm chart onto a local `kind` cluster running under Podman, with `scripts/deploy-llm.sh` provisioning just the Azure LLM backend and `scripts/sync-llm-secrets-to-kind.sh` syncing its credentials into the cluster — shipped; see `docs/architecture/customer-azure-llm-bootstrap.md`
+- **Production/customer-tenant** targets a real Azure AKS cluster (AAD + Azure RBAC hardened) in the customer's own subscription — `scripts/deploy-ps.sh` provisions the full stack end to end (LLM backend, Entra ID app registrations, the AKS cluster, the same Helm chart, and public HTTPS exposure via a Let's Encrypt certificate) — shipped; see `docs/architecture/customer-azure-deployment.md`. Both paths deploy the same chart; only the target cluster and provisioning tooling differ.
+- PS-Cli runs on the same machine as both containers during Local Test; in Production it is a separately-installed client reaching PS Service over the network
 
 **Regulatory Compliance (if applicable)**
 - EU GDPR

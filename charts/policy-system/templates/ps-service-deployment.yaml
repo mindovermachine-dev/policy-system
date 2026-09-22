@@ -88,3 +88,7 @@ spec:
             - name: PS_AUTH_CLI_CLIENT_ID
               value: {{ .Values.psService.auth.cliClientId | quote }}
             {{- end }}
+            {{- if .Values.psService.auth.scopes }}
+            - name: PS_AUTH_SCOPES
+              value: {{ .Values.psService.auth.scopes | quote }}
+            {{- end }}

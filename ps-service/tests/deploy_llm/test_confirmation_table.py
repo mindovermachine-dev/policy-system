@@ -52,7 +52,7 @@ def test_table_shows_resource_group_fixed_name(deploy_llm_fixture: DeployLlmFixt
 
     run = deploy_llm_fixture.run_deploy("--yes")
 
-    assert "rg-policy-system-llm" in run.stdout
+    assert "rg-policy-system" in run.stdout
 
 
 def test_table_shows_both_deployments_with_sku_and_capacity(
@@ -92,7 +92,7 @@ def test_yes_flag_prints_table_but_skips_reading_stdin(
     # subscription) never ran a second time.
     run = deploy_llm_fixture.run_deploy("--yes", stdin=None)
 
-    assert "rg-policy-system-llm" in run.stdout
+    assert "rg-policy-system" in run.stdout
     assert deploy_llm_fixture.read_az_log().count("account show --query id -o tsv") == 1
 
 

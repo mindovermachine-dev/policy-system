@@ -36,12 +36,14 @@ from importlib.metadata import version as installed_version
 from typing import TYPE_CHECKING, cast
 
 from ps_cli.config import load_config
+from ps_cli.credentials import build_credential_store
 from ps_cli.errors import PsCliError
 from ps_cli.http_client import PsServiceClient
 from ps_cli.modules.auth_handlers import AUTH_DISPATCH
 from ps_cli.modules.config_handlers import CONFIG_DISPATCH
 from ps_cli.modules.handlers import DISPATCH, NO_CLIENT_DISPATCH
 from ps_cli.modules.parser import build_parser
+from ps_cli.targets import resolve_auth_override, resolve_config_dir
 
 if TYPE_CHECKING:
     import argparse
@@ -53,17 +55,36 @@ if TYPE_CHECKING:
 def _resolve_client(
     args: argparse.Namespace, client: PsServiceClientProtocol | None
 ) -> PsServiceClientProtocol:
-    """Return `client` unchanged if injected, else build a real `PsServiceClient`.
+    """Return `client` unchanged if injected, else build a real, bearer-attaching `PsServiceClient`.
 
     Only reached for non-`config` commands (PLAN.md issue #56 §1 D8) -- `load_config()` is
     never called otherwise. `args.context` (the `--context` flag's resolved value for this
     invocation, absent via `SUPPRESS` when never given) feeds `load_config()`'s `context`
     param, PLAN.md D3's case 2.
+
+    Passes `credential_store`/`context`/`auth_override` into `PsServiceClient` -- issue #57
+    Slice 15's own bearer-attachment contract (see `auth_handlers.py`'s module docstring),
+    which this constructor call had never actually implemented: every authenticated
+    business command (`near-misses`, `check`, `ingest`, `restore`, `export`, ...) was
+    silently sending no `Authorization` header at all and relying on PS Service's own 401
+    to fail loud, rather than ever attaching the token `ps-cli auth login` stored. Confirmed
+    against a real deployment. Mirrors `auth_handlers.py`'s `_dispatch_auth_login` and
+    `mcp_bridge.py`'s own independent resolution -- `resolve_auth_override` is shared across
+    all three (`targets.py`'s own docstring on it).
     """
     if client is not None:
         return client
     context = getattr(args, "context", None)
-    return PsServiceClient(load_config(context=context).service_url)
+    config_dir = resolve_config_dir()
+    config = load_config(context=context, config_dir=config_dir)
+    credential_store = build_credential_store(config_dir)
+    auth_override = resolve_auth_override(config, config_dir)
+    return PsServiceClient(
+        config.service_url,
+        credential_store=credential_store,
+        context=config.context_name,
+        auth_override=auth_override,
+    )
 
 
 def _report_service_version(

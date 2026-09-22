@@ -11,6 +11,10 @@ falkordb:
   persistence:
     enabled: true
     storageClassName: ""
+    durableStorageClass:
+      # Off by default (local-test/kind). See values-prod.yaml — Premium SSD,
+      # Retain-reclaim StorageClass for FalkorDB's data volume (AC-BI-014).
+      enabled: false
   browser:
     enabled: true
     nodePort: 30300
@@ -35,11 +39,16 @@ psService:
   auth:
     # issuer/audience are required (render fails naming them) whenever
     # localTestBypass.enabled=false — see templates/ps-service-deployment.yaml's
-    # fail() guard. cliClientId is optional (informational, RFC 9728 metadata
-    # only). See docs/artifacts/idp-configuration-contract.md.
+    # fail() guard. cliClientId is optional (RFC 9728 metadata only). scopes is
+    # optional for PS Service's own token validation, but load-bearing in
+    # practice: ps-cli's device-flow login sends whatever PS Service advertises
+    # in scopes_supported as the literal OAuth `scope` parameter, and most IdPs
+    # (Entra included) reject an empty scope outright. See
+    # docs/artifacts/idp-configuration-contract.md.
     issuer: ""
     audience: ""
     cliClientId: ""
+    scopes: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
   # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
   # entry so pods can resolve host.containers.internal when llm.provider is

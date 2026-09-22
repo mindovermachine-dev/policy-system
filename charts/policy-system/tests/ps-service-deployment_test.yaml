@@ -297,6 +297,26 @@ tests:
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_CLI_CLIENT_ID")]
 
+  - it: auth.scopes set renders PS_AUTH_SCOPES
+    set:
+      llm.provider: ollama
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+      psService.auth.scopes: api://ps-service/access_as_user
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_SCOPES")].value
+          value: api://ps-service/access_as_user
+
+  - it: scopes unset (issuer/audience set) omits PS_AUTH_SCOPES entirely, not empty
+    set:
+      llm.provider: ollama
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_SCOPES")]
+
   - it: default render (localTestBypass.enabled=false, no auth values) fails naming the missing values
     set:
       llm.provider: ollama

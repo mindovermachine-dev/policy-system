@@ -37,12 +37,9 @@ from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
 from ps_cli.device_flow import ensure_valid_access_token
 from ps_cli.errors import PsCliError
-from ps_cli.targets import load_targets, resolve_config_dir
+from ps_cli.targets import resolve_auth_override, resolve_config_dir
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-    from ps_cli.config import CliConfig
     from ps_cli.credentials import CredentialStore
     from ps_cli.targets import AuthOverrides
 
@@ -55,26 +52,6 @@ _HTTP_BAD_REQUEST = 400
 def _log(message: str) -> None:
     """Write diagnostics to stderr -- stdout is reserved for JSON-RPC framing."""
     print(f"[ps-cli-mcp-bridge] {message}", file=sys.stderr, flush=True)
-
-
-def _resolve_auth_override(config: CliConfig, config_dir: Path) -> AuthOverrides | None:
-    """Resolve `config.context_name`'s `AuthOverrides`, or `None`.
-
-    A small, deliberately independent copy of `auth_handlers._resolve_auth_override_for_dispatch`'s
-    lookup (`targets.toml`'s per-context `[contexts.<name>.auth]` table) rather than an
-    import of that module-private helper -- this is the second call site, still under this
-    codebase's own "extract once a pattern repeats a third time" DRY threshold
-    (`http_client.py`'s own cited convention). The logic this module actually cannot
-    afford to duplicate -- credential-store reads/writes and refresh mechanics -- is
-    imported directly from `device_flow`/`credentials` below, never reimplemented.
-    """
-    if config.context_name is None:
-        return None
-    targets = load_targets(config_dir)
-    if targets is None:
-        return None
-    entry = targets.contexts.get(config.context_name)
-    return entry.auth if entry is not None else None
 
 
 def _resolve_access_token(
@@ -211,7 +188,7 @@ def main() -> None:
     config_dir = resolve_config_dir()
     config = load_config(config_dir=config_dir)
     credential_store = build_credential_store(config_dir)
-    auth_override = _resolve_auth_override(config, config_dir)
+    auth_override = resolve_auth_override(config, config_dir)
     mcp_url = config.service_url.rstrip("/") + _MCP_PATH
     context_name = config.context_name
 

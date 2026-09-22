@@ -14,6 +14,15 @@
   - [8. Load regulations into the graph](#8-load-regulations-into-the-graph)
   - [9. Install the Policy System plugin](#9-install-the-policy-system-plugin)
   - [10. Ask a question](#10-ask-a-question)
+- [Production](#production)
+  - [Prerequisites (Production)](#prerequisites-production)
+  - [1. Sign in to Azure](#1-sign-in-to-azure)
+  - [2. Review scripts/ps-defaults.conf](#2-review-scriptsps-defaultsconf)
+  - [3. Run scripts/deploy-ps.sh](#3-run-scriptsdeploy-pssh)
+  - [4. Access the cluster with kubelogin](#4-access-the-cluster-with-kubelogin)
+  - [5. Rotate the API key later](#5-rotate-the-api-key-later)
+  - [Manual steps and operational notes](#manual-steps-and-operational-notes)
+  - [Teardown](#teardown)
 - [ps-cli](#ps-cli)
   - [Configuring which PS Service instance ps-cli targets](#configuring-which-ps-service-instance-ps-cli-targets)
     - [Single target (default)](#single-target-default)
@@ -53,10 +62,10 @@ role-oriented view.
 > **This path is for evaluators** trying Policy System on their own laptop via a
 > Helm chart on a local `kind` cluster.
 
-The same Helm chart is also intended to serve **production administrators**
-deploying to a real Azure/AWS/on-prem cluster later, with a different values profile.
-This walkthrough covers the local-test profile only; a production rollout guide
-does not exist yet.                                                                    |
+The same Helm chart also serves **production administrators** deploying to a real
+Azure subscription, with a different values profile. This walkthrough covers the
+local-test profile only; see [Production](#production) below for the
+customer-tenant Azure rollout via `scripts/deploy-ps.sh`.
 
 ### Prerequisites
 
@@ -176,7 +185,7 @@ Azure credentials in the wrong cluster.
 >
 > **Cleanup.** Nothing here is torn down automatically:
 > ```bash
-> az group delete --name rg-policy-system-llm --yes
+> az group delete --name rg-policy-system --yes
 > az keyvault list-deleted --query "[].name" -o tsv   # find the vault pending purge
 > az keyvault purge --name <vault-name>                # clears soft-delete retention
 > ```
@@ -339,6 +348,193 @@ from the graph, and constructs an answer that cites what it retrieved. If the gr
 cannot answer, it says so rather than filling the gap from model recall.
 
 If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
+
+---
+
+## Production
+
+> [!NOTE]
+> **This path is for production/customer-tenant deployments** to a real Azure
+> subscription, using [`scripts/deploy-ps.sh`](../../scripts/deploy-ps.sh). It is a
+> separate, self-contained script from `deploy-llm.sh` (used by [Local Test step
+> 5](#5-provision-the-azure-llm-backend)) — the two are not the same code path and
+> both keep working independently. `deploy-ps.sh` provisions the LLM backend, the
+> Entra app registrations, an AKS cluster, the Helm release, and public HTTPS
+> exposure, all in one run.
+
+### Prerequisites (Production)
+
+| Tool | Why |
+| --- | --- |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Everything `deploy-ps.sh` provisions |
+| [jq](https://jqlang.org/download/) | Used by `deploy-ps.sh` to parse Azure CLI JSON output |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the AKS cluster `deploy-ps.sh` creates |
+| [Helm](https://helm.sh/docs/intro/install/) | Installs the Policy System chart |
+| [kubelogin](https://azure.github.io/kubelogin/install.html) | Required to authenticate `kubectl`/`helm` against the AAD-enabled AKS cluster — see [step 4](#4-access-the-cluster-with-kubelogin) |
+
+You'll need an Azure subscription where your signed-in identity has `Owner` or
+`Contributor` at subscription scope (checked by the script before it touches
+anything).
+
+### 1. Sign in to Azure
+
+```bash
+az login
+
+az account set --subscription <subscription-id>
+```
+
+### 2. Review scripts/ps-defaults.conf
+
+`scripts/ps-defaults.conf` holds the evaluator-tunable defaults: region candidates,
+chat/embedding model names and SKUs, capacities, and `TLS_CONTACT_EMAIL` (used for
+Let's Encrypt expiry/revocation notices — leave blank to be prompted interactively).
+The default SKUs are spike-proven to have quota on a fresh subscription; if your
+subscription/region differs, see [Manual steps and operational
+notes](#manual-steps-and-operational-notes) item 2 for how to discover the right
+values before your first run.
+
+### 3. Run scripts/deploy-ps.sh
+
+```bash
+scripts/deploy-ps.sh
+```
+
+This prints a confirmation table — region candidates, resource group, AIServices
+account, both model deployments, Key Vault, AKS cluster name, and public DNS label,
+all deterministically derived from your subscription id — and prompts
+`Proceed with these values? [Y/n]`. Pass `--yes` to skip the prompt.
+
+It then, in order: checks your subscription-level RBAC; registers required
+resource providers; selects the first region candidate where both models are
+Generally Available at the configured SKU and validates the configured capacities
+against that region's live quota; provisions the resource group, AIServices
+account, both model deployments, and Key Vault; creates the API and CLI Entra app
+registrations (falling back to a printed manual command — see [Manual steps and
+operational notes](#manual-steps-and-operational-notes) item 4 — if the signed-in
+identity can't grant admin consent itself); checks the AKS node VM size is
+allowed and vCPU quota is sufficient for this subscription in the selected region;
+creates the AKS cluster with AAD authentication, Azure RBAC, disabled local
+accounts, and Azure CNI network policy; syncs the LLM credentials into the cluster;
+reconciles the Helm release with the auth issuer/audience/scopes wired in; enables
+the AKS application-routing ingress add-on and sets a public DNS label; installs
+cert-manager and a Let's Encrypt `ClusterIssuer`; and creates the TLS-terminated
+Ingress exposing PS Service.
+
+Each phase prints a `==> <step>` progress line as it starts. The whole run is
+idempotent — re-running with nothing changed does no work and reports so. It ends
+with a summary naming which secrets were written (never their values) and the
+resulting URL:
+
+```
+Policy System provisioned. Wrote secrets: AZURE-API-BASE, AZURE-API-KEY, AZURE-API-VERSION.
+PS Service: https://<label>.<region>.cloudapp.azure.com
+```
+
+### 4. Access the cluster with kubelogin
+
+`deploy-ps.sh` creates the AKS cluster with `--enable-aad --enable-azure-rbac
+--disable-local-accounts`, so a plain `kubeconfig` from `az aks get-credentials`
+(which the script already ran for you) cannot authenticate on its own —
+`kubectl`/`helm` need `kubelogin` to complete the Azure AD sign-in:
+
+```bash
+brew install Azure/kubelogin/kubelogin   # macOS
+
+kubelogin convert-kubeconfig -l azurecli
+
+kubectl get pods
+```
+
+ps-service and falkordb should both be in "Running" state. This is a manual,
+per-operator prerequisite `deploy-ps.sh` does not automate — see [Manual steps and
+operational notes](#manual-steps-and-operational-notes) item 1.
+
+### 5. Rotate the API key later
+
+```bash
+scripts/deploy-ps.sh --rotate-key
+```
+
+Regenerates whichever Azure Cognitive Services API key slot isn't currently active
+in Key Vault and writes the new value back. Fails clearly if run before a first
+successful deploy.
+
+### Manual steps and operational notes
+
+Every item from the `deploy-ps-azure` spike's own "Manual steps a real installer
+needs" list, checked against what `scripts/deploy-ps.sh` actually automates today:
+
+1. **`kubelogin` — remains manual.** Install it and convert your kubeconfig before
+   `kubectl`/`helm` will authenticate against the AAD-enabled cluster — see [step
+   4](#4-access-the-cluster-with-kubelogin) above.
+2. **AOAI SKU/quota discovery — partly automated.** `deploy-ps.sh` validates
+   whatever SKU/capacity you configure against that region's live-reported range
+   and quota, and fails with the exact numbers if insufficient — but discovering
+   which SKU has real default quota for your subscription/region in the first
+   place remains a manual step before you fill in `scripts/ps-defaults.conf`:
+   ```bash
+   az cognitiveservices model list --location <region> \
+     --query "[?model.name=='gpt-5.4-mini'].model.skus[].name"
+
+   az cognitiveservices usage list --location <region>
+   ```
+3. **AKS node VM-size allowlist + vCPU quota — now automated.** The spike left
+   this as a manual step; `scripts/deploy-ps.sh` now checks both the subscription
+   allowlist and vCPU family quota for the fixed `Standard_D4as_v7` node size
+   before ever calling `az aks create`, failing with the actual restriction reason
+   or vCPU shortfall rather than a generic error. No operator action needed here
+   anymore.
+4. **Global Admin admin-consent fallback — remains manual.** If the signed-in
+   identity lacks Global Administrator / Privileged Role Administrator,
+   `deploy-ps.sh` prints the exact command for a colleague with that role to run:
+   ```bash
+   az ad app permission admin-consent --id <cli-app-id>
+   ```
+   (the real `<cli-app-id>` is printed inline). Re-run `scripts/deploy-ps.sh`
+   afterward — it detects the grant and continues past this step.
+5. **`kubectl rollout restart` FalkorDB startup-race workaround — remains
+   manual.** If PS Service's pod isn't `Ready` shortly after first install, once
+   FalkorDB is confirmed `Running`:
+   ```bash
+   kubectl rollout restart deployment/policy-system-ps-service
+   ```
+   The underlying FalkorDB startup race is out of scope for this deployment
+   script; only the workaround is documented here, not a fix.
+6. **`NetworkPolicy` restricting FalkorDB to PS Service only — now automated.**
+   The chart ships a `NetworkPolicy` template that restricts inbound connections
+   to FalkorDB's pods to PS Service's pods only, applied automatically on every
+   `helm upgrade --install` — `--network-policy azure` alone does not do this, but
+   no separate operator step is needed either.
+7. **Chart version pinning — remains a known gap.** `deploy-ps.sh`'s `CHART_REF`
+   (`oci://ghcr.io/mindovermachine-dev/charts/policy-system`) carries no explicit
+   `--version` pin, so `helm upgrade --install` always pulls whatever is latest at
+   that OCI reference when you run it. A chart release landing between two runs
+   can silently revert local fixes to `psService.auth.scopes`/`.audience` (or any
+   other `values-prod.yaml` field) until the fix is republished in a later chart
+   version. There is no flag today to pin a specific chart version — be aware of
+   this before re-running `deploy-ps.sh` against an existing deployment.
+8. **Claude Desktop consent-dialog gotcha — not a Policy System defect, but worth
+   knowing.** The same plugin-install consent dialog described in [Local Test step
+   9](#9-install-the-policy-system-plugin) may not render visibly in the normal
+   window layout — check every Space/display, and try a full app relaunch or OS
+   restart if it never appears. This applies equally when the plugin points at a
+   Production-hosted PS Service.
+
+### Teardown
+
+Nothing is torn down automatically:
+
+```bash
+az group delete --name rg-policy-system --yes
+
+az ad app delete --id $(az ad app list --display-name "Policy System API" --query "[0].appId" -o tsv)
+az ad app delete --id $(az ad app list --display-name "Policy System CLI" --query "[0].appId" -o tsv)
+```
+
+The resource group delete covers everything RG-scoped (AKS, the AIServices
+account, Key Vault, networking). The two Entra app registrations are tenant-level
+and survive an RG delete, so they need their own delete calls.
 
 ---
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from conftest import DeployLlmFixture
 
 SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
-RESOURCE_GROUP = "rg-policy-system-llm"
+RESOURCE_GROUP = "rg-policy-system"
 CHAT_MODEL_NAME = "gpt-5.4-mini"
 EMBED_MODEL_NAME = "text-embedding-3-large"
 DEFAULT_KEY1 = "FAKE-KEY-1-INITIAL"
@@ -135,3 +135,25 @@ def test_successful_run_output_never_contains_the_raw_api_key_value(
 
     assert DEFAULT_KEY1 not in run.output
     assert "AZURE-API-KEY" in run.output
+
+
+def test_resource_group_is_rg_policy_system_not_the_old_llm_suffixed_name(
+    deploy_llm_fixture: DeployLlmFixture,
+) -> None:
+    """Issue #111 Slice S1: the resource group is the shared `rg-policy-system`, not the old
+    `-llm`-suffixed name -- proves the create call and the on-disk state both use the new name,
+    and explicitly rules out the retired name reappearing anywhere in the created state or log.
+    """
+    deploy_llm_fixture.seed_subscription(id_=SUBSCRIPTION_ID)
+
+    deploy_llm_fixture.run_deploy("--yes", expect=0)
+
+    assert (deploy_llm_fixture.azure_state / "resource-groups" / "rg-policy-system").exists()
+    assert any(
+        "--name rg-policy-system " in line or line.endswith("--name rg-policy-system")
+        for line in deploy_llm_fixture.read_az_log()
+        if line.startswith("group create")
+    )
+    old_name_rg = deploy_llm_fixture.azure_state / "resource-groups" / "rg-policy-system-llm"
+    assert not old_name_rg.exists()
+    assert not any("rg-policy-system-llm" in line for line in deploy_llm_fixture.read_az_log())

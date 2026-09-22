@@ -9,7 +9,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- if .Values.falkordb.persistence.storageClassName }}
+  {{- if .Values.falkordb.persistence.durableStorageClass.enabled }}
+  storageClassName: {{ include "policy-system.falkordbStorageClassName" . | quote }}
+  {{- else if .Values.falkordb.persistence.storageClassName }}
   storageClassName: {{ .Values.falkordb.persistence.storageClassName | quote }}
   {{- end }}
   resources:

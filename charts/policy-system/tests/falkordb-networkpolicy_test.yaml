@@ -1,0 +1,50 @@
+suite: falkordb network policy
+templates:
+  - falkordb-networkpolicy.yaml
+set:
+  # Unrelated to this suite's assertions — set only so the chart's fail-closed
+  # OIDC guard (#58) and azure-credentials guard (secret.yaml) don't block
+  # rendering this template.
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # --- S4: NetworkPolicy restricting FalkorDB to PS Service only (AC-BI-007) ---
+
+  - it: NetworkPolicy selects only falkordb component pods
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: policy-system
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: falkordb
+
+  - it: NetworkPolicy allows ingress only from ps-service component pods, same release instance
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 1
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: policy-system
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: ps-service
+
+  - it: NetworkPolicy restricts to port 6379 TCP only
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].ports
+          count: 1
+      - equal:
+          path: spec.ingress[0].ports[0]
+          value:
+            protocol: TCP
+            port: 6379
+
+  - it: policyTypes is exactly [Ingress]
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress

@@ -38,6 +38,8 @@ No CI/CD pipeline and no separate template repo are involved — both scripts ru
 
 This design intentionally mirrors an existing hand-built reference deployment (`policy-system-ingestion` / `rg-policy-system-ingestion` / `kv-psi-pjosemomcujec` in the `Cosmos4Biz-NONPRD` subscription) rather than inventing a new resource shape — the scripts automate what was previously done by hand for that resource.
 
+**See also:** for a full, customer-tenant production deployment — a complete AKS cluster, Entra app registrations, the Helm release, and public HTTPS exposure, not just the LLM backend — see `docs/architecture/customer-azure-deployment.md` (`scripts/deploy-ps.sh`).
+
 ---
 
 ## Threat Model & Scope
@@ -57,7 +59,7 @@ graph TB
     Evaluator((Evaluator))
 
     subgraph Azure["Customer's Azure Subscription"]
-        RG["Resource Group\nrg-policy-system-llm"]
+        RG["Resource Group\nrg-policy-system"]
         AIS["AIServices Account\npolicy-system-llm-&lt;hash8&gt;"]
         Dep1["Deployment: gpt-5.4-mini\n(GlobalStandard)"]
         Dep2["Deployment: text-embedding-3-large\n(DataZoneStandard)"]
@@ -155,7 +157,7 @@ Suffix: first 8 hex characters of `sha256(subscription-id)`.
 
 | Resource | Name pattern | Example shape |
 |---|---|---|
-| Resource group | `rg-policy-system-llm` | fixed, no suffix |
+| Resource group | `rg-policy-system` | fixed, no suffix |
 | `AIServices` account | `policy-system-llm-<hash8>` | `policy-system-llm-3f9a2b1c` |
 | Key Vault | `kv-ps-llm-<hash8>` | `kv-ps-llm-3f9a2b1c` (18 chars, well under the 24-char cap) |
 | kind Secret | `policy-system-llm-credentials` | fixed literal, no suffix (single-tenant local cluster, no collision risk) |
@@ -203,7 +205,7 @@ The Kubernetes Secret is consumed via `envFrom: secretRef` in `ps-service-deploy
 ## Out of Scope
 
 - **No CI/CD pipeline, no separate `ps-gitops` template repo** — superseded by the two-script, run-locally design.
-- **No teardown script.** Cleanup is documented (not scripted) as `az group delete --name rg-policy-system-llm --yes`, plus `az keyvault purge --name kv-ps-llm-<hash8>` to clear the vault's soft-delete retention (Key Vault soft-delete is on by default; without purging, a delete-then-redeploy cycle against the same deterministic vault name will fail).
+- **No teardown script.** Cleanup is documented (not scripted) as `az group delete --name rg-policy-system --yes`, plus `az keyvault purge --name kv-ps-llm-<hash8>` to clear the vault's soft-delete retention (Key Vault soft-delete is on by default; without purging, a delete-then-redeploy cycle against the same deterministic vault name will fail).
 - **No automated permission elevation.** The preflight check is diagnostic only.
 - **No cost estimation/warning** before deployment.
 - **No support for non-EU regions.**

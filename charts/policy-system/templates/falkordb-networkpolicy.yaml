@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "policy-system.fullname" . }}-falkordb
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: falkordb
+spec:
+  # Restricts inbound connections to FalkorDB's pods to PS Service's pods only
+  # (same release instance), on the Redis protocol port only (AC-BI-007).
+  # The `--network-policy azure` AKS engine flag alone creates no restriction
+  # by itself — this chart-level resource is the actual enforcement. No
+  # values gate: rendering it under `kind`/local-test is harmless, since
+  # `kind`'s default CNI doesn't enforce NetworkPolicy without a supporting
+  # add-on.
+  podSelector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: falkordb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "policy-system.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ps-service
+      ports:
+        - protocol: TCP
+          port: 6379

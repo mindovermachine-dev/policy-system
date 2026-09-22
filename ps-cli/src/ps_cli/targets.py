@@ -21,10 +21,13 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ps_cli.errors import PsCliError
 from ps_cli.toml_writer import escape_basic_string, format_string_array
+
+if TYPE_CHECKING:
+    from ps_cli.config import CliConfig
 
 _TARGETS_FILE_NAME = "targets.toml"
 
@@ -181,6 +184,32 @@ def load_targets(config_dir: Path, *, strict: bool = True) -> TargetsFile | None
     current_context = cast("str | None", raw.get("current_context"))
 
     return TargetsFile(current_context=current_context, contexts=contexts)
+
+
+def resolve_auth_override(config: CliConfig, config_dir: Path) -> AuthOverrides | None:
+    """Resolve `config.context_name`'s `AuthOverrides` from `targets.toml`, or `None`.
+
+    Shared by every call site that must resolve `credential_store`/`auth_override`
+    independently of `cli.py::_resolve_client` (issue #57's `auth` subcommands, which
+    must never go through a path requiring an already-valid token, and
+    `mcp_bridge.py`, which has no `argparse.Namespace` to share `_resolve_client`'s
+    own resolution with) -- extracted here once a third call site
+    (`_resolve_client` itself, after issue #57 Slice 15's bearer-attachment gap fix)
+    needed the identical lookup, past this codebase's own "extract once a pattern
+    repeats a third time" DRY threshold (`http_client.py`'s cited convention).
+    Reads `targets.toml` fresh on every call rather than threading a `TargetsFile`
+    through from wherever `load_config()` already read it internally -- mirrors
+    `config_handlers.py`'s own handlers, none of which share a load across calls
+    either. Returns `None` whenever `config.context_name` is `None` (no context
+    resolved) or the named context sets no `auth` table.
+    """
+    if config.context_name is None:
+        return None
+    targets = load_targets(config_dir)
+    if targets is None:
+        return None
+    entry = targets.contexts.get(config.context_name)
+    return entry.auth if entry is not None else None
 
 
 def _format_auth_table(name: str, auth: AuthOverrides) -> str:

@@ -28,7 +28,7 @@ from ps_cli import device_flow, oidc_discovery
 from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
 from ps_cli.errors import PsCliError
-from ps_cli.targets import load_targets, resolve_config_dir
+from ps_cli.targets import resolve_auth_override, resolve_config_dir
 
 if TYPE_CHECKING:
     import argparse
@@ -145,26 +145,6 @@ def handle_auth_logout(context_name: str | None, *, credential_store: Credential
     credential_store.delete_tokens(context_name)
 
 
-def _resolve_auth_override_for_dispatch(
-    config: CliConfig, config_dir: Path
-) -> AuthOverrides | None:
-    """Resolve the `AuthOverrides` for `config.context_name`, or `None`.
-
-    Reads `targets.toml` fresh (rather than threading it through from
-    wherever `load_config()` already read it internally) -- mirrors
-    `config_handlers.py`'s own handlers, none of which share a `TargetsFile`
-    load across calls either. Returns `None` whenever `config.context_name`
-    is `None` (no context resolved) or the named context sets no `auth` table.
-    """
-    if config.context_name is None:
-        return None
-    targets = load_targets(config_dir)
-    if targets is None:
-        return None
-    entry = targets.contexts.get(config.context_name)
-    return entry.auth if entry is not None else None
-
-
 def _dispatch_auth_login(args: argparse.Namespace) -> None:
     """Adapt `handle_auth_login`'s signature to the `AUTH_DISPATCH` shape.
 
@@ -177,7 +157,7 @@ def _dispatch_auth_login(args: argparse.Namespace) -> None:
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
     credential_store = build_credential_store(config_dir)
-    auth_override = _resolve_auth_override_for_dispatch(config, config_dir)
+    auth_override = resolve_auth_override(config, config_dir)
     handle_auth_login(
         config.context_name,
         config,

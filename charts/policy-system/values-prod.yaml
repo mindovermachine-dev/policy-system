@@ -4,7 +4,16 @@
 falkordb:
   persistence:
     enabled: true
-    # Empty string = let the cluster pick its own default StorageClass
+    durableStorageClass:
+      # Prod-active path: a dedicated Premium SSD, Retain-reclaim
+      # StorageClass, computed by templates/_helpers.tpl
+      # (policy-system.falkordbStorageClassName) and referenced by both
+      # falkordb-storageclass.yaml and falkordb-pvc.yaml (AC-BI-014).
+      enabled: true
+    # storageClassName below is only the fallback used when
+    # durableStorageClass.enabled is false — it is not consulted here since
+    # durableStorageClass.enabled: true above takes precedence.
+    # Empty string = let the cluster pick its own default StorageClass.
     # Never hardcode kind's default StorageClass name here.
     storageClassName: ""
   browser:

@@ -1,7 +1,9 @@
 # shellcheck shell=bash
-# Shared naming helpers for scripts/deploy-llm.sh and scripts/sync-llm-secrets-to-kind.sh
-# (issue #105) -- both scripts compute the same subscription-hash-derived resource names
-# (docs/architecture/customer-azure-llm-bootstrap.md#naming--idempotency).
+# Shared naming helpers for scripts/deploy-llm.sh, scripts/sync-llm-secrets-to-kind.sh
+# (issue #105), and scripts/deploy-ps.sh (issue #111) -- all three scripts compute the same
+# subscription-hash-derived resource names
+# (docs/architecture/customer-azure-llm-bootstrap.md#naming--idempotency;
+# docs/architecture/customer-azure-deployment.md for deploy-ps.sh's own additions below).
 #
 # Sourced, never executed (mode 100644):
 #   source "$script_dir/lib/deploy-llm-common.sh"
@@ -11,7 +13,7 @@ if [[ -n "${DEPLOY_LLM_COMMON_LIB_LOADED:-}" ]]; then
 fi
 DEPLOY_LLM_COMMON_LIB_LOADED=1
 
-readonly LLM_RESOURCE_GROUP_NAME="rg-policy-system-llm"
+readonly RESOURCE_GROUP_NAME="rg-policy-system"
 
 # subscription_hash8 <subscription_id>: prints the first 8 hex chars of sha256(subscription_id).
 # `printf '%s'`, never `echo`, so no trailing newline is hashed (PLAN.md §0.4) -- this is what
@@ -37,4 +39,19 @@ llm_account_name() {
 llm_keyvault_name() {
   local subscription_id="$1"
   printf 'kv-ps-llm-%s' "$(subscription_hash8 "$subscription_id")"
+}
+
+# aks_cluster_name <subscription_id>: prints the deterministic AKS cluster name (issue #111,
+# PLAN.md §0.4) -- same hash8 scheme as llm_account_name/llm_keyvault_name above.
+aks_cluster_name() {
+  local subscription_id="$1"
+  printf 'aks-policy-system-%s' "$(subscription_hash8 "$subscription_id")"
+}
+
+# dns_label <subscription_id>: prints the deterministic public-IP DNS label (issue #111,
+# PLAN.md §0.4) -- short, since Azure DNS labels are capped at 63 chars and must start with a
+# letter; `ps-<hash8>` leaves headroom without needing truncation logic.
+dns_label() {
+  local subscription_id="$1"
+  printf 'ps-%s' "$(subscription_hash8 "$subscription_id")"
 }
