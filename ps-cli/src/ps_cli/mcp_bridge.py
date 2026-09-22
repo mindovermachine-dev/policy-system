@@ -56,6 +56,12 @@ _LOG_FILE_NAME = "mcp-bridge.log"
 _HTTP_ACCEPTED = 202
 _HTTP_BAD_REQUEST = 400
 
+# Issue #119, AC-BI-005: JSON-RPC 2.0 §5.1 reserves -32000..-32099 for
+# implementation-defined "Server error" codes; this one specific value means "could
+# not obtain an access token" -- distinct from a transport/PS-Service-side failure,
+# which still has no reply at all (see `_forward_message`'s other failure branches).
+_JSONRPC_AUTH_ERROR_CODE = -32001
+
 
 @dataclass(frozen=True)
 class _BridgeContext:
@@ -186,10 +192,14 @@ def _forward_message(
 ) -> tuple[dict[str, object] | None, str | None]:
     """Forward one JSON-RPC `message` to PS Service; return `(reply, updated session_id)`.
 
-    `reply` is `None` on any failure (token, transport, or non-2xx) or a
-    notification with no response -- every failure is logged (stderr + `ctx.log_file`)
-    and swallowed here, never raised, so one bad message never kills the whole proxy
-    loop mid-session. Every outcome -- success included -- is logged with `method`/`id`
+    `reply` is `None` on a transport/non-2xx failure, or a notification (no `id`)
+    with no response either way. A token-resolution failure on a genuine request
+    (issue #119, AC-BI-005/007) instead returns a JSON-RPC error object -- unlike
+    the transport/non-2xx cases, which stay silent no-replies rather than risk
+    forwarding PS Service's own raw response body upstream unfiltered. Every failure
+    is logged (stderr + `ctx.log_file`) and swallowed here, never raised, so one bad
+    message never kills the whole proxy loop mid-session. Every outcome -- success
+    included -- is logged with `method`/`id`
     (never the message's `params`, which may carry sensitive content), outcome, latency,
     and the session id in play, per AC-BI-003/004; secrets (the bearer token) never
     appear in any logged line, per AC-BI-009.
@@ -213,7 +223,24 @@ def _forward_message(
             f"(method={method} id={message_id!r} latency={_elapsed()} session={session_id})",
             log_file=ctx.log_file,
         )
-        return None, session_id
+        # Issue #119, AC-BI-005/007: surface this to the MCP host as a real reply --
+        # not a silent no-response -- so Claude Desktop shows the actual cause instead
+        # of a generic failure. Only for a genuine request (`message_id is not None`):
+        # a notification (JSON-RPC 2.0 §4.1) must never get a reply at all, matching
+        # every other notification already handled by this loop.
+        if message_id is None:
+            return None, session_id
+        return (
+            {
+                "jsonrpc": "2.0",
+                "id": message_id,
+                # AC-BI-006: `str(exc)` is `PsCliError`'s own msg/hint text, which
+                # never carries a token value (see `device_flow.py`'s own AC-BI-018
+                # guarantee) -- no separate redaction needed here.
+                "error": {"code": _JSONRPC_AUTH_ERROR_CODE, "message": str(exc)},
+            },
+            session_id,
+        )
 
     headers = {
         "Content-Type": "application/json",

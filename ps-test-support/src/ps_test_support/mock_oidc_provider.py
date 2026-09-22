@@ -83,18 +83,20 @@ class _RsaSigningKey:
 class DeviceFlowState:
     """Server-side state for one in-flight device-authorization grant, keyed by `device_code`.
 
-    `client_id`/`audience` are the values recorded off the original
+    `client_id`/`audience`/`scope` are the values recorded off the original
     `POST /device_authorization` request -- read back via
     `MockOidcProvider.device_flow_state` to prove audience passthrough
-    (AC-BI-003). `status` drives `POST /token`'s response:
-    `"pending"` (default) -> `authorization_pending`; `"approved"` ->
-    mints a token; `"expired"` -> `expired_token`; `"denied"` ->
+    (AC-BI-003) or, for `scope` (`ps-cli` issue #119), that a login request
+    actually asked for `offline_access`. `status` drives `POST /token`'s
+    response: `"pending"` (default) -> `authorization_pending`; `"approved"`
+    -> mints a token; `"expired"` -> `expired_token`; `"denied"` ->
     `access_denied`. `slow_down_once` makes exactly the next poll return
     `slow_down` before reverting to `status`.
     """
 
     client_id: str
     audience: str | None
+    scope: str | None = None
     status: str = "pending"
     sub: str = "test-subject"
     slow_down_once: bool = False
@@ -169,6 +171,10 @@ class MockOidcProvider:
 
     `jwks_request_count` lets a test assert exactly how many times `/jwks.json`
     was fetched (Slice 6's "refetch once, not repeatedly" assertion).
+    `last_token_request_form` holds the most recent `POST /token` request's raw
+    form fields (`ps-cli` issue #119 reads its `scope` key to prove a refresh
+    request carried `offline_access` forward) -- overwritten on every call, by
+    design: these tests only ever need the one request they just made.
 
     Issue #57 Slice 4 adds device-authorization + token endpoint simulation:
     `POST /device_authorization` mints a fresh `device_code`/`user_code`
@@ -185,6 +191,7 @@ class MockOidcProvider:
         self.jwks_request_count = 0
         self._device_flow_states: dict[str, DeviceFlowState] = {}
         self._issued_refresh_tokens: dict[str, str] = {}
+        self.last_token_request_form: dict[str, str] = {}
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _build_handler_class(self))
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -335,6 +342,7 @@ class MockOidcProvider:
         self._device_flow_states[device_code] = DeviceFlowState(
             client_id=form.get("client_id", ""),
             audience=form.get("audience"),
+            scope=form.get("scope"),
         )
         return {
             "device_code": device_code,
@@ -352,6 +360,7 @@ class MockOidcProvider:
         server via `do_POST`; public for the same handler-closure reason as
         `handle_device_authorization_request`.
         """
+        self.last_token_request_form = dict(form)
         grant_type = form.get("grant_type")
         if grant_type == "urn:ietf:params:oauth:grant-type:device_code":
             return self._handle_device_code_grant(form)

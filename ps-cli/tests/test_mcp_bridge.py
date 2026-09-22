@@ -11,10 +11,11 @@ mirroring `device_flow.py`'s own `transport` constructor-injection seam.
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import pytest
@@ -215,7 +216,11 @@ def test_forward_message_logs_non_2xx_with_latency_and_session(tmp_path: Path) -
 def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
     tmp_path: Path,
 ) -> None:
-    """AC-BI-004: a token-resolution failure (expired, no refresh token) is logged and swallowed."""
+    """AC-BI-004: a token-resolution failure (expired, no refresh token) is logged.
+
+    Issue #119, AC-BI-005/007: it is no longer swallowed into a silent no-reply --
+    `reply`'s own shape is covered separately below.
+    """
     store = FileCredentialStore(tmp_path)
     store.set_tokens(
         "prod",
@@ -243,7 +248,7 @@ def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
         ctx=ctx,
     )
 
-    assert reply is None
+    assert reply is not None
     assert session_id == "sess-3"
     logged = log_file.getvalue()
     assert "could not get access token" in logged
@@ -251,6 +256,89 @@ def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
     assert "id=5" in logged
     assert "latency=" in logged
     assert "session=sess-3" in logged
+
+
+def test_forward_message_returns_jsonrpc_error_on_token_resolution_failure(
+    tmp_path: Path,
+) -> None:
+    """Issue #119, AC-BI-005/006/007: a token-resolution failure returns a real
+    JSON-RPC error reply -- not a silent no-reply -- so the MCP host (Claude
+    Desktop) surfaces the actual cause instead of a generic timeout. Carries the
+    original request's own `id`, and never a token value.
+    """
+    store = FileCredentialStore(tmp_path)
+    store.set_tokens(
+        "prod",
+        TokenBundle(
+            access_token="sk-should-never-appear-in-a-reply",
+            refresh_token=None,
+            expires_at=0,
+            issuer="https://idp.example",
+        ),
+    )
+    ctx = _BridgeContext(
+        mcp_url=_MCP_URL,
+        context_name="prod",
+        service_url="https://ps.example.test",
+        auth_override=None,
+        credential_store=store,
+        log_file=None,
+    )
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _req: pytest.fail("must not reach PS Service"))
+    )
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "tools/call", "id": 5},
+        session_id="sess-3",
+        ctx=ctx,
+    )
+
+    assert reply is not None
+    assert reply["jsonrpc"] == "2.0"
+    assert reply["id"] == 5
+    error = reply["error"]
+    assert isinstance(error, dict)
+    assert "stored credentials could not be refreshed" in cast("str", error["message"])
+    assert "ps-cli auth login" in cast("str", error["message"])
+    assert "sk-should-never-appear-in-a-reply" not in json.dumps(reply)
+
+
+def test_forward_message_token_resolution_failure_for_a_notification_still_returns_no_reply(
+    tmp_path: Path,
+) -> None:
+    """Issue #119, AC-BI-005: a notification (no `id`) never gets a reply, even on a
+    token failure -- JSON-RPC 2.0 forbids replying to a notification; only the log
+    line (asserted above) carries the failure for that case.
+    """
+    store = FileCredentialStore(tmp_path)
+    store.set_tokens(
+        "prod",
+        TokenBundle(
+            access_token="stale", refresh_token=None, expires_at=0, issuer="https://idp.example"
+        ),
+    )
+    ctx = _BridgeContext(
+        mcp_url=_MCP_URL,
+        context_name="prod",
+        service_url="https://ps.example.test",
+        auth_override=None,
+        credential_store=store,
+        log_file=None,
+    )
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _req: pytest.fail("must not reach PS Service"))
+    )
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "notifications/cancelled"},
+        session_id=None,
+        ctx=ctx,
+    )
+
+    assert reply is None
 
 
 # --- Group 3: Resilience -------------------------------------------------------------

@@ -508,6 +508,106 @@ class TestEnsureValidAccessToken:
         assert rotated.access_token == new_token
         assert rotated.refresh_token != initial.refresh_token
 
+    def test_refresh_request_carries_forward_the_resolved_scope(
+        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #119, AC-BI-003: the refresh-token POST sends `params.scopes` as `scope`
+        -- proven with `offline_access` in the mix, the scope this fix cares about -- not
+        just the initial device-flow request. Without this, a bundle refreshed once would
+        still lose its refresh_token on the *second* refresh.
+        """
+        params = ResolvedAuthParameters(
+            issuer=mock_oidc_provider.issuer,
+            client_id=_CLIENT_ID,
+            scopes=("openid", "offline_access"),
+            audience=None,
+            device_authorization_endpoint=f"{mock_oidc_provider.base_url}/device_authorization",
+            token_endpoint=f"{mock_oidc_provider.base_url}/token",
+        )
+        device_auth = request_device_authorization(params)
+        mock_oidc_provider.complete_device_flow(device_auth.device_code)
+        initial = poll_for_token(params, device_auth, sleep=_fail_if_called)
+        assert initial.refresh_token is not None
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(
+                access_token=initial.access_token,
+                refresh_token=initial.refresh_token,
+                expires_at=int(time.time()) - 10,
+                issuer=mock_oidc_provider.issuer,
+            ),
+        )
+
+        def _fake_resolve(
+            service_url: str, override: object, *, transport: object = None
+        ) -> ResolvedAuthParameters:
+            del service_url, override, transport
+            return params
+
+        monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+
+        ensure_valid_access_token(
+            context="dev",
+            service_url="http://ps-service.example",
+            auth_override=None,
+            credential_store=store,
+        )
+
+        sent_scope = mock_oidc_provider.last_token_request_form.get("scope")
+        assert sent_scope is not None
+        assert "offline_access" in sent_scope.split()
+
+    def test_refresh_rejected_for_unrecognized_scope_fails_closed_like_any_refresh_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #119, AC-BI-004: an IdP that rejects the newly-added `offline_access`
+        scope (e.g. `invalid_scope`) is handled by the existing generic refresh-failure
+        path -- no special-casing added, no new crash mode.
+        """
+        params = ResolvedAuthParameters(
+            issuer="http://issuer.example",
+            client_id=_CLIENT_ID,
+            scopes=("openid", "offline_access"),
+            audience=None,
+            device_authorization_endpoint="http://issuer.example/device_authorization",
+            token_endpoint="http://issuer.example/token",
+        )
+
+        def _fake_resolve(
+            service_url: str, override: object, *, transport: object = None
+        ) -> ResolvedAuthParameters:
+            del service_url, override, transport
+            return params
+
+        monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+
+        def _handle(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"error": "invalid_scope"})
+
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(
+                access_token="stale",
+                refresh_token="rt",
+                expires_at=int(time.time()) - 10,
+                issuer="http://issuer.example",
+            ),
+        )
+
+        with pytest.raises(PsCliError) as excinfo:
+            ensure_valid_access_token(
+                context="dev",
+                service_url="http://ps-service.example",
+                auth_override=None,
+                credential_store=store,
+                transport=httpx.MockTransport(_handle),
+            )
+
+        assert excinfo.value.msg == "stored credentials could not be refreshed"
+        assert "ps-cli auth login" in (excinfo.value.hint or "")
+
     def test_second_call_with_now_stale_refresh_token_raises_fail_closed_not_a_crash(
         self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
     ) -> None:

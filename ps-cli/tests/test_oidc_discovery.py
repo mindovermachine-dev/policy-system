@@ -247,7 +247,7 @@ def test_resolve_auth_parameters_happy_path_discovers_everything(
     assert result == ResolvedAuthParameters(
         issuer=mock_oidc_provider.issuer,
         client_id="cli-client-id",
-        scopes=("openid", "profile"),
+        scopes=("openid", "profile", "offline_access"),
         audience=None,
         device_authorization_endpoint=f"{mock_oidc_provider.base_url}/device_authorization",
         token_endpoint=f"{mock_oidc_provider.base_url}/token",
@@ -297,7 +297,12 @@ def test_resolve_auth_parameters_issuer_override_wins_and_openid_config_targets_
 def test_resolve_auth_parameters_scopes_override_wins(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    """`auth.scopes` override wins over `scopes_supported` from the resource metadata."""
+    """`auth.scopes` override wins over `scopes_supported` from the resource metadata.
+
+    `offline_access` is still appended on top (issue #119, AC-BI-001) -- the override
+    replaces the *discovered* scope set, not this module's own refresh-capability
+    guarantee.
+    """
     transport = _SplitTransport(
         _resource_metadata_handler(mock_oidc_provider, scopes=["openid", "profile"])
     )
@@ -305,7 +310,38 @@ def test_resolve_auth_parameters_scopes_override_wins(
 
     result = resolve_auth_parameters(_SERVICE_URL, override, transport=transport)
 
-    assert result.scopes == ("custom-scope",)
+    assert result.scopes == ("custom-scope", "offline_access")
+
+
+def test_resolve_auth_parameters_does_not_duplicate_offline_access_when_already_advertised(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    """Issue #119, AC-BI-002: a server that already advertises `offline_access` in its
+    `scopes_supported` doesn't get it appended a second time.
+    """
+    transport = _SplitTransport(
+        _resource_metadata_handler(mock_oidc_provider, scopes=["openid", "offline_access"])
+    )
+
+    result = resolve_auth_parameters(_SERVICE_URL, _NO_OVERRIDE, transport=transport)
+
+    assert result.scopes == ("openid", "offline_access")
+
+
+def test_resolve_auth_parameters_does_not_duplicate_offline_access_in_an_override(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    """Issue #119, AC-BI-002: an `auth.scopes` override that already lists
+    `offline_access` doesn't get it appended a second time either.
+    """
+    transport = _SplitTransport(_resource_metadata_handler(mock_oidc_provider, scopes=["openid"]))
+    override = AuthOverrides(
+        issuer=None, client_id=None, scopes=("custom-scope", "offline_access"), audience=None
+    )
+
+    result = resolve_auth_parameters(_SERVICE_URL, override, transport=transport)
+
+    assert result.scopes == ("custom-scope", "offline_access")
 
 
 def test_resolve_auth_parameters_empty_authorization_servers_with_no_override_raises() -> None:

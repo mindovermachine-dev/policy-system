@@ -433,11 +433,21 @@ def _refresh_token_bundle(
     rotated one. Raises the AC-BI-013 fail-closed error (`_raise_refresh_failed`)
     on any network error, non-2xx response, or malformed body -- never lets an
     `httpx` exception or a raw `KeyError`/`TypeError` escape.
+
+    Also sends `params.scopes` as `scope` (issue #119, AC-BI-003) -- `params` is
+    freshly re-resolved by every `ensure_valid_access_token` call, so this already
+    includes `offline_access`, keeping every refresh (not just the initial login)
+    eligible for a new refresh_token in the response.
     """
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": params.client_id,
+        # Issue #119, AC-BI-003: carry `params.scopes` (which already includes
+        # `offline_access` -- see `oidc_discovery.resolve_auth_parameters`) forward on
+        # every refresh, not just the initial login, so a *second* refresh still has a
+        # refresh_token to work with.
+        "scope": " ".join(params.scopes),
     }
     with httpx.Client(timeout=_DEVICE_FLOW_TIMEOUT, transport=transport) as client:
         try:

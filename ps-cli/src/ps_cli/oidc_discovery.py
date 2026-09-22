@@ -65,6 +65,12 @@ _NO_AUTHORIZATION_SERVERS_MSG = (
     "is set for auth.issuer in targets.toml."
 )
 
+# Issue #119: the standard OIDC scope that signals "issue a refresh token too" --
+# without it, most IdPs (confirmed against Entra ID) mint an access-token-only
+# response, leaving `TokenBundle.refresh_token` permanently `None` and every later
+# `ensure_valid_access_token()` call fail-closed the moment that access token expires.
+_OFFLINE_ACCESS_SCOPE = "offline_access"
+
 # Issue #57 Slice 21 (AC-BI-017): module-local, deliberately duplicated from
 # `http_client.py`'s own `_LOOPBACK_HOSTNAMES` rather than imported/shared -- that
 # constant is private to `http_client.py` and serves a *warn* semantic there
@@ -307,8 +313,9 @@ def resolve_auth_parameters(
     resolves `issuer` (`override.issuer` if set, else `metadata.authorization_servers[0]`
     -- raising `PsCliError` if `authorization_servers` is empty and there is no
     override, failing closed rather than raising `IndexError`), resolves `scopes`
-    (`override.scopes` if set, else `tuple(metadata.scopes_supported)`), then fetches
-    `openid-configuration` from the *resolved* issuer (never the discovered one when
+    (`override.scopes` if set, else `tuple(metadata.scopes_supported)`, always with
+    `offline_access` appended if not already present -- issue #119, AC-BI-001/002),
+    then fetches `openid-configuration` from the *resolved* issuer (never the discovered one when
     an override replaced it) and reads `device_authorization_endpoint`/
     `token_endpoint`, raising `PsCliError` naming the issuer if either is absent
     (AC-BI-005). Also refuses (`_assert_secure_or_loopback`, AC-BI-017) a resolved
@@ -335,6 +342,14 @@ def resolve_auth_parameters(
         if override is not None and override.scopes is not None
         else tuple(metadata.scopes_supported)
     )
+    # Issue #119, AC-BI-001/002: always ask for `offline_access` so a device-flow
+    # login can be refreshed, on top of whatever PS Service's own resource-metadata
+    # scopes (or an operator's `auth.scopes` override) already ask for -- appended
+    # here, not folded into `PS_AUTH_SCOPES`/deploy config, so it can never regress
+    # per-deployment (see #119's Solution). Deduplicated: a server or override that
+    # already lists it must not send it twice.
+    if _OFFLINE_ACCESS_SCOPE not in scopes:
+        scopes = (*scopes, _OFFLINE_ACCESS_SCOPE)
     audience = override.audience if override is not None else None
 
     discovery_document = fetch_openid_configuration(issuer, transport=transport)

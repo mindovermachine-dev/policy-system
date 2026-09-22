@@ -157,6 +157,39 @@ def test_audience_is_recorded_and_readable_back(mock_oidc_provider: MockOidcProv
     assert state.audience == "ps-service"
 
 
+def test_scope_is_recorded_and_readable_back(mock_oidc_provider: MockOidcProvider) -> None:
+    """`ps-cli` issue #119 needs to assert what scope a device-flow request sent."""
+    body = _request_device_authorization(mock_oidc_provider, client_id="ps-cli")
+    device_code = str(body["device_code"])
+
+    state = mock_oidc_provider.device_flow_state(device_code)
+
+    assert state.scope == "openid"
+
+
+def test_last_token_request_form_records_the_refresh_grant_scope(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    """`ps-cli` issue #119 needs to assert the refresh-token POST's own `scope` field."""
+    body = _request_device_authorization(mock_oidc_provider, client_id="ps-cli")
+    device_code = str(body["device_code"])
+    mock_oidc_provider.complete_device_flow(device_code)
+    _, token_response = _poll_token(mock_oidc_provider, device_code, client_id="ps-cli")
+    refresh_token = str(token_response["refresh_token"])
+
+    _post_form(
+        f"{mock_oidc_provider.base_url}/token",
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": "ps-cli",
+            "scope": "openid offline_access",
+        },
+    )
+
+    assert mock_oidc_provider.last_token_request_form.get("scope") == "openid offline_access"
+
+
 def test_refresh_grant_rotates_the_refresh_token_and_rejects_the_old_one_on_reuse(
     mock_oidc_provider: MockOidcProvider,
 ) -> None:
