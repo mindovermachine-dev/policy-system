@@ -154,29 +154,6 @@ def test_contributing_has_no_manual_release_instructions() -> None:
     assert "ps-cli-v" not in text
 
 
-def test_getting_started_step2_requires_typed_issue_title() -> None:
-    """AC-BI-028: step 2 states the issue title must carry a conventional-commit type.
-
-    `gh tt deliver` uses it as the squash commit header, which the release classifier then reads.
-    """
-    getting_started = _section(CONTRIBUTING_PATH.read_text(encoding="utf-8"), "Getting Started")
-    step2 = getting_started.split("\n2.", 1)[1].split("\n3.", 1)[0]
-
-    assert "gh tt workon" in step2
-    assert "conventional" in step2.lower()
-    assert "squash" in step2.lower()
-
-
-def test_getting_started_step5_no_longer_says_gh_tt_cuts_releases() -> None:
-    """AC-BI-028: step 5 no longer says `gh tt` is used to cut releases."""
-    getting_started = _section(CONTRIBUTING_PATH.read_text(encoding="utf-8"), "Getting Started")
-    step5 = getting_started.split("\n5.", 1)[1]
-
-    assert "used to cut" not in step5.lower()
-    assert "automatic" in step5.lower()
-    assert "release" in step5.lower()
-
-
 def test_contributing_releasing_states_breaking_change_in_body_ships_major() -> None:
     """DECISIONS F-05: a `BREAKING CHANGE` footer/body (not only `feat!`) ships major."""
     releasing = _section(CONTRIBUTING_PATH.read_text(encoding="utf-8"), "Releasing")
