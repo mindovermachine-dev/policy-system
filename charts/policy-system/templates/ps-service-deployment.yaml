@@ -43,14 +43,27 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          resources:
+            requests:
+              cpu: {{ .Values.psService.resources.requests.cpu | quote }}
+              memory: {{ .Values.psService.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.psService.resources.limits.cpu | quote }}
+              memory: {{ .Values.psService.resources.limits.memory | quote }}
           readinessProbe:
             httpGet:
               path: /ready
               port: http
+            timeoutSeconds: {{ .Values.psService.probes.readiness.timeoutSeconds }}
+            periodSeconds: {{ .Values.psService.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.psService.probes.readiness.failureThreshold }}
           livenessProbe:
             httpGet:
               path: /health
               port: http
+            timeoutSeconds: {{ .Values.psService.probes.liveness.timeoutSeconds }}
+            periodSeconds: {{ .Values.psService.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.psService.probes.liveness.failureThreshold }}
           {{- if eq .Values.llm.provider "azure" }}
           envFrom:
             - secretRef:

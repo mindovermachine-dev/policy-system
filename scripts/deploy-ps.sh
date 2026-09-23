@@ -1002,17 +1002,28 @@ vm_family_quota_sufficient() {
   (( remaining >= needed_vcpus ))
 }
 
-# check_aks_vm_size <region>: hard-stops before any AKS creation (S13, not implemented yet)
-# unless AKS_NODE_VM_SIZE is both allowed for this subscription in <region> and this
-# subscription's vCPU family quota there covers AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS
+# check_aks_vm_size <cluster_name> <region>: hard-stops before any AKS creation (S13, not
+# implemented yet) unless AKS_NODE_VM_SIZE is both allowed for this subscription in <region> and
+# this subscription's vCPU family quota there covers AKS_NODE_COUNT x AKS_NODE_VM_SIZE_VCPUS
 # (AC-BI-011). New design, not ported -- PLAN.md §0.6: the spike explicitly left this
 # undischarged (its README's own "Manual steps a real installer needs" #3), so this mechanism is
 # not yet empirically proven against a live subscription the way S8's ported bugfixes are (flagged
 # in IMPL_SLICE_12.md). Fails with the actual allowlist/quota numbers shown, mirroring
 # validate_model_quota's own message-style convention (explicit numbers, never a generic
 # message) -- never left to `az aks create`'s own error text, this AC's literal wording.
+#
+# Skips entirely when <cluster_name> already exists, same reasoning as check_quota's own
+# deployment_exists guard above: ensure_aks_cluster is create-if-absent and never resizes an
+# existing cluster, so an existing cluster's own nodes are what the quota preflight would be
+# measuring against -- re-requesting their already-allocated vCPUs on a rerun reads as
+# insufficient quota even though no *new* capacity is actually needed.
 check_aks_vm_size() {
-  local region="$1"
+  local cluster_name="$1" region="$2"
+  if aks_cluster_exists "$cluster_name"; then
+    printf 'AKS cluster %s already exists -- skipping vCPU quota preflight (no new capacity requested).\n' \
+      "$cluster_name"
+    return
+  fi
   if ! vm_size_allowed "$region"; then
     # Re-fetches (failure path only, not the common case) -- vm_size_allowed only returns a
     # boolean; the actual restriction reason for the message comes from the same live query.
@@ -1366,6 +1377,16 @@ EOF
 # directly against the chart's own rendered Service name/port ($PS_SERVICE_NAME/"http") rather
 # than a chart change. The cert-manager.io/cluster-issuer annotation references S17's
 # ClusterIssuer by name; ingressClassName is S16's app-routing add-on class ($INGRESS_CLASS).
+#
+# nginx.ingress.kubernetes.io/proxy-body-size: the app-routing add-on's NGINX defaults to a 1 MiB
+# client_max_body_size, which 413s any restore/import payload above that (real incident: `ps-cli
+# restore instrument` against a live instrument). PS Service's own ServiceConfig.max_request_body
+# _bytes (ps_service/config.py) is the actual, precisely-configured limit -- currently a compiled
+# default of 100 MiB, not wired into the chart as an env var. This annotation is deliberately set
+# above that default (150m) rather than matched to it exactly, so NGINX stays a coarse outer guard
+# and never becomes a second source of truth that has to be kept in lockstep with the app's limit.
+# If max_request_body_bytes is ever raised past 150 MiB, this value needs raising too.
+#
 # Idempotent via the same apply_output_changed detection S14 established -- a rerun with an
 # unchanged manifest reports "unchanged" and does not set made_changes.
 ensure_ps_service_ingress() {
@@ -1377,6 +1398,7 @@ metadata:
   name: ${PS_SERVICE_NAME}
   annotations:
     cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER_NAME}
+    nginx.ingress.kubernetes.io/proxy-body-size: "150m"
 spec:
   ingressClassName: ${INGRESS_CLASS}
   tls:
@@ -1575,7 +1597,7 @@ main() {
   ensure_cli_app_registration
 
   log_step "Checking AKS node VM size and quota in $selected_region"
-  check_aks_vm_size "$selected_region"
+  check_aks_vm_size "$cluster_name" "$selected_region"
 
   log_step "Ensuring AKS cluster $cluster_name"
   ensure_aks_cluster "$cluster_name" "$selected_region"

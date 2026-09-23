@@ -62,6 +62,23 @@ _HTTP_BAD_REQUEST = 400
 # which still has no reply at all (see `_forward_message`'s other failure branches).
 _JSONRPC_AUTH_ERROR_CODE = -32001
 
+# Issue #120, AC-BI-004: JSON-RPC 2.0 §5.1's -32000..-32099 "Server error" range,
+# same convention as _JSONRPC_AUTH_ERROR_CODE above -- this one specific value means
+# "PS Service itself rejected the forwarded request with a >=400 status," distinct
+# from the auth-resolution failure above and from a transport-level failure (which
+# still has no reply at all -- see _forward_message's other failure branches).
+_JSONRPC_UPSTREAM_ERROR_CODE = -32002
+
+# The MCP SDK's own fixed literal for an unknown/expired session (see
+# mcp.server.streamable_http_manager). Detected by exact string match: this
+# text is never composed by ps-service's own code, only echoed verbatim by the SDK.
+_SESSION_NOT_FOUND_MESSAGE = "Session not found"
+
+# Matches the existing resp.text[:500] truncation already used when logging a >=400
+# response (see the log line just above this branch) -- bounds how much upstream text
+# this bridge will ever re-emit, even into its own JSON-RPC reply.
+_UPSTREAM_ERROR_MESSAGE_MAX_LEN = 500
+
 
 @dataclass(frozen=True)
 class _BridgeContext:
@@ -183,6 +200,82 @@ def _parse_response_body(resp: httpx.Response) -> dict[str, object] | None:
     return resp.json()
 
 
+def _extract_upstream_error_message(resp: httpx.Response) -> str | None:
+    """Best-effort extraction of PS Service's own JSON-RPC error `message` from `resp`.
+
+    Returns `None` when the body isn't the JSON-RPC error shape PS Service's MCP
+    transport actually emits (e.g. a non-JSON body from a proxy/gateway in front of
+    PS Service, or a shape this bridge doesn't recognize) -- callers fall back to a
+    generic, body-free message in that case. Never returns anything beyond this one
+    extracted string, truncated to _UPSTREAM_ERROR_MESSAGE_MAX_LEN -- the raw body,
+    headers, and any other field of the upstream error object are discarded here,
+    which is what makes AC-BI-007 hold at the one place this bridge ever looks inside
+    a >=400 response body.
+    """
+    try:
+        body = _parse_response_body(resp)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    error_body = cast("dict[str, object]", error)
+    message = error_body.get("message")
+    if not isinstance(message, str):
+        return None
+    return message[:_UPSTREAM_ERROR_MESSAGE_MAX_LEN]
+
+
+def _upstream_error_reply(message_id: object, resp: httpx.Response) -> dict[str, object]:
+    """Build the JSON-RPC error reply for a >=400 PS Service response to a genuine request.
+
+    AC-BI-004: always carries PS Service's own sanitized message text instead of
+    silence -- or a generic, body-free fallback (just the status code) when the body
+    can't be parsed into that shape. AC-BI-006: PS Service's fixed "Session not found"
+    text (see module-level docstring note) is rewrapped so the MCP host -- and the
+    human behind it -- can tell an expired/reset session (e.g. after a ps-service pod
+    restart) apart from any other >=400 failure, while still literally including PS
+    Service's own message text, satisfying AC-BI-004 and AC-BI-006 simultaneously
+    rather than choosing one over the other. AC-BI-007: this function never touches
+    resp.text/resp.headers/the request's own Authorization header directly -- only
+    the one string _extract_upstream_error_message already sanitized, plus this
+    bridge's own literal status-code note.
+    """
+    upstream_message = _extract_upstream_error_message(resp)
+    if upstream_message == _SESSION_NOT_FOUND_MESSAGE:
+        text = (
+            "PS Service session expired or was reset (e.g. after a service "
+            "restart) -- reconnect and retry. "
+            f'(PS Service: "{_SESSION_NOT_FOUND_MESSAGE}")'
+        )
+    elif upstream_message is not None:
+        text = f"PS Service rejected the request (status {resp.status_code}): {upstream_message}"
+    else:
+        text = f"PS Service rejected the request with status {resp.status_code}."
+    return {
+        "jsonrpc": "2.0",
+        "id": message_id,
+        "error": {"code": _JSONRPC_UPSTREAM_ERROR_CODE, "message": text},
+    }
+
+
+def _ge400_reply(message_id: object, resp: httpx.Response) -> dict[str, object] | None:
+    """Decide `_forward_message`'s reply for a >=400 PS Service response.
+
+    AC-BI-005: a notification (`message_id is None`) still gets no reply -- JSON-RPC
+    2.0 §4.1 forbids replying to one. Otherwise delegates to `_upstream_error_reply`
+    for AC-BI-004/006/007. Split out from `_forward_message` itself purely to keep
+    that function's own branching within L2's mccabe budget (`max-complexity = 8`) --
+    this one `if`/`else` mirrors the shape of the token-resolution-failure branch
+    one function up, kept here instead of inline for the same complexity reason.
+    """
+    if message_id is None:
+        return None
+    return _upstream_error_reply(message_id, resp)
+
+
 def _forward_message(
     client: httpx.Client,
     message: object,
@@ -192,14 +285,14 @@ def _forward_message(
 ) -> tuple[dict[str, object] | None, str | None]:
     """Forward one JSON-RPC `message` to PS Service; return `(reply, updated session_id)`.
 
-    `reply` is `None` on a transport/non-2xx failure, or a notification (no `id`)
-    with no response either way. A token-resolution failure on a genuine request
-    (issue #119, AC-BI-005/007) instead returns a JSON-RPC error object -- unlike
-    the transport/non-2xx cases, which stay silent no-replies rather than risk
-    forwarding PS Service's own raw response body upstream unfiltered. Every failure
-    is logged (stderr + `ctx.log_file`) and swallowed here, never raised, so one bad
-    message never kills the whole proxy loop mid-session. Every outcome -- success
-    included -- is logged with `method`/`id`
+    `reply` is `None` on a transport failure, or a notification (no `id`) with no
+    response either way. A token-resolution failure or a >=400 PS Service response
+    for a genuine request (issues #119/#120, AC-BI-004/005/007) instead returns a
+    JSON-RPC error object -- unlike a transport failure, which stays a silent
+    no-reply since there is no PS Service response to report PS Service's own
+    message from. Every failure is logged (stderr + `ctx.log_file`) and swallowed
+    here, never raised, so one bad message never kills the whole proxy loop
+    mid-session. Every outcome -- success included -- is logged with `method`/`id`
     (never the message's `params`, which may carry sensitive content), outcome, latency,
     and the session id in play, per AC-BI-003/004; secrets (the bearer token) never
     appear in any logged line, per AC-BI-009.
@@ -269,7 +362,11 @@ def _forward_message(
             f"session={updated_session_id})",
             log_file=ctx.log_file,
         )
-        return None, updated_session_id
+        # Issue #120, AC-BI-004/005: surface this to the MCP host as a real reply --
+        # not a silent no-response -- mirroring issue #119's auth-error branch above.
+        # `_ge400_reply` keeps the notification-vs-request decision out of this
+        # function's own branching (see its docstring for why).
+        return _ge400_reply(message_id, resp), updated_session_id
 
     _log(
         f"forwarded: method={method} id={message_id!r} outcome=ok "

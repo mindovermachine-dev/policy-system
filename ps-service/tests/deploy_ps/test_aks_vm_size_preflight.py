@@ -12,11 +12,14 @@ modules (e.g. test_quota_check.py) until that re-verification happens.
 Interim scope note (mirrors IMPL_SLICE_7.md's own precedent): S13 (`az aks create`) doesn't exist
 yet at this slice, so the "no AKS-related call on failure" test below cannot assert against a
 real `aks create` call the way a full end-to-end proof eventually will. It instead asserts the
-only thing provable today: the fake `az` log contains no `aks`-prefixed invocation at all after a
-failing preflight run -- `check_aks_vm_size` runs before anything AKS-related is even callable at
-this slice. Once S13 lands and adds a real `az aks create` call downstream of this preflight,
-strengthen this to a call-log ordering check the way test_provider_registration.py's own note
-describes for its analogous case.
+narrower thing provable today: the fake `az` log contains no AKS *creation*-related invocation
+after a failing preflight run. As of issue #120's follow-on to #111's `check_aks_vm_size`
+idempotent-rerun guard, `check_aks_vm_size` now runs `aks_cluster_exists` (`az aks show`) as its
+own read-only existence check, unconditionally, as its very first action -- this fires on every
+run, including a preflight failure, and is expected/correct, so `_aks_related_calls` below
+excludes it explicitly rather than asserting zero `aks`-prefixed calls outright. Once S13 lands
+and adds a real `az aks create` call downstream of this preflight, strengthen this to a call-log
+ordering check the way test_provider_registration.py's own note describes for its analogous case.
 
 `seed_subscription`'s baseline already seeds AKS_NODE_VM_SIZE as unrestricted with ample vCPU
 quota across every configured candidate region (conftest.py), so every test below only needs to
@@ -38,7 +41,20 @@ SELECTED_REGION = "swedencentral"
 
 
 def _aks_related_calls(fixture: DeployPsFixture) -> list[str]:
-    return [line for line in fixture.read_az_log() if line.startswith("aks ")]
+    """AKS calls that create or modify infrastructure -- excludes the read-only `aks show`
+    existence check `check_aks_vm_size` now runs as its own idempotent-rerun guard (see
+    `scripts/deploy-ps.sh`'s `aks_cluster_exists`), which fires on every run, including a
+    preflight failure, and is expected/correct.
+    """
+    return [
+        line
+        for line in fixture.read_az_log()
+        if line.startswith("aks ") and not line.startswith("aks show ")
+    ]
+
+
+def _aks_show_calls(fixture: DeployPsFixture) -> list[str]:
+    return [line for line in fixture.read_az_log() if line.startswith("aks show ")]
 
 
 def _vm_list_usage_calls(fixture: DeployPsFixture) -> list[str]:
@@ -66,6 +82,8 @@ def test_size_restricted_for_subscription_fails_with_allowlist_message_before_ak
     # Fails on the allowlist check alone -- never reaches the quota check.
     assert _vm_list_usage_calls(deploy_ps_fixture) == []
     assert _aks_related_calls(deploy_ps_fixture) == []
+    # The idempotent-rerun existence-check guard still fires exactly once, even on failure.
+    assert len(_aks_show_calls(deploy_ps_fixture)) == 1
 
 
 def test_size_allowed_but_insufficient_family_quota_fails_with_quota_message_before_aks_create(
@@ -90,6 +108,8 @@ def test_size_allowed_but_insufficient_family_quota_fails_with_quota_message_bef
     assert "only 5 remaining" in run.stderr
     assert "quota" in run.stderr.lower()
     assert _aks_related_calls(deploy_ps_fixture) == []
+    # The idempotent-rerun existence-check guard still fires exactly once, even on failure.
+    assert len(_aks_show_calls(deploy_ps_fixture)) == 1
 
 
 def test_size_allowed_and_quota_sufficient_passes_cleanly(
@@ -110,10 +130,12 @@ def test_size_allowed_and_quota_sufficient_passes_cleanly(
 def test_neither_check_makes_an_aks_related_az_call_on_failure(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Whether the preflight fails on the allowlist or the quota check, no AKS-related `az` call
-    is ever made -- S13 (`az aks create`) doesn't exist yet, so this is scoped to what's actually
-    callable at this slice (see this module's own docstring): the fake `az` log has zero
-    `aks`-prefixed entries after either failure mode.
+    """Whether the preflight fails on the allowlist or the quota check, no AKS *creation*-related
+    `az` call is ever made -- S13 (`az aks create`) doesn't exist yet, so this is scoped to what's
+    actually callable at this slice (see this module's own docstring): the fake `az` log has zero
+    AKS creation-related entries after either failure mode. The read-only `aks show`
+    existence-check guard (`check_aks_vm_size`'s idempotent-rerun guard, see #120) is expected to
+    fire regardless -- excluded from `_aks_related_calls` and asserted separately below.
     """
     deploy_ps_fixture.fill_tls_contact_email()
     deploy_ps_fixture.seed_subscription()
@@ -122,3 +144,5 @@ def test_neither_check_makes_an_aks_related_az_call_on_failure(
     deploy_ps_fixture.run_deploy("--yes", expect=1)
 
     assert _aks_related_calls(deploy_ps_fixture) == []
+    # The idempotent-rerun existence-check guard still fires exactly once, even on failure.
+    assert len(_aks_show_calls(deploy_ps_fixture)) == 1

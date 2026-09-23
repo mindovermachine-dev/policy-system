@@ -186,8 +186,13 @@ def test_forward_message_logs_transport_failure_with_latency_and_session(
     assert "session=sess-1" in logged
 
 
-def test_forward_message_logs_non_2xx_with_latency_and_session(tmp_path: Path) -> None:
-    """AC-BI-004: a non-2xx response is logged (retained + extended) and swallowed."""
+def test_forward_message_returns_generic_error_reply_when_body_is_not_jsonrpc_shaped(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-004/007: a non-2xx response whose body isn't the JSON-RPC error shape
+    PS Service emits still gets a real reply (not silence) -- with a generic,
+    status-code-only message, never the raw body text.
+    """
 
     def _handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="internal error")
@@ -203,7 +208,12 @@ def test_forward_message_logs_non_2xx_with_latency_and_session(tmp_path: Path) -
         ctx=ctx,
     )
 
-    assert reply is None
+    assert reply is not None
+    assert reply["id"] == 9
+    error = reply["error"]
+    assert isinstance(error, dict)
+    assert "500" in cast("str", error["message"])
+    assert "internal error" not in json.dumps(reply)
     assert session_id == "sess-2"
     logged = log_file.getvalue()
     assert "PS Service returned 500" in logged
@@ -211,6 +221,154 @@ def test_forward_message_logs_non_2xx_with_latency_and_session(tmp_path: Path) -
     assert "id=9" in logged
     assert "latency=" in logged
     assert "session=sess-2" in logged
+
+
+def test_forward_message_returns_jsonrpc_error_on_ge400_status_with_upstream_message(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-004: a >=400 PS Service response for a genuine request returns a real
+    JSON-RPC error reply carrying PS Service's own message text -- not silence.
+    """
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            json={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32000, "message": "graph unavailable"},
+            },
+        )
+
+    ctx = _ctx(tmp_path)
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "tools/call", "id": 11},
+        session_id=None,
+        ctx=ctx,
+    )
+
+    assert reply is not None
+    assert reply["jsonrpc"] == "2.0"
+    assert reply["id"] == 11
+    error = reply["error"]
+    assert isinstance(error, dict)
+    assert "graph unavailable" in cast("str", error["message"])
+
+
+def test_forward_message_ge400_for_a_notification_still_returns_no_reply(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-005: a notification (no `id`) never gets a reply, even on a >=400
+    PS Service response -- JSON-RPC 2.0 forbids replying to a notification.
+    """
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Session not found"},
+            },
+        )
+
+    ctx = _ctx(tmp_path)
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "notifications/cancelled"},
+        session_id="sess-4",
+        ctx=ctx,
+    )
+
+    assert reply is None
+
+
+def test_forward_message_session_not_found_error_distinguishes_expired_session(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-004/006: PS Service's literal "Session not found" (mcp SDK's fixed text
+    for an unknown/expired session id -- e.g. after a pod restart wiped in-memory
+    session state) is rewrapped into a message that names it as an expired/reset
+    session, while still carrying PS Service's own original text.
+    """
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Session not found"},
+            },
+        )
+
+    ctx = _ctx(tmp_path)
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "tools/call", "id": 13},
+        session_id="sess-5",
+        ctx=ctx,
+    )
+
+    assert reply is not None
+    assert reply["id"] == 13
+    error = reply["error"]
+    assert isinstance(error, dict)
+    message = cast("str", error["message"])
+    assert "Session not found" in message  # AC-BI-004: carries PS Service's own text
+    assert "expired" in message.lower() or "restart" in message.lower()  # AC-BI-006
+
+
+def test_forward_message_ge400_error_never_leaks_bearer_token_or_raw_body(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-007: the >=400 error reply never includes the bearer token or PS
+    Service's raw response body -- only the sanitized, extracted message text.
+    """
+    store = FileCredentialStore(tmp_path)
+    store.set_tokens(
+        "prod",
+        TokenBundle(
+            access_token="sk-topsecret-access-token",
+            refresh_token=None,
+            expires_at=99999999999,
+            issuer="https://idp.example",
+        ),
+    )
+    ctx = _BridgeContext(
+        mcp_url=_MCP_URL,
+        context_name="prod",
+        service_url="https://ps.example.test",
+        auth_override=None,
+        credential_store=store,
+        log_file=None,
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer sk-topsecret-access-token"
+        return httpx.Response(500, text="stacktrace: /var/secrets/db-password=hunter2")
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler))
+
+    reply, _ = _forward_message(
+        client,
+        {"jsonrpc": "2.0", "method": "tools/call", "id": 17},
+        session_id=None,
+        ctx=ctx,
+    )
+
+    assert reply is not None
+    dumped = json.dumps(reply)
+    assert "sk-topsecret-access-token" not in dumped
+    assert "hunter2" not in dumped
+    assert "/var/secrets" not in dumped
 
 
 def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
