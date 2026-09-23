@@ -46,7 +46,7 @@ first-pass construction — falsification is what turns that first-pass
 answer into a verified one (or surfaces a contradiction), not a
 post-hoc confirmation step layered on top of some other check.
 
-## Determine the attempt cap (scope-aware, per spikes/pipeline3 D6)
+## Determine the attempt cap (scope-aware)
 
 Before running any attempt, set `max_falsification_attempts`:
 
@@ -64,11 +64,11 @@ Before running any attempt, set `max_falsification_attempts`:
   `Capability`, or the classification layer `PracticeArea`/`RiskPath`).
 
 This is a floor, not a skip — every question gets at least one adversarial
-attempt regardless of scope. `spikes/pipeline3/smoke-test/run-01-falsification-pilot.md`
-and `run-02-harder-pilot.md` found every landed disproof and every
-non-landing-but-materially-improving attempt, across both rounds, happened
-on attempt 1 — a 1-attempt floor is evidence-backed, not an arbitrary
-minimum, for the layer those pilots actually tested (the ingested spine).
+attempt regardless of scope. Two falsification pilot rounds found every
+landed disproof and every non-landing-but-materially-improving attempt,
+across both rounds, happened on attempt 1 — a 1-attempt floor is
+evidence-backed, not an arbitrary minimum, for the layer those pilots
+actually tested (the ingested spine).
 It has not been empirically tested against the Policy/Standard/Control
 layer, which is exactly why that layer defaults to the full cap instead of
 inheriting the floor.

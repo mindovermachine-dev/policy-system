@@ -297,12 +297,12 @@ fetch_signed_in_user_upn() {
 }
 
 # fetch_role_assignments <assignee> <scope>: prints the newline-separated role names assigned to
-# <assignee> at <scope>. Generalized to accept an explicit scope (matching spikes/deploy-ps-azure/
-# deploy-ps.sh's own already-proven shape, spike lines 335-340) rather than building a
-# subscription-root scope internally -- S13's AKS RBAC grant (grant_aks_rbac_access below) needs
-# this same read at a cluster-scoped resource ID, a different scope than rbac_preflight's
-# subscription-root check just below, and both callers share this one function (L1 DRY) rather
-# than duplicating the `az role assignment list` call shape.
+# <assignee> at <scope>. Takes an explicit scope rather than building a subscription-root scope
+# internally -- `az role assignment list --scope` accepts any resource ID (subscription, resource
+# group, or a single resource such as an AKS cluster), and S13's AKS RBAC grant
+# (grant_aks_rbac_access below) needs this same read at a cluster-scoped resource ID, a different
+# scope than rbac_preflight's subscription-root check just below; both callers share this one
+# function (L1 DRY) rather than duplicating the `az role assignment list` call shape.
 fetch_role_assignments() {
   local assignee="$1" scope="$2"
   az role assignment list --assignee "$assignee" --scope "$scope" \
@@ -338,19 +338,19 @@ rbac_preflight() {
   fi
 }
 
-# Resource providers this script's resources need registered on the subscription -- the exact 9
-# namespaces the spike script's own REQUIRED_PROVIDERS lists (spikes/deploy-ps-azure/deploy-ps.sh),
-# confirmed against a genuinely fresh subscription where only Microsoft.Authorization is
-# registered by default; every one of these came back NotRegistered there, which fails resource
-# creation with MissingSubscriptionRegistration otherwise (AC-BI-008).
+# Resource providers this script's resources need registered on the subscription -- the 9
+# namespaces backing every Azure resource type this script creates (the Cognitive Services
+# account, AKS cluster, Key Vault, virtual-network resources, VMs, managed identities, and the
+# Container Insights/Log Analytics monitoring stack). On a fresh subscription only
+# Microsoft.Authorization is registered by default; any of these left NotRegistered fails
+# resource creation with MissingSubscriptionRegistration (AC-BI-008).
 readonly REQUIRED_PROVIDERS=(
   Microsoft.CognitiveServices Microsoft.ContainerService Microsoft.KeyVault Microsoft.Network
   Microsoft.Compute Microsoft.ManagedIdentity Microsoft.OperationsManagement
   Microsoft.OperationalInsights Microsoft.Insights
 )
-# Entra app registration names/URIs (S10/S11) -- the exact literals
-# spikes/deploy-ps-azure/deploy-ps.sh's own equivalents use, cross-checked against
-# docs/artifacts/idp-configuration-contract.md's worked example (Steps 2-3).
+# Entra app registration names/URIs (S10/S11) -- match
+# docs/artifacts/idp-configuration-contract.md's worked example (Steps 2-3) exactly.
 readonly API_APP_NAME="Policy System API"
 readonly CLI_APP_NAME="Policy System CLI"
 readonly CLI_REDIRECT_URI="https://login.microsoftonline.com/common/oauth2/nativeclient"
@@ -372,12 +372,14 @@ readonly AKS_NODE_VM_SIZE_VCPUS=4
 
 # Built-in role granted at cluster scope (S13, AC-BI-006) so the deploying identity's own
 # kubectl/helm calls (S14+) can authenticate against an --enable-azure-rbac cluster -- matches
-# spikes/deploy-ps-azure/deploy-ps.sh's own AKS_RBAC_ADMIN_ROLE literal (spike line 74) exactly.
+# Azure's built-in "Azure Kubernetes Service RBAC Cluster Admin" role name exactly, the role that
+# grants full access to Kubernetes APIs when Azure RBAC authorization is enabled on the cluster.
 readonly AKS_RBAC_ADMIN_ROLE="Azure Kubernetes Service RBAC Cluster Admin"
 
-# LLM credentials Secret name (S14) and Helm release identity (S15) -- match
-# spikes/deploy-ps-azure/deploy-ps.sh's own LLM_SECRET_NAME/CHART_REF/HELM_RELEASE_NAME literals
-# exactly (spike lines 75-82).
+# LLM credentials Secret name (S14) and Helm release identity (S15): LLM_SECRET_NAME is the
+# Kubernetes Secret name ensure_llm_secret below creates/reads; CHART_REF is this project's own
+# published OCI chart (charts/policy-system, published to ghcr.io); HELM_RELEASE_NAME is the Helm
+# release name ensure_release below installs/upgrades.
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
 readonly CHART_REF="oci://ghcr.io/mindovermachine-dev/charts/policy-system"
 readonly HELM_RELEASE_NAME="policy-system"
@@ -386,15 +388,12 @@ readonly HELM_RELEASE_NAME="policy-system"
 # ps-service-service.yaml, confirmed by reading it and _helpers.tpl's own policy-system.fullname
 # template before writing this): fullname resolves to the bare release name whenever the chart
 # name is already contained in the release name, which is the case here (both "policy-system").
-# Matches spikes/deploy-ps-azure/deploy-ps.sh's own PS_SERVICE_NAME literal exactly.
 readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
-# Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- no spike-local copy that
-# would silently drift (spike's own confirmed fix, spike line ~81's comment). NOT copied verbatim
-# from the spike's own "${SCRIPT_DIR}/../../charts/policy-system/values-prod.yaml" literal:
-# spikes/deploy-ps-azure/deploy-ps.sh lives TWO directories below the repo root
-# (spikes/deploy-ps-azure/), so it needs two "../" to reach the repo root; this script lives only
-# ONE directory below the repo root (scripts/), so one "../" is correct here -- verified by
-# resolving both forms against each script's own real SCRIPT_DIR before choosing this literal
+# Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- reads
+# charts/policy-system/values-prod.yaml from the repo's actual chart directory, never a local
+# copy that could silently drift from it. This script (scripts/deploy-ps.sh) lives ONE directory
+# below the repo root (scripts/), so one "../" from SCRIPT_DIR is correct here -- verified by
+# resolving the path against this script's own real SCRIPT_DIR before choosing this literal
 # (independently re-confirmed by IMPL_SLICE_14.md's own path-existence test, which reads this
 # exact assignment back out of this file rather than re-deriving the "expected" path, so a wrong
 # "../" count here cannot pass by construction).
@@ -473,7 +472,7 @@ fail_no_region_available() {
 # select_region: probes LLM_REGION_CANDIDATES in configured order, stopping at the first
 # candidate where both models are Generally Available (AC-BI-009) -- a flat loop with an early
 # exit, not nested conditionals (docs/coding-standards/level1-coding-principles.md, cyclomatic
-# complexity), ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own select_region.
+# complexity).
 # Prints "<region>\n<model_list_json>" so a caller capturing this via command substitution
 # (which runs in a subshell -- a plain variable set here would not survive back to the caller)
 # gets both the selected region and its already-fetched `model list` response, letting later
@@ -493,11 +492,10 @@ select_region() {
 
 # model_capacity_range <model_list_json> <model_name> <sku>: prints "<minimum> <maximum>" for
 # <model_name>'s <sku> SKU, per that region's `model list` response. Coalesces a null
-# capacity.minimum to 0 -- bugfix 1/6 from the spike's 11-iteration run (spikes/deploy-ps-azure/
-# README.md "Bugs found and fixed": "`capacity.minimum: null`" -- "Azure's `model list` reports
-# `null`, not a number, for SKUs with no enforced floor (`GlobalStandard`/`DataZoneStandard`);
-# the bash arithmetic capacity check crashed on the literal string `"null"`. Fixed: coalesce to
-# `0` in the `jq` query."). ps-defaults.conf's own LLM_CHAT_MODEL_SKU/LLM_EMBED_MODEL_SKU
+# capacity.minimum to 0 -- Azure's `az cognitiveservices model list` reports `capacity.minimum`
+# as `null`, not a number, for SKUs with no enforced floor (e.g. `GlobalStandard`/
+# `DataZoneStandard`); left uncoalesced, the bash arithmetic capacity check below would crash on
+# the literal string "null". ps-defaults.conf's own LLM_CHAT_MODEL_SKU/LLM_EMBED_MODEL_SKU
 # defaults (DataZoneStandard/Standard) are exactly this null-minimum case.
 model_capacity_range() {
   local model_list="$1" model_name="$2" sku="$3"
@@ -538,24 +536,22 @@ validate_capacity_range() {
 }
 
 # quota_usage_key <sku> <model_name>: prints the usage-list entry name Azure actually reports for
-# a model+SKU pair, e.g. "OpenAI.DataZoneStandard.gpt-5.4-mini". Bugfix 2/6 from the spike's
-# 11-iteration run (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Quota preflight
-# always a no-op" -- "`check_quota` queried usage-list entries by the literal keys
-# `"chat"`/`"embed"`, which never match any real `az cognitiveservices usage list` entry (real
-# names look like `OpenAI.DataZoneStandard.gpt-5.4-mini`) -- the check silently never fired, on
-# any subscription. Fixed: build the real key from the configured SKU + model name.").
-# scripts/deploy-llm.sh (issue #105) still has this bug uncorrected.
+# a model+SKU pair, e.g. "OpenAI.DataZoneStandard.gpt-5.4-mini". `az cognitiveservices usage
+# list` names each quota entry "OpenAI.<sku>.<model_name>"; querying by any other key (e.g. the
+# literal strings "chat"/"embed") never matches a real entry, so a quota preflight built on those
+# keys would silently never fire on any subscription. scripts/deploy-llm.sh (issue #105) still has
+# this bug uncorrected.
 quota_usage_key() {
   local sku="$1" model_name="$2"
   printf 'OpenAI.%s.%s' "$sku" "$model_name"
 }
 
 # model_usage_entry_exists <usage_json> <usage_key>: true if Azure's usage endpoint reported an
-# entry for <usage_key>. Bugfix 3/6 groundwork (spikes/deploy-ps-azure/README.md "Bugs found and
-# fixed": "Empty usage list on a subscription/region with zero prior deployments" -- "Azure
-# reports no usage entries at all until something has actually been deployed there; the original
-# code read this as `remaining = 0` and hard-failed. Fixed: skip the check (with a printed note)
-# when no entry exists yet; the account/deployment create calls still enforce the real limit.").
+# entry for <usage_key>. Needed because `az cognitiveservices usage list` reports no usage
+# entries at all for a subscription/region until something has actually been deployed there;
+# treating that absence as "remaining = 0" would hard-fail the very first deployment in a region.
+# validate_model_quota below uses this to skip the check (with a printed note) when no entry
+# exists yet -- the account/deployment create calls still enforce the real limit.
 model_usage_entry_exists() {
   local usage="$1" usage_key="$2"
   jq -e --arg key "$usage_key" 'any(.[]; .name.value == $key)' <<< "$usage" >/dev/null
@@ -563,10 +559,9 @@ model_usage_entry_exists() {
 
 # model_remaining_quota <usage_json> <usage_key>: prints the remaining quota (limit minus
 # current usage) for <usage_key> in <usage_json>, as an integer. Caller must already know the
-# entry exists (model_usage_entry_exists). Bugfix 4/6 from the spike's 11-iteration run
-# (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Float arithmetic in bash" -- "Azure
-# reports `currentValue`/`limit` as floats (`200.0`), which `$(( ))` can't parse. Fixed: do the
-# subtraction in `jq` (`floor`) instead of bash arithmetic.").
+# entry exists (model_usage_entry_exists). Azure reports `currentValue`/`limit` as floats (e.g.
+# `200.0`), which bash's `$(( ))` cannot parse -- the subtraction is done in `jq` (`floor`)
+# instead of bash arithmetic.
 model_remaining_quota() {
   local usage="$1" usage_key="$2"
   jq -r --arg key "$usage_key" \
@@ -611,12 +606,10 @@ deployment_exists() {
 # check_quota <region> <account_name>: hard-stops if either model's remaining quota at <region>
 # is less than its configured capacity (AC-BI-009) -- runs once, at the already-selected region
 # only; never tried against a different region. Skips a model's check entirely when its
-# deployment already exists -- bugfix 5/6 from the spike's 11-iteration run (spikes/deploy-ps-
-# azure/README.md "Bugs found and fixed": "Idempotent-rerun false 'insufficient quota'" --
-# "once a deployment exists, its own allocated capacity counts against `currentValue`, so
-# re-requesting the same capacity on a rerun reads as '0 remaining' even though no *new* capacity
-# is actually needed (`ensure_deployment` never resizes an existing deployment). Fixed: skip the
-# per-model quota check entirely when that model's deployment already exists.").
+# deployment already exists: once a deployment exists, its own allocated capacity counts against
+# Azure's reported `currentValue`, so re-requesting the same capacity on a rerun would read as
+# "0 remaining" even though no *new* capacity is actually needed (ensure_deployment below never
+# resizes an existing deployment).
 check_quota() {
   local region="$1" account_name="$2"
   local usage
@@ -638,14 +631,13 @@ check_quota() {
 }
 
 # model_version <model_list_json> <model_name>: prints the version string Azure's `model list`
-# reports for <model_name> in this region. Bugfix 6/6 from the spike's 11-iteration run
-# (spikes/deploy-ps-azure/README.md "Bugs found and fixed": "Missing `--model-version`" --
-# "`az cognitiveservices account deployment create` now hard-requires it; the original script
-# never passed one. Fixed: read `.model.version` from the already-fetched `model list`
-# response."). Reuses select_region's already-fetched response rather than a second `model list`
-# call for the same region. S9's ensure_deployment call is the actual consumer of this value
-# (feeds --model-version); this slice only resolves and logs it (see main()'s "Selected region"
-# step below) since deployment creation itself doesn't exist yet.
+# reports for <model_name> in this region. Needed because `az cognitiveservices account
+# deployment create` hard-requires an explicit `--model-version` -- reads `.model.version` from
+# the already-fetched `model list` response rather than omitting the flag. Reuses
+# select_region's already-fetched response rather than a second `model list` call for the same
+# region. S9's ensure_deployment call is the actual consumer of this value (feeds
+# --model-version); this slice only resolves and logs it (see main()'s "Selected region" step
+# below) since deployment creation itself doesn't exist yet.
 model_version() {
   local model_list="$1" model_name="$2"
   jq -r --arg name "$model_name" '.[] | select(.model.name == $name) | .model.version' \
@@ -659,9 +651,11 @@ resource_group_exists() {
 
 # ensure_resource_group <region>: create-if-absent (AC-BI-015's own RG-scoped provisioning) --
 # the first link in the provisioning chain, own copy under $RESOURCE_GROUP_NAME (PLAN.md §0.1 --
-# not shared/sourced from scripts/deploy-llm.sh). Sets made_changes=true only when a create
-# actually happened -- the check-before-act idiom a later slice's idempotent-rerun proof depends
-# on. Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_resource_group.
+# not shared/sourced from scripts/deploy-llm.sh). Checks resource_group_exists first rather than
+# calling `az group create` unconditionally -- `az group create` is itself idempotent (a no-op if
+# the group already exists), but only the explicit check lets this function set
+# made_changes=true exclusively when a create actually happened, the check-before-act idiom a
+# later slice's idempotent-rerun proof depends on.
 ensure_resource_group() {
   local region="$1"
   if resource_group_exists; then
@@ -678,9 +672,9 @@ fetch_account_endpoint() {
 }
 
 # ensure_account <account_name> <region>: create-if-absent, kind AIServices, SKU S0 -- same shape
-# as scripts/deploy-llm.sh's own ensure_account and spikes/deploy-ps-azure/deploy-ps.sh's proven
-# copy. Writes the resolved endpoint into the process-wide `account_endpoint` (top-of-file note)
-# rather than returning it on stdout, since this function must also set `made_changes`.
+# as scripts/deploy-llm.sh's own ensure_account. Writes the resolved endpoint into the
+# process-wide `account_endpoint` (top-of-file note) rather than returning it on stdout, since
+# this function must also set `made_changes`.
 ensure_account() {
   local account_name="$1" region="$2"
   local account_json
@@ -792,9 +786,9 @@ write_secret_if_changed() {
   made_changes=true
 }
 
-# new_scope_uuid: prints a fresh lowercase UUID for a new oauth2PermissionScope id. Prefers
-# uuidgen (present on both macOS and most Linux distros); falls back to python3 if absent.
-# Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own new_scope_uuid.
+# new_scope_uuid: prints a fresh lowercase UUID for a new oauth2PermissionScope id -- Microsoft
+# Graph requires each oauth2PermissionScope's `id` to be a valid UUID. Prefers uuidgen (present
+# on both macOS and most Linux distros); falls back to python3 if absent.
 new_scope_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
     uuidgen | tr '[:upper:]' '[:lower:]'
@@ -814,8 +808,7 @@ fetch_app_id_by_name() {
 # idp-configuration-contract.md's own "Common pitfalls") must run when the signed-in identity
 # can't create them itself. The operator re-runs this script afterwards, which picks up the
 # now-existing apps via fetch_app_id_by_name (same create-if-absent idiom as every other
-# ensure_* function here). Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own
-# print_app_registration_manual_steps.
+# ensure_* function here).
 print_app_registration_manual_steps() {
   printf 'Creating Entra app registrations failed -- the signed-in identity likely lacks the Application Administrator role.\n' >&2
   printf 'Ask a colleague with Application Administrator to run:\n\n' >&2
@@ -854,8 +847,7 @@ ensure_service_principal() {
 # idp-configuration-contract.md's "Common pitfalls" documents that a Graph-API-created
 # registration (what `az ad app create` calls) defaults this unset (v1 tokens), unlike the
 # Portal's "Expose an API" wizard which sets it automatically. Sets process-wide
-# api_app_id/api_audience/api_scope_id (top-of-file state note). Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own ensure_api_app_registration.
+# api_app_id/api_audience/api_scope_id (top-of-file state note).
 ensure_api_app_registration() {
   api_app_id="$(fetch_app_id_by_name "$API_APP_NAME")"
   if [[ -z "$api_app_id" ]]; then
@@ -896,8 +888,7 @@ ensure_api_app_registration() {
 # (ensure_api_app_registration, ensure_cli_app_registration's own create+permission-add) already
 # succeeded and is idempotent, so the rerun this message asks for resumes cleanly rather than
 # redoing any of that work. Exits EXIT_FAILURE, the same controlled exit code every other
-# preflight/business failure in this script uses -- not an uncaught crash. Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own print_admin_consent_manual_step.
+# preflight/business failure in this script uses -- not an uncaught crash.
 print_admin_consent_manual_step() {
   printf 'Granting admin consent failed -- the signed-in identity lacks the Global Administrator / Privileged Role Administrator role Entra requires to grant tenant-wide consent (a step up from Application Administrator, which was enough to create the app registrations above).\n' >&2
   printf 'Ask a colleague with that role to run:\n\n' >&2
@@ -911,8 +902,7 @@ print_admin_consent_manual_step() {
 # read, unlike creating one (`permission admin-consent`) -- checking this first is what lets a
 # non-admin operator's rerun recognize consent a privileged colleague already granted out of
 # band, instead of re-attempting (and re-failing) the same privilege-gated write every time
-# (AC-BI-005). Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own
-# admin_consent_granted.
+# (AC-BI-005).
 admin_consent_granted() {
   local cli_app_id="$1"
   az ad app permission list-grants --id "$cli_app_id" \
@@ -924,8 +914,7 @@ admin_consent_granted() {
 # client flows allowed, delegated permission on the API app's access_as_user scope, and one-time
 # admin consent -- checked via admin_consent_granted *before* attempting the privileged
 # admin-consent write (AC-BI-005's headline claim). Requires api_app_id/api_scope_id to already
-# be set (ensure_api_app_registration must run first). Sets process-wide cli_app_id. Ported
-# verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_cli_app_registration.
+# be set (ensure_api_app_registration must run first). Sets process-wide cli_app_id.
 ensure_cli_app_registration() {
   cli_app_id="$(fetch_app_id_by_name "$CLI_APP_NAME")"
   if [[ -z "$cli_app_id" ]]; then
@@ -1076,12 +1065,9 @@ fetch_aks_cluster_id() {
 # ensure_aks_cluster <cluster_name> <region>: create-if-absent, with every AC-BI-006/AC-BI-012
 # hardening flag: AAD-integrated auth, Azure RBAC authorization, local (cert-based) accounts
 # disabled, and Azure CNI network policy. --network-plugin azure MUST be passed ALONGSIDE
-# --network-policy azure -- spikes/deploy-ps-azure/README.md's own "Bugs found and fixed" section
-# (the trusted empirical record, confirmed against a real subscription during the spike run)
-# states this exactly: "Missing `--network-plugin` (new, mine) -- `--network-policy azure`
-# requires an explicit `--network-plugin azure`; omitting it fails `az aks create` outright.
-# Fixed." Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_aks_cluster
-# (spike lines 939-950).
+# --network-policy azure -- `az aks create --network-policy azure` requires an explicit
+# `--network-plugin azure`; Azure network policy enforcement is only supported on top of the
+# Azure CNI plugin (not kubenet), and omitting the plugin flag fails `az aks create` outright.
 ensure_aks_cluster() {
   local cluster_name="$1" region="$2"
   if aks_cluster_exists "$cluster_name"; then
@@ -1103,10 +1089,7 @@ ensure_aks_cluster() {
 # call in S14+ regardless of the operator's subscription-level Owner/Contributor role S6's
 # rbac_preflight already checked -- that is a different scope for a different concern. Read-
 # before-write, like grant_keyvault_access's sibling in S9: unlike keyvault set-policy, `az role
-# assignment create` errors on a duplicate assignment instead of being silently idempotent. Ported
-# verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own grant_aks_rbac_access (spike lines
-# 958-970), adapted to this script's user-only identity resolver and fetch_role_assignments's
-# generalized (assignee, scope) signature above.
+# assignment create` errors on a duplicate assignment instead of being silently idempotent.
 grant_aks_rbac_access() {
   local cluster_name="$1"
   local scope object_id roles
@@ -1122,8 +1105,9 @@ grant_aks_rbac_access() {
 }
 
 # ensure_aks_credentials <cluster_name>: points the local kubectl/helm at the cluster.
-# --overwrite-existing so a rerun never silently keeps a stale prior kubeconfig entry -- same
-# defensive choice as spikes/deploy-ps-azure/deploy-ps.sh's own ensure_aks_credentials.
+# --overwrite-existing so a rerun never silently keeps a stale prior kubeconfig entry -- without
+# it, `az aks get-credentials` refuses to merge new credentials over an existing kubeconfig
+# context of the same name.
 ensure_aks_credentials() {
   local cluster_name="$1"
   az aks get-credentials --name "$cluster_name" --resource-group "$RESOURCE_GROUP_NAME" \
@@ -1137,8 +1121,7 @@ ensure_aks_credentials() {
 # apply_output_changed <apply_output>: true unless kubectl reported the object unchanged --
 # `kubectl apply` is idempotent by construction but doesn't otherwise expose a machine-readable
 # "nothing changed" signal, so this greps its own stdout the way the rest of this script tracks
-# made_changes. Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own
-# apply_output_changed.
+# made_changes.
 apply_output_changed() {
   [[ "$1" != *unchanged* ]]
 }
@@ -1147,8 +1130,7 @@ apply_output_changed() {
 # and writes them into the cluster as a Kubernetes Secret, underscore-keyed (K8s env-var
 # convention) from the dash-named Key Vault secret names -- same create --dry-run=client -o yaml
 # | apply idiom as scripts/sync-llm-secrets-to-kind.sh, minus its kind-only context guard (this
-# script already pointed kubectl at the right cluster via S13's ensure_aks_credentials). Ported
-# verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_llm_secret.
+# script already pointed kubectl at the right cluster via S13's ensure_aks_credentials).
 ensure_llm_secret() {
   local vault_name="$1"
   local api_key api_base api_version apply_output
@@ -1167,11 +1149,9 @@ ensure_llm_secret() {
 # fetch_tenant_id: prints the signed-in az session's Entra tenant id, used to build the OIDC
 # issuer URL (docs/artifacts/idp-configuration-contract.md). Deliberately fetched here, just
 # before its only consumer (ensure_release below) rather than up front alongside
-# fetch_subscription_id the way spikes/deploy-ps-azure/deploy-ps.sh's own main() does -- fetching
-# it earlier would add an extra `account show` call ahead of the confirmation prompt, breaking
-# test_decline_path.py's existing exact-log assertion
-# (test_answering_n_makes_no_az_calls_beyond_account_show). Same underlying `az` call as the
-# spike's own fetch_tenant_id.
+# fetch_subscription_id -- fetching it earlier would add an extra `account show` call ahead of
+# the confirmation prompt, breaking test_decline_path.py's existing exact-log assertion
+# (test_answering_n_makes_no_az_calls_beyond_account_show).
 fetch_tenant_id() {
   az account show --query tenantId -o tsv
 }
@@ -1181,8 +1161,7 @@ fetch_tenant_id() {
 # `helm get values -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly
 # 5 leaf fields (CHANGES.md Appendix A's corrected count, not PLAN.md's original miscounted "4
 # fields" text): llm.existingSecret, psService.auth.issuer, psService.auth.audience,
-# psService.auth.cliClientId, psService.auth.scopes. Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own release_values_json (spike lines 1015-1021).
+# psService.auth.cliClientId, psService.auth.scopes.
 release_values_json() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
   jq -n --arg secret "$LLM_SECRET_NAME" --arg issuer "$issuer" --arg audience "$audience" \
@@ -1201,13 +1180,12 @@ release_values_json() {
 # the OAuth scope ps-cli's device-flow login requests, never used for token validation itself.
 #
 # Compares only the 5 fields release_values_json sets, extracted from `helm get values`'s output
-# via the same jq shape, rather than the whole object -- confirmed against a real rerun that
-# `helm get values` also echoes back everything from `-f values-prod.yaml` (falkordb.*,
-# llm.provider, psService.service.type), which this script never sets itself and doesn't need to
-# compare; a whole-object comparison against a JSON built from only the --set flags never
-# matches, permanently defeating this idempotency check (the spike's own confirmed fix, "every
-# rerun ran `helm upgrade` regardless of whether anything changed"). Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own ensure_release (spike lines 1042-1065).
+# via the same jq shape, rather than the whole object -- `helm get values` also echoes back
+# everything from `-f values-prod.yaml` (falkordb.*, llm.provider, psService.service.type), which
+# this script never sets itself via --set and doesn't need to compare; a whole-object comparison
+# against a JSON built from only the --set flags would never match, since that JSON never
+# contains those values-file-only fields at all -- permanently defeating this idempotency check
+# and causing `helm upgrade` to run on every rerun regardless of whether anything changed.
 ensure_release() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
   local desired_json
@@ -1246,13 +1224,12 @@ ensure_release() {
 readonly INGRESS_IP_WAIT_ATTEMPTS="${INGRESS_IP_WAIT_ATTEMPTS:-30}"
 readonly INGRESS_IP_WAIT_INTERVAL_SECONDS="${INGRESS_IP_WAIT_INTERVAL_SECONDS:-10}"
 
-# The app-routing add-on's own fixed ingress-class name -- used by S17's ClusterIssuer HTTP-01
-# solver below and by S18's PS Service Ingress. Ported verbatim from spikes/deploy-ps-azure/
-# deploy-ps.sh's own INGRESS_CLASS literal.
+# The AKS application-routing add-on's own fixed ingress-class name, set by Azure itself on every
+# cluster with the add-on enabled -- used by S17's ClusterIssuer HTTP-01 solver below and by
+# S18's PS Service Ingress.
 readonly INGRESS_CLASS="webapprouting.kubernetes.azure.com"
 
-# approuting_enabled <cluster_name>: true if the add-on is already on. Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own approuting_enabled.
+# approuting_enabled <cluster_name>: true if the add-on is already on.
 approuting_enabled() {
   local cluster_name="$1"
   [[ "$(az aks show --name "$cluster_name" --resource-group "$RESOURCE_GROUP_NAME" \
@@ -1260,8 +1237,7 @@ approuting_enabled() {
 }
 
 # ensure_approuting <cluster_name>: create-if-absent the managed NGINX ingress controller add-on
-# (supports AC-BI-015). Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own
-# ensure_approuting.
+# (supports AC-BI-015).
 ensure_approuting() {
   local cluster_name="$1"
   if approuting_enabled "$cluster_name"; then
@@ -1273,9 +1249,8 @@ ensure_approuting() {
 
 # fetch_ingress_public_ip: polls the add-on's managed ingress-nginx Service for its LoadBalancer
 # external IP -- namespace/Service name (app-routing-system/nginx) are the add-on's own fixed
-# names, per spikes/deploy-ps-azure/deploy-ps.sh's own fetch_ingress_public_ip (spike lines
-# 1091-1108, the trusted empirical reference). Fails explicitly, naming the resource it was
-# waiting on, rather than leaving a hard-to-diagnose empty hostname downstream.
+# names, set by AKS itself whenever application-routing is enabled. Fails explicitly, naming the
+# resource it was waiting on, rather than leaving a hard-to-diagnose empty hostname downstream.
 fetch_ingress_public_ip() {
   local ip="" _attempt
   for _attempt in $(seq 1 "$INGRESS_IP_WAIT_ATTEMPTS"); do
@@ -1292,8 +1267,8 @@ fetch_ingress_public_ip() {
 }
 
 # fetch_public_ip_resource_id <ip_address> <node_resource_group>: the add-on's public IP lives in
-# the AKS-managed node resource group, not $RESOURCE_GROUP_NAME. Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own fetch_public_ip_resource_id.
+# the AKS-managed node resource group (the auto-generated "MC_*" resource group where AKS
+# creates load-balancer and public-IP resources), not $RESOURCE_GROUP_NAME.
 fetch_public_ip_resource_id() {
   local ip_address="$1" node_resource_group="$2"
   az network public-ip list --resource-group "$node_resource_group" \
@@ -1303,7 +1278,6 @@ fetch_public_ip_resource_id() {
 # ensure_dns_label <public_ip_id> <label>: create-if-absent Azure's own public-IP DNS label
 # (spike's "DNS zone for the hostname" decision) -- no external registrar or Azure DNS zone.
 # Read-before-write like grant_keyvault_access/grant_aks_rbac_access's sibling functions above.
-# Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_dns_label.
 ensure_dns_label() {
   local public_ip_id="$1" label="$2"
   local current_label
@@ -1317,7 +1291,7 @@ ensure_dns_label() {
 }
 
 # fetch_public_ip_fqdn <public_ip_id>: prints the resulting "<label>.<region>.cloudapp.azure.com"
-# hostname. Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own fetch_public_ip_fqdn.
+# hostname.
 fetch_public_ip_fqdn() {
   az network public-ip show --ids "$1" --query "dnsSettings.fqdn" -o tsv
 }
@@ -1333,15 +1307,12 @@ readonly CERT_MANAGER_READY_TIMEOUT="180s"
 readonly CLUSTER_ISSUER_NAME="letsencrypt-prod"
 
 # ensure_cert_manager: create-if-absent install of cert-manager itself, via its own published OCI
-# chart -- confirmed against a real cluster (spikes/deploy-ps-azure/README.md, a correction the
-# spike made mid-run after an original wrong assumption) that the AKS application-routing add-on
-# installs only the NGINX ingress controller, NOT cert-manager -- there is no bundled
-# cert-manager for a ClusterIssuer to use unless this script installs one itself. Waits for the
-# controller/webhook/cainjector deployments to report Available BEFORE returning (AC-BI-016) --
-# a fresh install's admission webhook needs its own cert issued before it can admit the
-# ClusterIssuer ensure_cluster_issuer creates next; applying one immediately after a fresh
-# install intermittently fails webhook admission otherwise (the exact race the spike found).
-# Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's own ensure_cert_manager.
+# chart -- the AKS application-routing add-on installs only the NGINX ingress controller, NOT
+# cert-manager: there is no bundled cert-manager for a ClusterIssuer to use unless this script
+# installs one itself. Waits for the controller/webhook/cainjector deployments to report
+# Available BEFORE returning (AC-BI-016) -- a fresh install's admission webhook needs its own
+# cert issued before it can admit the ClusterIssuer ensure_cluster_issuer creates next; applying
+# one immediately after a fresh install can intermittently fail webhook admission otherwise.
 ensure_cert_manager() {
   if helm status "$CERT_MANAGER_RELEASE_NAME" --namespace "$CERT_MANAGER_NAMESPACE" \
       >/dev/null 2>&1; then
@@ -1360,8 +1331,7 @@ ensure_cert_manager() {
 # Encrypt ClusterIssuer using the cert-manager install above, HTTP-01 solved through the
 # app-routing add-on's own nginx ingress class -- MUST run only after ensure_cert_manager's own
 # wait-for-Available has already returned (AC-BI-016's literal claim; main() below calls these in
-# that fixed order, never the reverse). Ported verbatim from spikes/deploy-ps-azure/deploy-ps.sh's
-# own ensure_cluster_issuer.
+# that fixed order, never the reverse).
 ensure_cluster_issuer() {
   local email="$1" apply_output
   apply_output="$(kubectl apply -f - <<EOF
@@ -1397,8 +1367,7 @@ EOF
 # than a chart change. The cert-manager.io/cluster-issuer annotation references S17's
 # ClusterIssuer by name; ingressClassName is S16's app-routing add-on class ($INGRESS_CLASS).
 # Idempotent via the same apply_output_changed detection S14 established -- a rerun with an
-# unchanged manifest reports "unchanged" and does not set made_changes. Ported verbatim from
-# spikes/deploy-ps-azure/deploy-ps.sh's own ensure_ps_service_ingress.
+# unchanged manifest reports "unchanged" and does not set made_changes.
 ensure_ps_service_ingress() {
   local hostname="$1" apply_output
   apply_output="$(kubectl apply -f - <<EOF
@@ -1448,8 +1417,8 @@ print_provisioning_summary() {
 
 # require_account_exists <account_name>: fails clearly if the AIServices account has not been
 # provisioned yet -- --rotate-key has nothing to rotate otherwise (PLAN.md §0.6). Ported from
-# scripts/deploy-llm.sh's own require_account_exists / spikes/deploy-ps-azure/deploy-ps.sh's own
-# equivalent, message adapted to name this script's own flag.
+# scripts/deploy-llm.sh's own require_account_exists, message adapted to name this script's own
+# flag.
 require_account_exists() {
   local account_name="$1"
   if ! az cognitiveservices account show --name "$account_name" \

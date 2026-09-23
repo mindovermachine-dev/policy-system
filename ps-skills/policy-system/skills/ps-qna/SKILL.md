@@ -13,8 +13,7 @@ user's assumed vocabulary — then run freehand retrieval against the graph
 via PS Service's MCP connector, construct a first-pass answer, and attempt
 to falsify it. This covers step 1a (narrowing) plus steps 2-3 (freehand
 retrieval, answer construction) and step 5 (falsification) of the Guided
-Fitness Pipeline (`spikes/pipeline2/README.md`), the latter per
-`spikes/pipeline3/README.md`. Rubric-gated fitness-function authoring
+Fitness Pipeline. Rubric-gated fitness-function authoring
 (step 1b) and the independent verification loop (step 4) are scoped out of
 this skill entirely — falsification (adversarial querying against the
 graph's own data) is this skill's verification method.

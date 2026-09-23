@@ -49,8 +49,7 @@ survives a pod restart) and the `llm.*` keys (which provider, and how its creden
 reach the pod) are the two settings worth double-checking against your intended setup.
 Persistent storage means the PVC needs a StorageClass available in your cluster; a
 default `kind` cluster provisions one automatically, so this works out of the box locally
-too. See the Operations Guide's
-[Operations: Backup & Restore](./operations-guide.md#operations-backup--restore) for backing up
+too. See the Operations Guide's [Backup](./operations-guide.md#backup) section for backing up
 that volume once persistence is on.
 
 ## Example: `helm upgrade`

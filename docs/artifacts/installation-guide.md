@@ -308,7 +308,7 @@ chat/embedding model names and SKUs, capacities, and `TLS_CONTACT_EMAIL` (used f
 Let's Encrypt expiry/revocation notices — leave blank to be prompted interactively).
 The default SKUs are proven to have quota on a fresh subscription; if your
 subscription/region differs, see the [Operations Guide](./operations-guide.md#manual-steps-and-operational-notes)
-item 2 for how to discover the right values before your first run.
+item 1 for how to discover the right values before your first run.
 
 ### 3. Run scripts/deploy-ps.sh
 
@@ -327,7 +327,7 @@ Generally Available at the configured SKU and validates the configured capacitie
 against that region's live quota; provisions the resource group, AIServices
 account, both model deployments, and Key Vault; creates the API and CLI Entra app
 registrations (falling back to a printed manual command — see the [Operations
-Guide](./operations-guide.md#manual-steps-and-operational-notes) item 4 — if the
+Guide](./operations-guide.md#manual-steps-and-operational-notes) item 3 — if the
 signed-in identity can't grant admin consent itself); checks the AKS node VM size is
 allowed and vCPU quota is sufficient for this subscription in the selected region;
 creates the AKS cluster with AAD authentication, Azure RBAC, disabled local
@@ -336,6 +336,18 @@ reconciles the Helm release with the auth issuer/audience/scopes wired in; enabl
 the AKS application-routing ingress add-on and sets a public DNS label; installs
 cert-manager and a Let's Encrypt `ClusterIssuer`; and creates the TLS-terminated
 Ingress exposing PS Service.
+
+> [!NOTE]
+> **Global Admin admin-consent fallback.** If the signed-in identity lacks Global
+> Administrator / Privileged Role Administrator, `deploy-ps.sh` prints the exact
+> command for a colleague with that role to run:
+> ```bash
+> az ad app permission admin-consent --id <cli-app-id>
+> ```
+> (the real `<cli-app-id>` is printed inline). Re-run `scripts/deploy-ps.sh`
+> afterward — it detects the grant and continues past this step. See [Operations
+> Guide](./operations-guide.md#manual-steps-and-operational-notes) item 3 for
+> more detail.
 
 Each phase prints a `==> <step>` progress line as it starts. The whole run is
 idempotent — re-running with nothing changed does no work and reports so. It ends
@@ -369,8 +381,7 @@ kubectl get pods
 ```
 
 ps-service and falkordb should both be in "Running" state. This is a manual,
-per-operator prerequisite `deploy-ps.sh` does not automate — see the [Operations
-Guide](./operations-guide.md#manual-steps-and-operational-notes) item 1.
+per-operator, per-machine prerequisite `deploy-ps.sh` does not automate.
 
 Once deployed, see the [Operations Guide](./operations-guide.md#production-operations)
 for rotating the API key, manual operational notes, and teardown.
