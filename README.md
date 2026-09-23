@@ -19,7 +19,7 @@ If you want to try Policy System and evaluate it on your own computer this is do
 ### Contributing to Policy Systems codebase
 
 If you want to help develop and evolve Policy System we welcome your contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for
-development setup, coding standards, testing, and the pull request process.
+development setup, coding standards, testing, and the contribution workflow.
 
 ### Understanding the architecture
 
