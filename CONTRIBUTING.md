@@ -27,7 +27,7 @@ Contributions go through `devx-cafe/gh-tt`'s issue-branch workflow: pick up an
 issue on a dedicated branch, then hand off to CI, which merges to `main` once
 checks pass. No fork and no manual Pull Request in the common case.
 
-`devx-cafe/gh-tt` is installed as part of the devcontainer setup. The workflow is as follows:
+The workflow is as follows:
 
 1. Start work on an issue -- this creates and checks out an issue branch:
 
@@ -72,6 +72,14 @@ services:
 
 Reopen the repo in the container (VS Code: "Reopen in Container") and both
 services start together.
+
+`devx-cafe/gh-tt` must be installed as part of the devcontainer setup. Once the devcontainer is up you must run the following:
+
+```bash
+gh auth login
+gh ext install devx-cafe/gh-insitu
+gh insitu run post-create
+```
 
 ## Coding Standards
 
