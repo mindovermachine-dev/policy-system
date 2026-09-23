@@ -2,9 +2,10 @@
 
 Every operator-facing key in `charts/policy-system/values.yaml` (local-test default) and
 `charts/policy-system/values-prod.yaml` (production override file, passed via
-`-f values-prod.yaml`). See the [User Guide](./user-guide.md)'s
-[Local Test](./user-guide.md#local-test) walkthrough for how to deploy the chart in the
-first place — this page is the values reference for that walkthrough, step 6 onward.
+`-f values-prod.yaml`). See the [Installation Guide](./installation-guide.md)'s
+[Evaluator installation](./installation-guide.md#evaluator-installation) walkthrough for
+how to deploy the chart in the first place — this page is the values reference for
+that walkthrough, step 6 onward.
 
 ## Table of Contents
 
@@ -23,7 +24,7 @@ first place — this page is the values reference for that walkthrough, step 6 o
 | `psService.service.type` | `NodePort` (`ClusterIP` in prod) | PS Service Service type. `NodePort` is what `deploy/kind/cluster.yaml`'s `extraPortMappings` targets locally; prod has no kind-specific reachability mechanism, so it's `ClusterIP`-only there. |
 | `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
 | `psService.companyMerge.similarityThreshold` | `0.59` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by issue #29's labeled precision/recall/F1 sweep, not an undocumented judgment call. |
-| `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass for local evaluation. Off by default even under the local-test profile; an evaluator flips it explicitly to use the plugin path (step 7 of the User Guide) without OIDC. |
+| `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass for local evaluation. Off by default even under the local-test profile; an evaluator flips it explicitly to use the plugin path (step 8 of the Installation Guide) without OIDC. |
 | `psService.auth.issuer` | `""` | `PS_AUTH_ISSUER` — the OIDC authorization-server URL (e.g. `https://login.microsoftonline.com/<tenant-id>/v2.0` for Entra). Required unless `psService.localTestBypass.enabled=true`; see the [IdP configuration contract](./idp-configuration-contract.md). |
 | `psService.auth.audience` | `""` | `PS_AUTH_AUDIENCE` — the API app registration's own identifier (resource-server audience), not the CLI client's. Required unless `psService.localTestBypass.enabled=true`. |
 | `psService.auth.cliClientId` | `""` | `PS_AUTH_CLI_CLIENT_ID` — the public CLI client app registration's client id. Optional; when set it is advertised in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`. |
@@ -48,8 +49,8 @@ survives a pod restart) and the `llm.*` keys (which provider, and how its creden
 reach the pod) are the two settings worth double-checking against your intended setup.
 Persistent storage means the PVC needs a StorageClass available in your cluster; a
 default `kind` cluster provisions one automatically, so this works out of the box locally
-too. See the User Guide's
-[Operations: Backup & Restore](./user-guide.md#operations-backup--restore) for backing up
+too. See the Operations Guide's
+[Operations: Backup & Restore](./operations-guide.md#operations-backup--restore) for backing up
 that volume once persistence is on.
 
 ## Example: `helm upgrade`

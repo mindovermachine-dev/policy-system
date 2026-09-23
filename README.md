@@ -13,8 +13,8 @@ policy content that was retrieved. AI is used to analyze questions, derive inten
 
 ### Evaluating Policy System
 
-If you want to try Policy System and evaluate it on your own computer this is documented in the user guide's
-[Local Test](./docs/artifacts/user-guide.md#local-test) section.
+If you want to try Policy System and evaluate it on your own computer this is documented in the installation guide's
+[Evaluator installation](./docs/artifacts/installation-guide.md#evaluator-installation) section.
 
 ### Contributing to Policy Systems codebase
 
