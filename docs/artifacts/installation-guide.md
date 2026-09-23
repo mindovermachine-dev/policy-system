@@ -10,7 +10,7 @@
   - [4. Create the local cluster](#4-create-the-local-cluster)
   - [5. Provision the Azure LLM backend](#5-provision-the-azure-llm-backend)
   - [6. Install ps-cli](#6-install-ps-cli)
-  - [7. Deploy Policy System](#7-deploy-policy-system)
+  - [7. Deploy Policy System Backend](#7-deploy-policy-system-backend)
   - [8. Install the Policy System plugin](#8-install-the-policy-system-plugin)
 - [Production installation](#production-installation)
   - [Prerequisites (Production)](#prerequisites-production)
