@@ -103,15 +103,6 @@ groups, which are opt-out on the command line:
 uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not container_image"
 ```
 
-Every excluded group is registered in the root `pyproject.toml` with the reason it
-is slow, and each is run explicitly when you need it. `container_image` builds and
-runs the runtime image, so it needs `docker` or `podman` and several minutes on a
-cold build:
-
-```bash
-uv run pytest ps-service/tests/test_container_image.py -m container_image
-```
-
 Run the full local gate exactly as CI does:
 
 ```bash
@@ -148,22 +139,6 @@ chore ci test refactor style build`) is warned about in the job summary and does
 
 When several commits landed since the last tag, the highest bump among them wins.
 
-### Where a bad header is caught
-
-The same `scripts/release/lint-commit-header.sh` runs at three points, earliest first:
-
-- `.githooks/pre-push` — lints the head commit of any push to `ready/*` on your
-  machine, so `gh tt deliver` fails locally before CI ever runs. Issue-branch
-  (`wrapup`) pushes are not linted; their headers are squashed away.
-- `pr-to-ready.yml` — lints the PR title (as `<title> - resolves #N`) before the
-  takt action squashes it onto a `ready/*` branch.
-- `on_ready.yml` — the CI gate `merge-to-trunk` depends on; the backstop.
-
-When the header's leading token looks like a scope used as a type (`company_merge:
-...`, `ps-service/ps-cli: ...`) the lint prints a `hint:` with the `type(scope): ...`
-rewrite. Since `gh tt deliver` takes the header from the issue title, fix the _issue
-title_ first and deliver again, or the next delivery will fail the same way.
-
 ### What gets synced
 
 The computed version is written into every version-lockstep file, in one commit:
@@ -184,72 +159,6 @@ another push to `main` won the race first. That is expected, not an incident: th
 next push to `main` — typically the very commit that won the race — recomputes the
 version from the now-current tag state and releases normally. Nothing needs to be
 retried, force-pushed, or fixed by hand.
-
-### Verifying a release
-
-```bash
-docker buildx imagetools inspect ghcr.io/mindovermachine-dev/ps-service:<tag>
-```
-
-Each published tag must resolve to a manifest list containing both `linux/amd64`
-and `linux/arm64`. The package also carries `build-amd64` and `build-arm64`
-staging tags — these are the per-architecture images the manifest list points at,
-and they are expected.
-
-The tag itself must point at a commit that is an ancestor of `main`; the
-`verify-tag-on-main` job checks this and fails the release if it does not hold.
-
-### Prereleases
-
-Prerelease-form tags (semver 2.0, e.g. `1.2.4-pre.1`) are never produced by the
-automated flow and are not supported by the release pipeline.
-
-### Manually re-running a release
-
-`.github/workflows/on_semver.yml` also accepts a `workflow_dispatch` run against an
-existing tag, taking either a bare (`0.12.0`) or `v`-prefixed (`v0.12.0`) tag as
-input. This re-runs the image build/publish/GitHub-release steps for a tag that
-already exists — it does not cut a new version.
-
-### ps-cli is released the same way
-
-`ps-cli` is released in lockstep with `ps-service` by the same automated job — its
-`pyproject.toml` version is one of the synced fields above. The separate CLI tag
-procedure is retired: there is no independent tag or release step for `ps-cli`
-anymore.
-
-A contributor who needs `ps-cli` built from a branch or commit that has no release
-yet — before it's merged to `main`, for example — uses `PS_CLI_REF` with
-[`install.sh`](../../ps-cli/install.sh) instead of installing a release wheel:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | PS_CLI_REF=<branch-or-sha> bash
-```
-
-This is `install.sh`'s developer path: it skips release resolution and checksum
-verification entirely and installs directly via
-`uv tool install "git+https://github.com/mindovermachine-dev/policy-system@<branch-or-sha>#subdirectory=ps-cli"`.
-Unlike the raw `git+` command, `PS_CLI_REF` accepts either a branch name or a commit
-SHA — a SHA pins the exact commit the way a tag cannot.
-
-See also [Run from a repo checkout](#run-from-a-repo-checkout-local-development)
-above for invoking `ps-cli` as a module without installing it at all.
-
-## Delivery Process
-
-- Keep each issue branch focused on a single change.
-- Give the issue a clear title/description — `gh tt workon` uses it, and
-  `gh tt deliver` carries it through to the squashed `ready/*` commit.
-- Ensure all checks pass before running `gh tt deliver` (see
-  [Getting Started](#getting-started) above).
-- Every release adds a `chore(release)` commit to `main` (see
-  [Releasing](#releasing) above), so a `ready/**` branch already in flight when
-  that happens may need a rebase before its own `gh tt deliver`.
-- A rebase that hits conflicts commits the resolution without running the
-  pre-commit hook (git's rebase backend never invokes it), so run
-  `uv run pre-commit run --all-files` after resolving. `.githooks/pre-push`
-  re-runs `ruff check`/`ruff format --check` on every commit you push as a
-  safety net, and rejects the push with ruff's own report if either fails.
 
 ## Reporting Issues
 
