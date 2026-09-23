@@ -10,4 +10,4 @@ Agent Skills are shipped as a single git-hosted Claude plugin, not a separate de
 
 Policy System Agent Skills should not be part of the Policy System repo skill structure as they are not used across the development team to develop Policy System, rather they are part of the product so they should be installed into the local user Agent Skill structure if needed for testing the skills.
 
-To install: add this repo as a marketplace and run `/plugin install policy-system` (see `docs/artifacts/user-guide.md`).
+To install: add this repo as a marketplace and run `/plugin install policy-system` (see `docs/artifacts/installation-guide.md`).

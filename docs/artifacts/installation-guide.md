@@ -19,7 +19,6 @@
   - [3. Run scripts/deploy-ps.sh](#3-run-scriptsdeploy-pssh)
   - [4. Access the cluster with kubelogin](#4-access-the-cluster-with-kubelogin)
   - [5. Set up each user's computer](#5-set-up-each-users-computer)
-- [Configuration reference](#configuration-reference)
 
 This guide covers **deploying** Policy System — either an evaluator local-test
 instance on your own laptop, or a production customer-tenant rollout to Azure. If
@@ -234,8 +233,7 @@ Once deployed, see the [Operations Guide](./operations-guide.md#updating-to-the-
 for how to upgrade to a newer release later — your graph data is kept across upgrades.
 
 A freshly deployed system has an empty graph and can answer nothing — see the [User
-Guide: Running commands](./user-guide.md#running-commands) for seeding it with
-`ps-cli restore instrument`/`ingest regulation`/`ingest document`.
+Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
 
 ### 8. Install the Policy System plugin
 
@@ -392,28 +390,12 @@ the following on their own machine; none of it is done by `scripts/deploy-ps.sh`
 curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
 ```
 
-**Point `ps-cli` at this instance and log in.** Use the URL [step 3](#3-run-scriptsdeploy-pssh)
-printed (`https://<label>.<region>.cloudapp.azure.com`):
-
-```bash
-ps-cli config set-context prod --url https://<label>.<region>.cloudapp.azure.com
-```
-
-```bash
-ps-cli config use-context prod
-```
-
-```bash
-ps-cli auth login
-```
-
+**Point `ps-cli` at this instance and log in.** See [User Guide: Point ps-cli at your
+instance](./user-guide.md#point-ps-cli-at-your-instance) — use the URL [step
+3](#3-run-scriptsdeploy-pssh) printed (`https://<label>.<region>.cloudapp.azure.com`).
 Unlike the Evaluator's local-test instance, a production instance is deployed with
 Entra auth wired in (`deploy-ps.sh` sets this up — see [step 3](#3-run-scriptsdeploy-pssh)),
-so this last command is required here: it runs an OIDC device-authorization flow —
-`ps-cli` prints a verification URL and code, you complete sign-in in a browser, and the
-resulting token is stored for the `prod` context. See [User Guide: Configuring which PS
-Service instance ps-cli targets](./user-guide.md#configuring-which-ps-service-instance-ps-cli-targets)
-and [Credential storage](./user-guide.md#credential-storage) for details.
+so logging in is required here.
 
 **Install the Policy System plugin.** Same as [Evaluator installation, step
 8](#8-install-the-policy-system-plugin): in Claude Desktop, **Customize** → **Plugins**
@@ -426,20 +408,7 @@ authenticated `ps-cli` call.
 
 ---
 
-## Configuration reference
-
-| Setting | Applies to | Default | Purpose |
-| --- | --- | --- | --- |
-| `PS_CLI_SERVICE_URL` (env var) | ps-cli | unset | Highest-precedence override for which PS Service instance ps-cli targets. |
-| `ps-cli.toml` (`service_url`, in current directory) | ps-cli | none shipped | Project-local single-target override, lowest precedence. |
-| `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` / `credentials.toml` are read/written. |
-| `targets.toml` (`[contexts]`, `current_context`) | ps-cli | none until `config set-context` is run | Named PS Service targets and which one is current. Never contains a credential. |
-| `credentials.toml` | ps-cli | none until a credential is stored | Per-context credential fallback when no OS keyring backend is available, written by `ps-cli auth login` — see [Credential storage](./user-guide.md#credential-storage). |
-
-This table covers `ps-cli` only. The Policy System plugin's `policy-system-graph`
-connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`
-process (see [step 8](#8-install-the-policy-system-plugin)) that reuses whichever
-`ps-cli` context is current, so every row above already governs it too.
-
-See the [Helm Chart Values Reference](./helm-chart-values-reference.md) for PS
-Service / chart-level configuration.
+For `ps-cli` configuration reference (context/credential storage, env vars, config
+files), see [User Guide: Appendix — ps-cli reference](./user-guide.md#appendix-ps-cli-reference).
+For PS Service / chart-level configuration, see the [Helm Chart Values
+Reference](./helm-chart-values-reference.md).
