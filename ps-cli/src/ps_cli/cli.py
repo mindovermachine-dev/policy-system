@@ -3,9 +3,15 @@
 ``run()`` is the testable core: it parses ``argv``, builds a ``PsServiceClient``
 from ``ps_cli.config.load_config()`` only when one is not injected, dispatches to
 the matching handler via ``ps_cli.modules.handlers.DISPATCH``, and is the main
-``try/except PsCliError`` in the call chain -- catching every error from a real
-subcommand dispatch and returning exit code 1. ``main()`` is the literal, thin
-entrypoint ``ps_cli/__main__.py`` imports and calls (AC-BI-005). Mirrors gh-tt's
+``try/except`` in the call chain around a real subcommand dispatch. Issue #122:
+that one `try` now has three sibling `except` clauses, not one -- `PsCliError`
+(exit 1, unchanged), `KeyboardInterrupt` (the operator cancelled, exit 130), and
+any other `Exception` (an unhandled bug, exit 2, message-only unless `-v`). This
+is a deliberate, narrow exception to L2 ps-cli's general "let bugs crash"
+principle, scoped to this one dispatch boundary (see
+`docs/coding-standards/level2-python-instructions.md`'s `## ps-cli` Error
+Handling section). ``main()`` is the literal, thin entrypoint
+``ps_cli/__main__.py`` imports and calls (AC-BI-005). Mirrors gh-tt's
 `gh_tt.py`: parsing lives in `modules.parser`, handlers and dispatch live in
 `modules.handlers`, and this module is pure orchestration.
 
@@ -32,6 +38,7 @@ one (`run()`, for real subcommand dispatch) and `_report_service_version()`'s ow
 from __future__ import annotations
 
 import sys
+import traceback
 from importlib.metadata import version as installed_version
 from typing import TYPE_CHECKING, cast
 
@@ -166,18 +173,56 @@ def _dispatch_command(
         handler(args, active_client)
 
 
+def _print_ps_cli_error(args: argparse.Namespace, error: PsCliError) -> None:
+    """Print `error` to stderr; under `-v`, also print its innermost frame's `file:line`.
+
+    Extracted out of `run()` to keep its own cyclomatic complexity under
+    `level1-coding-principles.md`'s cap of 8 (mirrors `_dispatch_command`'s own
+    extraction, for the same reason -- issue #122 added two more `except`
+    branches to `run()`'s single `try`, pushing it back over the cap).
+    """
+    print(str(error), file=sys.stderr)
+    # `getattr(..., False)`, not `args.verbose`: the shared `-v` action uses
+    # `default=SUPPRESS` (see `modules.parser.build_parser`'s docstring), so the
+    # attribute is simply absent, not `False`, when `-v` was never given.
+    if getattr(args, "verbose", False):
+        tb = error.__traceback__
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        if tb is not None:
+            print(f"🔦 @ {tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}", file=sys.stderr)
+
+
+def _print_unexpected_exception(args: argparse.Namespace, exc: Exception) -> None:
+    """Print a one-line `{type}: {message}` summary of `exc` to stderr (issue #122).
+
+    Under `-v`, also print the full traceback -- unlike `_print_ps_cli_error`'s
+    single-frame pointer, a genuine unhandled bug needs the whole call chain to
+    diagnose, and (unlike the general "let bugs crash" case) this path's
+    default output is already a summary, not silence, so there is no reason to
+    withhold the detail `-v` asks for.
+    """
+    print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    if getattr(args, "verbose", False):
+        traceback.print_exc(file=sys.stderr)
+
+
 def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -> int:
-    """Parse `argv`, dispatch to the matching handler, catch `PsCliError` once here.
+    """Parse `argv`, dispatch to the matching handler, catch three exception types once here.
 
     Returns the process exit code: `0` on success or on `--version`/no-command
     help (both mirror gh-tt: bare `ps-cli` prints help and exits 0, matching
-    gh-tt's own no-command behavior), `1` on a `PsCliError` from real subcommand
+    gh-tt's own no-command behavior); `1` on a `PsCliError` from real subcommand
     dispatch (formatted as `msg` plus `hint`, if present, to stderr -- plus a
-    `-v`/`--verbose` failure-site line, no full traceback). Any other exception
-    is a bug, not a user error, and propagates uncaught (L2 ps-cli "Let bugs
-    crash"); a malformed argument value (e.g. a badly-shaped `celex`) is caught
-    by argparse itself during `parse_args()` below and exits 2 via `SystemExit`,
-    not through this function's own return value (PLAN.md §1 D10).
+    `-v`/`--verbose` failure-site line, no full traceback); `130` on
+    `KeyboardInterrupt` (the operator cancelled, e.g. Ctrl-C during `auth
+    login`'s device-flow wait -- issue #122, not a bug, so it gets its own exit
+    code rather than a raw traceback); `2` on any other `Exception` (an
+    unhandled bug -- one line, `{type(exc).__name__}: {exc}`, to stderr by
+    default, full traceback under `-v`). `SystemExit` (e.g. argparse's own
+    `--help`/a malformed argument value like a badly-shaped `celex`, exiting 2)
+    is not caught by any of these three and propagates as before (PLAN.md §1
+    D10).
 
     `--version` is the one exception to "catch `PsCliError` once here": it never
     reaches this function's `try/except` below at all -- `_report_service_version()`
@@ -208,17 +253,14 @@ def run(argv: Sequence[str], *, client: PsServiceClientProtocol | None = None) -
     try:
         _dispatch_command(command, args, client)
     except PsCliError as error:
-        print(str(error), file=sys.stderr)
-        # `getattr(..., False)`, not `args.verbose`: the shared `-v` action uses
-        # `default=SUPPRESS` (see `modules.parser.build_parser`'s docstring), so the
-        # attribute is simply absent, not `False`, when `-v` was never given.
-        if getattr(args, "verbose", False):
-            tb = error.__traceback__
-            while tb is not None and tb.tb_next is not None:
-                tb = tb.tb_next
-            if tb is not None:
-                print(f"🔦 @ {tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}", file=sys.stderr)
+        _print_ps_cli_error(args, error)
         return 1
+    except KeyboardInterrupt:
+        print("cancelled", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001 -- issue #122's deliberate catch-all boundary
+        _print_unexpected_exception(args, exc)
+        return 2
     return 0
 
 

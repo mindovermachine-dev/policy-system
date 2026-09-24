@@ -163,6 +163,28 @@ class _FakeFailingClient(_UnusedPsServiceClientMethods):
         )
 
 
+class _FakeKeyboardInterruptClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose check_health() raises KeyboardInterrupt.
+
+    Simulates an operator pressing Ctrl-C mid-call (issue #122) -- `check_health()`
+    stands in for any blocking call; `run()`'s own catch site is command-agnostic
+    (AC-BI-007), so this single fake proves the general boundary, not anything
+    specific to `get health`.
+    """
+
+    def check_health(self) -> str:
+        """Raise KeyboardInterrupt, simulating Ctrl-C during a blocking call."""
+        raise KeyboardInterrupt
+
+
+class _FakeUnexpectedErrorClient(_UnusedPsServiceClientMethods):
+    """A duck-typed PsServiceClient stand-in whose check_health() raises an unhandled bug."""
+
+    def check_health(self) -> str:
+        """Raise a plain RuntimeError, simulating a genuine, un-classified ps-cli bug."""
+        raise RuntimeError("boom")
+
+
 class _FakeNearMissesSuccessClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in whose list_pending_reviews() succeeds."""
 
@@ -329,6 +351,69 @@ def test_run_omits_failure_site_when_not_verbose(capsys: pytest.CaptureFixture[s
     run(["get", "health"], client=fake_client)
 
     assert "🔦" not in capsys.readouterr().err
+
+
+def test_run_returns_130_and_prints_cancelled_on_keyboard_interrupt(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-001/007/010: Ctrl-C during any blocking command exits 130, cancel message
+    to stderr only, no traceback -- not specific to `auth login` (`get health` here).
+    """
+    fake_client = _FakeKeyboardInterruptClient()
+
+    exit_code = run(["get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 130
+    assert captured.err == "cancelled\n"
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+
+
+def test_run_keyboard_interrupt_message_is_not_formatted_as_ps_cli_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-004: the cancel message is plain text, never `PsCliError`'s `❌`/`💡` shape."""
+    fake_client = _FakeKeyboardInterruptClient()
+
+    run(["get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert "❌" not in captured.err
+    assert "💡" not in captured.err
+
+
+def test_run_returns_two_and_prints_one_line_on_unexpected_exception(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-002/009/010: an unhandled bug exits 2, one `{type}: {message}` line to
+    stderr only, no traceback -- unless `-v` was given (separate test below).
+    """
+    fake_client = _FakeUnexpectedErrorClient()
+
+    exit_code = run(["get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.err == "RuntimeError: boom\n"
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+
+
+def test_run_prints_full_traceback_for_unexpected_exception_when_verbose(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-005: `-v` on an unhandled bug prints the full traceback, not just a
+    single-frame pointer (unlike `PsCliError`'s own `-v` behavior) -- still exits 2.
+    """
+    fake_client = _FakeUnexpectedErrorClient()
+
+    exit_code = run(["-v", "get", "health"], client=fake_client)
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "RuntimeError: boom" in captured.err
+    assert "Traceback (most recent call last)" in captured.err
 
 
 def test_run_with_no_command_prints_help_and_returns_zero(
