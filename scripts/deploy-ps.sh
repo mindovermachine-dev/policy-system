@@ -753,15 +753,15 @@ write_secret_if_changed() {
   made_changes=true
 }
 
-# new_scope_uuid: prints a fresh lowercase UUID for a new oauth2PermissionScope id -- Microsoft
-# Graph requires each oauth2PermissionScope's `id` to be a valid UUID. Prefers uuidgen (present
-# on both macOS and most Linux distros); falls back to python3 if absent.
+# new_scope_uuid: prints a fresh lowercase v4-format UUID for a new oauth2PermissionScope id --
+# Microsoft Graph requires each oauth2PermissionScope's `id` to be a valid UUID. Built from
+# bash's $RANDOM rather than uuidgen/python3 so the script has no extra tool dependency; the
+# id only needs to be unique within this app's scope list, not cryptographically random.
 new_scope_uuid() {
-  if command -v uuidgen >/dev/null 2>&1; then
-    uuidgen | tr '[:upper:]' '[:lower:]'
-  else
-    python3 -c 'import uuid; print(uuid.uuid4())'
-  fi
+  printf '%04x%04x-%04x-4%03x-%x%03x-%04x%04x%04x\n' \
+    "$RANDOM" "$RANDOM" "$RANDOM" "$((RANDOM % 4096))" \
+    "$(((RANDOM % 4) + 8))" "$((RANDOM % 4096))" \
+    "$RANDOM" "$RANDOM" "$RANDOM"
 }
 
 # fetch_app_id_by_name <display_name>: prints the app's appId, or empty if it doesn't exist yet.
