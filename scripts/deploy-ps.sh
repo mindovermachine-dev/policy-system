@@ -1,41 +1,5 @@
 #!/usr/bin/env bash
-# Provisions a full customer-managed Azure deployment of Policy System (issue #111): the LLM
-# backend (resource group, AIServices account, two model deployments, Key Vault -- own copy of
-# scripts/deploy-llm.sh's chain, not shared, PLAN.md §0.1), Entra app registrations, an AKS
-# cluster, the Helm release, and public HTTPS exposure. See
-# docs/architecture/customer-azure-deployment.md for the full design;
-# docs/coding-standards/level1-coding-principles.md for the conventions below.
-#
-# This is S5-S11 so far: flag parsing, config loading/validation, naming, the confirmation
-# table, the decline path (S5); the user-only RBAC preflight (S6); resource-provider
-# registration+poll (S7); region selection + capacity range + quota checking, with the spike's 6
-# proven numeric-correctness bugfixes (S8); the core LLM resource provisioning create-if-absent
-# chain -- resource group, AIServices account, both model deployments, Key Vault + access
-# policy, 3 secrets (S9); the API app registration + its service principal + the
-# access_as_user scope + the requestedAccessTokenVersion=2 PATCH (S10); the CLI app
-# registration + its service principal + delegated-permission grant + the admin-consent
-# preflight (list-grants before admin-consent, AC-BI-005) (S11); the AKS node VM-size allowlist +
-# vCPU quota preflight, before any AKS creation (AC-BI-011) -- this AC's own new design, no
-# spike-proven mechanism to port, see PLAN.md §0.6 (S12); and AKS cluster creation with AAD +
-# Azure RBAC + disabled local accounts + Azure CNI network policy hardening flags, the cluster-
-# scoped RBAC grant letting subsequent kubectl/helm calls authenticate, and fetching its
-# credentials (AC-BI-006, AC-BI-012) (S13); syncing the 3 LLM credentials into the cluster as a
-# Kubernetes Secret, and resolving charts/policy-system/values-prod.yaml directly for the Helm
-# release below (AC-BI-013 script-half) (S14); reconciling the Helm release itself, wiring
-# psService.auth.{issuer,audience,cliClientId,scopes} (audience the bare API app GUID, scopes the
-# "api://.../access_as_user" URI form -- different formats for different fields) and
-# llm.existingSecret, with a no-op comparison narrowed to exactly those 5 fields (AC-BI-001
-# completion, AC-BI-002 script-half, AC-BI-018) (S15); enabling the AKS application-routing
-# add-on (managed NGINX ingress controller) and setting Azure's own public-IP DNS label, giving a
-# "<label>.<region>.cloudapp.azure.com" hostname with no customer-owned domain required (S16);
-# and installing cert-manager via its own OCI chart, waiting for its deployments to report
-# Available, and only then creating a Let's Encrypt ClusterIssuer solving HTTP-01 through the
-# app-routing add-on's ingress class (AC-BI-016) (S17); and the TLS-terminated Ingress exposing
-# PS Service itself over HTTPS, the closing provisioning summary (secrets-only, never values),
-# and `--rotate-key` mode carried over from scripts/deploy-llm.sh's own proven implementation
-# (AC-BI-015 completion, AC-BI-017's mocked portion) (S18). main() is now feature-complete for
-# S1-S18 (see .orchestrator/tracker/issue-111-deploy-ps-azure-script/PLAN.md §5) -- S19 adds only
-# a capstone test file, no further script code is expected to land here.
+# Provisions a full customer-managed Azure deployment of Policy System.
 #
 # Usage:
 #   scripts/deploy-ps.sh [--yes]
@@ -53,6 +17,9 @@
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success -- including
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
 set -euo pipefail
+
+# Git Bash on Windows sometimes automatically converts POSIX-style paths to Windows-style paths.
+export MSYS_NO_PATHCONV=1
 
 # Every hard-stop failure message goes through print_error (below), which is red only when
 # stderr is a terminal -- piping to a file/CI log leaves plain text, no stray ANSI codes
