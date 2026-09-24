@@ -352,12 +352,6 @@ PS Service: https://<label>.<region>.cloudapp.azure.com
 (which the script already ran for you) cannot authenticate on its own —
 `kubectl`/`helm` need `kubelogin` to complete the Azure AD sign-in:
 
-macOS.
-
-```bash
-brew install Azure/kubelogin/kubelogin
-```
-
 ```bash
 kubelogin convert-kubeconfig -l azurecli
 ```
