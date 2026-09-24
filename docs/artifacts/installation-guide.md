@@ -321,22 +321,6 @@ account, both model deployments, Key Vault, AKS cluster name, and public DNS lab
 all deterministically derived from your subscription id — and prompts
 `Proceed with these values? [Y/n]`. Pass `--yes` to skip the prompt.
 
-It then, in order: checks your subscription-level RBAC; registers required
-resource providers; selects the first region candidate where both models are
-Generally Available at the configured SKU and validates the configured capacities
-against that region's live quota; provisions the resource group, AIServices
-account, both model deployments, and Key Vault; creates the API and CLI Entra app
-registrations (falling back to a printed manual command — see the [Operations
-Guide](./operations-guide.md#manual-steps-and-operational-notes) item 3 — if the
-signed-in identity can't grant admin consent itself); checks the AKS node VM size is
-allowed and vCPU quota is sufficient for this subscription in the selected region;
-creates the AKS cluster with AAD authentication, Azure RBAC, disabled local
-accounts, and Azure CNI network policy; syncs the LLM credentials into the cluster;
-reconciles the Helm release with the auth issuer/audience/scopes wired in; enables
-the AKS application-routing ingress add-on and sets a public DNS label; installs
-cert-manager and a Let's Encrypt `ClusterIssuer`; and creates the TLS-terminated
-Ingress exposing PS Service.
-
 > [!NOTE]
 > **Global Admin admin-consent fallback.** If the signed-in identity lacks Global
 > Administrator / Privileged Role Administrator, `deploy-ps.sh` prints the exact
