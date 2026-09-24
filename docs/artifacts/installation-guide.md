@@ -279,13 +279,13 @@ ask a question.
 
 ### Prerequisites (Production)
 
-| Tool | Why |
-| --- | --- |
-| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Everything `deploy-ps.sh` provisions |
-| [jq](https://jqlang.org/download/) | Used by `deploy-ps.sh` to parse Azure CLI JSON output |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the AKS cluster `deploy-ps.sh` creates |
-| [Helm](https://helm.sh/docs/intro/install/) | Installs the Policy System chart |
-| [kubelogin](https://azure.github.io/kubelogin/install.html) | Required to authenticate `kubectl`/`helm` against the AAD-enabled AKS cluster — see [step 4](#4-access-the-cluster-with-kubelogin) |
+| Tool | Why | Verify |
+| --- | --- | --- |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Everything `deploy-ps.sh` provisions | `az version` |
+| [jq](https://jqlang.org/download/) | Used by `deploy-ps.sh` to parse Azure CLI JSON output | `jq --version` |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the AKS cluster `deploy-ps.sh` creates | `kubectl version --client` |
+| [Helm](https://helm.sh/docs/intro/install/) | Installs the Policy System chart | `helm version` |
+| [kubelogin](https://azure.github.io/kubelogin/install.html) | Required to authenticate `kubectl`/`helm` against the AAD-enabled AKS cluster — see [step 4](#4-access-the-cluster-with-kubelogin) | `kubelogin --version` |
 
 You'll need an Azure subscription where your signed-in identity has `Owner` or
 `Contributor` at subscription scope (checked by the script before it touches
@@ -322,7 +322,9 @@ all deterministically derived from your subscription id — and prompts
 `Proceed with these values? [Y/n]`. Pass `--yes` to skip the prompt.
 
 > [!NOTE]
-> **Global Admin admin-consent fallback.** If the signed-in identity lacks Global
+> **Global Admin admin-consent fallback.**
+>
+> If the signed-in identity lacks Global
 > Administrator / Privileged Role Administrator, `deploy-ps.sh` prints the exact
 > command for a colleague with that role to run:
 > ```bash

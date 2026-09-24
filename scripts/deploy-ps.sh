@@ -129,6 +129,23 @@ join_comma_space() {
   printf '%s' "$joined"
 }
 
+# check_required_tools <tool...>: hard-stops unless every named CLI is on PATH, listing all
+# missing tools in one message rather than failing on the first -- so a missing binary is caught
+# before any Azure resource is touched instead of partway through provisioning (kubectl/helm
+# previously weren't needed until S14+, after the AKS cluster and everything before it already
+# existed). See docs/artifacts/installation-guide.md#prerequisites-production for install links.
+check_required_tools() {
+  local tool missing=()
+  for tool in "$@"; do
+    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    print_error 'Missing required tool(s): %s\n' "$(join_comma_space "${missing[@]}")"
+    print_error 'See docs/artifacts/installation-guide.md#prerequisites-production for install links.\n'
+    exit "$EXIT_FAILURE"
+  fi
+}
+
 # fail_validation <message>: prints a field+file-scoped config error and exits (contributes
 # AC-BI-019).
 fail_validation() {
@@ -1494,10 +1511,14 @@ rotate_key_main() {
 main() {
   parse_args "$@"
 
+  check_required_tools az jq
+
   if [[ "$rotate_key" == true ]]; then
     rotate_key_main
     return
   fi
+
+  check_required_tools kubectl helm
 
   log_step "Loading and validating $CONFIG_FILE_DISPLAY_PATH"
   load_config
