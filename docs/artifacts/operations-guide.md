@@ -31,12 +31,16 @@ installation](./installation-guide.md#evaluator-installation).
 
 ### Updating to the latest version
 
-The chart is installed straight from GHCR as an OCI artifact — no repo checkout or
-repo sync needed to upgrade. Re-run
-[`ps-cli/install.sh`](../../ps-cli/install.sh) (see [Installation Guide, step
-6](./installation-guide.md#6-install-ps-cli)) to pick up the new client version, then
-re-run the deploy command — no `--version` pin, so it always installs the latest chart,
-matching the client version install.sh just picked up:
+Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) from a repo checkout — it re-runs
+[`ps-cli/install.sh`](../../ps-cli/install.sh) to pick up the new client version, upgrades the
+Helm release (no `--version` pin, so it always installs the latest chart, matching the client
+version install.sh just picked up), and verifies pod status:
+
+```bash
+scripts/ps-upgrade.sh
+```
+
+Equivalently, run the steps it automates by hand:
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
@@ -97,16 +101,24 @@ installation](./installation-guide.md#production-installation).
 
 ### Updating to the latest version
 
-Re-run [`ps-cli/install.sh`](../../ps-cli/install.sh) (see [Installation Guide, step
-6](./installation-guide.md#6-install-ps-cli)) to pick up the new client version.
-
 `scripts/deploy-ps.sh`'s Helm reconciliation (`ensure_release`) only calls `helm upgrade
 --install` when one of the 5 auth-related fields (`llm.existingSecret`,
 `psService.auth.{issuer,audience,cliClientId,scopes}`) differs from what's already
 deployed. If none of those changed, re-running
-`scripts/deploy-ps.sh` is a no-op and will **not** pick up a new chart version. To force
-the update, read back the currently-deployed auth values and re-supply them explicitly
-in a manual `helm upgrade`:
+`scripts/deploy-ps.sh` is a no-op and will **not** pick up a new chart version.
+
+Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) from a repo checkout instead — it
+re-runs [`ps-cli/install.sh`](../../ps-cli/install.sh) to pick up the new client version, reads
+back the currently-deployed auth values and re-supplies them explicitly so a plain `helm
+upgrade` doesn't reset them to chart defaults, upgrades the Helm release (like Evaluator's
+chart, `CHART_REF` carries no `--version` pin, so this always pulls whatever is latest at that
+OCI reference), and verifies pod status:
+
+```bash
+scripts/ps-upgrade.sh
+```
+
+Equivalently, run the steps it automates by hand:
 
 ```bash
 helm get values policy-system -o json
@@ -122,9 +134,6 @@ helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/po
   --set psService.auth.scopes=<scopes from helm get values> \
   --wait
 ```
-
-Like Evaluator's chart, `CHART_REF` carries no `--version` pin, so this always pulls
-whatever is latest at that OCI reference.
 
 ```bash
 kubectl get pods -l app.kubernetes.io/component=ps-service \
