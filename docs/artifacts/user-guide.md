@@ -203,7 +203,7 @@ Global flags, usable before or after any subcommand:
 | `ps-cli near-misses list` | — | List every unresolved near-miss pending review from the company-merge dedup workflow. |
 | `ps-cli near-misses resolve <review_id> --decision <decision>` | `review_id`; `--decision` (required) — `keep-separate` or `merge` | Resolve one pending review. `keep-separate` clears it with no other graph change; `merge` re-points every edge from the loser node onto the winner, deletes the loser, and deletes the pending review, atomically. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
-| `ps-cli auth status` | — | Show the current context's login status (issuer, subject, expiry) — reads the local store only, no network call. |
+| `ps-cli auth status` | — | Show the current context's login status (context, issuer) — reads the local store only, no network call. |
 | `ps-cli auth logout` | — | Remove the current context's stored credential. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
@@ -280,23 +280,21 @@ PS_CLI_CONFIG_DIR=/tmp/my-ps-cli-config ps-cli config get-contexts
 
 #### Credential storage
 
-`ps-cli` has keyring-first credential storage built in — a stored credential is kept in
-your OS keyring by default, keyed per context name, and falls back automatically to a
-`credentials.toml` file (permissions restricted to your user only) when no OS keyring
-backend is available, printing a warning every time it uses that fallback, naming the
-file path — never the credential value:
-
-```
-⚠️  no OS keyring backend available; using /home/you/.config/ps-cli/credentials.toml instead (mode 0600). This is less secure than an OS keyring.
-```
+`ps-cli` stores credentials in your OS keyring only, keyed per context name. Only a
+`refresh_token` and its `issuer` are ever persisted; the access token obtained from it
+is never written to keyring or disk — it lives in memory for the current `ps-cli`
+invocation only, refreshed exactly once per invocation, and is discarded when the
+process exits. If the OS keyring is unavailable or a keyring operation fails for any
+reason, `ps-cli` raises an actionable error naming the context and the failure type
+(never the credential value) instead of falling back to writing a file.
 
 Log in with `ps-cli auth login` (requires a named context — `config
 set-context`/`use-context` first, since a stored credential is keyed per context
 name). This runs an OIDC device-authorization flow ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57)):
 `ps-cli` prints a verification URL and code, you complete sign-in in a browser, and
 the resulting token is stored under the current context. `ps-cli auth status` shows
-whether you're logged in (context, issuer, subject, expiry) without contacting
-anything; `ps-cli auth logout` removes the stored credential.
+whether you're logged in (context, issuer) without contacting anything; `ps-cli auth
+logout` removes the stored credential.
 
 Whether login is required at all depends on the target PS Service instance:
 generic OIDC bearer-token validation against any OIDC-compliant provider (no
@@ -438,11 +436,11 @@ rm -rf ~/.config/ps-cli
 
 Or `$PS_CLI_CONFIG_DIR`, if you set that instead.
 
-This deletes `targets.toml` (your contexts) and the `credentials.toml` fallback store,
-if either exists. If credentials were instead stored in your OS keyring (see
-[Credential storage](#credential-storage) above), remove them per context — e.g. `keyring
-del ps-cli <context-name>`, or via your OS's keychain/Credential Manager UI — since
-`uv tool uninstall` has no visibility into the keyring.
+This deletes `targets.toml` (your contexts), if it exists. Credentials are stored in
+your OS keyring (see [Credential storage](#credential-storage) above), not under this
+directory, so remove them per context separately — e.g. `keyring del ps-cli
+<context-name>`, or via your OS's keychain/Credential Manager UI — since `uv tool
+uninstall` has no visibility into the keyring.
 
 If you created a project-local `ps-cli.toml` (see
 [Single target (default)](#single-target-default) above), it isn't touched by any of
@@ -454,9 +452,8 @@ the above — delete it directly wherever you created it.
 | --- | --- | --- | --- |
 | `PS_CLI_SERVICE_URL` (env var) | ps-cli | unset | Highest-precedence override for which PS Service instance ps-cli targets. |
 | `ps-cli.toml` (`service_url`, in current directory) | ps-cli | none shipped | Project-local single-target override, lowest precedence. |
-| `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` / `credentials.toml` are read/written. |
+| `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` is read/written. |
 | `targets.toml` (`[contexts]`, `current_context`) | ps-cli | none until `config set-context` is run | Named PS Service targets and which one is current. Never contains a credential. |
-| `credentials.toml` | ps-cli | none until a credential is stored | Per-context credential fallback when no OS keyring backend is available, written by `ps-cli auth login` — see [Credential storage](#credential-storage). |
 
 This table covers `ps-cli` only. The Policy System plugin's `policy-system-graph`
 connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`

@@ -21,7 +21,6 @@ to `_resolve_client`/`DISPATCH` and crash with an opaque `KeyError`).
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 from ps_cli import device_flow, oidc_discovery
@@ -103,20 +102,20 @@ def handle_auth_login(
 
 
 def handle_auth_status(context_name: str | None, *, credential_store: CredentialStore) -> None:
-    """Print `context_name`'s login status (AC-BI-015).
+    """Print `context_name`'s login status (AC-BI-015; issue #121 D-121-6).
 
     Raises `PsCliError` if `context_name is None` (D-57-5, same boundary as
     `handle_auth_login`). If `credential_store.get_tokens(context_name)` is `None`,
     prints `"not logged in to '{context_name}'"` and returns normally -- this is a
     legitimate status to report (exit code 0), not a failure, unlike `auth login`'s
-    own D-57-5 "no context" case. Otherwise prints four lines: `context`, `issuer`,
-    `subject` (via `device_flow.decode_subject_unverified`, falling back to
-    `"unknown"` when the access token can't be decoded), and `expiry` (an ISO-8601
-    rendering of `bundle.expires_at`).
+    own D-57-5 "no context" case. Otherwise prints three lines: `context`, `issuer`,
+    and `logged in`.
 
-    Never contacts PS Service or the IdP -- reads only the local store. `expiry` is
-    reported exactly as stored, even if already in the past; this command never
-    triggers a refresh.
+    Issue #121: no `subject`/`expiry` any more -- `TokenBundle` no longer carries an
+    `access_token`/`expires_at` to derive either from (AC-BI-001), and deriving them
+    would require a live refresh-token exchange purely to populate a status display,
+    contradicting this command's own invariant of never contacting PS Service or the
+    IdP -- reads only the local store.
     """
     if context_name is None:
         raise PsCliError(msg=_NO_CONTEXT_TO_AUTHENTICATE_MSG)
@@ -124,12 +123,9 @@ def handle_auth_status(context_name: str | None, *, credential_store: Credential
     if bundle is None:
         print(f"not logged in to '{context_name}'")
         return
-    subject = device_flow.decode_subject_unverified(bundle.access_token) or "unknown"
-    expiry = datetime.fromtimestamp(bundle.expires_at, tz=UTC).isoformat()
     print(f"context: {context_name}")
     print(f"issuer: {bundle.issuer}")
-    print(f"subject: {subject}")
-    print(f"expiry: {expiry}")
+    print("logged in")
 
 
 def handle_auth_logout(context_name: str | None, *, credential_store: CredentialStore) -> None:
@@ -156,7 +152,7 @@ def _dispatch_auth_login(args: argparse.Namespace) -> None:
     context = cast("str | None", getattr(args, "context", None))
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
-    credential_store = build_credential_store(config_dir)
+    credential_store = build_credential_store()
     auth_override = resolve_auth_override(config, config_dir)
     handle_auth_login(
         config.context_name,
@@ -176,7 +172,7 @@ def _dispatch_auth_status(args: argparse.Namespace) -> None:
     context = cast("str | None", getattr(args, "context", None))
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
-    credential_store = build_credential_store(config_dir)
+    credential_store = build_credential_store()
     handle_auth_status(config.context_name, credential_store=credential_store)
 
 
@@ -189,7 +185,7 @@ def _dispatch_auth_logout(args: argparse.Namespace) -> None:
     context = cast("str | None", getattr(args, "context", None))
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
-    credential_store = build_credential_store(config_dir)
+    credential_store = build_credential_store()
     handle_auth_logout(config.context_name, credential_store=credential_store)
 
 

@@ -639,6 +639,11 @@ class PsServiceClient:
         self._credential_store = credential_store
         self._context = context
         self._auth_override = auth_override
+        # Issue #121: this invocation's in-memory-only access token cache -- one
+        # `PsServiceClient` is built once per real CLI invocation, so its lifetime
+        # already matches "one invocation" by construction (AC-BI-003/004).
+        self._access_token_cache = device_flow.AccessTokenCache()
+        self._transport = transport
         self._client = httpx.Client(
             base_url=base_url,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
@@ -662,6 +667,8 @@ class PsServiceClient:
             service_url=self._base_url,
             auth_override=self._auth_override,
             credential_store=self._credential_store,
+            access_token_cache=self._access_token_cache,
+            transport=self._transport,
         )
         return {"Authorization": f"Bearer {access_token}"}
 
@@ -909,17 +916,17 @@ class PsServiceClient:
         never raised as `PsCliError` or any other exception, so a poll
         failure can never affect the caller's own `ingest_catalog()` result.
 
-        Attaches a bearer header only from an already-cached, still-valid
-        token (`device_flow.peek_cached_access_token`, D-57-7) -- unlike
-        every other authenticated method, this never triggers a refresh or a
-        credential-store write; a poll is best-effort and must not race or
-        interfere with a real call's own token lifecycle.
+        Attaches a bearer header only from an already-cached access token
+        (`device_flow.peek_cached_access_token`, D-121-3) -- unlike every other
+        authenticated method, this never triggers a refresh or a credential-store
+        write; a poll is best-effort and must not race or interfere with a real
+        call's own token lifecycle. `self._access_token_cache.token` can only ever
+        be non-`None` if `_authorization_headers()` already ran
+        `ensure_valid_access_token` at least once this invocation.
         """
-        access_token = None
-        if self._credential_store is not None and self._context is not None:
-            access_token = device_flow.peek_cached_access_token(
-                context=self._context, credential_store=self._credential_store
-            )
+        access_token = device_flow.peek_cached_access_token(
+            access_token_cache=self._access_token_cache
+        )
         headers = {"Authorization": f"Bearer {access_token}"} if access_token is not None else {}
         try:
             response = self._client.get(

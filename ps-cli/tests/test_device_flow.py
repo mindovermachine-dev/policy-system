@@ -1,10 +1,20 @@
-"""Tests for ps_cli.device_flow (issue #57 Slices 9-12).
+"""Tests for ps_cli.device_flow (issue #57 Slices 9-12; issue #121 critical-flaw fix).
 
 Slices 9-11 drive the real `ps_test_support.mock_oidc_provider.MockOidcProvider`'s
 device-authorization/token endpoints directly (no monkeypatching) -- this *is* the
 IdP's own endpoint, mirroring `test_oidc_discovery.py`'s own Slice 6 convention.
 The one unrecognized-error-code case (Slice 11) uses `httpx.MockTransport` instead,
 since the real provider only ever emits the four documented RFC 8628 error codes.
+
+Issue #121: `TokenBundle` shrinks to `refresh_token`/`issuer` only (AC-BI-001) --
+every construction below drops `access_token`/`expires_at`. The in-memory-only
+access token now lives in a required `access_token_cache: AccessTokenCache`
+parameter threaded through `ensure_valid_access_token`/`peek_cached_access_token`
+(D-121-2/D-121-3). CHANGES.md's critical-flaw fix (Appendix A1) keeps
+`AccessTokenCache.expires_at` so a long-lived cache holder (e.g. `mcp_bridge`'s
+proxy-loop process) can self-heal once its in-memory token goes stale, without
+breaking AC-BI-003's "exactly one refresh per (fresh-process) invocation" for a
+real CLI invocation, whose cache always starts empty.
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ import pytest
 from ps_cli import oidc_discovery
 from ps_cli.credentials import TokenBundle
 from ps_cli.device_flow import (
+    AccessTokenCache,
     DeviceAuthorization,
     TokenResponse,
     complete_device_login,
@@ -266,18 +277,15 @@ def test_poll_for_token_unrecognized_error_code_raises_generic_error_not_crash()
 # --- Slice 12: token_bundle_from_response() / complete_device_login() --------------
 
 
-def test_token_bundle_from_response_computes_exact_expires_at(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+def test_token_bundle_from_response_persists_only_refresh_token_and_issuer() -> None:
+    """AC-BI-001: `token_bundle_from_response` never carries `access_token`/`expires_at`
+    into the persisted `TokenBundle` shape.
+    """
     response = TokenResponse(access_token="at", refresh_token="rt", expires_in=3600)
 
     bundle = token_bundle_from_response(response, issuer="http://issuer.example")
 
-    assert bundle.access_token == "at"
-    assert bundle.refresh_token == "rt"
-    assert bundle.expires_at == 1_000_000 + 3600
-    assert bundle.issuer == "http://issuer.example"
+    assert bundle == TokenBundle(refresh_token="rt", issuer="http://issuer.example")
 
 
 def test_complete_device_login_full_flow_round_trips_via_real_provider(
@@ -307,12 +315,12 @@ def test_complete_device_login_full_flow_round_trips_via_real_provider(
     assert sleep_calls == [printed[0].interval]
 
     bundle = token_bundle_from_response(response, params.issuer)
-    assert bundle.access_token == response.access_token
     assert bundle.refresh_token == response.refresh_token
     assert bundle.issuer == mock_oidc_provider.issuer
 
 
-# --- Issue #57 Group 3 (AC-BI-011/012/013): ensure_valid_access_token / peek_cached_access_token
+# --- Issue #57 Group 3 (AC-BI-002/003/004/005/009): ensure_valid_access_token /
+# peek_cached_access_token, retargeted onto AccessTokenCache by issue #121 -----------
 
 
 class _FakeCredentialStore:
@@ -365,74 +373,36 @@ def _patch_resolve_auth_parameters(
 
 
 class TestPeekCachedAccessToken:
-    """D-57-7: read-only, no-refresh access-token lookup."""
+    """D-121-3: read-only, in-memory-cache-only access-token lookup."""
 
-    def test_returns_none_when_no_bundle_stored(self) -> None:
-        store = _FakeCredentialStore()
+    def test_returns_none_when_cache_is_empty(self) -> None:
+        cache = AccessTokenCache()
 
-        assert peek_cached_access_token(context="dev", credential_store=store) is None
+        assert peek_cached_access_token(access_token_cache=cache) is None
 
-    def test_returns_none_when_bundle_is_expired(self) -> None:
-        store = _FakeCredentialStore()
-        store.set_tokens(
-            "dev",
-            TokenBundle(
-                access_token="stale",
-                refresh_token="rt",
-                expires_at=int(time.time()) - 10,
-                issuer="http://issuer.example",
-            ),
-        )
+    def test_returns_the_cached_token_verbatim_when_populated(self) -> None:
+        cache = AccessTokenCache(token="fresh", expires_at=int(time.time()) + 3600)
 
-        assert peek_cached_access_token(context="dev", credential_store=store) is None
+        assert peek_cached_access_token(access_token_cache=cache) == "fresh"
 
-    def test_returns_access_token_when_bundle_is_still_valid(self) -> None:
-        store = _FakeCredentialStore()
-        store.set_tokens(
-            "dev",
-            TokenBundle(
-                access_token="fresh",
-                refresh_token="rt",
-                expires_at=int(time.time()) + 3600,
-                issuer="http://issuer.example",
-            ),
-        )
+    def test_returns_the_cached_token_even_when_stale(self) -> None:
+        """A read-only peek never checks staleness -- that is `ensure_valid_access_token`'s
+        job, not this best-effort function's (its own docstring: "never calls the
+        network, never writes the store, never raises").
+        """
+        cache = AccessTokenCache(token="stale-but-cached", expires_at=int(time.time()) - 10)
 
-        assert peek_cached_access_token(context="dev", credential_store=store) == "fresh"
+        assert peek_cached_access_token(access_token_cache=cache) == "stale-but-cached"
 
 
 class TestEnsureValidAccessToken:
-    """AC-BI-011 (already-valid path), AC-BI-012 (silent refresh), AC-BI-013 (fail closed)."""
-
-    def test_returns_cached_access_token_without_network_when_not_expired(self) -> None:
-        """AC-BI-011: a non-expired bundle's access_token is returned unchanged, no network call.
-
-        `service_url` deliberately names an unreachable host -- if the
-        already-valid-token path ever regressed into attempting discovery, this
-        would fail with a connection error instead of returning "fresh".
-        """
-        store = _FakeCredentialStore()
-        store.set_tokens(
-            "dev",
-            TokenBundle(
-                access_token="fresh",
-                refresh_token="rt",
-                expires_at=int(time.time()) + 3600,
-                issuer="http://issuer.example",
-            ),
-        )
-
-        token = ensure_valid_access_token(
-            context="dev",
-            service_url="http://ps-service-must-not-be-contacted.invalid",
-            auth_override=None,
-            credential_store=store,
-        )
-
-        assert token == "fresh"
+    """AC-BI-002 (fail closed), AC-BI-003 (exactly one refresh per empty cache),
+    AC-BI-004 (in-memory reuse), AC-BI-005 (rotation), plus issue #121's critical-flaw
+    fix: a populated-but-stale cache still triggers exactly one more refresh.
+    """
 
     def test_no_stored_credentials_raises_actionable_error(self) -> None:
-        """AC-BI-013: no bundle at all -> the "no stored credentials" fail-closed error."""
+        """AC-BI-002: no bundle at all -> the "no stored credentials" fail-closed error."""
         store = _FakeCredentialStore()
 
         with pytest.raises(PsCliError) as excinfo:
@@ -441,23 +411,16 @@ class TestEnsureValidAccessToken:
                 service_url="http://ps-service.example",
                 auth_override=None,
                 credential_store=store,
+                access_token_cache=AccessTokenCache(),
             )
 
         assert "no stored credentials for context 'dev'" in excinfo.value.msg
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
-    def test_expired_bundle_with_no_refresh_token_raises_actionable_error(self) -> None:
-        """AC-BI-013: an expired bundle with no refresh_token -> "could not be refreshed"."""
+    def test_stored_bundle_with_no_refresh_token_raises_actionable_error(self) -> None:
+        """AC-BI-002: a stored bundle with `refresh_token=None` -> "could not be refreshed"."""
         store = _FakeCredentialStore()
-        store.set_tokens(
-            "dev",
-            TokenBundle(
-                access_token="stale",
-                refresh_token=None,
-                expires_at=int(time.time()) - 10,
-                issuer="http://issuer.example",
-            ),
-        )
+        store.set_tokens("dev", TokenBundle(refresh_token=None, issuer="http://issuer.example"))
 
         with pytest.raises(PsCliError) as excinfo:
             ensure_valid_access_token(
@@ -465,17 +428,20 @@ class TestEnsureValidAccessToken:
                 service_url="http://ps-service.example",
                 auth_override=None,
                 credential_store=store,
+                access_token_cache=AccessTokenCache(),
             )
 
         assert excinfo.value.msg == "stored credentials could not be refreshed"
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
-    def test_expired_bundle_with_valid_refresh_token_refreshes_and_rotates_store(
+    def test_empty_cache_always_refreshes_regardless_of_how_long_the_bundle_has_been_stored(
         self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AC-BI-012: an expired bundle with a valid refresh_token yields a *new*
-        access_token, and the store afterward holds the *rotated* refresh_token, not
-        the original -- proving the store write, not just the return value.
+        """AC-BI-003's literal "regardless of any prior token's expiry": there is no
+        persisted expiry left to vary at all (AC-BI-001) -- an empty
+        `AccessTokenCache` always calls the refresh endpoint on a cache miss, proven
+        against the real provider so the returned access token is genuine, not just a
+        return-value stand-in.
         """
         _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
@@ -483,12 +449,106 @@ class TestEnsureValidAccessToken:
         store = _FakeCredentialStore()
         store.set_tokens(
             "dev",
-            TokenBundle(
-                access_token=initial.access_token,
-                refresh_token=initial.refresh_token,
-                expires_at=int(time.time()) - 10,
-                issuer=mock_oidc_provider.issuer,
-            ),
+            TokenBundle(refresh_token=initial.refresh_token, issuer=mock_oidc_provider.issuer),
+        )
+
+        token = ensure_valid_access_token(
+            context="dev",
+            service_url="http://ps-service.example",
+            auth_override=None,
+            credential_store=store,
+            access_token_cache=AccessTokenCache(),
+        )
+
+        assert isinstance(token, str)
+        assert token != ""
+
+    def test_populated_fresh_cache_returns_cached_token_with_zero_further_transport_calls(
+        self,
+    ) -> None:
+        """AC-BI-004: a pre-populated, still-fresh `AccessTokenCache` short-circuits --
+        no store read, no network call. `service_url`/`credential_store` are both
+        deliberately unusable (an unreachable host, a store that fails the test if
+        touched) -- if the cache-hit path ever regressed into consulting either, this
+        test would fail loudly instead of silently passing.
+        """
+
+        class _UncallableCredentialStore:
+            def get_tokens(self, context: str) -> TokenBundle | None:
+                pytest.fail(f"get_tokens must not be called, got context={context!r}")
+
+            def set_tokens(self, context: str, tokens: TokenBundle) -> None:
+                del tokens
+                pytest.fail(f"set_tokens must not be called, got context={context!r}")
+
+            def delete_tokens(self, context: str) -> None:
+                pytest.fail(f"delete_tokens must not be called, got context={context!r}")
+
+        cache = AccessTokenCache(token="already-cached", expires_at=int(time.time()) + 3600)
+
+        token = ensure_valid_access_token(
+            context="dev",
+            service_url="http://ps-service-must-not-be-contacted.invalid",
+            auth_override=None,
+            credential_store=_UncallableCredentialStore(),
+            access_token_cache=cache,
+        )
+
+        assert token == "already-cached"
+
+    def test_populated_but_stale_cache_triggers_exactly_one_more_refresh(
+        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #121 critical-flaw fix (CHANGES.md Appendix A1): a cache that already
+        holds a token, but whose `expires_at` is in the past, is treated as a cache
+        miss -- exactly one more refresh happens, and the cache is updated with the
+        newly-refreshed token, not left holding the stale one. This is the proof that
+        a long-lived cache holder (e.g. `mcp_bridge`'s proxy-loop process) can self-heal
+        once its in-memory token goes stale, instead of returning an increasingly-stale
+        token forever.
+        """
+        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        initial = _obtain_real_tokens(mock_oidc_provider)
+        assert initial.refresh_token is not None
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(refresh_token=initial.refresh_token, issuer=mock_oidc_provider.issuer),
+        )
+        stale_cache = AccessTokenCache(token="stale-token", expires_at=int(time.time()) - 10)
+
+        new_token = ensure_valid_access_token(
+            context="dev",
+            service_url="http://ps-service.example",
+            auth_override=None,
+            credential_store=store,
+            access_token_cache=stale_cache,
+        )
+
+        assert new_token != "stale-token"
+        assert stale_cache.token == new_token
+        assert stale_cache.expires_at is not None
+        assert stale_cache.expires_at > int(time.time())
+        # The store afterward holds the *rotated* refresh_token, not the original --
+        # proving the refresh (and the store write) actually happened, not just a
+        # cache-internal mutation.
+        rotated = store.get_tokens("dev")
+        assert rotated is not None
+        assert rotated.refresh_token != initial.refresh_token
+
+    def test_expired_bundle_with_valid_refresh_token_refreshes_and_rotates_store(
+        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AC-BI-005: a cache-miss refresh yields a *new* access_token, and the store
+        afterward holds the *rotated* refresh_token, not the original.
+        """
+        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        initial = _obtain_real_tokens(mock_oidc_provider)
+        assert initial.refresh_token is not None
+        store = _FakeCredentialStore()
+        store.set_tokens(
+            "dev",
+            TokenBundle(refresh_token=initial.refresh_token, issuer=mock_oidc_provider.issuer),
         )
 
         new_token = ensure_valid_access_token(
@@ -496,17 +556,14 @@ class TestEnsureValidAccessToken:
             service_url="http://ps-service.example",
             auth_override=None,
             credential_store=store,
+            access_token_cache=AccessTokenCache(),
         )
 
-        # The mock provider's RS256 signing is deterministic given identical claims,
-        # so a fresh mint within the same wall-clock second can coincidentally equal
-        # the original access_token -- the rotated refresh_token (never reused
-        # verbatim by the provider) is this test's real, non-flaky proof of a store
-        # write, not just a return value.
         rotated = store.get_tokens("dev")
         assert rotated is not None
-        assert rotated.access_token == new_token
         assert rotated.refresh_token != initial.refresh_token
+        assert isinstance(new_token, str)
+        assert new_token != ""
 
     def test_refresh_request_carries_forward_the_resolved_scope(
         self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
@@ -531,12 +588,7 @@ class TestEnsureValidAccessToken:
         store = _FakeCredentialStore()
         store.set_tokens(
             "dev",
-            TokenBundle(
-                access_token=initial.access_token,
-                refresh_token=initial.refresh_token,
-                expires_at=int(time.time()) - 10,
-                issuer=mock_oidc_provider.issuer,
-            ),
+            TokenBundle(refresh_token=initial.refresh_token, issuer=mock_oidc_provider.issuer),
         )
 
         def _fake_resolve(
@@ -552,6 +604,7 @@ class TestEnsureValidAccessToken:
             service_url="http://ps-service.example",
             auth_override=None,
             credential_store=store,
+            access_token_cache=AccessTokenCache(),
         )
 
         sent_scope = mock_oidc_provider.last_token_request_form.get("scope")
@@ -586,15 +639,7 @@ class TestEnsureValidAccessToken:
             return httpx.Response(400, json={"error": "invalid_scope"})
 
         store = _FakeCredentialStore()
-        store.set_tokens(
-            "dev",
-            TokenBundle(
-                access_token="stale",
-                refresh_token="rt",
-                expires_at=int(time.time()) - 10,
-                issuer="http://issuer.example",
-            ),
-        )
+        store.set_tokens("dev", TokenBundle(refresh_token="rt", issuer="http://issuer.example"))
 
         with pytest.raises(PsCliError) as excinfo:
             ensure_valid_access_token(
@@ -602,6 +647,7 @@ class TestEnsureValidAccessToken:
                 service_url="http://ps-service.example",
                 auth_override=None,
                 credential_store=store,
+                access_token_cache=AccessTokenCache(),
                 transport=httpx.MockTransport(_handle),
             )
 
@@ -613,7 +659,7 @@ class TestEnsureValidAccessToken:
     ) -> None:
         """Simulates a second process racing on an already-rotated refresh_token: the
         provider's own "already rotated" `invalid_grant` rejection surfaces as
-        AC-BI-013's fail-closed error, not a crash.
+        AC-BI-002's fail-closed error, not a crash.
         """
         _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
@@ -622,13 +668,7 @@ class TestEnsureValidAccessToken:
 
         def _seed_with(refresh_token: str) -> None:
             store.set_tokens(
-                "dev",
-                TokenBundle(
-                    access_token=initial.access_token,
-                    refresh_token=refresh_token,
-                    expires_at=int(time.time()) - 10,
-                    issuer=mock_oidc_provider.issuer,
-                ),
+                "dev", TokenBundle(refresh_token=refresh_token, issuer=mock_oidc_provider.issuer)
             )
 
         _seed_with(initial.refresh_token)
@@ -638,8 +678,10 @@ class TestEnsureValidAccessToken:
             service_url="http://ps-service.example",
             auth_override=None,
             credential_store=store,
+            access_token_cache=AccessTokenCache(),
         )
-        # A second, racing process still holds the now-stale original token.
+        # A second, racing process still holds the now-stale original token -- and its
+        # own, separate (empty) AccessTokenCache, since it is a different invocation.
         _seed_with(initial.refresh_token)
 
         with pytest.raises(PsCliError) as excinfo:
@@ -648,6 +690,7 @@ class TestEnsureValidAccessToken:
                 service_url="http://ps-service.example",
                 auth_override=None,
                 credential_store=store,
+                access_token_cache=AccessTokenCache(),
             )
 
         assert excinfo.value.msg == "stored credentials could not be refreshed"
@@ -656,7 +699,6 @@ class TestEnsureValidAccessToken:
 
 # --- Slice 22: AC-BI-018 never log a token value ------------------------------------
 
-_MARKER_ACCESS_TOKEN = "marker-access-token-should-never-print-79c3"
 _MARKER_REFRESH_TOKEN = "marker-refresh-token-should-never-print-79c3"
 
 
@@ -667,7 +709,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
     (`poll_for_token`'s own error paths) and 16/17 (`ensure_valid_access_token`'s
     refresh path), with a distinctive marker value deliberately in scope when each
     is raised, checked for in `.msg`/`.hint` (AC-BI-018). No production-code change
-    expected -- this is a proof pass over Slices 1-21's actual code.
+    expected -- this is a proof pass over Slice 1's actual code.
     """
     params = ResolvedAuthParameters(
         issuer="http://issuer.example",
@@ -709,7 +751,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
     _assert_poll_error_never_leaks_device_code("some_unrecognized_error")
 
     # Slices 16/17: ensure_valid_access_token's refresh path, with a marker
-    # access/refresh token already in scope when each failure is raised.
+    # refresh token already in scope when each failure is raised.
     def _fake_resolve(
         service_url: str, override: object, *, transport: object = None
     ) -> ResolvedAuthParameters:
@@ -722,12 +764,7 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
         store = _FakeCredentialStore()
         store.set_tokens(
             "dev",
-            TokenBundle(
-                access_token=_MARKER_ACCESS_TOKEN,
-                refresh_token=_MARKER_REFRESH_TOKEN,
-                expires_at=int(time.time()) - 10,
-                issuer="http://issuer.example",
-            ),
+            TokenBundle(refresh_token=_MARKER_REFRESH_TOKEN, issuer="http://issuer.example"),
         )
 
         with pytest.raises(PsCliError) as excinfo:
@@ -736,10 +773,9 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
                 service_url="http://ps-service.example",
                 auth_override=None,
                 credential_store=store,
+                access_token_cache=AccessTokenCache(),
                 transport=transport,
             )
-        assert _MARKER_ACCESS_TOKEN not in excinfo.value.msg
-        assert _MARKER_ACCESS_TOKEN not in (excinfo.value.hint or "")
         assert _MARKER_REFRESH_TOKEN not in excinfo.value.msg
         assert _MARKER_REFRESH_TOKEN not in (excinfo.value.hint or "")
 

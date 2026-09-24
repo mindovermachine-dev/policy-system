@@ -103,17 +103,14 @@ def handle_config_set_context(
     every call, including the very first `set-context` for a brand-new context name
     (AC-BI-014, D13) -- so a stale credential from a previous URL is never silently reused
     against the new one. `config_dir` defaults to `resolve_config_dir()` and
-    `credential_store` to `build_credential_store(resolved_config_dir)` when omitted,
-    exactly like a real CLI invocation with no explicit overrides -- the same
-    constructor-injection seam `config.py`'s `load_config()` already establishes (PLAN.md
-    D2).
+    `credential_store` to `build_credential_store()` when omitted, exactly like a real
+    CLI invocation with no explicit overrides -- the same constructor-injection seam
+    `config.py`'s `load_config()` already establishes (PLAN.md D2). Issue #121:
+    `build_credential_store()` is zero-argument -- `resolved_config_dir` is used only
+    for `targets.toml`'s own read/write below, not for credential resolution any more.
     """
     resolved_config_dir = config_dir if config_dir is not None else resolve_config_dir()
-    store = (
-        credential_store
-        if credential_store is not None
-        else build_credential_store(resolved_config_dir)
-    )
+    store = credential_store if credential_store is not None else build_credential_store()
 
     # strict=False: fixing (or adding) *this* context by name must not be blocked
     # by some *other*, unrelated context still being in the pre-#57 old format --

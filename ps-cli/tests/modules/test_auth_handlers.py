@@ -25,20 +25,17 @@ provider behavior, only observing it.
 
 from __future__ import annotations
 
-import base64
 import json
 import threading
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
 
-import keyring.errors
 import pytest
 
 from ps_cli import device_flow, oidc_discovery
 from ps_cli.cli import run
 from ps_cli.config import CliConfig
-from ps_cli.credentials import FileCredentialStore, TokenBundle
+from ps_cli.credentials import KeyringCredentialStore, TokenBundle
 from ps_cli.device_flow import DeviceAuthorization, TokenResponse
 from ps_cli.errors import PsCliError
 from ps_cli.modules.auth_handlers import handle_auth_login, handle_auth_logout, handle_auth_status
@@ -53,6 +50,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import httpx
+    from conftest import InMemoryKeyringBackend
 
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -139,24 +137,11 @@ def _resource_metadata_body(
     return body
 
 
-def _force_no_keyring(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force `build_credential_store()`'s default keyring backend to fall back to file.
-
-    Same mechanism `test_cli.py::_raise_no_keyring_error` and its call sites use --
-    monkeypatches only the three module-level `keyring` functions actually called,
-    never the `keyring`/`keyring.errors` symbols themselves (that breaks
-    `KeyringCredentialStore`'s own `except keyring.errors.KeyringError` clauses --
-    see `test_cli.py`'s own docstring for the confirmed crash this avoids). Portable
-    regardless of the real OS keyring state on whatever machine runs this suite.
-    """
-
-    def _raise(*args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise keyring.errors.NoKeyringError("no backend")
-
-    monkeypatch.setattr("keyring.get_password", _raise)
-    monkeypatch.setattr("keyring.set_password", _raise)
-    monkeypatch.setattr("keyring.delete_password", _raise)
+# Issue #121, D-121-7: `_force_no_keyring` (a "no real OS keyring -> fall back to file"
+# forcer) is gone -- there is no fallback left to force onto. Tests below that need
+# `build_credential_store()`'s real, zero-argument production wiring to actually work
+# portably use the shared `portable_keyring` fixture (`conftest.py`) instead; tests that
+# construct a `CredentialStore` directly use the shared `keyring_backend` fixture.
 
 
 # --- Slice 13: handle_auth_login() happy path ---------------------------------------
@@ -168,19 +153,20 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    keyring_backend: InMemoryKeyringBackend,
 ) -> None:
     """The full Slices 5-12 chain, run once through `handle_auth_login()`.
 
     Asserts: printed stdout contains the provider's `verification_uri`/`user_code`;
     `credential_store.get_tokens("dev")` returns a `TokenBundle` whose `issuer` matches
-    the provider and whose `access_token`/`refresh_token` are the ones the poll
-    actually returned.
+    the provider and whose `refresh_token` is the one the poll actually returned --
+    issue #121, AC-BI-001: no `access_token` field exists on `TokenBundle` any more.
     """
     resource_metadata_server = fake_json_server_factory(
         "/.well-known/oauth-protected-resource", _resource_metadata_body(mock_oidc_provider)
     )
     config = CliConfig(service_url=resource_metadata_server.base_url, context_name="dev")
-    credential_store = FileCredentialStore(tmp_path)
+    credential_store = KeyringCredentialStore(keyring_backend=keyring_backend)
 
     captured_device_auth: list[DeviceAuthorization] = []
     original_request_device_authorization = device_flow.request_device_authorization
@@ -218,15 +204,16 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     stored = credential_store.get_tokens("dev")
     assert stored is not None
     assert stored.issuer == mock_oidc_provider.issuer
-    assert isinstance(stored.access_token, str)
-    assert stored.access_token != ""
     assert isinstance(stored.refresh_token, str)
+    assert stored.refresh_token != ""
 
 
-def test_handle_auth_login_no_context_raises_before_any_network_call(tmp_path: Path) -> None:
+def test_handle_auth_login_no_context_raises_before_any_network_call(
+    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+) -> None:
     """`context_name is None` raises up front -- never calls `resolve_auth_parameters`."""
     config = CliConfig(service_url="http://ps-service.invalid", context_name=None)
-    credential_store = FileCredentialStore(tmp_path)
+    credential_store = KeyringCredentialStore(keyring_backend=keyring_backend)
 
     with pytest.raises(PsCliError) as excinfo:
         handle_auth_login(
@@ -258,11 +245,11 @@ def test_run_auth_login_missing_client_id_exits_1_with_ac_bi_004_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """No `ps_cli_client_id` in metadata, no override -> exit 1, AC-BI-004's message."""
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
-    _force_no_keyring(monkeypatch)
     resource_metadata_server = fake_json_server_factory(
         "/.well-known/oauth-protected-resource",
         _resource_metadata_body(mock_oidc_provider, client_id=None),
@@ -274,7 +261,7 @@ def test_run_auth_login_missing_client_id_exits_1_with_ac_bi_004_message(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "No OIDC client id is configured" in captured.err
-    assert FileCredentialStore(config_dir).get_tokens("dev") is None
+    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
 
 
 def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi_005_message(
@@ -282,13 +269,13 @@ def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """An issuer whose discovery doc has no `device_authorization_endpoint` -> exit 1,
     AC-BI-005's message naming that issuer.
     """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
-    _force_no_keyring(monkeypatch)
     # No `device_authorization_endpoint` (nor `issuer`, which `resolve_auth_parameters`
     # never actually reads off this response -- it always uses the resolved issuer URL
     # itself, see `oidc_discovery.py::resolve_auth_parameters`'s own docstring). A bare
@@ -314,7 +301,7 @@ def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi
     assert exit_code == 1
     assert issuer_server.base_url in captured.err
     assert "does not support device authorization" in captured.err
-    assert FileCredentialStore(config_dir).get_tokens("dev") is None
+    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
 
 
 def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
@@ -323,6 +310,7 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """`deny_device_code` fired the instant the device code is minted (before the poll
     even starts) -> the first `/token` poll returns `access_denied` -> exit 1, AC-BI-009's
@@ -330,7 +318,6 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
-    _force_no_keyring(monkeypatch)
     resource_metadata_server = fake_json_server_factory(
         "/.well-known/oauth-protected-resource", _resource_metadata_body(mock_oidc_provider)
     )
@@ -354,7 +341,7 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "denied" in captured.err
-    assert FileCredentialStore(config_dir).get_tokens("dev") is None
+    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
 
 
 def test_run_auth_login_no_context_exits_1_with_no_context_message(
@@ -362,10 +349,14 @@ def test_run_auth_login_no_context_exits_1_with_no_context_message(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No `--context`, no `current_context` set -> exit 1, D-57-5's message; nothing written."""
+    """No `--context`, no `current_context` set -> exit 1, D-57-5's message; nothing written.
+
+    `build_credential_store()` is constructed by `_dispatch_auth_login` regardless, but
+    `handle_auth_login` raises before ever calling any of its methods -- no real OS
+    keyring backend is ever actually touched, so no portable fake is needed here.
+    """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))
-    _force_no_keyring(monkeypatch)
 
     exit_code = run(["auth", "login"])
 
@@ -373,7 +364,6 @@ def test_run_auth_login_no_context_exits_1_with_no_context_message(
     assert exit_code == 1
     assert "no context to authenticate" in captured.err
     assert "ps-cli config set-context" in captured.err
-    assert not (config_dir / "credentials.toml").exists()
 
 
 # --- Slices 19-20: handle_auth_status()/handle_auth_logout() ------------------------
@@ -407,35 +397,16 @@ class _FakeCredentialStore:
         self._tokens.pop(context, None)
 
 
-def _make_unverified_jwt(sub: str) -> str:
-    """Hand-build a real, unsigned JWT with a known `sub` claim.
-
-    No signature needed -- `device_flow.decode_subject_unverified` never checks one.
-    Mirrors `decode_subject_unverified`'s own base64url-with-stripped-padding shape.
-    """
-
-    def _b64url(data: bytes) -> str:
-        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-    header = _b64url(json.dumps({"alg": "none", "typ": "JWT"}).encode("utf-8"))
-    payload = _b64url(json.dumps({"sub": sub}).encode("utf-8"))
-    return f"{header}.{payload}."
-
-
-def test_handle_auth_status_with_stored_tokens_prints_context_issuer_subject_expiry(
+def test_handle_auth_status_with_stored_tokens_prints_context_issuer_and_logged_in(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A pre-seeded bundle -> all four AC-BI-015 fields, correctly rendered."""
+    """A pre-seeded bundle -> `context`/`issuer`/`logged in`, correctly rendered
+    (issue #121, D-121-6) -- no `subject`/`expiry` any more, since `TokenBundle` no
+    longer carries an `access_token`/`expires_at` to derive either from.
+    """
     credential_store = _FakeCredentialStore()
-    expires_at = 1_700_000_000
     credential_store.set_tokens(
-        "dev",
-        TokenBundle(
-            access_token=_make_unverified_jwt("user-123"),
-            refresh_token="rt",
-            expires_at=expires_at,
-            issuer="https://issuer.example",
-        ),
+        "dev", TokenBundle(refresh_token="rt", issuer="https://issuer.example")
     )
 
     handle_auth_status("dev", credential_store=credential_store)
@@ -443,9 +414,9 @@ def test_handle_auth_status_with_stored_tokens_prints_context_issuer_subject_exp
     printed = capsys.readouterr().out
     assert "context: dev" in printed
     assert "issuer: https://issuer.example" in printed
-    assert "subject: user-123" in printed
-    expected_expiry = datetime.fromtimestamp(expires_at, tz=UTC).isoformat()
-    assert f"expiry: {expected_expiry}" in printed
+    assert "logged in" in printed
+    assert "subject" not in printed
+    assert "expiry" not in printed
 
 
 def test_handle_auth_status_with_no_stored_tokens_prints_not_logged_in_and_exits_zero(
@@ -475,10 +446,7 @@ def test_handle_auth_logout_deletes_stored_tokens() -> None:
     """A pre-seeded bundle -> gone afterward (AC-BI-016's real removal)."""
     credential_store = _FakeCredentialStore()
     credential_store.set_tokens(
-        "dev",
-        TokenBundle(
-            access_token="at", refresh_token="rt", expires_at=0, issuer="https://issuer.example"
-        ),
+        "dev", TokenBundle(refresh_token="rt", issuer="https://issuer.example")
     )
 
     handle_auth_logout("dev", credential_store=credential_store)
@@ -501,10 +469,7 @@ def test_handle_auth_logout_prints_nothing_on_success(
     """Silence on success -- unlike `auth login`'s own confirmation line."""
     credential_store = _FakeCredentialStore()
     credential_store.set_tokens(
-        "dev",
-        TokenBundle(
-            access_token="at", refresh_token="rt", expires_at=0, issuer="https://issuer.example"
-        ),
+        "dev", TokenBundle(refresh_token="rt", issuer="https://issuer.example")
     )
 
     handle_auth_logout("dev", credential_store=credential_store)
@@ -589,45 +554,33 @@ def test_handle_auth_login_output_never_contains_the_access_or_refresh_token_val
     assert marker_access_token not in printed.err
     assert marker_refresh_token not in printed.out
     assert marker_refresh_token not in printed.err
-    # Sanity: the markers really were stored -- this test exercised the real value,
-    # not a stand-in that the code path never actually touched.
+    # Sanity: the marker refresh_token really was stored -- this test exercised the
+    # real value, not a stand-in that the code path never actually touched. There is
+    # no `stored.access_token` to check any more (issue #121, AC-BI-001) -- that it
+    # was never persisted is now a structural guarantee (`TokenBundle` has no such
+    # field), not something this test needs to separately prove.
     stored = credential_store.get_tokens("dev")
     assert stored is not None
-    assert stored.access_token == marker_access_token
     assert stored.refresh_token == marker_refresh_token
 
 
-def test_handle_auth_status_output_never_contains_the_raw_access_token_value(
+def test_handle_auth_status_output_never_contains_the_stored_refresh_token_value(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`auth status`'s four-field report prints the *subject* decoded from the token
-    (legitimate, AC-BI-015) but never the raw access-token string itself (AC-BI-018).
-
-    The marker is placed in the JWT's signature segment specifically -- distinct from
-    the payload segment the `sub` claim legitimately comes from -- so this test can
-    tell "the subject was decoded and printed" apart from "the raw token leaked".
+    """`auth status`'s report prints `context`/`issuer`/`logged in` (issue #121,
+    D-121-6) but never the stored `refresh_token` value itself (AC-BI-018) -- the
+    only secret-shaped field left on `TokenBundle` for this command to ever touch.
     """
-    signature_marker = "marker-signature-segment-should-never-print-79c3"
     refresh_marker = "marker-refresh-token-should-never-print-79c3"
-    access_token = f"{_make_unverified_jwt('user-123').rsplit('.', 1)[0]}.{signature_marker}"
     credential_store = _FakeCredentialStore()
     credential_store.set_tokens(
-        "dev",
-        TokenBundle(
-            access_token=access_token,
-            refresh_token=refresh_marker,
-            expires_at=1_700_000_000,
-            issuer="https://issuer.example",
-        ),
+        "dev", TokenBundle(refresh_token=refresh_marker, issuer="https://issuer.example")
     )
 
     handle_auth_status("dev", credential_store=credential_store)
 
     printed = capsys.readouterr()
-    assert "subject: user-123" in printed.out
-    assert signature_marker not in printed.out
-    assert signature_marker not in printed.err
-    assert access_token not in printed.out
-    assert access_token not in printed.err
+    assert "context: dev" in printed.out
+    assert "issuer: https://issuer.example" in printed.out
     assert refresh_marker not in printed.out
     assert refresh_marker not in printed.err

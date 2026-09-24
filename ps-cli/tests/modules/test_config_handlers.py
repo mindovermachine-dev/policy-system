@@ -2,25 +2,26 @@
 
 Slice 22: writes `targets.toml`, never a credential (AC-BI-012, PLAN.md §4 Slice 22).
 Slice 23: `delete_tokens` on every re-run, unconditionally (AC-BI-014, PLAN.md §4
-Slice 23, D13). Slice 23.5 (CHANGES.md F7, not in PLAN.md): end-to-end proof that
-`PS_CLI_CONFIG_DIR` also drives `credentials.toml` resolution when both `config_dir` and
-`credential_store` are omitted, mirroring Slice 11's `targets.toml`-half proof.
+Slice 23, D13).
 Slice 25: `handle_config_use_context()` -- success + unknown-name error (AC-BI-005 half,
 AC-BI-009 command half, PLAN.md §4 Slice 25).
 
 Issue #57 Slice 1 (D-57-2) rewrites `targets.toml`'s `[contexts]` shape from flat
 `name = "url"` strings to nested `[contexts.<name>]` tables with a `url` key; every
 fixture and assertion below that touched the old flat shape is updated to the new one.
+
+Issue #121: `build_credential_store()` becomes zero-argument (D-121-5) -- the old
+`PS_CLI_CONFIG_DIR`-drives-`credentials.toml`-resolution proof this file used to carry
+(CHANGES.md issue #56 F7) no longer applies and is deleted (see the note where it used
+to live, just above the Slice 25 section).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import keyring.errors
 import pytest
 
-from ps_cli.credentials import FileCredentialStore, TokenBundle
 from ps_cli.errors import PsCliError
 from ps_cli.modules.config_handlers import (
     handle_config_get_contexts,
@@ -29,25 +30,19 @@ from ps_cli.modules.config_handlers import (
 )
 from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, load_targets, write_targets
 
-_SEED_TOKENS = TokenBundle(
-    access_token="seed-token",
-    refresh_token=None,
-    expires_at=1_700_000_000,
-    issuer="https://issuer.example",
-)
-_SIBLING_TOKENS = TokenBundle(
-    access_token="sibling-token",
-    refresh_token=None,
-    expires_at=1_700_000_000,
-    issuer="https://issuer.example",
-)
-
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from conftest import InMemoryKeyringBackend
 
-def test_handle_config_set_context_writes_url_creates_new_entry(tmp_path: Path) -> None:
+    from ps_cli.credentials import TokenBundle
+
+
+def test_handle_config_set_context_writes_url_creates_new_entry(
+    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+) -> None:
     """A brand-new context name is written into `targets.toml`'s `[contexts]` table."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     targets = load_targets(tmp_path)
@@ -69,8 +64,10 @@ _CREDENTIAL_MARKER_STRINGS = (
 
 def test_handle_config_set_context_file_content_never_contains_a_credential_value(
     tmp_path: Path,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """`targets.toml`'s raw file content has the URL, never a credential marker (AC-BI-012)."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     raw_content = (tmp_path / "targets.toml").read_text(encoding="utf-8")
@@ -117,62 +114,24 @@ def test_handle_config_set_context_deletes_credential_unconditionally_on_every_c
     assert spy.deleted == ["prod", "prod"]
 
 
-def _raise_no_keyring_error(*args: object, **kwargs: object) -> None:
-    """Unconditionally raise `NoKeyringError` -- forces `KeyringCredentialStore` onto its
-    `FileCredentialStore` fallback regardless of what real OS keyring backend (if any) is
-    actually active on the machine running this test. Mirrors `test_cli.py:1046-1051`.
-    """
-    del args, kwargs
-    raise keyring.errors.NoKeyringError("no backend")
-
-
-def test_handle_config_set_context_credential_delete_resolves_under_ps_cli_config_dir_env_var(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`PS_CLI_CONFIG_DIR` drives `credentials.toml` resolution too (CHANGES.md F7).
-
-    `build_credential_store(config_dir: Path)` takes a required, non-defaulted `config_dir`
-    -- so this proof cannot live inside `build_credential_store()` itself; it must exercise
-    the real call site (`handle_config_set_context`, with both `config_dir` and
-    `credential_store` omitted) that lets `config_dir` default via `resolve_config_dir()`,
-    exactly like a real CLI invocation. A credential is pre-seeded directly via
-    `FileCredentialStore`, bypassing keyring entirely. A second, sibling `tmp_path`-adjacent
-    dir with its own seeded credential, asserted untouched afterward, rules out a false
-    positive from a shared/global fallback path.
-
-    BASELINE.md root cause: on a machine with a real, working OS keychain backend, the
-    production `KeyringCredentialStore.delete_tokens()` call reaches that real backend
-    first; since the seeded credential was only ever written to the file store, the real
-    keychain raises a benign `PasswordDeleteError` that `credentials.py` correctly treats as
-    a no-op -- so the file-store credential is never actually deleted, breaking this test's
-    premise on any such machine. The fix forces the real `keyring` module's functions to
-    fail before reaching any real backend, mirroring `test_cli.py:1085-1088`
-    (`_raise_no_keyring_error` at `:1046-1051`), so `KeyringCredentialStore` falls back to
-    `FileCredentialStore` regardless of what backend is actually installed.
-    """
-    primary_dir = tmp_path / "primary"
-    monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(primary_dir))
-    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
-    FileCredentialStore(primary_dir).set_tokens("dev", _SEED_TOKENS)
-
-    sibling_dir = tmp_path / "sibling"
-    FileCredentialStore(sibling_dir).set_tokens("dev", _SIBLING_TOKENS)
-
-    handle_config_set_context(
-        "dev", "https://ps.example.com", config_dir=None, credential_store=None
-    )
-
-    assert FileCredentialStore(primary_dir).get_tokens("dev") is None
-    assert FileCredentialStore(sibling_dir).get_tokens("dev") == _SIBLING_TOKENS
+# Issue #121: the old `test_handle_config_set_context_credential_delete_resolves_under_
+# ps_cli_config_dir_env_var` test (proving `PS_CLI_CONFIG_DIR`-driven isolation across two
+# different `config_dir`s) is deleted here, not salvaged -- `build_credential_store()` is
+# now zero-argument (D-121-5), so `config_dir` plays no role in credential resolution at
+# all any more. What that test's premise actually cared about -- two different contexts
+# never colliding -- is already covered by `test_credentials.py`'s
+# `test_keyring_credential_store_isolates_credentials_per_context_name`, which isolates by
+# context *name* within one `KeyringCredentialStore`, the only isolation axis left.
 
 
 # --- issue #56 Slice 25: handle_config_use_context() -----------------------------------
 
 
-def test_handle_config_set_context_writes_auth_issuer_override(tmp_path: Path) -> None:
+def test_handle_config_set_context_writes_auth_issuer_override(
+    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+) -> None:
     """`auth_issuer="https://issuer.example"` writes `ContextEntry.auth.issuer` (AC-BI-006)."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -190,10 +149,12 @@ def test_handle_config_set_context_writes_auth_issuer_override(tmp_path: Path) -
 
 def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_given_again(
     tmp_path: Path,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """Re-running `set-context` with only `--url` (no `--auth-*` flags) leaves the
     context's existing `auth` table untouched (AC-BI-006: omitted flags never clear).
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -214,10 +175,12 @@ def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_gi
 
 def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving_others_intact(
     tmp_path: Path,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """Passing only `--auth-audience` on a re-run overwrites just that field, leaving
     `issuer`/`client_id`/`scopes` exactly as they were (AC-BI-006's per-field wording).
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -243,8 +206,10 @@ def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving
 
 def test_handle_config_set_context_no_auth_flags_and_no_existing_auth_stays_none(
     tmp_path: Path,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """A brand-new context with no `--auth-*` flags gets `auth=None`, not an empty table."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     targets = load_targets(tmp_path)
@@ -252,8 +217,11 @@ def test_handle_config_set_context_no_auth_flags_and_no_existing_auth_stays_none
     assert targets.contexts["prod"].auth is None
 
 
-def test_handle_config_use_context_sets_current_context(tmp_path: Path) -> None:
+def test_handle_config_use_context_sets_current_context(
+    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+) -> None:
     """`use-context prod` sets `current_context` to `prod`, `[contexts]` unchanged."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
@@ -270,8 +238,10 @@ def test_handle_config_use_context_sets_current_context(tmp_path: Path) -> None:
 
 def test_handle_config_use_context_raises_listing_valid_names_for_unknown_context(
     tmp_path: Path,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """`use-context qa` with only `dev`/`prod` defined raises, listing the valid names."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
@@ -287,11 +257,14 @@ def test_handle_config_use_context_raises_listing_valid_names_for_unknown_contex
 
 
 def test_handle_config_get_contexts_marks_current_context(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """Two contexts, one current -- both appear in stdout as a bordered table; exactly one
     line carries `*`, the current context's line (AC-BI-005).
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
     handle_config_use_context("prod", config_dir=tmp_path)
@@ -312,9 +285,12 @@ def test_handle_config_get_contexts_marks_current_context(
 
 
 def test_handle_config_get_contexts_does_not_truncate_a_wide_url(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """AC-BI-006, handler level: a 120-char context URL is never truncated."""
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     wide_url = "https://" + "a" * 112
     assert len(wide_url) == 120
     handle_config_set_context("dev", wide_url, config_dir=tmp_path)
@@ -352,13 +328,16 @@ def test_handle_config_get_contexts_renders_a_hostile_url_literally(
 
 
 def test_handle_config_get_contexts_shows_auth_overrides_column(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """The "Auth Overrides" column lists field *names* only, never their values
     (issue #57 Slice 8): "-" for a context with no overrides, "issuer, audience" for
     one with those two fields set, and the literal override values themselves never
     appear anywhere in stdout.
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context(
         "prod",

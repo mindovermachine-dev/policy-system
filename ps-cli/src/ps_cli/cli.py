@@ -77,7 +77,7 @@ def _resolve_client(
     context = getattr(args, "context", None)
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
-    credential_store = build_credential_store(config_dir)
+    credential_store = build_credential_store()
     auth_override = resolve_auth_override(config, config_dir)
     return PsServiceClient(
         config.service_url,

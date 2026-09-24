@@ -11,18 +11,17 @@ import base64
 import json
 import socket
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import keyring.errors
 import pytest
 
 from ps_cli import cli
 from ps_cli.cli import run
 from ps_cli.config import load_config
 from ps_cli.credentials import TokenBundle, build_credential_store
+from ps_cli.device_flow import poll_for_token, request_device_authorization
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
     ChangeCheckResult,
@@ -38,10 +37,17 @@ from ps_cli.models import (
     RestorationStageOutcome,
 )
 from ps_cli.modules.parser import build_parser
+from ps_cli.oidc_discovery import ResolvedAuthParameters
 from ps_cli.targets import load_targets
+from ps_test_support.mock_oidc_provider import (
+    mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 if TYPE_CHECKING:
+    from conftest import AlwaysRaisingKeyringBackend, InMemoryKeyringBackend
+
     from ps_cli.catalog_repo import CuratedArtifact
+    from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / "__main__.py"
 
@@ -776,15 +782,19 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
     assert "Traceback" not in captured.err
 
 
-def _build_near_misses_handler(
-    captured_auth_headers: list[str | None],
+def _build_near_misses_handler_with_resource_metadata(
+    captured_auth_headers: list[str | None], *, issuer: str, client_id: str
 ) -> type[BaseHTTPRequestHandler]:
-    """Build a handler class serving `GET /near-misses`, recording each request's `Authorization`.
+    """Build a handler serving both PS Service's own resource-metadata endpoint and
+    `GET /near-misses`, recording each `/near-misses` request's `Authorization`.
 
-    Closure-based factory -- `HTTPServer` requires a handler *class*, not an
-    instance, so `captured_auth_headers` must be captured some way other than
-    `self`. Mirrors `test_integration_auth_full_cycle.py::_build_resource_metadata_
-    handler`'s own recipe.
+    Issue #121: `ensure_valid_access_token` always refreshes on a cache miss
+    (AC-BI-003), which requires a real OIDC discovery round trip against *some*
+    resource-metadata endpoint -- this one server now plays both roles (mirrors
+    `test_integration_auth_full_cycle.py::_build_resource_metadata_handler`'s own
+    recipe). Closure-based factory -- `HTTPServer` requires a handler *class*, not
+    an instance, so the captured values must be closed over some way other than
+    `self`.
     """
 
     class _Handler(BaseHTTPRequestHandler):
@@ -792,8 +802,18 @@ def _build_near_misses_handler(
             """Silence `BaseHTTPRequestHandler`'s default stderr access log."""
 
         def do_GET(self) -> None:
-            captured_auth_headers.append(self.headers.get("Authorization"))
-            payload = json.dumps({"reviews": []}).encode("utf-8")
+            if self.path == "/.well-known/oauth-protected-resource":
+                payload = json.dumps(
+                    {
+                        "resource": "http://ps-service.example",
+                        "authorization_servers": [issuer],
+                        "scopes_supported": ["openid"],
+                        "ps_cli_client_id": client_id,
+                    }
+                ).encode("utf-8")
+            else:
+                captured_auth_headers.append(self.headers.get("Authorization"))
+                payload = json.dumps({"reviews": []}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -803,8 +823,11 @@ def _build_near_misses_handler(
     return _Handler
 
 
-def test_resolve_client_attaches_a_stored_bearer_token_to_a_real_business_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_business_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_oidc_provider: MockOidcProvider,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """Issue #111 Slice 2: closes a real coverage gap on already-shipped AC-BI-003 code.
 
@@ -817,19 +840,29 @@ def test_resolve_client_attaches_a_stored_bearer_token_to_a_real_business_call(
     made every authenticated business command silently send no `Authorization`
     header at all (see `_resolve_client`'s own docstring). This test runs a real
     local `http.server.HTTPServer` that records the `Authorization` header of every
-    request, seeds a real `FileCredentialStore`-backed token via `build_credential_
-    store(config_dir).set_tokens(...)`, and calls `run(["near-misses", "list"],
-    client=None)` -- the exact `client=None` path that forces `_resolve_client` to
-    build a real `PsServiceClient` -- pointed at that local server.
+    `/near-misses` request, seeds a real refresh_token (obtained via a full
+    device-flow login against a real `mock_oidc_provider`) via `build_credential_
+    store().set_tokens(...)`, and calls `run(["near-misses", "list"], client=None)`
+    -- the exact `client=None` path that forces `_resolve_client` to build a real
+    `PsServiceClient` -- pointed at that local server.
+
+    Issue #121: there is no persisted access_token to seed directly any more
+    (AC-BI-001) -- `ensure_valid_access_token` always refreshes on a cache miss
+    (AC-BI-003), so this test seeds a real refresh_token and lets a genuine refresh
+    happen against `mock_oidc_provider`.
     """
-    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
+    client_id = "ps-cli-test-client"
 
     captured_auth_headers: list[str | None] = []
-    server = HTTPServer(("127.0.0.1", 0), _build_near_misses_handler(captured_auth_headers))
+    server = HTTPServer(
+        ("127.0.0.1", 0),
+        _build_near_misses_handler_with_resource_metadata(
+            captured_auth_headers, issuer=mock_oidc_provider.issuer, client_id=client_id
+        ),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -837,24 +870,35 @@ def test_resolve_client_attaches_a_stored_bearer_token_to_a_real_business_call(
         (tmp_path / "targets.toml").write_text(
             f'current_context = "test"\n\n[contexts.test]\nurl = "{base_url}"\n'
         )
-        credential_store = build_credential_store(tmp_path)
+
+        params = ResolvedAuthParameters(
+            issuer=mock_oidc_provider.issuer,
+            client_id=client_id,
+            scopes=("openid",),
+            audience=None,
+            device_authorization_endpoint=f"{mock_oidc_provider.base_url}/device_authorization",
+            token_endpoint=f"{mock_oidc_provider.base_url}/token",
+        )
+        device_auth = request_device_authorization(params)
+        mock_oidc_provider.complete_device_flow(device_auth.device_code)
+        token_response = poll_for_token(
+            params, device_auth, sleep=lambda _: pytest.fail("must not sleep")
+        )
+
+        credential_store = build_credential_store()
         credential_store.set_tokens(
             "test",
             TokenBundle(
-                access_token="stored-test-token",
-                refresh_token=None,
-                # Far in the future -- `device_flow.ensure_valid_access_token`'s
-                # not-expired path returns the stored token unchanged, no refresh
-                # network call, so this test needs no OIDC provider at all.
-                expires_at=int(time.time()) + 3600,
-                issuer="https://issuer.example",
+                refresh_token=token_response.refresh_token, issuer=mock_oidc_provider.issuer
             ),
         )
 
         exit_code = run(["near-misses", "list"], client=None)
 
         assert exit_code == 0
-        assert captured_auth_headers == ["Bearer stored-test-token"]
+        assert len(captured_auth_headers) == 1
+        assert captured_auth_headers[0] is not None
+        assert captured_auth_headers[0].startswith("Bearer ")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -1102,7 +1146,9 @@ def test_ingest_document_still_rejects_invalid_local_file_before_any_network_cal
 
 
 def test_run_config_set_context_never_constructs_ps_service_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """`config set-context` never calls `load_config()` -- the critical D8 property.
 
@@ -1114,6 +1160,7 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     routed straight to `handle_config_set_context`, never the `else` branch (PLAN.md §4
     Slice 24).
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     (tmp_path / "targets.toml").write_text(
         'current_context = "missing"\n\n[contexts.dev]\nurl = "http://127.0.0.1:8000"\n'
@@ -1131,49 +1178,34 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     assert targets.contexts["prod"].url == "https://ps.example.com"
 
 
-def _raise_no_keyring_error(*args: object, **kwargs: object) -> None:
-    """Unconditionally raise `NoKeyringError` -- a stand-in for `keyring`'s module-level
-    `get_password`/`set_password`/`delete_password` functions when no OS backend exists.
-    """
-    del args, kwargs
-    raise keyring.errors.NoKeyringError("no backend")
-
-
-def test_run_config_set_context_prints_fallback_warning_on_stderr_via_real_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_run_config_set_context_surfaces_actionable_keyring_error_via_real_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unusable_keyring: AlwaysRaisingKeyringBackend,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """AC-BI-011's CLI-level proof (CHANGES.md F4): the real dispatch chain, not just the
-    `CredentialStore` unit level, ends up warning on stderr.
+    """AC-BI-006/007's CLI-level proof: the real dispatch chain, not just the
+    `CredentialStore` unit level, surfaces an actionable `PsCliError` naming the
+    context but never a token value -- issue #121 replaces the old
+    fallback-warning/exit-0 behavior entirely (`FileCredentialStore` is gone,
+    AC-BI-008).
 
     Exercises `run()` -> `CONFIG_DISPATCH` -> `handle_config_set_context` ->
-    `build_credential_store` -> `KeyringCredentialStore` -> `FileCredentialStore` end to
-    end -- a wiring bug anywhere in that chain would fail this test even though every
-    narrower slice (15-23.5) still passes on its own. `set-context` is the only one of this
-    issue's three new commands that ever touches `CredentialStore` (D13's unconditional
-    `delete_credential`) -- `use-context`/`get-contexts` have no `credential_store` param
-    by design, so this single command's proof fully covers AC-BI-011's "every command that
-    reads or writes it" wording for this issue's scope.
+    `build_credential_store` -> `KeyringCredentialStore` end to end -- a wiring bug
+    anywhere in that chain would fail this test even though every narrower slice
+    still passes on its own. `set-context` is the only command that ever touches
+    `CredentialStore` (D13's unconditional `delete_tokens`) -- `use-context`/
+    `get-contexts` have no `credential_store` param by design, so this single
+    command's proof fully covers AC-BI-006/007's "every command that reads or
+    writes it" wording for this issue's scope.
 
-    **Deviation from CHANGES.md F4's literal mechanism text**, flagged here (see
-    `IMPL_SLICE_22-24.md` for the full writeup): F4 says to
-    `monkeypatch.setattr("ps_cli.credentials.keyring", _AlwaysNoKeyringErrorBackend())` --
-    replacing the whole `keyring` module-level symbol `credentials.py` imports. That
-    literal mechanism was tried first and found to break `KeyringCredentialStore`'s own
-    `except keyring.errors.PasswordDeleteError`/`except keyring.errors.KeyringError`
-    clauses: both `import keyring` and `import keyring.errors` in `credentials.py` bind the
-    *same* module-level name `keyring`, so replacing it with a fake object that has no
-    `.errors` attribute makes exception-type evaluation itself raise `AttributeError` the
-    first time `delete_credential()` runs -- confirmed by running the literal mechanism and
-    observing exactly this crash. The fix used here monkeypatches only the three
-    module-level *functions* `build_credential_store()`'s default `keyring_backend=keyring`
-    actually calls (`keyring.get_password`/`set_password`/`delete_password`) to raise
-    `NoKeyringError`, leaving the `keyring`/`keyring.errors` symbols themselves untouched --
-    same portable, no-real-environment-dependency intent F4 describes, without the crash.
+    `unusable_keyring` (`conftest.py`) monkeypatches the real `keyring` module's
+    three free functions to raise a bare `OSError` -- reproducing "the failure is a
+    raw `win32ctypes.pywin32.pywintypes.error`, not a `keyring.errors.KeyringError`"
+    (TASK.md issue #121) -- rather than any `keyring.errors.*` subclass.
     """
+    del unusable_keyring  # only needed so build_credential_store() hits an unusable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr("keyring.get_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.set_password", _raise_no_keyring_error)
-    monkeypatch.setattr("keyring.delete_password", _raise_no_keyring_error)
     uncallable_client = _UnusedPsServiceClientMethods()
 
     exit_code = run(
@@ -1182,16 +1214,19 @@ def test_run_config_set_context_prints_fallback_warning_on_stderr_via_real_dispa
     )
 
     captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "no OS keyring backend available" in captured.err
-    assert str(tmp_path / "credentials.toml") in captured.err
+    assert exit_code == 1
+    assert "❌" in captured.err
+    assert "prod" in captured.err
+    assert "credentials.toml" not in captured.err
 
 
 # --- issue #56 Slice 26: --context flag wiring + AC-BI-005 end-to-end proof --------------
 
 
 def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """AC-BI-005's literal scenario: `set-context` then `use-context` drives resolution.
 
@@ -1201,6 +1236,7 @@ def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
     resolve to next. The two `run()` calls use an uncallable client fake (this is `config
     set-context`/`use-context`, neither of which ever touches `PsServiceClient` -- D8).
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     uncallable_client = _UnusedPsServiceClientMethods()
@@ -1839,7 +1875,9 @@ def test_run_get_health_with_unreachable_real_service_returns_one_without_crashi
 
 
 def test_run_get_health_with_context_flag_resolves_named_targets_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    portable_keyring: InMemoryKeyringBackend,
 ) -> None:
     """AC-BI-005/AC-BI-006 end-to-end for `get health`, per CHANGES.md M2 (the only valid proof
     mechanism for this slice): an independent `load_config(context=..., config_dir=...)`
@@ -1856,6 +1894,7 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     `DISPATCH` entry reaches that same generic code path as every other client-backed
     command (D9), so this proof transfers to `get health` without needing to invoke it at all.
     """
+    del portable_keyring  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     uncallable_client = _UnusedPsServiceClientMethods()

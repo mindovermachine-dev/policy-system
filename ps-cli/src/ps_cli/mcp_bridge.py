@@ -39,7 +39,7 @@ import httpx
 
 from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
-from ps_cli.device_flow import ensure_valid_access_token
+from ps_cli.device_flow import AccessTokenCache, ensure_valid_access_token
 from ps_cli.errors import PsCliError
 from ps_cli.targets import resolve_auth_override, resolve_config_dir
 
@@ -94,7 +94,16 @@ class _BridgeContext:
     service_url: str
     auth_override: AuthOverrides | None
     credential_store: CredentialStore
+    access_token_cache: AccessTokenCache
     log_file: TextIO | None
+    # Issue #121 Slice 2: the same constructor-injection seam `PsServiceClient`
+    # already threads into `ensure_valid_access_token` (`http_client.py::self._transport`)
+    # -- lets one `httpx.MockTransport` answer PS Service's resource-metadata/refresh
+    # endpoints *and* the forwarded business call, for a genuine wire-level test of
+    # AC-BI-003/004 at this entrypoint. Production callers (`main()`) pass the same
+    # `transport` they already accept for the forwarding `httpx.Client`; defaults to
+    # `None` (real network) so no existing `_BridgeContext(...)` construction breaks.
+    transport: httpx.BaseTransport | None = None
 
 
 def _log(message: str, *, log_file: TextIO | None = None) -> None:
@@ -143,6 +152,8 @@ def _resolve_access_token(
     service_url: str,
     auth_override: AuthOverrides | None,
     credential_store: CredentialStore,
+    access_token_cache: AccessTokenCache,
+    transport: httpx.BaseTransport | None = None,
 ) -> str | None:
     """Return a valid access token, or `None` when no auth applies or nothing is stored.
 
@@ -176,6 +187,8 @@ def _resolve_access_token(
         service_url=service_url,
         auth_override=auth_override,
         credential_store=credential_store,
+        access_token_cache=access_token_cache,
+        transport=transport,
     )
 
 
@@ -309,6 +322,8 @@ def _forward_message(
             service_url=ctx.service_url,
             auth_override=ctx.auth_override,
             credential_store=ctx.credential_store,
+            access_token_cache=ctx.access_token_cache,
+            transport=ctx.transport,
         )
     except PsCliError as exc:
         _log(
@@ -421,7 +436,7 @@ def main(*, transport: httpx.BaseTransport | None = None) -> None:
     """
     config_dir = resolve_config_dir()
     config = load_config(config_dir=config_dir)
-    credential_store = build_credential_store(config_dir)
+    credential_store = build_credential_store()
     auth_override = resolve_auth_override(config, config_dir)
     mcp_url = config.service_url.rstrip("/") + _MCP_PATH
     context_name = config.context_name
@@ -438,7 +453,9 @@ def main(*, transport: httpx.BaseTransport | None = None) -> None:
         service_url=config.service_url,
         auth_override=auth_override,
         credential_store=credential_store,
+        access_token_cache=AccessTokenCache(),
         log_file=log_file,
+        transport=transport,
     )
 
     try:

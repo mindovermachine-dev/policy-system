@@ -31,8 +31,6 @@ returns the `TokenResponse` the poll produced.
 
 from __future__ import annotations
 
-import base64
-import json
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -66,18 +64,14 @@ _UNEXPECTED_DEVICE_AUTHORIZATION_SHAPE_MSG = (
 )
 _UNEXPECTED_GRANT_RESPONSE_SHAPE_MSG = "the issuer returned an unexpected grant-response shape"
 
-# AC-BI-012's clock-skew/in-flight-request buffer (issue #57 Slice 16, D-57 group 3):
-# a bundle expiring within this many seconds is treated as already expired, so a
-# request in flight doesn't race a token that expires mid-call. A small, documented
-# assumption -- not tied to a specific measured value.
+# AC-BI-012's clock-skew/in-flight-request buffer (issue #57 Slice 16, D-57 group 3),
+# repurposed by issue #121 to gate the in-memory AccessTokenCache instead of a
+# persisted TokenBundle's expires_at -- same buffer, same rationale (a request in
+# flight must not race a token that expires mid-call), new target.
 _EXPIRY_LEEWAY_SECONDS = 30
 
 _RELOGIN_HINT = "run `ps-cli auth login`"
 _REFRESH_FAILED_MSG = "stored credentials could not be refreshed"
-
-# A JWT is always exactly three dot-separated segments (header, payload, signature) --
-# `decode_subject_unverified`'s own shape check, not tied to any external doc.
-_JWT_SEGMENT_COUNT = 3
 
 
 @dataclass(frozen=True)
@@ -99,6 +93,31 @@ class TokenResponse:
     access_token: str
     refresh_token: str | None
     expires_in: int
+
+
+@dataclass
+class AccessTokenCache:
+    """One CLI invocation's in-memory-only access token (AC-BI-004, issue #121).
+
+    Never persisted. Constructed once per invocation by whichever object's lifetime *is*
+    that invocation (`PsServiceClient.__init__` for a real ps-cli command;
+    `mcp_bridge.main()` for the proxy-loop process), then passed explicitly into
+    `ensure_valid_access_token`/`peek_cached_access_token` -- discarded at process exit by
+    simply going out of scope, no explicit "clear" step needed.
+
+    `expires_at` (issue #121 critical-flaw fix): the token's own absolute Unix-epoch
+    expiry, set alongside `token` on every refresh. Never persisted, never read from any
+    store -- exists purely so a long-lived holder of this cache (mcp_bridge's whole
+    proxy-loop process) can detect its own token going stale mid-session and self-heal,
+    instead of returning an increasingly-stale token forever once populated. For a real
+    CLI invocation (a fresh process every time, `token` starts `None`), this field never
+    changes AC-BI-003's "exactly one refresh per invocation" behavior: the first check
+    always misses (`token is None`), so exactly one refresh still happens before the
+    first business-endpoint call, same as before this field existed.
+    """
+
+    token: str | None = None
+    expires_at: int | None = None
 
 
 def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
@@ -333,51 +352,16 @@ def complete_device_login(
 def token_bundle_from_response(response: TokenResponse, issuer: str) -> TokenBundle:
     """Convert a `TokenResponse` into the `TokenBundle` shape `CredentialStore` persists.
 
-    `expires_at = int(time.time()) + response.expires_in` -- an absolute Unix epoch
-    second, matching `TokenBundle.expires_at`'s own documented shape
-    (`credentials.py:48-51`). Storing the result (`credential_store.set_tokens(...)`)
-    is the caller's (Slice 13's) job -- this module never imports `credentials.py`'s
-    concrete store classes, only the `TokenBundle` shape itself.
+    Issue #121 (AC-BI-001): only `refresh_token`/`issuer` persist -- `response.
+    access_token`/`expires_in` are never written to the store; the in-memory access
+    token lives in `AccessTokenCache` instead, populated by `ensure_valid_access_token`,
+    never here (this function is only ever called from `handle_auth_login`'s initial
+    login path, which stores immediately after obtaining fresh tokens). Storing the
+    result (`credential_store.set_tokens(...)`) is the caller's job -- this module
+    never imports `credentials.py`'s concrete store classes, only the `TokenBundle`
+    shape itself.
     """
-    return TokenBundle(
-        access_token=response.access_token,
-        refresh_token=response.refresh_token,
-        expires_at=int(time.time()) + response.expires_in,
-        issuer=issuer,
-    )
-
-
-def decode_subject_unverified(access_token: str) -> str | None:
-    """Decode the unverified `sub` claim out of `access_token`'s JWT payload (Slice 19).
-
-    Hand-rolled -- split on `.`, base64url-decode the second (payload) segment
-    (padded with `+= "=" * (-len(segment) % 4)`), `json.loads`, read `"sub"`.
-    Display-only, for `auth status` (AC-BI-015) -- **never** a security check: ps-cli
-    is not a resource server and has no way to verify a signature without knowing the
-    issuer's JWKS ahead of time. Deliberately not `pyjwt`/`cryptography` -- adding that
-    runtime dependency to `ps-cli` just to read one unverified claim for display would
-    reintroduce the cross-package coupling L2's decoupling rule warns against (today
-    only `ps-service` and `ps-test-support` depend on `pyjwt`).
-
-    Returns `None` on any malformed input (wrong segment count, invalid base64url,
-    invalid JSON, not an object, missing/non-string `sub`) -- every failure mode
-    collapses to the same "unknown" outcome for the caller, never a crash.
-    """
-    segments = access_token.split(".")
-    if len(segments) != _JWT_SEGMENT_COUNT:
-        return None
-    payload_segment = segments[1]
-    padded = payload_segment + "=" * (-len(payload_segment) % 4)
-    try:
-        payload = json.loads(base64.urlsafe_b64decode(padded))
-    except ValueError:
-        # Covers `binascii.Error` (invalid base64url) and `json.JSONDecodeError`/
-        # `UnicodeDecodeError` (invalid JSON) -- all three are `ValueError` subclasses.
-        return None
-    if not isinstance(payload, dict):
-        return None
-    sub = cast("dict[str, object]", payload).get("sub")
-    return sub if isinstance(sub, str) else None
+    return TokenBundle(refresh_token=response.refresh_token, issuer=issuer)
 
 
 def _raise_no_stored_credentials(context: str) -> NoReturn:
@@ -399,38 +383,43 @@ def _raise_refresh_failed() -> NoReturn:
     raise PsCliError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT)
 
 
-def _is_expired(bundle: TokenBundle) -> bool:
-    """Return whether `bundle` is expired or expiring within `_EXPIRY_LEEWAY_SECONDS`."""
-    return bundle.expires_at <= int(time.time()) + _EXPIRY_LEEWAY_SECONDS
+def _is_cache_stale(cache: AccessTokenCache) -> bool:
+    """Return whether `cache`'s token is expired or expiring within `_EXPIRY_LEEWAY_SECONDS`.
 
-
-def peek_cached_access_token(*, context: str, credential_store: CredentialStore) -> str | None:
-    """Return `context`'s cached access token if it is still valid, else `None` (D-57-7).
-
-    Read-only: never calls the network, never writes the store, never raises --
-    used by `PsServiceClient.poll_ingestion_status()`, whose best-effort contract
-    must never trigger a refresh or a credential-store write. Contrast with
-    `ensure_valid_access_token()`, which refreshes an expired bundle (and fails
-    closed if it cannot); here, a missing or expired bundle simply means "attach
-    no Authorization header", not an error.
+    Mirrors the old (pre-#121) `_is_expired(bundle: TokenBundle)` check bit-for-bit, but
+    reads the in-memory `AccessTokenCache` instead of a persisted `TokenBundle` -- there is
+    no persisted `expires_at` left to check (AC-BI-001), but the in-memory cache still
+    needs one to self-heal within a long-lived process (issue #121 critical-flaw fix).
+    `cache.expires_at is None` (nothing cached yet) counts as stale, so a fresh cache
+    always falls through to a real refresh.
     """
-    bundle = credential_store.get_tokens(context)
-    if bundle is None or _is_expired(bundle):
-        return None
-    return bundle.access_token
+    return cache.expires_at is None or cache.expires_at <= int(time.time()) + _EXPIRY_LEEWAY_SECONDS
 
 
-def _refresh_token_bundle(
+def peek_cached_access_token(*, access_token_cache: AccessTokenCache) -> str | None:
+    """Return this invocation's already-obtained access token, if any (D-121-3).
+
+    Read-only: never calls the network, never writes the store, never raises -- used
+    by `PsServiceClient.poll_ingestion_status()`, whose best-effort contract must
+    never trigger a refresh or a credential-store write. Contrast with
+    `ensure_valid_access_token()`, which refreshes a stale/missing cache entry (and
+    fails closed if it cannot); here, an empty cache simply means "attach no
+    Authorization header", not an error.
+    """
+    return access_token_cache.token
+
+
+def _refresh_tokens(
     params: ResolvedAuthParameters,
     refresh_token: str,
     *,
     transport: httpx.BaseTransport | None,
-) -> TokenBundle:
-    """`POST params.token_endpoint` with `grant_type=refresh_token`; return the new bundle.
+) -> TokenResponse:
+    """`POST params.token_endpoint` with `grant_type=refresh_token`; return the refreshed tokens.
 
     Carries `refresh_token` forward unchanged if the response does not include a
-    new one (AC-BI-012: "not every IdP rotates on every refresh"), else adopts the
-    rotated one. Raises the AC-BI-013 fail-closed error (`_raise_refresh_failed`)
+    new one (AC-BI-005: "not every IdP rotates on every refresh"), else adopts the
+    rotated one. Raises the AC-BI-009 fail-closed error (`_raise_refresh_failed`)
     on any network error, non-2xx response, or malformed body -- never lets an
     `httpx` exception or a raw `KeyError`/`TypeError` escape.
 
@@ -438,6 +427,13 @@ def _refresh_token_bundle(
     freshly re-resolved by every `ensure_valid_access_token` call, so this already
     includes `offline_access`, keeping every refresh (not just the initial login)
     eligible for a new refresh_token in the response.
+
+    Note: the `TokenResponse` this returns is not literally the IdP's token-endpoint
+    response -- `.refresh_token` is already carry-forward-resolved (the old stored value
+    when the endpoint didn't rotate it), narrower than `TokenResponse`'s own general
+    docstring contract ("the subset of RFC 8628 SS3.5's token-endpoint success response").
+    Callers should treat this specific return value as "the refresh_token to persist,"
+    not as a verbatim echo of what the IdP sent.
     """
     data = {
         "grant_type": "refresh_token",
@@ -467,11 +463,10 @@ def _refresh_token_bundle(
     new_refresh_token = (
         token_response.refresh_token if token_response.refresh_token is not None else refresh_token
     )
-    return TokenBundle(
+    return TokenResponse(
         access_token=token_response.access_token,
         refresh_token=new_refresh_token,
-        expires_at=int(time.time()) + token_response.expires_in,
-        issuer=params.issuer,
+        expires_in=token_response.expires_in,
     )
 
 
@@ -481,40 +476,53 @@ def ensure_valid_access_token(
     service_url: str,
     auth_override: AuthOverrides | None,
     credential_store: CredentialStore,
+    access_token_cache: AccessTokenCache,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
     """Return a valid access token for `context`, refreshing (or failing closed) as needed.
 
-    AC-BI-011/012/013's shared orchestration, called by `PsServiceClient`'s
-    authenticated helpers before every business-endpoint call:
+    Cache-hit (`access_token_cache.token is not None` AND not `_is_cache_stale(...)`):
+    returns immediately, no store read, no network call -- AC-BI-004's "reused by
+    further business-endpoint calls within the same invocation."
 
-    - No stored bundle at all -> fails closed (`_raise_no_stored_credentials`,
-      AC-BI-013) -- never silently proceeds unauthenticated.
-    - A bundle that is not expired (with `_EXPIRY_LEEWAY_SECONDS`' clock-skew
-      buffer) -> its `access_token` is returned unchanged, no network call
-      (AC-BI-011's already-valid-token path).
-    - An expired bundle with no `refresh_token` -> fails closed
-      (`_raise_refresh_failed`, AC-BI-013) -- there is nothing to refresh with.
-    - An expired bundle with a `refresh_token` -> re-resolves OIDC parameters
-      (`oidc_discovery.resolve_auth_parameters`; a stored bundle carries no
-      `client_id`/`token_endpoint` of its own) and exchanges the refresh token
-      (`_refresh_token_bundle`, AC-BI-012), persisting the result
-      (`credential_store.set_tokens`) before returning the new access token.
+    Cache-miss (nothing cached yet, OR the cached token is stale -- issue #121
+    critical-flaw fix): reads the stored bundle, fails closed if absent
+    (`_raise_no_stored_credentials`, AC-BI-002) or if `refresh_token is None`
+    (`_raise_refresh_failed`), otherwise always refreshes (AC-BI-003, AC-BI-005's
+    rotation preserved verbatim inside `_refresh_tokens`), persists
+    `TokenBundle(refresh_token=refreshed.refresh_token, issuer=params.issuer)`,
+    populates `access_token_cache.token`/`access_token_cache.expires_at`, and returns
+    the new access token.
+
+    For a real CLI invocation this is unobservably identical to a design with no
+    `expires_at` field at all: the cache starts empty, so the first call always
+    misses and refreshes exactly once, same as every subsequent call for the rest of
+    that invocation once populated. For `mcp_bridge`'s long-lived proxy-loop process,
+    this is what makes a real Entra ID access token's ~60-90 min TTL survive a session
+    that outlives it: once `_is_cache_stale` trips, the very next forwarded message
+    (not the one mid-flight -- this is checked before a request is sent, never
+    mid-request) transparently re-refreshes and the process keeps working with no
+    manual restart.
 
     `transport` is the constructor-injection seam tests use to substitute a
     combined real-provider/fake-metadata transport for `resolve_auth_parameters`'s
     own network calls and for the refresh POST itself -- production callers never
     pass it, so both go over the real network.
     """
+    if access_token_cache.token is not None and not _is_cache_stale(access_token_cache):
+        return access_token_cache.token
+
     bundle = credential_store.get_tokens(context)
     if bundle is None:
         _raise_no_stored_credentials(context)
-    if not _is_expired(bundle):
-        return bundle.access_token
     if bundle.refresh_token is None:
         _raise_refresh_failed()
 
     params = oidc_discovery.resolve_auth_parameters(service_url, auth_override, transport=transport)
-    new_bundle = _refresh_token_bundle(params, bundle.refresh_token, transport=transport)
-    credential_store.set_tokens(context, new_bundle)
-    return new_bundle.access_token
+    refreshed = _refresh_tokens(params, bundle.refresh_token, transport=transport)
+    credential_store.set_tokens(
+        context, TokenBundle(refresh_token=refreshed.refresh_token, issuer=params.issuer)
+    )
+    access_token_cache.token = refreshed.access_token
+    access_token_cache.expires_at = int(time.time()) + refreshed.expires_in
+    return access_token_cache.token
