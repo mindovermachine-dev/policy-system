@@ -24,15 +24,11 @@ from ps_cli.credentials import TokenBundle, build_credential_store
 from ps_cli.device_flow import poll_for_token, request_device_authorization
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
-    ChangeCheckResult,
     ExportManifest,
     ExportResult,
     ExportStageOutcome,
     IngestionResult,
-    InstrumentCheckOutcome,
-    PendingReviewsResult,
     ReadinessResult,
-    ResolveReviewResult,
     RestorationResult,
     RestorationStageOutcome,
 )
@@ -77,19 +73,9 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")
 
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
-        msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
-        raise AssertionError(msg)
-
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
         msg = f"ingest_internal must not be called in this test (content={content!r})"
-        raise AssertionError(msg)
-
-    def poll_ingestion_status(self, run_id: str) -> str | None:
-        """Fail: this test's fake does not expect `poll_ingestion_status()` to be called."""
-        msg = f"poll_ingestion_status must not be called in this test (run_id={run_id!r})"
         raise AssertionError(msg)
 
     def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
@@ -100,22 +86,6 @@ class _UnusedPsServiceClientMethods:
     def export_instrument(self, instrument_id: str) -> ExportResult:
         """Fail: this test's fake does not expect `export_instrument()` to be called."""
         msg = f"export_instrument must not be called in this test (instrument_id={instrument_id!r})"
-        raise AssertionError(msg)
-
-    def run_change_check(self) -> ChangeCheckResult:
-        """Fail: this test's fake does not expect `run_change_check()` to be called."""
-        raise AssertionError("run_change_check must not be called in this test")
-
-    def list_pending_reviews(self) -> PendingReviewsResult:
-        """Fail: this test's fake does not expect `list_pending_reviews()` to be called."""
-        raise AssertionError("list_pending_reviews must not be called in this test")
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Fail: this test's fake does not expect `resolve_review()` to be called."""
-        msg = (
-            f"resolve_review must not be called in this test "
-            f"(review_id={review_id!r}, decision={decision!r})"
-        )
         raise AssertionError(msg)
 
 
@@ -185,135 +155,6 @@ class _FakeUnexpectedErrorClient(_UnusedPsServiceClientMethods):
     def check_health(self) -> str:
         """Raise a plain RuntimeError, simulating a genuine, un-classified ps-cli bug."""
         raise RuntimeError("boom")
-
-
-class _FakeNearMissesSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose list_pending_reviews() succeeds."""
-
-    def list_pending_reviews(self) -> PendingReviewsResult:
-        """Return an empty-but-valid PendingReviewsResult."""
-        return PendingReviewsResult(reviews=[])
-
-
-class _FakeNearMissesFailingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose list_pending_reviews() always raises."""
-
-    def list_pending_reviews(self) -> PendingReviewsResult:
-        """Raise a PsCliError, simulating a PS Service failure response."""
-        raise PsCliError(msg="Could not reach PS Service at http://127.0.0.1:8000.")
-
-
-def test_run_near_misses_list_returns_zero_on_success() -> None:
-    """`run(["near-misses", "list"], client=<succeeding fake>)` returns 0 (issue #35, AC-BI-003)."""
-    fake_client = _FakeNearMissesSuccessClient()
-
-    exit_code = run(["near-misses", "list"], client=fake_client)
-
-    assert exit_code == 0
-
-
-def test_run_near_misses_list_returns_one_on_ps_cli_error(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A `PsCliError` from the client surfaces as exit code 1, per `run()`'s one catch site."""
-    fake_client = _FakeNearMissesFailingClient()
-
-    exit_code = run(["near-misses", "list"], client=fake_client)
-
-    assert exit_code == 1
-    assert "Could not reach PS Service" in capsys.readouterr().err
-
-
-class _FakeNearMissesResolveSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose resolve_review() succeeds."""
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Return a scripted ResolveReviewResult echoing the given id/decision."""
-        return ResolveReviewResult(
-            review_id=review_id, decision=decision, winner_id=None, loser_id=None
-        )
-
-
-class _FakeNearMissesResolveMergeSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose resolve_review() succeeds with a merge."""
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Return a scripted ResolveReviewResult with winner/loser ids populated."""
-        return ResolveReviewResult(
-            review_id=review_id,
-            decision=decision,
-            winner_id="capability_winner",
-            loser_id="capability_loser",
-        )
-
-
-class _FakeNearMissesResolveFailingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose resolve_review() always raises (AC-BI-008)."""
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Raise a PsCliError, simulating a not-found PS Service response."""
-        del review_id, decision
-        raise PsCliError(
-            msg="PS Service reported pending_review_not_found: no unresolved PendingReview"
-        )
-
-
-def test_run_near_misses_resolve_keep_separate_returns_zero_on_success() -> None:
-    """`run(["near-misses", "resolve", ..., "--decision=keep-separate"])` returns 0 (AC-BI-004)."""
-    fake_client = _FakeNearMissesResolveSuccessClient()
-
-    exit_code = run(
-        ["near-misses", "resolve", "review_aaa", "--decision", "keep-separate"],
-        client=fake_client,
-    )
-
-    assert exit_code == 0
-
-
-def test_run_near_misses_resolve_returns_one_on_ps_cli_error(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-008: a not-found review id's PsCliError surfaces as exit code 1."""
-    fake_client = _FakeNearMissesResolveFailingClient()
-
-    exit_code = run(
-        ["near-misses", "resolve", "review_missing", "--decision", "keep-separate"],
-        client=fake_client,
-    )
-
-    assert exit_code == 1
-    assert "pending_review_not_found" in capsys.readouterr().err
-
-
-def test_run_near_misses_resolve_merge_returns_zero_on_success() -> None:
-    """`run(["near-misses", "resolve", ..., "--decision=merge"])` returns 0 (AC-BI-005/006/007)."""
-    fake_client = _FakeNearMissesResolveMergeSuccessClient()
-
-    exit_code = run(
-        ["near-misses", "resolve", "review_aaa", "--decision", "merge"],
-        client=fake_client,
-    )
-
-    assert exit_code == 0
-
-
-def test_run_near_misses_resolve_rejects_unknown_decision_at_parse_time() -> None:
-    """The parser's `--decision` `choices` rejects any value outside keep-separate/merge.
-
-    Argparse rejects an unknown `choices` value before any dispatch/client
-    call happens (exit code 2, a usage error) -- `_UnusedPsServiceClientMethods`'s
-    bare fake would raise `AssertionError` on any client call, proving none
-    was made.
-    """
-    uncallable_client = _UnusedPsServiceClientMethods()
-
-    with pytest.raises(SystemExit) as excinfo:
-        run(
-            ["near-misses", "resolve", "review_aaa", "--decision", "not-a-decision"],
-            client=uncallable_client,
-        )
-
-    assert excinfo.value.code == 2
 
 
 def test_run_formats_ps_cli_error_to_stderr_without_traceback(
@@ -599,250 +440,6 @@ def test_main_module_only_imports_and_conditionally_calls_main() -> None:
     assert expr_node.value.keywords == []
 
 
-class _FakeIngestSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose ingest_catalog() succeeds."""
-
-    def check_readiness(self) -> ReadinessResult:
-        """Report a fully-healthy target -- the pre-flight check must let this through."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Return a fixed IngestionResult, ignoring `celex`/`run_id`."""
-        del celex, run_id
-        return IngestionResult(
-            run_id="run-ingest-cli",
-            regulatory_instrument_id="ri-cli",
-            source="catalog",
-            stages=[],
-        )
-
-
-class _FakeIngestFailingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose ingest_catalog() always raises."""
-
-    def check_readiness(self) -> ReadinessResult:
-        """Report a fully-healthy target -- the pre-flight check must let this through."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Raise a PsCliError, simulating a 502 pipeline_stage_failed response."""
-        del celex, run_id
-        raise PsCliError(
-            msg="PS Service reported pipeline_stage_failed: the domain mapper stage failed "
-            "(failing stage: domain_mapper)",
-            hint="run_id: run-ingest-err",
-        )
-
-
-class _UncallableIngestClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose ingest_catalog() must never be called."""
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Fail the test if reached -- proves the CLI validated `celex` before calling out."""
-        del run_id
-        msg = f"ingest_catalog must not be called for a malformed celex, got {celex!r}"
-        raise AssertionError(msg)
-
-
-def test_run_ingest_regulation_returns_zero_on_success() -> None:
-    """`run(["ingest", "regulation", <celex>], client=<succeeding fake>)` returns 0."""
-    fake_client = _FakeIngestSuccessClient()
-
-    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    assert exit_code == 0
-
-
-def test_run_ingest_regulation_prints_run_id_on_success(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-010: the run id is printed to stdout on a successful ingest."""
-    fake_client = _FakeIngestSuccessClient()
-
-    run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert "run_id: run-ingest-cli" in captured.out
-
-
-def test_run_ingest_regulation_malformed_celex_exits_two_without_calling_client(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A malformed CELEX is rejected by argparse's `type=` callback (PLAN.md §1 D10).
-
-    This now happens during `parser.parse_args()`, before `run()`'s own
-    `try/except PsCliError` is even entered -- argparse's own machinery exits
-    2 via `SystemExit`, not `run()`'s return value (exit 1 is reserved for
-    `PsCliError`s raised after a successful parse). The client is never
-    constructed far enough to be called either way.
-    """
-    fake_client = _UncallableIngestClient()
-
-    with pytest.raises(SystemExit) as excinfo:
-        run(["ingest", "regulation", "not-a-celex"], client=fake_client)
-
-    assert excinfo.value.code == 2
-    assert "not a 10-character CELEX identifier" in capsys.readouterr().err
-
-
-class _FakeIngestRecordingClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in that records the `celex` it was called with."""
-
-    def __init__(self) -> None:
-        """Initialize with no recorded call yet."""
-        self.called_with_celex: str | None = None
-
-    def check_readiness(self) -> ReadinessResult:
-        """Report a fully-healthy target -- the pre-flight check must let this through."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Record `celex`, then return a fixed IngestionResult."""
-        del run_id
-        self.called_with_celex = celex
-        return IngestionResult(
-            run_id="run-ingest-cli",
-            regulatory_instrument_id="ri-cli",
-            source="catalog",
-            stages=[],
-        )
-
-
-def test_run_ingest_regulation_trims_whitespace_padded_celex_before_calling_client() -> None:
-    """AC-BI-001: a whitespace-padded CELEX is trimmed before it reaches the client."""
-    fake_client = _FakeIngestRecordingClient()
-
-    run(["ingest", "regulation", "  32016R0679  "], client=fake_client)
-
-    assert fake_client.called_with_celex == "32016R0679"
-
-
-def test_run_ingest_regulation_propagates_client_ps_cli_error_as_exit_one(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A PsCliError raised by ingest_catalog() (e.g. a 502) is caught centrally by run()."""
-    fake_client = _FakeIngestFailingClient()
-
-    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "pipeline_stage_failed" in captured.err
-    assert "domain_mapper" in captured.err
-    assert "Traceback" not in captured.err
-
-
-class _FakeReadinessGatedIngestClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome.
-
-    Used to prove the pre-flight check (AC-BI-009..013): either a scripted
-    `ReadinessResult` is returned, or a scripted `PsCliError` is raised (simulating PS
-    Service itself being unreachable, `http_client.py:105-110`'s shape). By default
-    `ingest_catalog()` raises `AssertionError` if called -- proving the pre-flight check
-    ran first and blocked the command; pass `allow_ingest=True` for the one test where
-    the pre-flight check must let the command proceed to a normal, successful ingest.
-    """
-
-    def __init__(
-        self,
-        *,
-        readiness: ReadinessResult | None = None,
-        readiness_error: PsCliError | None = None,
-        allow_ingest: bool = False,
-    ) -> None:
-        """Script this fake's check_readiness() outcome: a result, or an error to raise."""
-        self._readiness = readiness
-        self._readiness_error = readiness_error
-        self._allow_ingest = allow_ingest
-
-    def check_readiness(self) -> ReadinessResult:
-        """Return the scripted ReadinessResult, or raise the scripted PsCliError."""
-        if self._readiness_error is not None:
-            raise self._readiness_error
-        assert self._readiness is not None
-        return self._readiness
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Fail the test unless `allow_ingest=True` -- proves the pre-flight check ran first."""
-        if not self._allow_ingest:
-            msg = (
-                f"ingest_catalog must not be called in this test "
-                f"(celex={celex!r}, run_id={run_id!r})"
-            )
-            raise AssertionError(msg)
-        return IngestionResult(
-            run_id="run-ingest-cli",
-            regulatory_instrument_id="ri-cli",
-            source="catalog",
-            stages=[],
-        )
-
-
-def test_run_ingest_regulation_fails_fast_when_llm_interface_unreachable(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-009: LLM Interface unhealthy blocks the command before any POST /ingestions."""
-    fake_client = _FakeReadinessGatedIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
-    )
-
-    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "LLM Interface" in captured.err
-    assert "unavailable" in captured.err
-
-
-def test_run_ingest_regulation_does_not_block_when_only_cellar_eli_unreachable() -> None:
-    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks the command."""
-    fake_client = _FakeReadinessGatedIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
-        allow_ingest=True,
-    )
-
-    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    assert exit_code == 0
-
-
-def test_run_ingest_regulation_preflight_fails_closed_distinctly_when_ps_service_unreachable(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-012: an unreachable PS Service fails with its own distinct wording.
-
-    Never conflated with the LLM-Interface-unavailable message -- these are two
-    different failure modes.
-    """
-    fake_client = _FakeReadinessGatedIngestClient(
-        readiness_error=PsCliError(
-            msg="Could not reach PS Service at http://x.",
-            hint="check PS_CLI_SERVICE_URL / ps-cli.toml, and that ps-service is running",
-        )
-    )
-
-    exit_code = run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "Could not reach PS Service" in captured.err
-    assert "LLM Interface is unavailable" not in captured.err
-
-
-def test_run_ingest_regulation_preflight_message_never_contains_raw_dependency_error(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-013: the failure message is the fixed string, never interpolating `readiness`."""
-    fake_client = _FakeReadinessGatedIngestClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
-    )
-
-    run(["ingest", "regulation", "32016R0679"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert "❌ LLM Interface is unavailable." in captured.err
-
-
 def test_run_with_unreachable_real_service_returns_one_without_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -861,7 +458,7 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
     probe.close()
     monkeypatch.setenv("PS_CLI_SERVICE_URL", f"http://127.0.0.1:{port}")
 
-    exit_code = run(["ingest", "regulation", "32016R0679"])
+    exit_code = run(["get", "health"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
@@ -869,43 +466,67 @@ def test_run_with_unreachable_real_service_returns_one_without_crashing(
     assert "Traceback" not in captured.err
 
 
-def _build_near_misses_handler_with_resource_metadata(
+def _build_ingest_document_handler_with_resource_metadata(
     captured_auth_headers: list[str | None], *, issuer: str, client_id: str
 ) -> type[BaseHTTPRequestHandler]:
-    """Build a handler serving both PS Service's own resource-metadata endpoint and
-    `GET /near-misses`, recording each `/near-misses` request's `Authorization`.
+    """Build a handler serving PS Service's own resource-metadata endpoint,
+    `GET /ready` (the `ingest document` pre-flight check), and `POST /ingestions`,
+    recording each `/ingestions` request's `Authorization`.
+
+    Issue #126 retargeted this from the now-removed `near-misses list`/
+    `GET /near-misses` to `ingest document`/`POST /ingestions`, the closest
+    surviving authenticated business call -- no behavioral change to what this
+    test proves (`_resolve_client` wires a real bearer token into a real
+    business call).
 
     Issue #121: `ensure_valid_access_token` always refreshes on a cache miss
     (AC-BI-003), which requires a real OIDC discovery round trip against *some*
-    resource-metadata endpoint -- this one server now plays both roles (mirrors
-    `test_integration_auth_full_cycle.py::_build_resource_metadata_handler`'s own
-    recipe). Closure-based factory -- `HTTPServer` requires a handler *class*, not
-    an instance, so the captured values must be closed over some way other than
-    `self`.
+    resource-metadata endpoint -- this one server now plays all three roles
+    (mirrors `test_integration_auth_full_cycle.py::_build_resource_metadata_handler`'s
+    own recipe). Closure-based factory -- `HTTPServer` requires a handler *class*,
+    not an instance, so the captured values must be closed over some way other
+    than `self`.
     """
 
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             """Silence `BaseHTTPRequestHandler`'s default stderr access log."""
 
+        def _write_json(self, payload: dict[str, object]) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
             if self.path == "/.well-known/oauth-protected-resource":
-                payload = json.dumps(
+                self._write_json(
                     {
                         "resource": "http://ps-service.example",
                         "authorization_servers": [issuer],
                         "scopes_supported": ["openid"],
                         "ps_cli_client_id": client_id,
                     }
-                ).encode("utf-8")
+                )
             else:
-                captured_auth_headers.append(self.headers.get("Authorization"))
-                payload = json.dumps({"reviews": []}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+                # `/ready` -- `_assert_llm_interface_available`'s unauthenticated
+                # pre-flight check, no `Authorization` header expected or recorded.
+                self._write_json({"status": "ready", "unhealthy_dependencies": []})
+
+        def do_POST(self) -> None:
+            captured_auth_headers.append(self.headers.get("Authorization"))
+            content_length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(content_length)  # drain the request body
+            self._write_json(
+                {
+                    "run_id": "run-cli-integration-1",
+                    "regulatory_instrument_id": "ri-cli-integration",
+                    "source": "internal",
+                    "stages": [],
+                }
+            )
 
     return _Handler
 
@@ -927,9 +548,9 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     made every authenticated business command silently send no `Authorization`
     header at all (see `_resolve_client`'s own docstring). This test runs a real
     local `http.server.HTTPServer` that records the `Authorization` header of every
-    `/near-misses` request, seeds a real refresh_token (obtained via a full
+    `/ingestions` request, seeds a real refresh_token (obtained via a full
     device-flow login against a real `mock_oidc_provider`) via `build_credential_
-    store().set_tokens(...)`, and calls `run(["near-misses", "list"], client=None)`
+    store().set_tokens(...)`, and calls `run(["ingest", "document", ...], client=None)`
     -- the exact `client=None` path that forces `_resolve_client` to build a real
     `PsServiceClient` -- pointed at that local server.
 
@@ -942,11 +563,13 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     client_id = "ps-cli-test-client"
+    document_path = tmp_path / "seed.json"
+    document_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
 
     captured_auth_headers: list[str | None] = []
     server = HTTPServer(
         ("127.0.0.1", 0),
-        _build_near_misses_handler_with_resource_metadata(
+        _build_ingest_document_handler_with_resource_metadata(
             captured_auth_headers, issuer=mock_oidc_provider.issuer, client_id=client_id
         ),
     )
@@ -980,7 +603,7 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
             ),
         )
 
-        exit_code = run(["near-misses", "list"], client=None)
+        exit_code = run(["ingest", "document", str(document_path)], client=None)
 
         assert exit_code == 0
         assert len(captured_auth_headers) == 1
@@ -1132,7 +755,7 @@ def test_ingest_document_surfaces_real_service_501_as_clean_failure(
 
 class _FakeReadinessGatedInternalIngestClient(_UnusedPsServiceClientMethods):
     """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
-    `ingest document` (mirrors `_FakeReadinessGatedIngestClient` for `ingest regulation`).
+    `ingest document`.
 
     By default `ingest_internal()` raises `AssertionError` if called -- proving the
     pre-flight check ran first and blocked the command; pass `allow_ingest=True` for the
@@ -1996,122 +1619,6 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     assert set_exit_code == 0
     assert use_exit_code == 0
     assert load_config(context=None, config_dir=tmp_path).service_url == "https://ps.example.com"
-
-
-class _FakeCheckClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in with a scripted run_change_check() (issue #73)."""
-
-    def __init__(self, result: ChangeCheckResult) -> None:
-        """Script this fake's `run_change_check()` return value."""
-        self._result = result
-
-    def check_readiness(self) -> ReadinessResult:
-        """Return a healthy default -- this fake's tests are not about the pre-flight check."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def run_change_check(self) -> ChangeCheckResult:
-        """Return the scripted result."""
-        return self._result
-
-
-class _FakeReadinessGatedCheckClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in scripting `check_readiness()`'s outcome for
-    `check regulations` (mirrors `_FakeReadinessGatedIngestClient` for `ingest regulation`).
-
-    By default `run_change_check()` raises `AssertionError` if called -- proving the
-    pre-flight check ran first and blocked the command; pass `allow_check=True` for the
-    one test where the pre-flight check must let the command proceed.
-    """
-
-    def __init__(self, *, readiness: ReadinessResult, allow_check: bool = False) -> None:
-        """Script this fake's check_readiness() outcome, and whether the sweep may proceed."""
-        self._readiness = readiness
-        self._allow_check = allow_check
-
-    def check_readiness(self) -> ReadinessResult:
-        """Return the scripted ReadinessResult."""
-        return self._readiness
-
-    def run_change_check(self) -> ChangeCheckResult:
-        """Fail the test unless `allow_check=True` -- proves the pre-flight check ran first."""
-        if not self._allow_check:
-            raise AssertionError("run_change_check must not be called in this test")
-        return ChangeCheckResult(run_id="run-check-cli", instruments=[])
-
-
-def test_check_regulations_fails_fast_when_llm_interface_unreachable(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-009: LLM Interface unhealthy blocks `check regulations` before any pipeline call."""
-    fake_client = _FakeReadinessGatedCheckClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["llm_interface"])
-    )
-
-    exit_code = run(["check", "regulations"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "LLM Interface" in captured.err
-    assert "unavailable" in captured.err
-
-
-def test_check_regulations_does_not_block_when_only_cellar_eli_unreachable() -> None:
-    """AC-BI-010: cellar_eli alone (LLM Interface healthy) never blocks `check regulations`."""
-    fake_client = _FakeReadinessGatedCheckClient(
-        readiness=ReadinessResult(status="ready", unhealthy_dependencies=["cellar_eli"]),
-        allow_check=True,
-    )
-
-    exit_code = run(["check", "regulations"], client=fake_client)
-
-    assert exit_code == 0
-
-
-def test_run_check_regulations_returns_zero_on_empty_sweep(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """`run(["check", "regulations"], client=<empty-sweep fake>)` returns 0; stdout has both lines
-    (issue #73, PLAN.md §4 Slice 1).
-    """
-    fake_client = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
-
-    exit_code = run(["check", "regulations"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "run_id: r1" in captured.out
-    assert "no tracked instruments" in captured.out
-
-
-def test_run_check_regulations_prints_run_id_and_returns_zero_end_to_end(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """`run(["check", "regulations"], client=<multi-bucket fake>)` -> `0`; stdout has the run id
-    first, proving ps-cli can display any outcome bucket from Slice 2 onward
-    (issue #73, PLAN.md §4 Slice 2, CHANGES.md's re-sequencing) -- closing the
-    display gap for Slices 3-5 structurally, the same way Slice 7 structurally
-    closes AC-BI-009.
-    """
-    fake_client = _FakeCheckClient(
-        ChangeCheckResult(
-            run_id="sweep-1",
-            instruments=[
-                InstrumentCheckOutcome(
-                    "CRA-1.0", "amendment_reingested", "-> CRA-1.0 (superseded)", "ingest-run-1"
-                ),
-                InstrumentCheckOutcome("GDPR-1.0", "current", None, None),
-            ],
-        )
-    )
-
-    exit_code = run(["check", "regulations"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    lines = captured.out.splitlines()
-    assert lines[0] == "run_id: sweep-1"
-    assert "CRA-1.0: amendment_reingested (-> CRA-1.0 (superseded))" in lines
-    assert "GDPR-1.0: current" in lines
 
 
 # --- issue #82 Slice 8: `--version --context` (AC-BI-006, AC-BI-007) --------------------

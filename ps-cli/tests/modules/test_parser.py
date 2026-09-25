@@ -1,11 +1,6 @@
-"""Tests for ps_cli.modules.parser: `_celex_type` (PLAN.md §3 Increment 1) and, for
-issue #56 Slice 14, `_context_name_type`/`_service_url_type` plus `config set-context`
-parsing (PLAN.md §1 D5/D6/D7).
-
-AC-BI-001/AC-BI-002: leading/trailing whitespace is trimmed before the CELEX
-format-validation regex runs, and a value that is still malformed after
-trimming raises the same `argparse.ArgumentTypeError` message as it does
-today -- trimming must not change the error text.
+"""Tests for ps_cli.modules.parser: for issue #56 Slice 14, `_context_name_type`/
+`_service_url_type` plus `config set-context` parsing (PLAN.md §1 D5/D6/D7), and
+`_instrument_id_type` (issue #66 Slice 7.4).
 """
 
 from __future__ import annotations
@@ -15,28 +10,11 @@ import argparse
 import pytest
 
 from ps_cli.modules.parser import (
-    _celex_type,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 1: unit-tested directly per its own AC
-    _context_name_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _celex_type
-    _instrument_id_type,  # pyright: ignore[reportPrivateUsage]  # issue #66 Slice 7.4: unit-tested directly per its own AC, mirrors _celex_type
-    _service_url_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _celex_type
+    _context_name_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC
+    _instrument_id_type,  # pyright: ignore[reportPrivateUsage]  # issue #66 Slice 7.4: unit-tested directly per its own AC, mirrors _context_name_type
+    _service_url_type,  # pyright: ignore[reportPrivateUsage]  # issue #56 Slice 14: unit-tested directly per its own AC, mirrors _context_name_type
     build_parser,
 )
-
-
-def test_celex_type_trims_leading_and_trailing_whitespace_before_validating() -> None:
-    """A well-formed CELEX padded with whitespace is trimmed and accepted."""
-    assert _celex_type("  32016R0679  ") == "32016R0679"
-
-
-def test_celex_type_rejects_malformed_value_after_trim_with_unchanged_error_message() -> None:
-    """A value that's still malformed after trimming raises the existing, unchanged message."""
-    with pytest.raises(argparse.ArgumentTypeError) as excinfo:
-        _celex_type("  not-a-celex  ")
-
-    assert str(excinfo.value) == (
-        "'not-a-celex' is not a 10-character CELEX identifier "
-        "(expected: 3<4 digits><1 uppercase letter><4 digits>, e.g. 32016R0679)"
-    )
 
 
 def test_context_name_type_accepts_alnum_start_with_hyphen_and_underscore_body() -> None:
@@ -231,28 +209,6 @@ def test_build_parser_get_health_accepts_context_flag_before_and_after() -> None
     """`--context` works both before and after `get health`, via the shared parent parser (D8)."""
     args_before = build_parser().parse_args(["--context", "prod", "get", "health"])
     args_after = build_parser().parse_args(["get", "health", "--context", "prod"])
-
-    assert args_before.context == "prod"
-    assert args_after.context == "prod"
-
-
-def test_build_parser_parses_check_regulations() -> None:
-    """`ps-cli check regulations` (no arguments) parses correctly (issue #73 D1): a
-    resource leaf under the `check` verb group, mirroring `get health`'s own
-    verb/resource shape.
-    """
-    args = build_parser().parse_args(["check", "regulations"])
-
-    assert args.command == "check_regulations"
-    assert args.group == "check"
-
-
-def test_build_parser_check_regulations_accepts_context_flag_before_and_after() -> None:
-    """`--context` works both before and after `check regulations`, via the shared parent
-    parser (D1).
-    """
-    args_before = build_parser().parse_args(["--context", "prod", "check", "regulations"])
-    args_after = build_parser().parse_args(["check", "regulations", "--context", "prod"])
 
     assert args_before.context == "prod"
     assert args_after.context == "prod"

@@ -3,6 +3,9 @@
 One of the client types users use to access Policy System is Agent Skills. The following Agent Skills are officially supported:
 
 - ps-qna. This skill is used to ask policy related Questions and retrieve Answers (QnA) from the Company Policy Knowledge Graph.
+- ps-ingest-regulation. This skill ingests an EU regulation into the Company Policy Knowledge Graph by CELEX identifier, whether or not that CELEX is in the curated catalog.
+- ps-check-regulations. This skill sweeps every regulation tracked in the Company Policy Knowledge Graph for detected amendments, automatically re-ingesting any that are found, and reports the per-instrument outcome.
+- ps-near-miss-review. This skill lists near-miss pending reviews (Company Merge dedup candidates) awaiting a keep-separate/merge decision in the Company Policy Knowledge Graph, and resolves one by keeping its two entities separate or merging them.
 
 ## Development of Policy System Skills
 

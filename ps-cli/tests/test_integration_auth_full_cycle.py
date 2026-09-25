@@ -88,7 +88,7 @@ _CLIENT_ID = "ps-cli-integration-test-client"
 _CONTEXT_NAME = "test"
 _RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 _OPENID_CONFIGURATION_PATH = "/.well-known/openid-configuration"
-_NEAR_MISSES_PATH = "/near-misses"
+_INGESTIONS_PATH = "/ingestions"
 
 
 def _build_resource_metadata_handler(body: dict[str, object]) -> type[BaseHTTPRequestHandler]:
@@ -194,8 +194,11 @@ def _build_ps_service_transport(
       handle_token_request(...)`, so a refresh through this transport exercises the
       provider's genuine rotation/`invalid_grant` state machine, never a
       hand-constructed fake response (Slice 4, TASK.md Deliverables).
-    - `_NEAR_MISSES_PATH` -- the one business route this suite calls, genuinely
-      enforcing the bearer requirement (200 with an empty review list given a
+    - `_INGESTIONS_PATH` -- the one business route this suite calls (issue #126
+      retargeted this from the now-removed `near-misses list`/`GET /near-misses`
+      to `ingest document`/`POST /ingestions`, the closest surviving authenticated
+      business call -- no behavioral change to what this suite proves), genuinely
+      enforcing the bearer requirement (200 with a stub ingestion result given a
       non-empty `Bearer` token, 401 without) so a later "succeeds with the token
       attached" assertion is meaningful, not trivially true.
 
@@ -226,7 +229,7 @@ def _build_ps_service_transport(
                 refresh_grant_tokens.append(form.get("refresh_token", ""))
             status, body = mock_oidc_provider.handle_token_request(form)
             return httpx.Response(status, json=body)
-        if request.url.path != _NEAR_MISSES_PATH:
+        if request.url.path != _INGESTIONS_PATH:
             return httpx.Response(404)
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer ") or not auth_header.removeprefix("Bearer "):
@@ -234,7 +237,15 @@ def _build_ps_service_transport(
                 401,
                 json={"error": {"code": "unauthenticated", "message": "missing bearer token"}},
             )
-        return httpx.Response(200, json={"reviews": []})
+        return httpx.Response(
+            200,
+            json={
+                "run_id": "run-integration-1",
+                "regulatory_instrument_id": "ri-integration",
+                "source": "internal",
+                "stages": [],
+            },
+        )
 
     return httpx.MockTransport(_handle), refresh_grant_tokens
 
@@ -352,7 +363,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
         fake_ps_service_metadata_server.base_url, transport=transport
     )
     with pytest.raises(PsCliError) as no_token_excinfo:
-        unauthenticated_client.list_pending_reviews()
+        unauthenticated_client.ingest_internal({"nodes": [], "edges": []})
     assert "authentication rejected" in no_token_excinfo.value.msg
     assert refresh_grant_tokens == []  # never even attempted a refresh
 
@@ -366,14 +377,14 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
         context=_CONTEXT_NAME,
         auth_override=auth_override,
     )
-    result = first_invocation_client.list_pending_reviews()
-    assert result.reviews == []
+    result = first_invocation_client.ingest_internal({"nodes": [], "edges": []})
+    assert result.regulatory_instrument_id == "ri-integration"
     assert len(refresh_grant_tokens) == 1
 
     # --- A second call on the *same* `PsServiceClient` instance (same invocation)
     # reuses the in-memory `AccessTokenCache` -- zero further refreshes (AC-BI-004).
-    result_again = first_invocation_client.list_pending_reviews()
-    assert result_again.reviews == []
+    result_again = first_invocation_client.ingest_internal({"nodes": [], "edges": []})
+    assert result_again.regulatory_instrument_id == "ri-integration"
     assert len(refresh_grant_tokens) == 1
 
     stored_after_first_invocation = credential_store.get_tokens(_CONTEXT_NAME)
@@ -392,8 +403,8 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
         context=_CONTEXT_NAME,
         auth_override=auth_override,
     )
-    result_second_invocation = second_invocation_client.list_pending_reviews()
-    assert result_second_invocation.reviews == []
+    result_second_invocation = second_invocation_client.ingest_internal({"nodes": [], "edges": []})
+    assert result_second_invocation.regulatory_instrument_id == "ri-integration"
     assert len(refresh_grant_tokens) == 2
     assert refresh_grant_tokens[1] == rotated_once
 
@@ -418,7 +429,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
         auth_override=auth_override,
     )
     with pytest.raises(PsCliError) as logged_out_excinfo:
-        post_logout_client.list_pending_reviews()
+        post_logout_client.ingest_internal({"nodes": [], "edges": []})
     assert "no stored credentials" in logged_out_excinfo.value.msg
     assert "ps-cli auth login" in (logged_out_excinfo.value.hint or "")
     assert len(refresh_grant_tokens) == 2  # fails closed before ever attempting one
@@ -470,7 +481,7 @@ def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogi
     )
 
     with pytest.raises(PsCliError) as excinfo:
-        client.list_pending_reviews()
+        client.ingest_internal({"nodes": [], "edges": []})
 
     assert excinfo.value.msg == "stored credentials could not be refreshed"
     assert "ps-cli auth login" in (excinfo.value.hint or "")

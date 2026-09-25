@@ -20,7 +20,7 @@ from ps_cli.http_client import (
     PsServiceClient,
     _should_warn_insecure,  # pyright: ignore[reportPrivateUsage]  # PLAN.md Inc. 7: unit-tested directly per its own AC
 )
-from ps_cli.models import ChangeCheckResult, ReadinessResult
+from ps_cli.models import ReadinessResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,226 +98,6 @@ def _read_error_handler(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadError("[Errno 54] Connection reset by peer", request=request)
 
 
-_NEAR_MISSES_BODY = {
-    "reviews": [
-        {
-            "id": "review_aaa",
-            "kind": "Capability",
-            "incoming_text": "Report the incident to the authority.",
-            "nearest_existing_text": "Conduct a risk assessment.",
-            "similarity": 0.62,
-        },
-        {
-            "id": "review_bbb",
-            "kind": "Policy",
-            "incoming_text": "Maintain a data protection policy.",
-            "nearest_existing_text": "Maintain a privacy policy.",
-            "similarity": 0.701,
-        },
-    ]
-}
-
-
-def _near_misses_handler(request: httpx.Request) -> httpx.Response:
-    assert request.url.path == "/near-misses"
-    return httpx.Response(200, json=_NEAR_MISSES_BODY)
-
-
-class TestListPendingReviews:
-    """Issue #35, Slice 2: PsServiceClient.list_pending_reviews() (AC-BI-003)."""
-
-    def test_parses_a_200_near_misses_response(self) -> None:
-        """A 200 GET /near-misses body parses into PendingReviewEntry list."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_near_misses_handler)
-        )
-
-        result = client.list_pending_reviews()
-
-        assert len(result.reviews) == 2
-        assert result.reviews[0].id == "review_aaa"
-        assert result.reviews[0].kind == "Capability"
-        assert result.reviews[0].incoming_text == "Report the incident to the authority."
-        assert result.reviews[0].nearest_existing_text == "Conduct a risk assessment."
-        assert result.reviews[0].similarity == 0.62
-        assert result.reviews[1].id == "review_bbb"
-
-    def test_empty_reviews_list_parses_to_empty_result(self) -> None:
-        """A 200 body with an empty `reviews` array parses to an empty result, not an error."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses"
-            return httpx.Response(200, json={"reviews": []})
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        result = client.list_pending_reviews()
-
-        assert result.reviews == []
-
-    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.list_pending_reviews()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-
-    def test_malformed_body_raises_ps_cli_error(self) -> None:
-        """A 200 body missing the `reviews` key raises PsCliError, not a KeyError."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses"
-            return httpx.Response(200, json={})
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        with pytest.raises(PsCliError):
-            client.list_pending_reviews()
-
-    def test_non_2xx_response_raises_from_error_body(self) -> None:
-        """A non-2xx response is mapped through D5's structured-error-body path."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses"
-            return httpx.Response(
-                500,
-                json={"error": {"code": "internal_error", "message": "boom"}, "run_id": None},
-            )
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.list_pending_reviews()
-
-        assert "internal_error" in excinfo.value.msg
-
-
-class TestResolveReview:
-    """Issue #35, Slice 3: PsServiceClient.resolve_review() (AC-BI-004/008/009)."""
-
-    def test_parses_a_200_keep_separate_response(self) -> None:
-        """A 200 POST /near-misses/{id}/resolve body parses into a ResolveReviewResult."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses/review_aaa/resolve"
-            assert json.loads(request.content) == {"decision": "keep-separate"}
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": "review_aaa",
-                    "decision": "keep-separate",
-                    "winner_id": None,
-                    "loser_id": None,
-                },
-            )
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        result = client.resolve_review("review_aaa", "keep-separate")
-
-        assert result.review_id == "review_aaa"
-        assert result.decision == "keep-separate"
-        assert result.winner_id is None
-        assert result.loser_id is None
-
-    def test_connect_error_raises_ps_cli_error_with_actionable_message(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5's mapping."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.resolve_review("review_aaa", "keep-separate")
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-
-    def test_malformed_body_raises_ps_cli_error(self) -> None:
-        """A 200 body missing required keys raises PsCliError, not a KeyError."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses/review_aaa/resolve"
-            return httpx.Response(200, json={})
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        with pytest.raises(PsCliError):
-            client.resolve_review("review_aaa", "keep-separate")
-
-    def test_not_found_response_raises_from_error_body(self) -> None:
-        """AC-BI-008: a 404 pending_review_not_found response maps through D5's error path."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses/review_missing/resolve"
-            return httpx.Response(
-                404,
-                json={
-                    "error": {
-                        "code": "pending_review_not_found",
-                        "message": "no unresolved PendingReview with id 'review_missing'",
-                        "failing_stage": None,
-                    },
-                    "run_id": None,
-                },
-            )
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.resolve_review("review_missing", "keep-separate")
-
-        assert "pending_review_not_found" in excinfo.value.msg
-        assert "review_missing" in excinfo.value.msg
-
-    def test_parses_a_200_merge_response(self) -> None:
-        """Issue #35 Slice 4: a 200 POST .../resolve merge body parses winner/loser ids."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/near-misses/review_aaa/resolve"
-            assert json.loads(request.content) == {"decision": "merge"}
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": "review_aaa",
-                    "decision": "merge",
-                    "winner_id": "capability_winner",
-                    "loser_id": "capability_loser",
-                },
-            )
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        result = client.resolve_review("review_aaa", "merge")
-
-        assert result.review_id == "review_aaa"
-        assert result.decision == "merge"
-        assert result.winner_id == "capability_winner"
-        assert result.loser_id == "capability_loser"
-
-
-_INGESTION_SUCCESS_BODY = {
-    "run_id": "run-ingest-001",
-    "regulatory_instrument_id": "ri-gdpr",
-    "source": "catalog",
-    "stages": [
-        {"stage": "parse", "status": "succeeded", "summary": {"nodes": 3}},
-        {"stage": "merge", "status": "succeeded", "summary": {"edges": 5}},
-    ],
-}
-
-
-def _make_ingestion_success_handler() -> Callable[[httpx.Request], httpx.Response]:
-    def _handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/ingestions"
-        assert request.method == "POST"
-        return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
-
-    return _handler
-
-
 def _make_error_body_handler(
     *, status_code: int, code: str, message: str, failing_stage: str | None = None
 ) -> Callable[[httpx.Request], httpx.Response]:
@@ -332,155 +112,6 @@ def _make_error_body_handler(
         )
 
     return _handler
-
-
-class TestIngestCatalog:
-    """Increment 11: PsServiceClient.ingest_catalog(celex)."""
-
-    def test_parses_a_200_success_response(self) -> None:
-        """A 200 POST /ingestions body parses into an IngestionResult."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(_make_ingestion_success_handler()),
-        )
-
-        result = client.ingest_catalog("32016R0679")
-
-        assert result.run_id == "run-ingest-001"
-        assert result.regulatory_instrument_id == "ri-gdpr"
-        assert result.source == "catalog"
-        assert len(result.stages) == 2
-        assert result.stages[0].stage == "parse"
-        assert result.stages[0].status == "succeeded"
-        assert result.stages[0].summary == {"nodes": 3}
-        assert result.stages[1].stage == "merge"
-        assert result.stages[1].summary == {"edges": 5}
-
-    def test_posts_the_expected_request_body(self) -> None:
-        """The request body is {"source": "catalog", "celex": celex}."""
-        captured_bodies: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_bodies.append(json.loads(request.content))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.ingest_catalog("32016R0679")
-
-        assert captured_bodies == [{"source": "catalog", "celex": "32016R0679"}]
-
-    def test_404_catalog_identifier_not_found_raises_ps_cli_error(self) -> None:
-        """A 404 catalog_identifier_not_found body maps to PsCliError per D5."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                _make_error_body_handler(
-                    status_code=404,
-                    code="catalog_identifier_not_found",
-                    message="CELEX '39999X9999' is not in the curated catalog.",
-                )
-            ),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("39999X9999")
-
-        assert "catalog_identifier_not_found" in excinfo.value.msg
-        assert "not in the curated catalog" in excinfo.value.msg
-
-    def test_502_pipeline_stage_failed_surfaces_failing_stage(self) -> None:
-        """A 502 pipeline_stage_failed body's failing_stage surfaces in the raised error."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                _make_error_body_handler(
-                    status_code=502,
-                    code="pipeline_stage_failed",
-                    message="the domain mapper stage failed",
-                    failing_stage="domain_mapper",
-                )
-            ),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
-
-        assert "pipeline_stage_failed" in excinfo.value.msg
-        assert "domain_mapper" in excinfo.value.msg
-
-    def test_503_ingestion_config_incomplete_raises_ps_cli_error(self) -> None:
-        """A 503 ingestion_config_incomplete body maps to PsCliError per D5."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                _make_error_body_handler(
-                    status_code=503,
-                    code="ingestion_config_incomplete",
-                    message="FalkorDB configuration is incomplete.",
-                )
-            ),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
-
-        assert "ingestion_config_incomplete" in excinfo.value.msg
-
-    def test_500_internal_error_raises_generic_ps_cli_error(self) -> None:
-        """A 500 internal_error catch-all body maps to PsCliError per D5."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                _make_error_body_handler(
-                    status_code=500,
-                    code="internal_error",
-                    message="An internal error occurred.",
-                )
-            ),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
-
-        assert "internal_error" in excinfo.value.msg
-
-    def test_non_json_502_body_falls_back_to_generic_error_without_crashing(self) -> None:
-        """A malformed (non-JSON) error body falls back to a generic PsCliError -- no crash."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            del request
-            return httpx.Response(502, content=b"<html>not json</html>")
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
-
-        assert "unexpected error response" in excinfo.value.msg
-        assert "502" in excinfo.value.msg
-
-    def test_posts_with_the_extended_ingestion_read_timeout(self) -> None:
-        """OPEN_QUESTIONS_RESOLVED.md item 10 / BATCH_H_FIX.md.
-
-        `POST /ingestions` blocks synchronously for the whole real pipeline (a real CRA
-        ingestion measured 612.86s / 10m12s) -- the client-wide 30s read timeout is far
-        too short for it. This proves `ingest_catalog()` passes a per-request override
-        widening only the read timeout to 1800s (30 min); connect/write/pool stay at the
-        fast client-wide 5s, since a slow *response* is expected here but a slow
-        *connection* is not.
-        """
-        captured_timeouts: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_timeouts.append(request.extensions.get("timeout"))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.ingest_catalog("32016R0679")
-
-        assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
 
 
 _INTERNAL_INGESTION_SUCCESS_BODY = {
@@ -588,9 +219,12 @@ class TestIngestInternal:
     def test_posts_with_the_extended_ingestion_read_timeout(self) -> None:
         """OPEN_QUESTIONS_RESOLVED.md item 10 / BATCH_H_FIX.md.
 
-        Same per-request timeout override as `ingest_catalog()` (both endpoints share the
-        same real pipeline behind `POST /ingestions`) -- proves `ingest_internal()` also
-        passes the extended 1800s read timeout, not the client-wide 30s default.
+        `POST /ingestions` blocks synchronously for the whole real pipeline (a real CRA
+        ingestion measured 612.86s / 10m12s) -- the client-wide 30s read timeout is far
+        too short for it. This proves `ingest_internal()` passes a per-request override
+        widening only the read timeout to 1800s (30 min); connect/write/pool stay at the
+        fast client-wide 5s, since a slow *response* is expected here but a slow
+        *connection* is not.
         """
         captured_timeouts: list[object] = []
 
@@ -603,154 +237,6 @@ class TestIngestInternal:
         client.ingest_internal({"nodes": [], "edges": []})
 
         assert captured_timeouts == [{"connect": 5.0, "read": 1800.0, "write": 5.0, "pool": 5.0}]
-
-
-class TestIngestCatalogRunId:
-    """Increment 14: `ingest_catalog(celex, *, run_id=...)`'s request-body shape."""
-
-    def test_includes_run_id_in_request_body_when_given(self) -> None:
-        """`run_id` is included in the POST body when the caller supplies one."""
-        captured_bodies: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_bodies.append(json.loads(request.content))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.ingest_catalog("32016R0679", run_id="run-explicit-123")
-
-        assert captured_bodies == [
-            {"source": "catalog", "celex": "32016R0679", "run_id": "run-explicit-123"}
-        ]
-
-    def test_omits_run_id_from_request_body_when_not_given(self) -> None:
-        """Regression: today's exact wire shape is preserved when `run_id` is not passed."""
-        captured_bodies: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_bodies.append(json.loads(request.content))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.ingest_catalog("32016R0679")
-
-        assert captured_bodies == [{"source": "catalog", "celex": "32016R0679"}]
-
-
-_STATUS_BODY_WITH_STAGE = {"run_id": "run-poll-001", "stage": "extraction"}
-_STATUS_BODY_NO_STAGE = {"run_id": "run-poll-001", "stage": None}
-
-
-class TestPollIngestionStatus:
-    """Increment 14: PsServiceClient.poll_ingestion_status(run_id)."""
-
-    def test_parses_the_stage_field(self) -> None:
-        """A 200 GET /ingestions/{run_id} body's `stage` field is returned as-is."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/ingestions/run-poll-001"
-            assert request.method == "GET"
-            return httpx.Response(200, json=_STATUS_BODY_WITH_STAGE)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage == "extraction"
-
-    def test_returns_none_when_stage_field_is_null(self) -> None:
-        """A 200 body with `stage: null` (no run in flight) returns None, not a crash."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            del request
-            return httpx.Response(200, json=_STATUS_BODY_NO_STAGE)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_returns_none_on_network_error_without_raising(self) -> None:
-        """A transport-level ConnectError is swallowed -- this is a best-effort read."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("connection refused", request=request)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_returns_none_on_read_timeout_without_raising(self) -> None:
-        """A transport-level ReadTimeout is also swallowed -- never surfaced to the caller."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ReadTimeout("timed out", request=request)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_returns_none_on_non_2xx_response_without_raising(self) -> None:
-        """A non-2xx response (e.g. a 404/500) is swallowed, not mapped to PsCliError."""
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            del request
-            return httpx.Response(500, json={"error": "boom"})
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_returns_none_on_non_json_body_without_raising(self) -> None:
-        """A malformed (non-JSON) body is swallowed, not raised."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, content=b"<html>not json</html>")
-            ),
-        )
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_returns_none_on_wrong_shaped_body_without_raising(self) -> None:
-        """A 200 body that parses as JSON but doesn't match the expected shape is swallowed."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json={"unexpected": "shape"})
-            ),
-        )
-
-        stage = client.poll_ingestion_status("run-poll-001")
-
-        assert stage is None
-
-    def test_uses_a_short_timeout_not_the_1800s_override(self) -> None:
-        """A recording transport proves the new short timeout constant is used, not the
-        1800s `_INGESTION_REQUEST_TIMEOUT` override sized for `POST /ingestions`.
-        """
-        captured_timeouts: list[object] = []
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            captured_timeouts.append(request.extensions.get("timeout"))
-            return httpx.Response(200, json=_STATUS_BODY_WITH_STAGE)
-
-        client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
-
-        client.poll_ingestion_status("run-poll-001")
-
-        assert captured_timeouts == [{"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}]
 
 
 _RESTORATION_MANIFEST = CuratedInstrumentManifest(
@@ -1279,63 +765,6 @@ class TestCheckReadiness:
         assert excinfo.value.msg == _UNEXPECTED_RESPONSE_SHAPE_MSG
 
 
-_CHANGE_CHECK_SUCCESS_BODY: dict[str, object] = {"run_id": "r1", "instruments": []}
-
-
-def _change_check_handler(request: httpx.Request) -> httpx.Response:
-    assert request.url.path == "/change-checks"
-    assert request.method == "POST"
-    return httpx.Response(200, json=_CHANGE_CHECK_SUCCESS_BODY)
-
-
-class TestRunChangeCheck:
-    """Issue #73, PLAN.md §4 Slice 1: PsServiceClient.run_change_check()."""
-
-    def test_run_change_check_returns_result_on_success(self) -> None:
-        """A 200 POST /change-checks body parses into a ChangeCheckResult."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_change_check_handler)
-        )
-
-        result = client.run_change_check()
-
-        assert result == ChangeCheckResult(run_id="r1", instruments=[])
-
-    def test_run_change_check_raises_ps_cli_error_on_connect_failure(self) -> None:
-        """A transport-level ConnectError maps to PsCliError per D5/D14's mapping."""
-        client = PsServiceClient(
-            "http://127.0.0.1:8000", transport=httpx.MockTransport(_connect_error_handler)
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.run_change_check()
-
-        assert "Could not reach PS Service at" in excinfo.value.msg
-        assert excinfo.value.hint is not None
-        assert "PS_CLI_SERVICE_URL" in excinfo.value.hint
-
-    def test_run_change_check_raises_from_structured_error_body_on_non_2xx(self) -> None:
-        """A 500 with the standard ErrorBody shape raises via `_raise_from_error_body` (D14) --
-        `/change-checks` can still fail this way (an unguarded graph-open failure, D12),
-        so it belongs in the "has an error body" camp like `ingest_catalog()`.
-        """
-        client = PsServiceClient(
-            "http://127.0.0.1:8000",
-            transport=httpx.MockTransport(
-                _make_error_body_handler(
-                    status_code=500,
-                    code="internal_error",
-                    message="An internal error occurred.",
-                )
-            ),
-        )
-
-        with pytest.raises(PsCliError) as excinfo:
-            client.run_change_check()
-
-        assert "internal_error" in excinfo.value.msg
-
-
 # --- Issue #121 Group 3 (AC-BI-002/003/004/005/006/009): token use, refresh-once ----
 #
 # `PsServiceClient` threads its own `transport` constructor argument into
@@ -1433,7 +862,7 @@ def _build_auth_and_business_transport(
 class TestAuthenticatedRequestsAttachBearerHeader:
     """Issue #121 (AC-BI-003/004): exactly one refresh per invocation, then reused."""
 
-    def test_ingest_catalog_attaches_authorization_header_from_a_freshly_refreshed_token(
+    def test_ingest_internal_attaches_authorization_header_from_a_freshly_refreshed_token(
         self,
     ) -> None:
         """`credential_store`+`context` given -> a refresh happens, and the resulting
@@ -1443,7 +872,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 
         def _business_handler(request: httpx.Request) -> httpx.Response:
             captured_headers.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+            return httpx.Response(200, json=_INTERNAL_INGESTION_SUCCESS_BODY)
 
         transport, refresh_calls = _build_auth_and_business_transport(_business_handler)
         store = _FakeCredentialStore()
@@ -1455,7 +884,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
             context="dev",
         )
 
-        client.ingest_catalog("32016R0679")
+        client.ingest_internal({"nodes": [], "edges": []})
 
         assert captured_headers == ["Bearer refreshed-token-1"]
         assert refresh_calls == [1]
@@ -1472,7 +901,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 
         def _business_handler(request: httpx.Request) -> httpx.Response:
             captured_headers.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+            return httpx.Response(200, json=_INTERNAL_INGESTION_SUCCESS_BODY)
 
         transport, refresh_calls = _build_auth_and_business_transport(_business_handler)
         store = _FakeCredentialStore()
@@ -1484,8 +913,8 @@ class TestAuthenticatedRequestsAttachBearerHeader:
             context="dev",
         )
 
-        client.ingest_catalog("32016R0679")
-        client.ingest_catalog("32016R0679")
+        client.ingest_internal({"nodes": [], "edges": []})
+        client.ingest_internal({"nodes": [], "edges": []})
 
         assert refresh_calls == [1]
         assert captured_headers == ["Bearer refreshed-token-1", "Bearer refreshed-token-1"]
@@ -1529,11 +958,11 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 
         def _handler(request: httpx.Request) -> httpx.Response:
             captured_headers.append(request.headers.get("authorization"))
-            return httpx.Response(200, json=_INGESTION_SUCCESS_BODY)
+            return httpx.Response(200, json=_INTERNAL_INGESTION_SUCCESS_BODY)
 
         client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
 
-        client.ingest_catalog("32016R0679")
+        client.ingest_internal({"nodes": [], "edges": []})
 
         assert captured_headers == [None]
 
@@ -1541,7 +970,7 @@ class TestAuthenticatedRequestsAttachBearerHeader:
 class TestAuthenticationFailsClosed:
     """Issue #121 (AC-BI-002/009): no-refresh-token / refresh-fails fail closed."""
 
-    def test_ingest_catalog_with_no_stored_credential_raises_without_sending_request(
+    def test_ingest_internal_with_no_stored_credential_raises_without_sending_request(
         self,
     ) -> None:
         """No stored bundle at all -> fail closed; the PS Service transport is never touched."""
@@ -1554,12 +983,12 @@ class TestAuthenticationFailsClosed:
         )
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert "no stored credentials for context 'dev'" in excinfo.value.msg
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
-    def test_ingest_catalog_with_no_refresh_token_raises_without_sending_request(
+    def test_ingest_internal_with_no_refresh_token_raises_without_sending_request(
         self,
     ) -> None:
         """A stored bundle with `refresh_token=None` -> fail closed, no request sent."""
@@ -1573,12 +1002,12 @@ class TestAuthenticationFailsClosed:
         )
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert excinfo.value.msg == "stored credentials could not be refreshed"
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
-    def test_ingest_catalog_with_rejected_refresh_raises_without_sending_a_business_request(
+    def test_ingest_internal_with_rejected_refresh_raises_without_sending_a_business_request(
         self,
     ) -> None:
         """A refresh_token the fake issuer rejects (`invalid_grant`) surfaces as the
@@ -1605,7 +1034,7 @@ class TestAuthenticationFailsClosed:
         )
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert excinfo.value.msg == "stored credentials could not be refreshed"
         assert "ps-cli auth login" in (excinfo.value.hint or "")
@@ -1615,7 +1044,7 @@ class TestAuthenticationFailsClosed:
 class TestUnauthorizedResponseMapping:
     """Issue #57 Slice 18 (AC-BI-014): a 401 maps to one actionable error, never the body."""
 
-    def test_ingest_catalog_maps_401_response_to_actionable_error_not_generic_http_error(
+    def test_ingest_internal_maps_401_response_to_actionable_error_not_generic_http_error(
         self,
     ) -> None:
         """A bare 401, with PS Service's own structured error body attached, still maps
@@ -1641,7 +1070,7 @@ class TestUnauthorizedResponseMapping:
         client = PsServiceClient("http://127.0.0.1:8000", transport=httpx.MockTransport(_handler))
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert (
             excinfo.value.msg
@@ -1688,7 +1117,7 @@ class TestUnauthorizedResponseMapping:
         )
 
         with pytest.raises(PsCliError) as excinfo:
-            client.ingest_catalog("32016R0679")
+            client.ingest_internal({"nodes": [], "edges": []})
 
         assert marker_access_token not in excinfo.value.msg
         assert marker_access_token not in (excinfo.value.hint or "")

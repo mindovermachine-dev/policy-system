@@ -57,7 +57,7 @@ class StageOutcome:
 
 @dataclass(frozen=True)
 class IngestionResult:
-    """Parsed success result of `PsServiceClient.ingest_catalog()` / `ingest_internal()`."""
+    """Parsed success result of `PsServiceClient.ingest_internal()`."""
 
     run_id: str
     regulatory_instrument_id: str
@@ -183,90 +183,3 @@ class ReadinessResult:
 
     status: str
     unhealthy_dependencies: list[str]
-
-
-class InstrumentCheckOutcomeBody(TypedDict):
-    """Raw JSON shape of one entry in a `POST /change-checks` 200 response's `instruments` array."""
-
-    instrument_id: str
-    outcome: str
-    detail: str | None
-    reingest_run_id: str | None
-
-
-class ChangeCheckResponseBody(TypedDict):
-    """Raw JSON shape of a `POST /change-checks` 200 response body."""
-
-    run_id: str
-    instruments: list[InstrumentCheckOutcomeBody]
-
-
-@dataclass(frozen=True)
-class InstrumentCheckOutcome:
-    """One tracked instrument's classification, as reported in a change-check sweep result."""
-
-    instrument_id: str
-    outcome: str
-    detail: str | None
-    reingest_run_id: str | None
-
-
-@dataclass(frozen=True)
-class ChangeCheckResult:
-    """Parsed result of `PsServiceClient.run_change_check()`."""
-
-    run_id: str
-    instruments: list[InstrumentCheckOutcome]
-
-
-class PendingReviewEntryBody(TypedDict):
-    """Raw JSON shape of one entry in `GET /near-misses`'s `reviews` array (issue #35)."""
-
-    id: str
-    kind: str
-    incoming_text: str
-    nearest_existing_text: str
-    similarity: float
-
-
-class PendingReviewListResponseBody(TypedDict):
-    """Raw JSON shape of a `GET /near-misses` 200 response body."""
-
-    reviews: list[PendingReviewEntryBody]
-
-
-@dataclass(frozen=True)
-class PendingReviewEntry:
-    """One unresolved near-miss review: its id, kind, both texts, and similarity score."""
-
-    id: str
-    kind: str
-    incoming_text: str
-    nearest_existing_text: str
-    similarity: float
-
-
-@dataclass(frozen=True)
-class PendingReviewsResult:
-    """Parsed result of `PsServiceClient.list_pending_reviews()`."""
-
-    reviews: list[PendingReviewEntry]
-
-
-class ResolveReviewResponseBody(TypedDict):
-    """Raw JSON shape of a `POST /near-misses/{review_id}/resolve` 200 response body (issue #35)."""
-
-    review_id: str
-    decision: str
-    winner_id: str | None
-    loser_id: str | None
-
-
-@dataclass(frozen=True)
-class ResolveReviewResult:
-    """Parsed result of `PsServiceClient.resolve_review()`."""
-
-    review_id: str
-    decision: str
-    winner_id: str | None
-    loser_id: str | None

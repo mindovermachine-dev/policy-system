@@ -40,9 +40,9 @@ if TYPE_CHECKING:
 _RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 _OPENID_CONFIGURATION_PATH = "/.well-known/openid-configuration"
 
-# Matches `http_client.py`'s own fast-path timeout convention (`_STATUS_POLL_TIMEOUT`)
-# -- both discovery documents are small, static JSON bodies with no reason to wait
-# any longer than PS Service's own fast endpoints.
+# Matches `http_client.py`'s own fast-path timeout convention (a short, uniform
+# connect/read/write/pool bound) -- both discovery documents are small, static JSON
+# bodies with no reason to wait any longer than PS Service's own fast endpoints.
 _DISCOVERY_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 
 _UNEXPECTED_RESOURCE_METADATA_SHAPE_MSG = (

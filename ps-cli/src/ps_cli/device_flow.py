@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 # Matches `oidc_discovery.py`'s own `_DISCOVERY_TIMEOUT` convention -- both the
 # device-authorization request and each individual token-endpoint poll are small,
 # fast JSON round-trips with no reason to wait any longer than PS Service's own fast
-# endpoints (`http_client.py::_STATUS_POLL_TIMEOUT`).
+# endpoints (`http_client.py`'s own short, uniform connect/read/write/pool bound).
 _DEVICE_FLOW_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 
 _GRANT_TYPE_DEVICE_CODE = "urn:ietf:params:oauth:grant-type:device_code"
@@ -399,12 +399,11 @@ def _is_cache_stale(cache: AccessTokenCache) -> bool:
 def peek_cached_access_token(*, access_token_cache: AccessTokenCache) -> str | None:
     """Return this invocation's already-obtained access token, if any (D-121-3).
 
-    Read-only: never calls the network, never writes the store, never raises -- used
-    by `PsServiceClient.poll_ingestion_status()`, whose best-effort contract must
-    never trigger a refresh or a credential-store write. Contrast with
-    `ensure_valid_access_token()`, which refreshes a stale/missing cache entry (and
-    fails closed if it cannot); here, an empty cache simply means "attach no
-    Authorization header", not an error.
+    Read-only: never calls the network, never writes the store, never raises --
+    for a best-effort caller that must never trigger a refresh or a
+    credential-store write. Contrast with `ensure_valid_access_token()`, which
+    refreshes a stale/missing cache entry (and fails closed if it cannot); here,
+    an empty cache simply means "attach no Authorization header", not an error.
     """
     return access_token_cache.token
 

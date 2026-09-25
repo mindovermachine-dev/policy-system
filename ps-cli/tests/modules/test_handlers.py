@@ -1,4 +1,4 @@
-"""Tests for ps_cli.modules.handlers: handle_ingest_regulation (PLAN.md §3 Increment 12).
+"""Tests for ps_cli.modules.handlers.
 
 `handle_ingest_document`'s full happy-path wiring (PLAN.md §3 Increment 15) is
 deliberately not unit-tested at this layer -- its coverage there is exactly two
@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import threading
-import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -23,26 +21,17 @@ import pytest
 from ps_cli.config import CliConfig
 from ps_cli.errors import PsCliError
 from ps_cli.models import (
-    ChangeCheckResult,
     ExportResult,
     IngestionResult,
-    InstrumentCheckOutcome,
-    PendingReviewEntry,
-    PendingReviewsResult,
     ReadinessResult,
-    ResolveReviewResult,
     RestorationResult,
     RestorationStageOutcome,
     StageOutcome,
 )
 from ps_cli.modules.handlers import (
-    handle_check_regulations,
     handle_get_catalog,
     handle_get_health,
     handle_ingest_document,
-    handle_ingest_regulation,
-    handle_near_misses_list,
-    handle_near_misses_resolve,
     handle_restore_instrument,
 )
 
@@ -75,19 +64,9 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `check_readiness()` to be called."""
         raise AssertionError("check_readiness must not be called in this test")
 
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Fail: this test's fake does not expect `ingest_catalog()` to be called."""
-        msg = f"ingest_catalog must not be called in this test (celex={celex!r}, run_id={run_id!r})"
-        raise AssertionError(msg)
-
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
         msg = f"ingest_internal must not be called in this test (content={content!r})"
-        raise AssertionError(msg)
-
-    def poll_ingestion_status(self, run_id: str) -> str | None:
-        """Fail: this test's fake does not expect `poll_ingestion_status()` to be called."""
-        msg = f"poll_ingestion_status must not be called in this test (run_id={run_id!r})"
         raise AssertionError(msg)
 
     def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
@@ -99,351 +78,6 @@ class _UnusedPsServiceClientMethods:
         """Fail: this test's fake does not expect `export_instrument()` to be called."""
         msg = f"export_instrument must not be called in this test (instrument_id={instrument_id!r})"
         raise AssertionError(msg)
-
-    def run_change_check(self) -> ChangeCheckResult:
-        """Fail: this test's fake does not expect `run_change_check()` to be called."""
-        raise AssertionError("run_change_check must not be called in this test")
-
-    def list_pending_reviews(self) -> PendingReviewsResult:
-        """Fail: this test's fake does not expect `list_pending_reviews()` to be called."""
-        raise AssertionError("list_pending_reviews must not be called in this test")
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Fail: this test's fake does not expect `resolve_review()` to be called."""
-        msg = (
-            f"resolve_review must not be called in this test "
-            f"(review_id={review_id!r}, decision={decision!r})"
-        )
-        raise AssertionError(msg)
-
-
-class _FakePendingReviewsClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake implementing `list_pending_reviews()`'s signature (issue #35)."""
-
-    def __init__(self, result: PendingReviewsResult) -> None:
-        """Script the PendingReviewsResult this fake's list_pending_reviews() returns."""
-        self._result = result
-
-    def list_pending_reviews(self) -> PendingReviewsResult:
-        """Return the scripted PendingReviewsResult."""
-        return self._result
-
-
-def test_handle_near_misses_list_prints_id_similarity_and_both_texts_per_line(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-003: each unresolved review prints its id, similarity, and both texts."""
-    result = PendingReviewsResult(
-        reviews=[
-            PendingReviewEntry(
-                id="review_aaa",
-                kind="Capability",
-                incoming_text="Report the incident to the authority.",
-                nearest_existing_text="Conduct a risk assessment.",
-                similarity=0.62,
-            ),
-            PendingReviewEntry(
-                id="review_bbb",
-                kind="Policy",
-                incoming_text="Maintain a data protection policy.",
-                nearest_existing_text="Maintain a privacy policy.",
-                similarity=0.701,
-            ),
-        ]
-    )
-    fake_client = _FakePendingReviewsClient(result)
-
-    handle_near_misses_list(fake_client)
-
-    captured = capsys.readouterr()
-    assert captured.out == (
-        "review_aaa  0.620  'Report the incident to the authority.' vs "
-        "'Conduct a risk assessment.'\n"
-        "review_bbb  0.701  'Maintain a data protection policy.' vs "
-        "'Maintain a privacy policy.'\n"
-    )
-    assert captured.err == ""
-
-
-def test_handle_near_misses_list_no_reviews_prints_nothing(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """An empty `reviews` list prints nothing -- L2 ps-cli "Silence on success"."""
-    fake_client = _FakePendingReviewsClient(PendingReviewsResult(reviews=[]))
-
-    handle_near_misses_list(fake_client)
-
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
-
-
-class _FakeResolveReviewClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake implementing `resolve_review()`'s signature (issue #35, Slice 3)."""
-
-    def __init__(self, result: ResolveReviewResult) -> None:
-        """Script the ResolveReviewResult this fake's resolve_review() returns."""
-        self._result = result
-        self.calls: list[tuple[str, str]] = []
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Record the call and return the scripted ResolveReviewResult."""
-        self.calls.append((review_id, decision))
-        return self._result
-
-
-class _FakeResolveReviewFailingClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake whose resolve_review() always raises (AC-BI-008)."""
-
-    def __init__(self, error: PsCliError) -> None:
-        """Store the PsCliError this fake's resolve_review() raises."""
-        self._error = error
-
-    def resolve_review(self, review_id: str, decision: str) -> ResolveReviewResult:
-        """Raise the scripted PsCliError, simulating a not-found PS Service response."""
-        del review_id, decision
-        raise self._error
-
-
-def test_handle_near_misses_resolve_keep_separate_prints_confirmation(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-004/009: a successful keep-separate resolve prints a confirmation line."""
-    result = ResolveReviewResult(
-        review_id="review_aaa", decision="keep-separate", winner_id=None, loser_id=None
-    )
-    fake_client = _FakeResolveReviewClient(result)
-
-    handle_near_misses_resolve("review_aaa", "keep-separate", fake_client)
-
-    captured = capsys.readouterr()
-    assert captured.out == "cleared review review_aaa (keep-separate)\n"
-    assert captured.err == ""
-    assert fake_client.calls == [("review_aaa", "keep-separate")]
-
-
-def test_handle_near_misses_resolve_unknown_id_propagates_ps_cli_error() -> None:
-    """AC-BI-008: a not-found id's PsCliError propagates uncaught -- only cli.run() catches it."""
-    fake_client = _FakeResolveReviewFailingClient(
-        PsCliError(msg="PS Service reported pending_review_not_found: no such review")
-    )
-
-    with pytest.raises(PsCliError, match="pending_review_not_found"):
-        handle_near_misses_resolve("review_missing", "keep-separate", fake_client)
-
-
-def test_handle_near_misses_resolve_merge_prints_winner_and_loser(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-005/006/007/009: a successful merge resolve prints winner/loser, not a bare id."""
-    result = ResolveReviewResult(
-        review_id="review_aaa",
-        decision="merge",
-        winner_id="capability_winner",
-        loser_id="capability_loser",
-    )
-    fake_client = _FakeResolveReviewClient(result)
-
-    handle_near_misses_resolve("review_aaa", "merge", fake_client)
-
-    captured = capsys.readouterr()
-    assert captured.out == "merged capability_loser into capability_winner\n"
-    assert captured.err == ""
-    assert fake_client.calls == [("review_aaa", "merge")]
-
-
-class _FakeIngestClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake implementing `ingest_catalog()`'s signature.
-
-    Scripted to either return a fixed `IngestionResult` or raise a fixed
-    `PsCliError` (simulating a structured PS Service failure response, e.g.
-    Increment 11's 502 case). Records the `celex` it was called with (or
-    `None` if never called), for the fast-fail assertion.
-    """
-
-    def __init__(
-        self, *, result: IngestionResult | None = None, error: PsCliError | None = None
-    ) -> None:
-        """Script this fake's ingest_catalog() outcome: a result, or an error to raise."""
-        self._result = result
-        self._error = error
-        self.called_with_celex: str | None = None
-
-    def check_readiness(self) -> ReadinessResult:
-        """Report a fully-healthy target -- the pre-flight check must let this through."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Record `celex`, then return the scripted result or raise the scripted error."""
-        del run_id
-        self.called_with_celex = celex
-        if self._error is not None:
-            raise self._error
-        assert self._result is not None
-        return self._result
-
-
-def test_handle_ingest_regulation_prints_run_id_and_stage_summary_on_success(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A successful ingest prints run_id, regulatory_instrument_id, and each stage's outcome."""
-    result = IngestionResult(
-        run_id="run-ingest-001",
-        regulatory_instrument_id="ri-gdpr",
-        source="catalog",
-        stages=[
-            StageOutcome(stage="parse", status="succeeded", summary={"nodes": 3}),
-            StageOutcome(stage="merge", status="succeeded", summary={"edges": 5}),
-        ],
-    )
-    fake = _FakeIngestClient(result=result)
-
-    handle_ingest_regulation("32016R0679", fake)
-
-    captured = capsys.readouterr()
-    assert "run_id: run-ingest-001" in captured.out
-    assert "regulatory_instrument_id: ri-gdpr" in captured.out
-    assert "parse: succeeded" in captured.out
-    assert "merge: succeeded" in captured.out
-    assert fake.called_with_celex == "32016R0679"
-
-
-def test_handle_ingest_regulation_surfaces_nonzero_skipped_units(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-003: a stage summary with skipped_units > 0 surfaces the count to the operator."""
-    result = IngestionResult(
-        run_id="run-ingest-002",
-        regulatory_instrument_id="ri-gdpr",
-        source="catalog",
-        stages=[
-            StageOutcome(
-                stage="extraction",
-                status="succeeded",
-                summary={"roles": 2, "requirements": 5, "candidates": 5, "skipped_units": 3},
-            ),
-        ],
-    )
-    fake = _FakeIngestClient(result=result)
-
-    handle_ingest_regulation("32016R0679", fake)
-
-    captured = capsys.readouterr()
-    lines = captured.out.splitlines()
-    assert "extraction: succeeded (skipped_units: 3)" in lines
-
-
-def test_handle_ingest_regulation_stage_line_byte_identical_when_no_skipped_units(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-004: skipped_units == 0 (or absent) prints exactly the pre-existing line, unchanged."""
-    result = IngestionResult(
-        run_id="run-ingest-003",
-        regulatory_instrument_id="ri-gdpr",
-        source="catalog",
-        stages=[
-            StageOutcome(
-                stage="extraction",
-                status="succeeded",
-                summary={"roles": 2, "requirements": 5, "candidates": 5, "skipped_units": 0},
-            ),
-            StageOutcome(stage="merge", status="succeeded", summary={"edges": 5}),
-        ],
-    )
-    fake = _FakeIngestClient(result=result)
-
-    handle_ingest_regulation("32016R0679", fake)
-
-    captured = capsys.readouterr()
-    lines = captured.out.splitlines()
-    assert "extraction: succeeded" in lines
-    assert "merge: succeeded" in lines
-
-
-def test_handle_ingest_regulation_surfaces_nonzero_pending_reviews(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Issue #35, Slice 5 (AC-BI-010): a merge-stage summary with
-    pending_reviews > 0 surfaces the count to the operator, mirroring
-    skipped_units's exact conditional-append idiom (CHANGES.md C2).
-    """
-    result = IngestionResult(
-        run_id="run-ingest-004",
-        regulatory_instrument_id="ri-gdpr",
-        source="catalog",
-        stages=[
-            StageOutcome(
-                stage="merge",
-                status="succeeded",
-                summary={
-                    "obligations": 4,
-                    "canonical_capabilities": 3,
-                    "near_misses": 2,
-                    "pending_reviews": 2,
-                },
-            ),
-        ],
-    )
-    fake = _FakeIngestClient(result=result)
-
-    handle_ingest_regulation("32016R0679", fake)
-
-    captured = capsys.readouterr()
-    lines = captured.out.splitlines()
-    assert "merge: succeeded (pending_reviews: 2)" in lines
-
-
-def test_handle_ingest_regulation_stage_line_byte_identical_when_no_pending_reviews(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """AC-BI-010 corollary: pending_reviews == 0 (or absent) prints exactly
-    the pre-existing line, unchanged (CHANGES.md C2's byte-identical
-    guarantee).
-    """
-    result = IngestionResult(
-        run_id="run-ingest-005",
-        regulatory_instrument_id="ri-gdpr",
-        source="catalog",
-        stages=[
-            StageOutcome(
-                stage="merge",
-                status="succeeded",
-                summary={
-                    "obligations": 4,
-                    "canonical_capabilities": 3,
-                    "near_misses": 0,
-                    "pending_reviews": 0,
-                },
-            ),
-            StageOutcome(stage="extraction", status="succeeded", summary={"skipped_units": 0}),
-        ],
-    )
-    fake = _FakeIngestClient(result=result)
-
-    handle_ingest_regulation("32016R0679", fake)
-
-    captured = capsys.readouterr()
-    lines = captured.out.splitlines()
-    assert "merge: succeeded" in lines
-    assert "extraction: succeeded" in lines
-
-
-def test_handle_ingest_regulation_propagates_ps_cli_error_from_client_uncaught() -> None:
-    """A PsCliError from the client (e.g. a 502) propagates uncaught through the handler.
-
-    Not caught here -- only `ps_cli.cli.run()` catches `PsCliError`, in its
-    single central try/except (PLAN.md §1 D5/D9).
-    """
-    fake = _FakeIngestClient(
-        error=PsCliError(
-            msg="PS Service reported pipeline_stage_failed: the domain mapper stage failed "
-            "(failing stage: domain_mapper)",
-            hint="run_id: run-ingest-err",
-        )
-    )
-
-    with pytest.raises(PsCliError):
-        handle_ingest_regulation("32016R0679", fake)
 
 
 def test_handle_ingest_document_validates_locally_before_any_http_call(
@@ -493,11 +127,10 @@ _MINIMAL_VALID_INTERNAL_SEED_DOCUMENT: dict[str, object] = {
 class _FakeInternalIngestClient(_UnusedPsServiceClientMethods):
     """Hand-written fake implementing `ingest_internal()`'s signature.
 
-    Scripted to return a fixed `IngestionResult`, mirroring `_FakeIngestClient`
-    above but for the internal-seed path -- used only for issue #35 Slice 5's
-    pending_reviews stage-line tests, which need a specific `IngestionResult`
-    the way the pre-existing skipped_units tests do for
-    `handle_ingest_regulation`.
+    Scripted to return a fixed `IngestionResult`, used only for issue #35
+    Slice 5's pending_reviews stage-line tests, which need a specific
+    `IngestionResult` to exercise `handle_ingest_document`'s conditional-append
+    idiom for `pending_reviews`.
     """
 
     def __init__(self, *, result: IngestionResult) -> None:
@@ -518,9 +151,9 @@ def test_handle_ingest_document_surfaces_nonzero_pending_reviews(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Issue #35, Slice 5 (AC-BI-010): same conditional-append behavior as
-    `handle_ingest_regulation`, for the internal-seed pipeline's own
-    stage-print loop (CHANGES.md C2, handlers.py:215-219).
+    """Issue #35, Slice 5 (AC-BI-010): `handle_ingest_document`'s own
+    stage-print loop appends `" (pending_reviews: {n})"` when the merge
+    stage's summary reports a nonzero count (CHANGES.md C2).
     """
     document_path = tmp_path / "seed.json"
     document_path.write_text(json.dumps(_MINIMAL_VALID_INTERNAL_SEED_DOCUMENT), encoding="utf-8")
@@ -585,128 +218,6 @@ def test_handle_ingest_document_stage_line_byte_identical_when_no_pending_review
     lines = captured.out.splitlines()
     assert "internal_ingestion: succeeded" in lines
     assert "merge: succeeded" in lines
-
-
-class _FakeProgressIngestClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake whose `ingest_catalog()` blocks briefly and whose
-    `poll_ingestion_status()` returns a scripted sequence of stages.
-
-    Simulates a real ingest in flight (PLAN.md §3 Increment 15): the main
-    thread's `ingest_catalog()` call sleeps for `block_seconds` before
-    returning a fixed `IngestionResult`, giving a concurrently-polling
-    background thread a real window to observe stage changes.
-    """
-
-    def __init__(
-        self,
-        *,
-        result: IngestionResult,
-        stages: list[str | None],
-        block_seconds: float,
-    ) -> None:
-        """Script this fake's `ingest_catalog()` delay/result and polled stage sequence."""
-        self._result = result
-        self._stages = stages
-        self._block_seconds = block_seconds
-        self._poll_calls = 0
-
-    def check_readiness(self) -> ReadinessResult:
-        """Report a fully-healthy target -- the pre-flight check must let this through."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def ingest_catalog(self, celex: str, *, run_id: str | None = None) -> IngestionResult:
-        """Record nothing; block briefly, then return the scripted result."""
-        del celex, run_id
-        time.sleep(self._block_seconds)
-        return self._result
-
-    def poll_ingestion_status(self, run_id: str) -> str | None:
-        """Return the next scripted stage, repeating the last one once exhausted."""
-        del run_id
-        index = min(self._poll_calls, len(self._stages) - 1)
-        self._poll_calls += 1
-        return self._stages[index]
-
-
-_PROGRESS_TEST_RESULT = IngestionResult(
-    run_id="run-progress-001",
-    regulatory_instrument_id="ri-progress",
-    source="catalog",
-    stages=[StageOutcome(stage="merge", status="succeeded", summary={})],
-)
-
-
-def test_handle_ingest_regulation_prints_stage_changes_to_stderr_while_waiting(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Stage changes observed while `ingest_catalog()` blocks print to stderr, not stdout.
-
-    The final stdout summary (AC-BI-010) is unchanged by the presence of
-    progress output.
-    """
-    fake = _FakeProgressIngestClient(
-        result=_PROGRESS_TEST_RESULT,
-        stages=["ingestion", "extraction", "extraction"],
-        block_seconds=0.05,
-    )
-
-    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
-
-    captured = capsys.readouterr()
-    assert "ingestion: running" in captured.err
-    assert "extraction: running" in captured.err
-    assert captured.out == (
-        "run_id: run-progress-001\nregulatory_instrument_id: ri-progress\nmerge: succeeded\n"
-    )
-
-
-def test_handle_ingest_regulation_does_not_repeat_an_unchanged_stage_line(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A stage that stays the same across multiple polls prints only once."""
-    fake = _FakeProgressIngestClient(
-        result=_PROGRESS_TEST_RESULT,
-        stages=["ingestion"],
-        block_seconds=0.08,
-    )
-
-    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
-
-    captured = capsys.readouterr()
-    assert captured.err.count("ingestion: running") == 1
-
-
-def test_handle_ingest_regulation_stops_polling_after_ingest_catalog_returns() -> None:
-    """The poller thread is no longer alive once the handler has returned (no thread leak)."""
-    fake = _FakeProgressIngestClient(
-        result=_PROGRESS_TEST_RESULT,
-        stages=["ingestion", "extraction"],
-        block_seconds=0.05,
-    )
-
-    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
-
-    poller_threads = [t for t in threading.enumerate() if t.name == "ps-cli-ingest-poller"]
-    assert not any(t.is_alive() for t in poller_threads)
-
-
-def test_handle_ingest_regulation_poll_failures_never_affect_the_final_result(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """`poll_ingestion_status()` always returning `None` never affects the final output."""
-    fake = _FakeProgressIngestClient(
-        result=_PROGRESS_TEST_RESULT,
-        stages=[None, None, None],
-        block_seconds=0.05,
-    )
-
-    handle_ingest_regulation("32016R0679", fake, poll_interval_seconds=0.01)
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out == (
-        "run_id: run-progress-001\nregulatory_instrument_id: ri-progress\nmerge: succeeded\n"
-    )
 
 
 def _write_catalog_fixture(repo_path: Path) -> None:
@@ -1010,69 +521,3 @@ def test_handle_get_health_not_ready_message_never_says_could_not_reach() -> Non
         handle_get_health(fake)
 
     assert "Could not reach" not in str(excinfo.value)
-
-
-class _FakeCheckClient(_UnusedPsServiceClientMethods):
-    """Hand-written fake implementing `run_change_check()`'s signature (issue #73)."""
-
-    def __init__(self, result: ChangeCheckResult) -> None:
-        """Script this fake's `run_change_check()` return value."""
-        self._result = result
-
-    def check_readiness(self) -> ReadinessResult:
-        """Return a healthy default -- this fake's tests are not about the pre-flight check."""
-        return ReadinessResult(status="ready", unhealthy_dependencies=[])
-
-    def run_change_check(self) -> ChangeCheckResult:
-        """Return the scripted result."""
-        return self._result
-
-
-def test_handle_check_regulations_prints_run_id_and_no_tracked_instruments_message_when_empty(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """An empty sweep prints `run_id: {run_id}` then `no tracked instruments`, in that
-    order, raising nothing (issue #73, PLAN.md §4 Slice 1).
-    """
-    fake = _FakeCheckClient(ChangeCheckResult(run_id="r1", instruments=[]))
-
-    handle_check_regulations(fake)
-
-    captured = capsys.readouterr()
-    assert captured.out == "run_id: r1\nno tracked instruments\n"
-    assert captured.err == ""
-
-
-def test_handle_check_regulations_prints_run_id_first_then_one_line_per_instrument(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A mixed-bucket sweep prints `run_id: {run_id}` first, then one line per
-    instrument (`"{instrument_id}: {outcome}"`, with `" ({detail})"` appended
-    only when `detail` is not `None`), in tracked order (issue #73, PLAN.md §4
-    Slice 2 -- moved forward from Slice 6 per CHANGES.md's re-sequencing).
-    This fabricated multi-bucket result is valid this slice: Slice 1's Green
-    step already declared all six `Literal` outcome values in `ps_cli.models`,
-    so this formatter test needs no real orchestration behind
-    `amendment_reingested`/`skipped`/`reingest_failed` to exist yet.
-    """
-    fake = _FakeCheckClient(
-        ChangeCheckResult(
-            run_id="sweep-1",
-            instruments=[
-                InstrumentCheckOutcome(
-                    "CRA-1.0", "amendment_reingested", "-> CRA-1.0 (superseded)", "ingest-run-1"
-                ),
-                InstrumentCheckOutcome("GDPR-1.0", "current", None, None),
-            ],
-        )
-    )
-
-    handle_check_regulations(fake)
-
-    captured = capsys.readouterr()
-    assert captured.out == (
-        "run_id: sweep-1\n"
-        "CRA-1.0: amendment_reingested (-> CRA-1.0 (superseded))\n"
-        "GDPR-1.0: current\n"
-    )
-    assert captured.err == ""

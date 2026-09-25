@@ -22,8 +22,8 @@
   - [Configuration reference](#configuration-reference)
 
 This guide is for people **using** an already-deployed Policy System instance —
-asking compliance questions through Claude Desktop, and ingesting regulations,
-internal policies, or administering an instance through `ps-cli`. If you want an
+asking compliance questions and ingesting regulations through Claude Desktop, and
+ingesting internal policies or administering an instance through `ps-cli`. If you want an
 overview of the project see [README.md](../../README.md). If you want to build,
 test, or release the project, see [CONTRIBUTING.md](../../CONTRIBUTING.md). To
 deploy a new instance, see the [Installation Guide](./installation-guide.md); to
@@ -32,8 +32,8 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 
 | I want to... | Use |
 | --- | --- |
-| Ingest a regulation or internal policy, check service health, administer an instance | [Using ps-cli](#using-ps-cli) |
-| Ask a compliance question in natural language | [Using Claude Desktop](#using-claude-desktop) |
+| Ingest an internal policy, check service health, administer an instance | [Using ps-cli](#using-ps-cli) |
+| Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop](#using-claude-desktop) |
 
 ---
 
@@ -120,9 +120,12 @@ empty graph and answers nothing until something is restored or ingested.
 
 ### Find and ingest a regulation from EUR-Lex
 
-Not every regulation is curated. `ps-cli ingest regulation <celex>` accepts any
-CELEX identifier and, if it isn't in the curated set, resolves it against
-Cellar/ELI — the EU's public document repository — directly.
+Not every regulation is curated. Ingesting one by CELEX identifier — curated or
+not — is done through the `ps-ingest-regulation` skill (see [Using Claude
+Desktop](#using-claude-desktop)), not `ps-cli`: ask Claude to ingest the
+regulation, e.g. _"Use the ps-ingest-regulation skill to ingest 32016R0679 as
+gdpr."_ The skill always asks for both the CELEX identifier and a `short_name`,
+even for a curated regulation — never guess `short_name` on the user's behalf.
 
 To find a regulation's CELEX identifier:
 
@@ -131,16 +134,14 @@ To find a regulation's CELEX identifier:
 2. Open the regulation's page and switch to its **Document information** tab.
 3. Read off the **CELEX number** — a 10-character code such as `32016R0679`.
 
-Then ingest it:
+If the CELEX is outside the curated set, the skill resolves it against
+Cellar/ELI — the EU's public document repository — directly.
 
-```bash
-ps-cli ingest regulation 32016R0679
-```
-
-This runs the full pipeline — minutes, not seconds (a full CRA ingestion has
-measured ~10 minutes end to end) — and needs the target instance's FalkorDB and LLM
-interface configured. See the [Appendix](#running-commands) for what to expect and
-[Troubleshooting](#troubleshooting) if a command fails unexpectedly.
+The skill runs the full pipeline — minutes, not seconds (a full CRA ingestion
+has measured ~10 minutes end to end) — and needs the target PS Service
+instance's FalkorDB and LLM interface configured. It reports the resolved
+`regulatory_instrument_id` and each pipeline stage's outcome, or a specific
+named error if something fails.
 
 ---
 
@@ -195,13 +196,9 @@ Global flags, usable before or after any subcommand:
 | --- | --- | --- |
 | `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
 | `ps-cli get catalog` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
-| `ps-cli ingest regulation <celex>` | `celex` — 10-character CELEX identifier (e.g. `32016R0679`) | Ingest a regulation through the full pipeline. |
 | `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
 | `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
-| `ps-cli check regulations` | — | Sweep every tracked instrument for amendments, re-ingesting any found; reports one outcome line per instrument. |
-| `ps-cli near-misses list` | — | List every unresolved near-miss pending review from the company-merge dedup workflow. |
-| `ps-cli near-misses resolve <review_id> --decision <decision>` | `review_id`; `--decision` (required) — `keep-separate` or `merge` | Resolve one pending review. `keep-separate` clears it with no other graph change; `merge` re-points every edge from the loser node onto the winner, deletes the loser, and deletes the pending review, atomically. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
 | `ps-cli auth status` | — | Show the current context's login status (context, issuer) — reads the local store only, no network call. |
 | `ps-cli auth logout` | — | Remove the current context's stored credential. |
@@ -321,40 +318,26 @@ Local curated catalog — no FalkorDB/LLM dependency.
 ps-cli restore instrument CRA-1.0
 ```
 
-Restores a curated instrument's pre-ingested artifact — faster than a full `ingest
-regulation` run. `<instrument_id>` is one of the ids `ps-cli get catalog` just printed.
-A freshly deployed instance has an empty graph and answers nothing until something is
+Restores a curated instrument's pre-ingested artifact — faster than a full
+ingestion run via the `ps-ingest-regulation` skill (see [Find and ingest a
+regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex)).
+`<instrument_id>` is one of the ids `ps-cli get catalog` just printed. A freshly
+deployed instance has an empty graph and answers nothing until something is
 restored or ingested; until then, questions get an explicit "graph is unseeded" error
 rather than an empty result.
-
-```bash
-ps-cli ingest regulation 32016R0679
-```
-
-Full ingestion pipeline.
 
 ```bash
 ps-cli ingest document <document_path>.json
 ```
 
-Reads the file locally, sends its content.
+Reads the file locally, sends its content. (Ingesting a regulation by CELEX is
+done through the `ps-ingest-regulation` skill, not `ps-cli` — see [Find and
+ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex).)
 
-`ingest regulation` and `ingest document` exercise the full pipeline, so the PS
-Service instance you're targeting needs FalkorDB and its LLM interface configured —
-check its `/ready` endpoint first if a command fails unexpectedly (see
+`ingest document` exercises the full pipeline, so the PS Service instance you're
+targeting needs FalkorDB and its LLM interface configured — check its `/ready`
+endpoint first if a command fails unexpectedly (see
 [Troubleshooting](#troubleshooting) below).
-
-A few behaviors worth knowing about `ingest regulation`:
-
-- The `celex` argument is trimmed and format-validated before it's sent — a malformed
-  value is rejected immediately, without a round trip to PS Service.
-- A CELEX identifier doesn't have to be in PS Service's curated set to be ingestible:
-  if it's not curated, PS Service resolves it against Cellar/ELI (the public EU
-  document repository) directly. Ingestion isn't limited to the curated set.
-- A real ingestion run takes minutes (a full CRA ingestion has measured ~10 minutes
-  end to end). `ps-cli` prints each pipeline stage's name to stderr as it starts, so a
-  long-running ingest doesn't look hung — the final `run_id` /
-  `regulatory_instrument_id` / per-stage summary still prints to stdout only, once.
 
 A few behaviors worth knowing about `export instrument`:
 
@@ -399,9 +382,10 @@ Guide: Troubleshooting / FAQ](./operations-guide.md#troubleshooting--faq) for
 
 Note that `ready: ready` no longer implies the LLM Interface or Cellar/ELI are healthy —
 readiness reflects FalkorDB only. An LLM Interface outage instead surfaces to
-`ingest regulation`/`ingest document`/`check regulations` via that command's own
-pre-flight failure message (`❌ LLM Interface is unavailable.`), before any pipeline
-call is made.
+`ps-cli ingest document` (and to the `ps-ingest-regulation`/
+`ps-check-regulations` skills) via that command's own pre-flight failure message
+(`❌ LLM Interface is unavailable.` for `ps-cli`, `error: LLM Interface is unavailable.`
+for the skills), before any pipeline call is made.
 
 `ps-cli get health` reports all three — reachability, health, and readiness — in one call:
 

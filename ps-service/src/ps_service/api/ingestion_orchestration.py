@@ -404,6 +404,7 @@ class _CellarResolution:
 def resolve_via_cellar(
     celex: str,
     *,
+    short_name: str | None = None,
     cellar_fetch: Callable[[str], bytes] | None = None,
     cellar_fetch_rdf: Callable[[str], bytes] | None = None,
 ) -> _CellarResolution:
@@ -411,8 +412,8 @@ def resolve_via_cellar(
 
     Fetches the XHTML document once (``cellar_fetch``) and the RDF/XML
     metadata document once (``cellar_fetch_rdf``), extracts bibliographic
-    metadata from both, and derives a ``short_name`` (D-slug) -- all
-    *before* the pipeline ever runs (D1), so a curated and a Cellar-resolved
+    metadata from both, and resolves a ``short_name`` -- all *before* the
+    pipeline ever runs (D1), so a curated and a Cellar-resolved
     :class:`CatalogEntry` are indistinguishable to
     ``run_catalog_ingestion_pipeline``. The returned adapter's fetch steps
     replay both already-fetched byte strings, so Stage 1 never re-fetches
@@ -425,6 +426,17 @@ def resolve_via_cellar(
     Args:
         celex: A well-formed CELEX identifier absent from the curated
             catalog.
+        short_name: A caller-supplied ``short_name`` to use verbatim instead
+            of deriving one (issue #96, issue #126 CHANGES.md Appendix C1).
+            When ``None`` (the default -- REST's ``POST /ingestions`` path,
+            which does not collect a ``short_name`` from its caller), the
+            title fetched by this same call is slugged via
+            :func:`_derive_short_name`, exactly as before. When supplied
+            (the MCP ``ingest_regulation`` tool's path), that value is used
+            as-is and :func:`_derive_short_name` is never reached -- this is
+            the actual #96 fix: two resolutions of the same CELEX with
+            differently-worded Cellar titles no longer derive two different
+            ``short_name``s, because nothing is derived at all.
         cellar_fetch: The Cellar/ELI XHTML fetch callable; injectable for
             tests. When ``None`` (the default), the module-level
             :func:`fetch_xhtml` name is resolved at call time -- not bound
@@ -479,8 +491,10 @@ def resolve_via_cellar(
         # `_<celex>`-shaped short_name is never derived from either.
         raise _classify_stage_failure("ingestion", exc) from exc
 
-    short_name = _derive_short_name(metadata.title, celex)
-    entry = CatalogEntry(celex, metadata.title, short_name, metadata.version)
+    resolved_short_name = (
+        short_name if short_name is not None else _derive_short_name(metadata.title, celex)
+    )
+    entry = CatalogEntry(celex, metadata.title, resolved_short_name, metadata.version)
     adapter = CellarEliAdapter(fetch=lambda _identifier: xhtml, fetch_rdf=lambda _identifier: rdf)
     return _CellarResolution(entry=entry, adapter=adapter)
 

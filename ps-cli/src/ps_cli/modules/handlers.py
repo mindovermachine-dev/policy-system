@@ -13,9 +13,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import sys
-import threading
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -28,22 +25,9 @@ from ps_cli.intake_validation import validate_local_seed_file
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
-    from typing import Literal
 
     from ps_cli.config import CliConfig
     from ps_cli.http_client import PsServiceClientProtocol
-
-# How often the background poller (`_poll_ingestion_progress`) checks PS Service for the
-# run's currently-executing stage (AC-BI-009). A test overrides this via
-# `handle_ingest_regulation`'s `poll_interval_seconds` keyword rather than waiting on the
-# real interval (PLAN.md §3 Increment 15).
-_POLL_INTERVAL_SECONDS = 2.0
-
-# Bound on how long `handle_ingest_regulation` waits for the poller thread to notice
-# `stop_event` and exit, before its own final summary prints (PLAN.md §3 Increment 15). The
-# poller's own loop granularity is `poll_interval_seconds`, not this value -- this is only a
-# safety bound against an unexpectedly slow/stuck thread.
-_POLLER_JOIN_TIMEOUT_SECONDS = 5.0
 
 # The dependency name PS Service's `/ready` reports when its LLM provider is unreachable
 # (issue #75). Only this dependency's presence in `unhealthy_dependencies` blocks
@@ -74,149 +58,6 @@ def _assert_llm_interface_available(client: PsServiceClientProtocol) -> None:
     )
 
 
-def handle_near_misses_list(client: PsServiceClientProtocol) -> None:
-    """Print every unresolved near-miss `PendingReview`, one line per review (issue #35, AC-BI-003).
-
-    Format: ``"{id}  {similarity:.3f}  {incoming_text!r} vs {nearest_existing_text!r}"``
-    -- a read-only listing, one line per entry, nothing else (L2 "Silence on
-    success"). `kind` is parsed off the wire response but not printed here
-    (PLAN.md §3 Slice 2's formatting is flagged as non-load-bearing, an
-    implementation-agnostic choice within AC-BI-003's "shown with its ID,
-    incoming text, existing text, and similarity score" requirement).
-    """
-    result = client.list_pending_reviews()
-    for review in result.reviews:
-        print(
-            f"{review.id}  {review.similarity:.3f}  "
-            f"{review.incoming_text!r} vs {review.nearest_existing_text!r}"
-        )
-
-
-def handle_near_misses_resolve(
-    review_id: str, decision: Literal["keep-separate", "merge"], client: PsServiceClientProtocol
-) -> None:
-    """Resolve one near-miss `PendingReview` (issue #35, AC-BI-004/005/006/007/008/009).
-
-    `--decision`'s argparse `choices` (`ps_cli.modules.parser`) already
-    reject any value outside `"keep-separate"`/`"merge"` at parse time,
-    before this handler ever runs. A not-found, already-resolved, or (merge
-    only) stale `review_id` surfaces as a `PsCliError` raised by
-    `client.resolve_review()` (AC-BI-008), propagating uncaught -- only
-    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9, matching
-    every other handler in this module).
-
-    On success, prints one confirmation line: `"cleared review {id}
-    (keep-separate)"` for `decision="keep-separate"`, or `"merged {loser_id}
-    into {winner_id}"` for `decision="merge"` -- exact wording is a
-    non-load-bearing formatting choice (PLAN.md §6 Slice 4).
-    """
-    result = client.resolve_review(review_id, decision)
-    if result.decision == "merge":
-        print(f"merged {result.loser_id} into {result.winner_id}")
-    else:
-        print(f"cleared review {result.review_id} ({result.decision})")
-
-
-def _poll_ingestion_progress(
-    client: PsServiceClientProtocol,
-    run_id: str,
-    stop_event: threading.Event,
-    poll_interval_seconds: float,
-) -> None:
-    """Print each newly-observed in-flight stage to stderr until `stop_event` is set.
-
-    Runs on the daemon background thread `handle_ingest_regulation` starts
-    (AC-BI-009). Polls `client.poll_ingestion_status(run_id)` every
-    `poll_interval_seconds`, printing `"{stage}: running"` to `sys.stderr`
-    only when `stage` is not `None` and differs from the last stage printed
-    -- never repeating an unchanged stage. `stop_event.wait(...)` doubles as
-    both the sleep and the shutdown signal, so the loop wakes and exits as
-    soon as the main thread's blocking `ingest_catalog()` call returns,
-    rather than up to one full interval late. `poll_ingestion_status()`
-    never raises (PLAN.md §3 Increment 14) -- a poll failure surfaces here
-    as `None` and is silently skipped, never affecting the main thread's
-    ingestion result (PLAN.md §1 D4).
-    """
-    last_stage: str | None = None
-    while not stop_event.wait(timeout=poll_interval_seconds):
-        stage = client.poll_ingestion_status(run_id)
-        if stage is not None and stage != last_stage:
-            print(f"{stage}: running", file=sys.stderr)
-            last_stage = stage
-
-
-def handle_ingest_regulation(
-    celex: str,
-    client: PsServiceClientProtocol,
-    *,
-    poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
-) -> None:
-    """Ingest a curated EU regulation, identified by `celex`, via PS Service.
-
-    Before anything else, `_assert_llm_interface_available` runs a pre-flight
-    readiness check (issue #75, AC-BI-009..013): a target reporting LLM
-    Interface unreachable fails fast here, before `celex` validation's
-    round-trip-avoidance even matters, and well before the expensive
-    `POST /ingestions` call below.
-
-    `celex`'s format is already validated by argparse's `type=_celex_type`
-    callback (`ps_cli.modules.parser`) before this handler ever runs -- a
-    fast-fail that avoids a wasted round trip for input PS Service would
-    reject anyway (L1 "Fail Fast at Boundaries"), enforced at parse time
-    rather than re-checked here (PLAN.md §1 D10). On success, prints the run
-    id, the regulatory instrument id, and each pipeline stage's name and
-    status (AC-BI-002, AC-BI-010). When a stage's summary reports
-    `skipped_units > 0` (currently only the extraction stage ever does), that
-    count is appended to the stage's line as `" (skipped_units: {n})"`
-    (issue #63, AC-BI-003) -- when it is zero or absent, the line is
-    byte-identical to before this behavior was added (AC-BI-004). Likewise,
-    when a stage's summary reports `pending_reviews > 0` (currently only the
-    merge stage ever does), that count is appended as
-    `" (pending_reviews: {n})"` (issue #35, AC-BI-010) -- zero or absent
-    leaves the line byte-identical, using the exact same conditional-append
-    idiom as `skipped_units`. A `PsCliError` raised by the client (e.g. a
-    structured PS Service failure response) propagates uncaught -- only
-    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
-
-    While `ingest_catalog()` blocks (a real ingestion runs for minutes), a
-    daemon background thread polls PS Service for the run's
-    currently-executing stage and prints stage changes to **stderr**
-    (AC-BI-009) -- stdout carries only the three summary lines above,
-    byte-identical to before this behavior was added (AC-BI-010).
-    `poll_interval_seconds` defaults to `_POLL_INTERVAL_SECONDS` (2.0s); a
-    caller (e.g. a test) may override it to avoid waiting on the real
-    interval.
-    """
-    _assert_llm_interface_available(client)
-    run_id = uuid.uuid4().hex
-    stop_event = threading.Event()
-    poller = threading.Thread(
-        target=_poll_ingestion_progress,
-        args=(client, run_id, stop_event, poll_interval_seconds),
-        name="ps-cli-ingest-poller",
-        daemon=True,
-    )
-    poller.start()
-    try:
-        result = client.ingest_catalog(celex, run_id=run_id)
-    finally:
-        # Stop and join the poller *before* the summary prints below, so no stderr
-        # progress line can ever interleave with stdout's final output (AC-BI-010).
-        stop_event.set()
-        poller.join(timeout=_POLLER_JOIN_TIMEOUT_SECONDS)
-    print(f"run_id: {result.run_id}")
-    print(f"regulatory_instrument_id: {result.regulatory_instrument_id}")
-    for stage in result.stages:
-        line = f"{stage.stage}: {stage.status}"
-        skipped_units = stage.summary.get("skipped_units", 0)
-        if skipped_units:
-            line += f" (skipped_units: {skipped_units})"
-        pending_reviews = stage.summary.get("pending_reviews", 0)
-        if pending_reviews:
-            line += f" (pending_reviews: {pending_reviews})"
-        print(line)
-
-
 def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol) -> None:
     """Ingest an internal document, read locally from `document_path`, via PS Service.
 
@@ -236,23 +77,21 @@ def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol)
     recording zero calls.
 
     Once local validation succeeds, `_assert_llm_interface_available` runs
-    the same pre-flight readiness check `handle_ingest_regulation` runs
-    (issue #75, AC-BI-009..013): a target reporting LLM Interface unreachable
-    fails fast here too, before `client.ingest_internal()`'s network call
-    (DD2 -- local validation still runs first, since it's the cheaper check
-    and would reject the request regardless of readiness). The already-parsed
-    document is then sent directly in the request body (D13/D9) -- the file
-    is never read or parsed a second time.
+    a pre-flight readiness check (issue #75, AC-BI-009..013): a target
+    reporting LLM Interface unreachable fails fast here too, before
+    `client.ingest_internal()`'s network call (DD2 -- local validation still
+    runs first, since it's the cheaper check and would reject the request
+    regardless of readiness). The already-parsed document is then sent
+    directly in the request body (D13/D9) -- the file is never read or
+    parsed a second time.
 
     On success, prints the run id, the regulatory instrument id, and each
     pipeline stage's name and status (AC-BI-010). When the `merge` stage's
     summary reports `pending_reviews > 0` (issue #35, AC-BI-010), that count
-    is appended to the stage's line as `" (pending_reviews: {n})"`, mirroring
-    `handle_ingest_regulation`'s own `skipped_units` idiom byte-for-byte --
-    zero or absent prints the line unchanged. A `PsCliError` raised by
-    the client (a structured PS Service failure response) propagates
-    uncaught -- only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1
-    D5/D9).
+    is appended to the stage's line as `" (pending_reviews: {n})"` -- zero
+    or absent prints the line unchanged. A `PsCliError` raised by the client
+    (a structured PS Service failure response) propagates uncaught -- only
+    `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
     """
     document = validate_local_seed_file(document_path)
     _assert_llm_interface_available(client)
@@ -308,9 +147,8 @@ def handle_restore_instrument(
     locally via `catalog_repo.read_artifact` (D5: `ps-cli` reads the artifact
     off `curated_repo_path`, PS Service does the FalkorDB work), then uploads
     it via `client.restore_instrument()`. On success, prints the restored
-    instrument id and each completed stage's name and status, mirroring
-    `handle_ingest_regulation`'s summary-line shape. A `PsCliError` raised
-    by `catalog_repo.read_artifact` (missing local instrument directory) or
+    instrument id and each completed stage's name and status. A `PsCliError`
+    raised by `catalog_repo.read_artifact` (missing local instrument directory) or
     by the client (a structured PS Service rejection) propagates uncaught --
     only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
     """
@@ -423,38 +261,6 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     print(f"ready: {readiness.status}")
 
 
-def handle_check_regulations(client: PsServiceClientProtocol) -> None:
-    """Sweep every tracked instrument for amendments and re-ingest any found.
-
-    Before anything else, `_assert_llm_interface_available` runs a pre-flight
-    readiness check (issue #75, AC-BI-009..013): a target reporting LLM
-    Interface unreachable fails fast here, before `client.run_change_check()`'s
-    sweep, which would otherwise attempt an LLM-dependent re-ingest for every
-    amended instrument found.
-
-    Prints the run id first (issue #73, PLAN.md §1 D8), matching
-    `handle_ingest_regulation`'s own `print(f"run_id: {result.run_id}")`
-    precedent, then one line per tracked instrument, in the order the sweep
-    reported them: `"{instrument_id}: {outcome}"`, with `" ({detail})"`
-    appended only when `detail` is not `None`. A generic, outcome-agnostic
-    formatter (issue #73, PLAN.md §4 Slice 2, moved forward from Slice 6 per
-    CHANGES.md's re-sequencing) -- no per-outcome-value special casing, so
-    every bucket a later slice's orchestration produces
-    (`amendment_reingested` / `poll_failed` / `not_configured` / `skipped` /
-    `reingest_failed`) already prints correctly with zero further ps-cli
-    changes. An empty sweep instead prints `"no tracked instruments"`.
-    """
-    _assert_llm_interface_available(client)
-    result = client.run_change_check()
-    print(f"run_id: {result.run_id}")
-    if not result.instruments:
-        print("no tracked instruments")
-        return
-    for outcome in result.instruments:
-        detail_suffix = f" ({outcome.detail})" if outcome.detail is not None else ""
-        print(f"{outcome.instrument_id}: {outcome.outcome}{detail_suffix}")
-
-
 def _dispatch_get_catalog(args: argparse.Namespace) -> None:
     """Adapt `handle_get_catalog`'s signature to the `NO_CLIENT_DISPATCH` shape.
 
@@ -497,32 +303,6 @@ def _dispatch_export_instrument(args: argparse.Namespace, client: PsServiceClien
     )
 
 
-def _dispatch_ingest_regulation(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_ingest_regulation`'s signature to the dispatch shape, passing `celex`."""
-    handle_ingest_regulation(cast("str", args.celex), client)
-
-
-def _dispatch_near_misses_list(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_near_misses_list`'s single-argument signature to the dispatch shape."""
-    del args
-    handle_near_misses_list(client)
-
-
-def _dispatch_near_misses_resolve(
-    args: argparse.Namespace, client: PsServiceClientProtocol
-) -> None:
-    """Adapt `handle_near_misses_resolve`'s signature to the dispatch shape.
-
-    `args.decision` is guaranteed `"keep-separate"` or `"merge"` by the
-    parser's own `choices`.
-    """
-    handle_near_misses_resolve(
-        cast("str", args.review_id),
-        cast('Literal["keep-separate", "merge"]', args.decision),
-        client,
-    )
-
-
 def _dispatch_ingest_document(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_ingest_document`'s signature to the dispatch shape.
 
@@ -539,21 +319,11 @@ def _dispatch_get_health(args: argparse.Namespace, client: PsServiceClientProtoc
     handle_get_health(client)
 
 
-def _dispatch_check_regulations(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_check_regulations`'s single-argument signature to the dispatch shape."""
-    del args
-    handle_check_regulations(client)
-
-
 DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None]] = {
-    "ingest_regulation": _dispatch_ingest_regulation,
     "ingest_document": _dispatch_ingest_document,
     "restore_instrument": _dispatch_restore_instrument,
     "export_instrument": _dispatch_export_instrument,
     "get_health": _dispatch_get_health,
-    "check_regulations": _dispatch_check_regulations,
-    "near_misses_list": _dispatch_near_misses_list,
-    "near_misses_resolve": _dispatch_near_misses_resolve,
 }
 
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must

@@ -11,12 +11,6 @@ import re
 
 from ps_cli.config import is_valid_service_url
 
-# Mirrors ps_service/api/models.py's CatalogIngestionRequest.celex
-# Field(pattern=r"^3\d{4}[A-Z]\d{4}$") verbatim -- vendored per L2 Project
-# Structure's "fully decoupled... vendors its own copy" rule, NOT imported.
-# Must be updated in lockstep if the server's pattern ever changes.
-_CELEX_PATTERN = re.compile(r"^3\d{4}[A-Z]\d{4}$")
-
 # A context name is always a safe bare TOML key by construction (alnum start,
 # alnum/`_`/`-` body, 1-64 chars) -- no quoting logic needed by `toml_writer`.
 # Not derived from any cited doc; a documented assumption, see PLAN.md (issue
@@ -37,32 +31,12 @@ _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _INSTRUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
-def _celex_type(value: str) -> str:
-    """`type=` callback for the `celex` positional: format-validate at parse time.
-
-    Mirrors gh-tt's `tt_parser.py::valid_status_states` pattern -- a single
-    argument's own value format is checked via `type=`, raising
-    `argparse.ArgumentTypeError` (argparse turns this into a normal usage
-    error, exit code 2), not via a post-parse `assert_contract`/`PsCliError`
-    check in the handler. By the time a handler runs, `celex` is guaranteed
-    well-formed.
-    """
-    trimmed_value = value.strip()
-    if not _CELEX_PATTERN.fullmatch(trimmed_value):
-        msg = (
-            f"'{trimmed_value}' is not a 10-character CELEX identifier "
-            "(expected: 3<4 digits><1 uppercase letter><4 digits>, e.g. 32016R0679)"
-        )
-        raise argparse.ArgumentTypeError(msg)
-    return trimmed_value
-
-
 def _context_name_type(value: str) -> str:
     """`type=` callback for a context-name positional (`set-context`/`use-context`).
 
     Format-validates against PLAN.md (issue #56) §1 D6's charset: alnum start,
     alnum/`_`/`-` body, 1-64 characters total. Same `type=`-callback convention
-    as `_celex_type` -- raises `argparse.ArgumentTypeError` (exit 2), never a
+    as `_instrument_id_type` -- raises `argparse.ArgumentTypeError` (exit 2), never a
     post-parse `assert_contract`/`PsCliError` check.
     """
     if not _CONTEXT_NAME_PATTERN.fullmatch(value):
@@ -103,7 +77,7 @@ def _instrument_id_type(value: str) -> str:
     """`type=` callback for the `instrument_id` positional (`restore instrument`).
 
     Format-validates at parse time -- same `type=`-callback convention as
-    `_celex_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
+    `_context_name_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
     charset (which already excludes `/`); the redundant explicit `..`
     substring check below is defense-in-depth documentation, not load-
     bearing on its own -- see `_INSTRUMENT_ID_PATTERN`'s own comment for why
@@ -122,7 +96,7 @@ def _instrument_id_type(value: str) -> str:
 def _document_path_type(value: str) -> str:
     """`type=` callback for the `document_path` positional: format-validate at parse time.
 
-    Same rationale as `_celex_type` -- format validation belongs at parse
+    Same rationale as `_instrument_id_type` -- format validation belongs at parse
     time via `type=`, not in the handler. `value` is a plain local
     filesystem path (relative to the operator's cwd, or absolute), resolved
     the ordinary way -- not resolved against any PS Service or ps-cli-owned
@@ -325,9 +299,9 @@ def _add_auth_parser(
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser: a strict kubectl-style `<verb> <resource>` surface.
 
-    Every top-level group except `config` is a verb (`get`, `ingest`, `restore`,
-    `check`); each verb group is itself an `add_subparsers()` group whose leaves are
-    resource nouns (e.g. `ingest regulation`, `restore instrument`) -- `ps-cli <verb>
+    Every top-level group except `config` is a verb (`get`, `ingest`, `restore`);
+    each verb group is itself an `add_subparsers()` group whose leaves are
+    resource nouns (e.g. `ingest document`, `restore instrument`) -- `ps-cli <verb>
     <resource> [name] [flags]`, modeled on kubectl. `config` is the one exception
     group, mirroring kubectl's own `kubectl config` subcommands: its leaves are
     verb-noun compounds (`set-context`/`use-context`/`get-contexts`) rather than
@@ -415,26 +389,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     get_catalog_parser.set_defaults(command="get_catalog")
 
-    # `ingest` (bring new content into PS Service): a curated EU regulation by CELEX,
-    # or an internal-document fixture by path.
+    # `ingest` (bring new content into PS Service): an internal-document fixture by
+    # path. (A curated EU regulation by CELEX is ingested via the `ps-ingest-regulation`
+    # MCP skill instead -- see docs/artifacts/user-guide.md.)
     ingest_parser = top_level_subparsers.add_parser(
         "ingest",
         parents=[verbose_parent_parser],
-        help="Bring new content into PS Service: a curated regulation or an internal document.",
+        help="Bring new content into PS Service: an internal document.",
     )
     ingest_subparsers = ingest_parser.add_subparsers(dest="ingest_command", required=True)
-
-    ingest_regulation_parser = ingest_subparsers.add_parser(
-        "regulation",
-        parents=[verbose_parent_parser],
-        help="Ingest a curated EU regulation by its CELEX identifier.",
-    )
-    ingest_regulation_parser.add_argument(
-        "celex",
-        type=_celex_type,
-        help="The regulation's 10-character CELEX identifier.",
-    )
-    ingest_regulation_parser.set_defaults(command="ingest_regulation")
 
     ingest_document_parser = ingest_subparsers.add_parser(
         "document",
@@ -464,7 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # `restore` (restore a curated instrument's artifact into PS Service): reads the
     # artifact off `curated_repo_path` locally and uploads it (`POST /restorations`),
-    # reusing `_resolve_client` exactly like `ingest regulation`.
+    # reusing `_resolve_client` exactly like `ingest document`.
     restore_parser = top_level_subparsers.add_parser(
         "restore",
         parents=[verbose_parent_parser],
@@ -489,66 +452,5 @@ def build_parser() -> argparse.ArgumentParser:
     # in the opposite direction. See `_add_export_parser`'s own docstring for why this
     # one verb group is factored into a helper rather than inlined like every other.
     _add_export_parser(top_level_subparsers, verbose_parent_parser)
-
-    # `check` (issue #73, PLAN.md §1 D1): sweep for state changes. `regulations` is
-    # its only leaf today -- a subparser group of one, for structural consistency
-    # with `get`/`ingest`/`restore` (uniformity matters more than terseness here, and
-    # it leaves room for a future `check catalog` or similar without another
-    # reshuffle) rather than a subgroup-less top-level leaf.
-    check_parser = top_level_subparsers.add_parser(
-        "check",
-        parents=[verbose_parent_parser],
-        help="Sweep for state changes against tracked content.",
-    )
-    check_subparsers = check_parser.add_subparsers(dest="check_command", required=True)
-
-    check_regulations_parser = check_subparsers.add_parser(
-        "regulations",
-        parents=[verbose_parent_parser],
-        help="Sweep every tracked instrument for amendments and re-ingest any found.",
-    )
-    check_regulations_parser.set_defaults(command="check_regulations")
-
-    # `near-misses` subcommand group (issue #35, PLAN.md §6): the near-miss
-    # review workflow. `list` (Slice 2, AC-BI-003) and `resolve` (Slice 3
-    # `keep-separate`, Slice 4 `merge` -- AC-BI-004/005/006/007/008/009) are
-    # wired -- mirrors `catalog`'s two-leaf group shape.
-    near_misses_parser = top_level_subparsers.add_parser(
-        "near-misses",
-        parents=[verbose_parent_parser],
-        help="Commands for the near-miss company-merge review workflow.",
-    )
-    near_misses_subparsers = near_misses_parser.add_subparsers(
-        dest="near_misses_command", required=True
-    )
-    near_misses_list_parser = near_misses_subparsers.add_parser(
-        "list",
-        parents=[verbose_parent_parser],
-        help="List every unresolved near-miss pending review.",
-    )
-    near_misses_list_parser.set_defaults(command="near_misses_list")
-
-    near_misses_resolve_parser = near_misses_subparsers.add_parser(
-        "resolve",
-        parents=[verbose_parent_parser],
-        help="Resolve one unresolved near-miss pending review.",
-    )
-    near_misses_resolve_parser.add_argument(
-        "review_id",
-        help="The pending review's id (e.g. 'review_<hex>').",
-    )
-    near_misses_resolve_parser.add_argument(
-        "--decision",
-        choices=["keep-separate", "merge"],
-        required=True,
-        help=(
-            "How to resolve the review. 'keep-separate' clears the pending "
-            "review only (no other graph change). 'merge' re-points every "
-            "edge referencing the loser canonical node onto the "
-            "deterministically-chosen winner, deletes the loser, and "
-            "deletes the pending review, atomically."
-        ),
-    )
-    near_misses_resolve_parser.set_defaults(command="near_misses_resolve")
 
     return parser

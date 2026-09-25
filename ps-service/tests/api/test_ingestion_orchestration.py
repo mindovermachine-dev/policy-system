@@ -488,6 +488,47 @@ def test_resolve_via_cellar_returns_catalog_entry_with_derived_short_name_and_ba
     assert resolution.entry.version == "1.0"
 
 
+def test_resolve_via_cellar_uses_caller_supplied_short_name_verbatim_when_given() -> None:
+    """Issue #126 CHANGES.md C1/Appendix C1: when a caller supplies `short_name`
+    explicitly (the MCP `ingest_regulation` path), it is used verbatim and
+    `_derive_short_name` is never reached -- proven by passing a value that
+    does not match what `_derive_short_name` would have derived from this
+    fixture's own title.
+    """
+    fetch = _CountingFetch(_FIXTURE_REGULATION_A)
+    fetch_rdf = _CountingFetch(_RDF_FIXTURE_REGULATION_A)
+
+    resolution = resolve_via_cellar(
+        _NONCURATED_CELEX,
+        short_name="caller-supplied-name",
+        cellar_fetch=fetch,
+        cellar_fetch_rdf=fetch_rdf,
+    )
+
+    assert resolution.entry.short_name == "caller-supplied-name"
+    assert resolution.entry.celex == _NONCURATED_CELEX
+    assert resolution.entry.title == "Regulation (EU) 1111/1111 Fixture A"
+
+
+def test_resolve_via_cellar_omitting_short_name_still_derives_exactly_as_before() -> None:
+    """Issue #126 CHANGES.md C1/Appendix C1: REST's call site
+    (`routes.py:145`, `resolve_via_cellar(request_body.celex)`) never passes
+    `short_name`, so this is REST's exact existing call shape -- confirming
+    the new optional keyword-only parameter is fully backward compatible and
+    the derivation behavior is completely unchanged when omitted.
+    """
+    fetch = _CountingFetch(_FIXTURE_REGULATION_A)
+    fetch_rdf = _CountingFetch(_RDF_FIXTURE_REGULATION_A)
+
+    resolution = resolve_via_cellar(
+        _NONCURATED_CELEX, cellar_fetch=fetch, cellar_fetch_rdf=fetch_rdf
+    )
+
+    assert resolution.entry.short_name == _derive_short_name(
+        "Regulation (EU) 1111/1111 Fixture A", _NONCURATED_CELEX
+    )
+
+
 def test_resolve_via_cellar_fetches_document_at_most_once_when_stage_one_reuses_adapter() -> None:
     """AC-BI-006/D2: one HTTP fetch total per document (XHTML, RDF) across resolution +
     a simulated Stage 1 call -- the direct regression guard for the "fetch-once,

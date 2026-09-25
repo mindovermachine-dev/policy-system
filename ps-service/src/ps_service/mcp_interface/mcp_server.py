@@ -17,16 +17,47 @@ the plugin model made the HTTP endpoint the only supported client path.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import os
 from importlib import resources
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.mcpserver.resolve import Elicit, Resolve
+from pydantic import BaseModel, Field
 
+from ps_service import dependency_health
+from ps_service.api.catalog import find_by_celex
+from ps_service.api.change_check_orchestration import (
+    build_default_change_check_dependencies,
+    run_change_check_sweep,
+)
+from ps_service.api.errors import (
+    CatalogIdentifierNotFoundError,
+    IngestionConfigIncompleteError,
+    PendingReviewNotFoundError,
+    PipelineStageError,
+)
+from ps_service.api.ingestion_orchestration import (
+    _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
+    GraphOpeners,
+    build_default_pipeline_dependencies,
+    resolve_via_cellar,
+    run_catalog_ingestion_pipeline,
+)
+from ps_service.api.near_miss_review_orchestration import (
+    build_default_near_miss_review_dependencies,
+    run_list_near_misses,
+    run_resolve_near_miss,
+)
+from ps_service.api.routes import (
+    _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
+    _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
+)
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
-from ps_service.logging import bind_run_context, emit_log_entry
+from ps_service.logging import bind_run_context, current_run_id, emit_log_entry
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
@@ -45,9 +76,15 @@ from ps_service.query_engine.falkordb_client import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from importlib.resources.abc import Traversable
 
+    from ps_service.api.catalog import CatalogEntry
+    from ps_service.api.change_check_orchestration import ChangeCheckDependencies
+    from ps_service.api.ingestion_orchestration import PipelineDependencies
+    from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
     from ps_service.config import ServiceConfig
+    from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
@@ -57,6 +94,26 @@ _DOMAIN_CONCEPTS_URI = "psdomain://concepts"
 _DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL = "the ps-domain-concepts resource is currently unavailable"
 _GRAPH_UNAVAILABLE_DETAIL = "the policy graph database is not reachable"
 _GRAPH_UNAVAILABLE_MESSAGE = f"error: {_GRAPH_UNAVAILABLE_DETAIL}"
+_UNEXPECTED_ERROR_MESSAGE = "error: an unexpected error occurred"
+# D-PREFLIGHT: verbatim reuse of ps-cli's own `handlers.py:72` message text,
+# preserved for operator familiarity across both client paths.
+_LLM_INTERFACE_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
+
+# D-SHORTNAME-PATTERN: must start with a letter, alnum/`_`/`-` body, 1-64 chars --
+# mirrors every existing catalog short_name ("cra", "gdpr", "nis2").
+_SHORT_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+# Same CELEX pattern `api/models.py`'s `CatalogIngestionRequest.celex` already enforces.
+_CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
+
+# CHANGES.md H2: the merge-decision confirmation gate's own warning text --
+# both the resolver's `Elicit(...)` message the client actually sees and the
+# secondary signal repeated in `near_misses_resolve`'s own docstring (same
+# sentence, per D-MERGE-WARN point 2), so the two channels never drift.
+_MERGE_WARNING = (
+    'WARNING: decision="merge" is IRREVERSIBLE -- it deletes the loser node and '
+    "re-points every edge that referenced it onto the winner, atomically, before "
+    'this call returns. Reply with confirm="merge" to proceed.'
+)
 
 
 @functools.cache
@@ -184,6 +241,446 @@ def _resolve_principal(config: ServiceConfig) -> str | None:
     if config.is_local_test_bypass_active:
         return LOCAL_TEST_PRINCIPAL_ID
     return None
+
+
+def _run_mcp_action(
+    action: str,
+    principal: str | None,
+    body: Callable[[], dict[str, object] | str],
+) -> dict[str, object] | str:
+    """Run one MCP tool body inside a fresh run context, with a uniform audit triad.
+
+    D-AUDIT-WRAPPER: the shared logging/run-id helper every action-taking MCP
+    tool (`ingest_regulation`, `check_regulations`, `near_misses_list`,
+    `near_misses_resolve`) reuses, so the started/succeeded/failed triad and
+    generic-exception safety net live in exactly one place rather than being
+    duplicated a fourth time (L2 Common DRY).
+
+    Binds a fresh run id for the call, emits a `component="mcp_interface"`
+    `outcome="started"` entry carrying `principal`, then runs `body`. A
+    `body` that returns a string beginning `"error:"` is treated as a
+    handled failure -- logged `outcome="failed"` with the (truncated) error
+    text as `reason`, and returned unchanged. A `body` that *raises* is the
+    residual, not-yet-sanitised case (D-SANITIZE-UNEXPECTED's last row): the
+    exception is converted here to the fixed, generic error string, with the
+    full `repr` logged server-side only. Any other return value is treated
+    as success, logged `outcome="succeeded"`, and returned unchanged.
+
+    Args:
+        action: The tool's own name (e.g. `"ingest_regulation"`), used as
+            the log entries' `action` field -- distinct per tool, unlike
+            `cypher`'s shared `_ACTION` constant.
+        principal: The caller identity `_resolve_principal` already
+            resolved; threaded onto every log entry this call emits
+            (`"unknown"` when `None`), and available to `body` via the
+            closure that constructed it.
+        body: A zero-arg callable running the tool's actual work inside the
+            bound run context (its own `run_id` is read via
+            `current_run_id()`, since binding happens here, not in `body`).
+
+    Returns:
+        `body`'s return value unchanged on success or a handled `error:`
+        string; the fixed generic error string if `body` raised.
+    """
+    principal_extra = principal or "unknown"
+    with bind_run_context() as run_id:
+        emit_log_entry(
+            component=_COMPONENT,
+            action=action,
+            outcome="started",
+            run_id=run_id,
+            extra={"principal": principal_extra},
+        )
+        try:
+            result = body()
+        except Exception as exc:  # noqa: BLE001 -- residual MCP-boundary safety net (D-SANITIZE-UNEXPECTED's last row): body() must never raise across the MCP boundary
+            emit_log_entry(
+                component=_COMPONENT,
+                action=action,
+                outcome="failed",
+                run_id=run_id,
+                extra={"principal": principal_extra, "detail": repr(exc)},
+            )
+            return _UNEXPECTED_ERROR_MESSAGE
+        if isinstance(result, str) and result.startswith("error:"):
+            emit_log_entry(
+                component=_COMPONENT,
+                action=action,
+                outcome="failed",
+                run_id=run_id,
+                extra={"principal": principal_extra, "reason": result[:_STAGE_REASON_MAX_LEN]},
+            )
+            return result
+        emit_log_entry(
+            component=_COMPONENT,
+            action=action,
+            outcome="succeeded",
+            run_id=run_id,
+            extra={"principal": principal_extra},
+        )
+        return result
+
+
+def _sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
+    """Wrap one graph opener so any failure sanitises to `McpGraphUnavailableError`.
+
+    Mirrors `_resolve_graph`'s own pattern for the `cypher` tool
+    (D-SANITIZE-UNEXPECTED). Host/port/driver detail must not cross the MCP
+    boundary from this call site either.
+    """
+
+    def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return opener(*args, **kwargs)
+        except Exception as exc:
+            raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
+
+    return _wrapped
+
+
+def _sanitize_pipeline_graph_opens(dependencies: PipelineDependencies) -> PipelineDependencies:
+    """Wrap all three of `dependencies.graphs`' openers (D-SANITIZE-UNEXPECTED).
+
+    `run_catalog_ingestion_pipeline` calls `dependencies.graphs.native`/
+    `.baseline`/`.single_tenant` directly, with no try/except of its own --
+    confirmed by reading it: it opens all three graphs before
+    `_execute_catalog_stages`/`_run_stage` ever runs, so a stage failure's own
+    `PipelineStageError` sanitisation never covers this earlier step. Without
+    this wrapper, an unreachable FalkorDB here would instead reach the caller
+    as `_run_mcp_action`'s generic residual error.
+    """
+    graphs = dependencies.graphs
+    return dataclasses.replace(
+        dependencies,
+        graphs=GraphOpeners(
+            native=_sanitize_graph_open(graphs.native),
+            baseline=_sanitize_graph_open(graphs.baseline),
+            single_tenant=_sanitize_graph_open(graphs.single_tenant),
+        ),
+    )
+
+
+def _sanitize_change_check_graph_opens(
+    dependencies: ChangeCheckDependencies,
+) -> ChangeCheckDependencies:
+    """Wrap `open_single_tenant`/`open_native` (D-SANITIZE-UNEXPECTED).
+
+    `run_change_check_sweep` calls `dependencies.open_single_tenant`
+    directly, with no try/except of its own, and `_reingest_one` calls
+    `dependencies.open_native` the same way when an amendment is
+    re-ingested -- confirmed by reading `change_check_orchestration.py` in
+    full. Mirrors `_sanitize_pipeline_graph_opens`'s own shape exactly,
+    reusing the same per-opener `_sanitize_graph_open` wrapper (not
+    reinvented) rather than duplicating its try/except body a third time.
+    """
+    return dataclasses.replace(
+        dependencies,
+        open_single_tenant=_sanitize_graph_open(dependencies.open_single_tenant),
+        open_native=_sanitize_graph_open(dependencies.open_native),
+    )
+
+
+def _sanitize_near_miss_review_graph_opens(
+    dependencies: NearMissReviewDependencies,
+) -> NearMissReviewDependencies:
+    """Wrap `open_single_tenant_graph` (D-SANITIZE-UNEXPECTED).
+
+    `run_list_near_misses`/`run_resolve_near_miss` both call
+    `dependencies.open_single_tenant_graph` directly, with no try/except of
+    their own -- confirmed by reading `near_miss_review_orchestration.py` in
+    full. Mirrors `_sanitize_pipeline_graph_opens`'s/
+    `_sanitize_change_check_graph_opens`'s own shape exactly, reusing the
+    same generic per-opener `_sanitize_graph_open` wrapper (not reinvented)
+    rather than duplicating its try/except body a third time.
+    """
+    return dataclasses.replace(
+        dependencies,
+        open_single_tenant_graph=_sanitize_graph_open(dependencies.open_single_tenant_graph),
+    )
+
+
+def _resolve_and_ingest(
+    celex: str,
+    short_name: str,
+    entry: CatalogEntry | None,
+    *,
+    config: ServiceConfig,
+    principal: str | None,
+    run_id: str,
+) -> dict[str, object] | str:
+    """Resolve `entry` (if needed), run the pipeline, and map its exceptions.
+
+    `entry` non-`None` means `celex` is already curated (the caller already
+    matched its `short_name`); `None` means it must be resolved against
+    Cellar/ELI first (issue #96 -- `short_name` is used verbatim, never
+    derived). Any exception this function does not itself catch is the
+    residual D-SANITIZE-UNEXPECTED row, left to `_run_mcp_action`'s own
+    safety net.
+    """
+    ingestion_adapter: IngestionAdapter | None = None
+    try:
+        if entry is None:
+            resolution = resolve_via_cellar(celex, short_name=short_name)
+            entry = resolution.entry
+            ingestion_adapter = resolution.adapter
+        outcome = run_catalog_ingestion_pipeline(
+            entry,
+            config=config,
+            run_id=run_id,
+            caller=principal or "unknown",
+            dependencies=_sanitize_pipeline_graph_opens(build_default_pipeline_dependencies()),
+            ingestion_adapter=ingestion_adapter,
+        )
+    except (
+        CatalogIdentifierNotFoundError,
+        IngestionConfigIncompleteError,
+        PipelineStageError,
+    ) as exc:
+        return f"error: {exc}"
+    except McpGraphUnavailableError:
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    return _to_accepted_response(run_id, outcome).model_dump()
+
+
+@server.tool()
+def ingest_regulation(
+    celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
+    short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
+) -> dict[str, object] | str:
+    """IngestRegulation: ingest one EU regulation by CELEX into the compliance graph.
+
+    Runs the full external pipeline (Ingestion -> Domain Mapper -> Company
+    Merge) for `celex`, in-process, exactly like `POST /ingestions` does for
+    a `source: "catalog"` request. `short_name` is always required (issue
+    #96): for a CELEX already in the curated catalog, it must equal that
+    entry's own canonical short name exactly -- pass a different value and
+    the call is rejected with a named error rather than silently
+    substituting the catalog's own value. For a CELEX outside the curated
+    catalog, `short_name` is resolved against Cellar/ELI and used verbatim
+    (issue #96's fix: nothing is derived from the fetched title, so the same
+    CELEX ingested twice never forks into two differently-named graphs).
+
+    On success, returns the same structured summary `POST /ingestions`
+    returns: `run_id`, `regulatory_instrument_id`, `source`, and one
+    `stages` entry per completed pipeline stage (ingestion, extraction,
+    derivation, merge) with its own small integer `summary`. Returns a
+    string beginning `error: ` when: `short_name` does not match a curated
+    CELEX's own value; `celex` exists in neither the curated catalog nor
+    Cellar/ELI; the LLM Interface dependency is currently unhealthy (checked
+    before any graph is opened or the pipeline is called); the service
+    configuration is missing an LLM/embedding model or similarity threshold;
+    the policy graph database cannot be reached; a pipeline stage genuinely
+    fails mid-run; or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
+            return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
+        entry = find_by_celex(celex)
+        if entry is not None and short_name != entry.short_name:
+            return (
+                f"error: CELEX {celex} is curated under short_name "
+                f"'{entry.short_name}'; pass that value, not '{short_name}'"
+            )
+        # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
+        # calling this closure, so `current_run_id()` is never actually `None`
+        # here -- the `""` fallback only satisfies the type checker's narrowing,
+        # mirroring `_resolve_principal`'s own "unreachable in practice" idiom.
+        run_id = current_run_id() or ""
+        return _resolve_and_ingest(
+            celex, short_name, entry, config=config, principal=principal, run_id=run_id
+        )
+
+    return _run_mcp_action("ingest_regulation", principal, _body)
+
+
+@server.tool()
+def check_regulations() -> dict[str, object] | str:
+    """CheckRegulations: sweep every tracked regulation for detected amendments.
+
+    Runs the full change-check sweep in-process, exactly like `POST
+    /change-checks` does: opens the merged compliance graph, reads every
+    actively-tracked external `regulation`/`directive` instrument, polls for
+    a newer consolidated version of each, and automatically re-ingests any
+    detected amendment (D-DELEGATE). Takes zero parameters -- there is no
+    client-supplied input to validate for this tool, so AC-BI-005's
+    format-validation surface does not apply here; this is a deliberate
+    absence, not a gap.
+
+    On success, returns the same structured summary `POST /change-checks`
+    returns: `run_id` and one `instruments` entry per tracked instrument,
+    each carrying its own `instrument_id` and `outcome` (`current`,
+    `amendment_reingested`, `poll_failed`, `not_configured`, `skipped`, or
+    `reingest_failed`), plus `detail`/`reingest_run_id` where applicable.
+    Returns a string beginning `error: ` when the LLM Interface dependency
+    is currently unhealthy (checked before any graph is opened or the sweep
+    is run), when the policy graph database cannot be reached, or (this
+    tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
+            return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
+        # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
+        # calling this closure, so `current_run_id()` is never actually `None`
+        # here -- the `""` fallback only satisfies the type checker's narrowing,
+        # mirroring `ingest_regulation`'s own identical idiom.
+        run_id = current_run_id() or ""
+        try:
+            result = run_change_check_sweep(
+                config=config,
+                run_id=run_id,
+                dependencies=_sanitize_change_check_graph_opens(
+                    build_default_change_check_dependencies()
+                ),
+            )
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return _to_change_check_response(result).model_dump()
+
+    return _run_mcp_action("check_regulations", principal, _body)
+
+
+@server.tool()
+def near_misses_list() -> dict[str, object] | str:
+    """ListNearMisses: list every unresolved near-miss pending review.
+
+    Runs in-process, exactly like `GET /near-misses` does: opens the merged
+    (single-tenant) compliance graph and returns every unresolved
+    `PendingReview` -- a Company Merge dedup candidate awaiting a
+    keep-separate/merge decision. Takes zero parameters. Unlike
+    `ingest_regulation`/`check_regulations`, this tool has no LLM Interface
+    dependency of its own (Company Merge's dedup pass runs only during
+    ingestion/merge, not during this read), so it does not run the
+    LLM-Interface pre-flight check those two tools do -- matching ps-cli's
+    own `handle_near_misses_list`, which never calls
+    `_assert_llm_interface_available` either.
+
+    On success, returns the same structured summary `GET /near-misses`
+    returns: a `reviews` list, one entry per unresolved review, each
+    carrying `id`, `kind`, `incoming_text`, `nearest_existing_text`, and
+    `similarity` (the two canonical node ids a review references are
+    deliberately omitted from this wire shape, matching the REST endpoint).
+    Returns a string beginning `error: ` when the policy graph database
+    cannot be reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        try:
+            result = run_list_near_misses(
+                config=config,
+                dependencies=_sanitize_near_miss_review_graph_opens(
+                    build_default_near_miss_review_dependencies()
+                ),
+            )
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return result.model_dump()
+
+    return _run_mcp_action("near_misses_list", principal, _body)
+
+
+class MergeConfirmation(BaseModel):
+    """CHANGES.md H2: the confirmation payload a client must supply to proceed with a merge."""
+
+    confirm: Literal["merge"]
+
+
+def _confirm_merge(decision: str) -> Elicit[MergeConfirmation] | bool:
+    """CHANGES.md H2: `near_misses_resolve`'s merge-confirmation resolver.
+
+    Runs before the tool body, given the tool's own already-validated
+    `decision` argument by name (the SDK's resolver-DAG wiring, not a
+    manual lookup). `decision="keep-separate"` resolves instantly with no
+    elicitation round trip -- Slice 3.2's existing single-round-trip
+    behavior for that branch is unchanged. `decision="merge"` returns an
+    `Elicit` marker instead: the SDK sends (or, on the >= 2026-07-28
+    protocol, batches into an `InputRequiredResult`) an `elicitation/create`
+    request carrying `_MERGE_WARNING`, and does not call this tool's body
+    until the client answers. A decline/cancel answer raises `ToolError`
+    automatically (the resolver's own consumer -- `near_misses_resolve`'s
+    `confirmed` parameter -- is annotated to receive the unwrapped value,
+    not the full outcome union), so no merge write ever happens on that
+    path either.
+    """
+    if decision != "merge":
+        return True
+    return Elicit(message=_MERGE_WARNING, schema=MergeConfirmation)
+
+
+@server.tool()
+def near_misses_resolve(
+    review_id: Annotated[str, Field(min_length=1)],
+    decision: Literal["keep-separate", "merge"],
+    confirmed: Annotated[bool | MergeConfirmation, Resolve(_confirm_merge)],
+) -> dict[str, object] | str:
+    """ResolveNearMiss: resolve one near-miss pending review.
+
+    Runs in-process, exactly like `POST /near-misses/{review_id}/resolve`
+    does: `decision="keep-separate"` deletes only the `PendingReview`
+    record -- `winner_id`/`loser_id` stay `None` in the response (this
+    slice's own implemented happy path). `decision`'s `Literal` type is
+    itself the MCP-schema-level rejection of any other value, before this
+    tool's body ever runs.
+
+    WARNING: decision="merge" is IRREVERSIBLE -- it deletes the loser node
+    and re-points every edge that referenced it onto the winner,
+    atomically, before this call returns. Reply with confirm="merge" to
+    proceed. This is also the exact message a real elicitation round trip
+    sends before any merge write happens (CHANGES.md H2, reversing
+    D-MERGE-WARN's earlier rejection of this mechanism): calling with
+    decision="merge" pauses the call until the client answers with
+    `{"confirm": "merge"}`; a decline or cancel answer aborts the call
+    before any write; and a client that has not declared the elicitation
+    capability gets a clear protocol error instead of an unconfirmed merge.
+    `decision="keep-separate"` never pauses -- one round trip, exactly as
+    before.
+
+    Like `near_misses_list`, this tool has no LLM Interface dependency of
+    its own and so runs no LLM-Interface pre-flight check.
+
+    On success, returns the same structured summary `POST
+    /near-misses/{review_id}/resolve` returns: `review_id`, `decision`, and
+    `winner_id`/`loser_id` (populated for `merge`, `None` for
+    `keep-separate`). Returns a string beginning `error: ` when `review_id`
+    doesn't exist or was already resolved, when (`merge` only) it references
+    a node a prior merge already deleted (a stale reference), when the
+    policy graph database cannot be reached, or (this tool's own residual
+    safety net) on any other unexpected failure.
+    """
+    # `confirmed` is a resolver-filled gate (CHANGES.md H2): its presence on
+    # the signature is what forces the elicitation round-trip for `merge`
+    # before this body ever runs; the value itself carries nothing further
+    # this body needs (the tool never reaches here on a decline/cancel).
+    _ = confirmed
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        try:
+            result = run_resolve_near_miss(
+                review_id,
+                decision,
+                config=config,
+                dependencies=_sanitize_near_miss_review_graph_opens(
+                    build_default_near_miss_review_dependencies()
+                ),
+            )
+        except PendingReviewNotFoundError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return result.model_dump()
+
+    return _run_mcp_action("near_misses_resolve", principal, _body)
 
 
 @server.tool()
