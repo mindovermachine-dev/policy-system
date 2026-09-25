@@ -18,9 +18,6 @@
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
 set -euo pipefail
 
-# Git Bash on Windows sometimes automatically converts POSIX-style paths to Windows-style paths.
-export MSYS_NO_PATHCONV=1
-
 # Every hard-stop failure message goes through print_error (below), which is red only when
 # stderr is a terminal -- piping to a file/CI log leaves plain text, no stray ANSI codes
 # (respects NO_COLOR, https://no-color.org). Copied verbatim from scripts/deploy-llm.sh
@@ -280,6 +277,20 @@ fetch_signed_in_user_upn() {
   az account show --query user.name -o tsv
 }
 
+# az_no_pathconv <args...>: runs `az` with Git Bash's MSYS path conversion disabled for this one
+# call. Git Bash auto-rewrites any argument that looks like a POSIX absolute path (leading "/")
+# into a Windows path before a non-MSYS binary ever sees it -- helpful for a real filesystem path,
+# but it mangles an Azure resource ID/scope like "/subscriptions/..." into garbage. This script has
+# exactly one real filesystem path (VALUES_PROD_FILE, passed to `helm -f` in ensure_release) that
+# depends on that conversion happening, so MSYS_NO_PATHCONV can't be exported globally (previously
+# tried -- broke the `helm -f` lookup under Git Bash on Windows) -- it must be scoped to only the
+# `az` calls below that take a leading-"/" resource ID: fetch_role_assignments,
+# grant_aks_rbac_access's role assignment create, and the `--ids`-based public-IP calls
+# (ensure_dns_label/fetch_public_ip_fqdn).
+az_no_pathconv() {
+  MSYS_NO_PATHCONV=1 az "$@"
+}
+
 # fetch_role_assignments <assignee> <scope>: prints the newline-separated role names assigned to
 # <assignee> at <scope>. Takes an explicit scope rather than building a subscription-root scope
 # internally -- `az role assignment list --scope` accepts any resource ID (subscription, resource
@@ -289,7 +300,7 @@ fetch_signed_in_user_upn() {
 # function (L1 DRY) rather than duplicating the `az role assignment list` call shape.
 fetch_role_assignments() {
   local assignee="$1" scope="$2"
-  az role assignment list --assignee "$assignee" --scope "$scope" \
+  az_no_pathconv role assignment list --assignee "$assignee" --scope "$scope" \
     --query "[].roleDefinitionName" -o tsv
 }
 
@@ -1094,7 +1105,7 @@ grant_aks_rbac_access() {
   if has_role "$roles" "$AKS_RBAC_ADMIN_ROLE"; then
     return 0
   fi
-  az role assignment create --assignee "$object_id" --role "$AKS_RBAC_ADMIN_ROLE" \
+  az_no_pathconv role assignment create --assignee "$object_id" --role "$AKS_RBAC_ADMIN_ROLE" \
     --scope "$scope" >/dev/null
   made_changes=true
 }
@@ -1276,19 +1287,19 @@ fetch_public_ip_resource_id() {
 ensure_dns_label() {
   local public_ip_id="$1" label="$2"
   local current_label
-  current_label="$(az network public-ip show --ids "$public_ip_id" \
+  current_label="$(az_no_pathconv network public-ip show --ids "$public_ip_id" \
     --query "dnsSettings.domainNameLabel" -o tsv 2>/dev/null || true)"
   if [[ "$current_label" == "$label" ]]; then
     return 0
   fi
-  az network public-ip update --ids "$public_ip_id" --dns-name "$label" >/dev/null
+  az_no_pathconv network public-ip update --ids "$public_ip_id" --dns-name "$label" >/dev/null
   made_changes=true
 }
 
 # fetch_public_ip_fqdn <public_ip_id>: prints the resulting "<label>.<region>.cloudapp.azure.com"
 # hostname.
 fetch_public_ip_fqdn() {
-  az network public-ip show --ids "$1" --query "dnsSettings.fqdn" -o tsv
+  az_no_pathconv network public-ip show --ids "$1" --query "dnsSettings.fqdn" -o tsv
 }
 
 # ---------------------------------------------------------------------------------------------
