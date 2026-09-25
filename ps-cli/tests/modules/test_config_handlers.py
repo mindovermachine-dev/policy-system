@@ -31,18 +31,19 @@ from ps_cli.modules.config_handlers import (
 from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, load_targets, write_targets
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
-    from conftest import InMemoryKeyringBackend
+    from conftest import InMemoryPersistenceBackend
 
     from ps_cli.credentials import TokenBundle
 
 
 def test_handle_config_set_context_writes_url_creates_new_entry(
-    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+    tmp_path: Path, portable_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """A brand-new context name is written into `targets.toml`'s `[contexts]` table."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     targets = load_targets(tmp_path)
@@ -64,10 +65,10 @@ _CREDENTIAL_MARKER_STRINGS = (
 
 def test_handle_config_set_context_file_content_never_contains_a_credential_value(
     tmp_path: Path,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`targets.toml`'s raw file content has the URL, never a credential marker (AC-BI-012)."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     raw_content = (tmp_path / "targets.toml").read_text(encoding="utf-8")
@@ -128,10 +129,10 @@ def test_handle_config_set_context_deletes_credential_unconditionally_on_every_c
 
 
 def test_handle_config_set_context_writes_auth_issuer_override(
-    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+    tmp_path: Path, portable_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """`auth_issuer="https://issuer.example"` writes `ContextEntry.auth.issuer` (AC-BI-006)."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -149,12 +150,12 @@ def test_handle_config_set_context_writes_auth_issuer_override(
 
 def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_given_again(
     tmp_path: Path,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Re-running `set-context` with only `--url` (no `--auth-*` flags) leaves the
     context's existing `auth` table untouched (AC-BI-006: omitted flags never clear).
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -175,12 +176,12 @@ def test_handle_config_set_context_preserves_existing_auth_when_only_url_flag_gi
 
 def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving_others_intact(
     tmp_path: Path,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Passing only `--auth-audience` on a re-run overwrites just that field, leaving
     `issuer`/`client_id`/`scopes` exactly as they were (AC-BI-006's per-field wording).
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context(
         "prod",
         "https://ps.example.com",
@@ -206,10 +207,10 @@ def test_handle_config_set_context_overwrites_only_the_passed_auth_field_leaving
 
 def test_handle_config_set_context_no_auth_flags_and_no_existing_auth_stays_none(
     tmp_path: Path,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """A brand-new context with no `--auth-*` flags gets `auth=None`, not an empty table."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
     targets = load_targets(tmp_path)
@@ -218,10 +219,10 @@ def test_handle_config_set_context_no_auth_flags_and_no_existing_auth_stays_none
 
 
 def test_handle_config_use_context_sets_current_context(
-    tmp_path: Path, portable_keyring: InMemoryKeyringBackend
+    tmp_path: Path, portable_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """`use-context prod` sets `current_context` to `prod`, `[contexts]` unchanged."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
@@ -238,10 +239,10 @@ def test_handle_config_use_context_sets_current_context(
 
 def test_handle_config_use_context_raises_listing_valid_names_for_unknown_context(
     tmp_path: Path,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`use-context qa` with only `dev`/`prod` defined raises, listing the valid names."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
 
@@ -259,12 +260,12 @@ def test_handle_config_use_context_raises_listing_valid_names_for_unknown_contex
 def test_handle_config_get_contexts_marks_current_context(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Two contexts, one current -- both appear in stdout as a bordered table; exactly one
     line carries `*`, the current context's line (AC-BI-005).
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context("prod", "https://ps.example.com", config_dir=tmp_path)
     handle_config_use_context("prod", config_dir=tmp_path)
@@ -287,10 +288,10 @@ def test_handle_config_get_contexts_marks_current_context(
 def test_handle_config_get_contexts_does_not_truncate_a_wide_url(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-006, handler level: a 120-char context URL is never truncated."""
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     wide_url = "https://" + "a" * 112
     assert len(wide_url) == 120
     handle_config_set_context("dev", wide_url, config_dir=tmp_path)
@@ -330,14 +331,14 @@ def test_handle_config_get_contexts_renders_a_hostile_url_literally(
 def test_handle_config_get_contexts_shows_auth_overrides_column(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """The "Auth Overrides" column lists field *names* only, never their values
     (issue #57 Slice 8): "-" for a context with no overrides, "issuer, audience" for
     one with those two fields set, and the literal override values themselves never
     appear anywhere in stdout.
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     handle_config_set_context("dev", "http://ctx-dev:9000", config_dir=tmp_path)
     handle_config_set_context(
         "prod",

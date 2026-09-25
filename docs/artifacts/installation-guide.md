@@ -191,6 +191,12 @@ $ ps-cli --version
 PS Service isn't deployed yet at this point, so the second line reports
 `unavailable (...)` — that's expected here, and `ps-cli --version` still exits 0.
 
+On Linux, `ps-cli auth login`/`auth status`/`auth logout` additionally require
+`gir1.2-secret-1` (Debian/Ubuntu: `sudo apt install python3-gi gir1.2-secret-1`) to
+access the OS Secret Service for encrypted credential storage. If it's missing,
+`ps-cli` reports an actionable error naming the exact install command rather than
+crashing.
+
 There is no separate upgrade command — re-run `install.sh` whenever a newer release is available; re-running is the documented upgrade path and installs over whatever version is currently on `PATH`.
 
 ### 7. Deploy Policy System Backend

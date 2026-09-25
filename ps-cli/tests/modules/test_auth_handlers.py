@@ -35,12 +35,13 @@ import pytest
 from ps_cli import device_flow, oidc_discovery
 from ps_cli.cli import run
 from ps_cli.config import CliConfig
-from ps_cli.credentials import KeyringCredentialStore, TokenBundle
+from ps_cli.credentials import PersistenceCredentialStore, TokenBundle
 from ps_cli.device_flow import DeviceAuthorization, TokenResponse
 from ps_cli.errors import PsCliError
 from ps_cli.modules.auth_handlers import handle_auth_login, handle_auth_logout, handle_auth_status
 from ps_cli.oidc_discovery import ResolvedAuthParameters
 from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, write_targets
+from ps_test_support import mock_oidc_provider as mock_oidc_provider_module
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
@@ -50,7 +51,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import httpx
-    from conftest import InMemoryKeyringBackend
+    from conftest import InMemoryPersistenceBackend
 
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -137,23 +138,37 @@ def _resource_metadata_body(
     return body
 
 
-# Issue #121, D-121-7: `_force_no_keyring` (a "no real OS keyring -> fall back to file"
-# forcer) is gone -- there is no fallback left to force onto. Tests below that need
-# `build_credential_store()`'s real, zero-argument production wiring to actually work
-# portably use the shared `portable_keyring` fixture (`conftest.py`) instead; tests that
-# construct a `CredentialStore` directly use the shared `keyring_backend` fixture.
+# Issue #121, D-121-7: the old "force no real OS credential-storage backend -> fall
+# back to file" forcer is gone -- there is no fallback left to force onto. Issue #123:
+# tests that construct a `CredentialStore` directly use the shared
+# `build_in_memory_persistence` fixture (`conftest.py`) to build a
+# `PersistenceCredentialStore`. The three tests below that exercise `run()`'s real
+# dispatch chain never reach `build_credential_store()`'s own production wiring before
+# failing (their failures all happen during discovery/device-flow, before any
+# `credential_store.set_tokens` call), so they also use `build_in_memory_persistence`
+# directly for their own post-hoc "nothing was stored" assertion, rather than
+# depending on `build_credential_store()`'s real production wiring
+# (`credentials.py`'s own module docstring).
 
 
 # --- Slice 13: handle_auth_login() happy path ---------------------------------------
 
 
+@pytest.mark.parametrize(
+    "oversized_refresh_token",
+    [
+        pytest.param(None, id="normal_refresh_token"),
+        pytest.param("r" * 5000, id="ac_bi_003_oversized_windows_blob_limit_refresh_token"),
+    ],
+)
 def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     mock_oidc_provider: MockOidcProvider,
     fake_json_server_factory: Callable[[str, dict[str, object]], _FakeJsonServer],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
+    oversized_refresh_token: str | None,
 ) -> None:
     """The full Slices 5-12 chain, run once through `handle_auth_login()`.
 
@@ -161,12 +176,34 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     `credential_store.get_tokens("dev")` returns a `TokenBundle` whose `issuer` matches
     the provider and whose `refresh_token` is the one the poll actually returned --
     issue #121, AC-BI-001: no `access_token` field exists on `TokenBundle` any more.
+
+    Parametrized (issue #123, AC-BI-003) with a 5000-character `refresh_token` --
+    `MockOidcProvider._handle_device_code_grant` mints its refresh token via
+    `secrets.token_urlsafe(32)` with no seam of its own to override the value, so the
+    `oversized_refresh_token`-parametrized case monkeypatches
+    `mock_oidc_provider_module.secrets.token_urlsafe` itself, substituting the oversized
+    string only for the 32-byte refresh-token call (never the 16-byte device_code call,
+    which must keep minting a real unique code for the poll to key off). Proves the full
+    CLI-command path --
+    discovery, device-authorization, polling, `handle_auth_login`'s own
+    `credential_store.set_tokens` call -- round-trips an oversized payload with no
+    ceiling, not just `PersistenceCredentialStore` in isolation (that's test 1's job).
     """
+    if oversized_refresh_token is not None:
+        real_token_urlsafe = mock_oidc_provider_module.secrets.token_urlsafe
+
+        def _fake_token_urlsafe(nbytes: int | None = None) -> str:
+            if nbytes == 32:
+                return oversized_refresh_token
+            return real_token_urlsafe(nbytes)
+
+        monkeypatch.setattr(mock_oidc_provider_module.secrets, "token_urlsafe", _fake_token_urlsafe)
+
     resource_metadata_server = fake_json_server_factory(
         "/.well-known/oauth-protected-resource", _resource_metadata_body(mock_oidc_provider)
     )
     config = CliConfig(service_url=resource_metadata_server.base_url, context_name="dev")
-    credential_store = KeyringCredentialStore(keyring_backend=keyring_backend)
+    credential_store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
 
     captured_device_auth: list[DeviceAuthorization] = []
     original_request_device_authorization = device_flow.request_device_authorization
@@ -206,14 +243,17 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     assert stored.issuer == mock_oidc_provider.issuer
     assert isinstance(stored.refresh_token, str)
     assert stored.refresh_token != ""
+    if oversized_refresh_token is not None:
+        assert stored.refresh_token == oversized_refresh_token
+        assert len(stored.refresh_token) == 5000
 
 
 def test_handle_auth_login_no_context_raises_before_any_network_call(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """`context_name is None` raises up front -- never calls `resolve_auth_parameters`."""
     config = CliConfig(service_url="http://ps-service.invalid", context_name=None)
-    credential_store = KeyringCredentialStore(keyring_backend=keyring_backend)
+    credential_store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
 
     with pytest.raises(PsCliError) as excinfo:
         handle_auth_login(
@@ -245,7 +285,7 @@ def test_run_auth_login_missing_client_id_exits_1_with_ac_bi_004_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """No `ps_cli_client_id` in metadata, no override -> exit 1, AC-BI-004's message."""
     config_dir = tmp_path / "config"
@@ -261,7 +301,10 @@ def test_run_auth_login_missing_client_id_exits_1_with_ac_bi_004_message(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "No OIDC client id is configured" in captured.err
-    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
+    assert (
+        PersistenceCredentialStore(build_persistence=build_in_memory_persistence).get_tokens("dev")
+        is None
+    )
 
 
 def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi_005_message(
@@ -269,7 +312,7 @@ def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """An issuer whose discovery doc has no `device_authorization_endpoint` -> exit 1,
     AC-BI-005's message naming that issuer.
@@ -301,7 +344,10 @@ def test_run_auth_login_missing_device_authorization_endpoint_exits_1_with_ac_bi
     assert exit_code == 1
     assert issuer_server.base_url in captured.err
     assert "does not support device authorization" in captured.err
-    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
+    assert (
+        PersistenceCredentialStore(build_persistence=build_in_memory_persistence).get_tokens("dev")
+        is None
+    )
 
 
 def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
@@ -310,7 +356,7 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    portable_keyring: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`deny_device_code` fired the instant the device code is minted (before the poll
     even starts) -> the first `/token` poll returns `access_denied` -> exit 1, AC-BI-009's
@@ -341,7 +387,10 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "denied" in captured.err
-    assert KeyringCredentialStore(keyring_backend=portable_keyring).get_tokens("dev") is None
+    assert (
+        PersistenceCredentialStore(build_persistence=build_in_memory_persistence).get_tokens("dev")
+        is None
+    )
 
 
 def test_run_auth_login_no_context_exits_1_with_no_context_message(
@@ -353,7 +402,8 @@ def test_run_auth_login_no_context_exits_1_with_no_context_message(
 
     `build_credential_store()` is constructed by `_dispatch_auth_login` regardless, but
     `handle_auth_login` raises before ever calling any of its methods -- no real OS
-    keyring backend is ever actually touched, so no portable fake is needed here.
+    credential-storage backend is ever actually touched, so no portable fake is needed
+    here.
     """
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(config_dir))

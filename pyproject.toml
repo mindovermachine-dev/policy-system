@@ -161,9 +161,12 @@ reportMissingTypeStubs = false  # falkordb / litellm ship no py.typed. This is a
 #                        to the litellm response type at the boundary (see B13).
 #
 #   ps-cli uses httpx (0.28.1) for its PS Service REST client, which ships
-#   `py.typed` — no per-library boundary-cast comment needed there. keyring
-#   (25.7.0, issue #56's credential storage) ships `py.typed` too — same
-#   reasoning, no boundary suppression needed.
+#   `py.typed` — no per-library boundary-cast comment needed there.
+#   msal-extensions (1.3.1, issue #123's credential storage, replacing keyring)
+#   ships no `py.typed` (its own source carries PEP 484 type comments, which
+#   basedpyright reads — no suppression has been needed so far); its one
+#   boundary module is ps_cli/credentials.py, where any future suppression
+#   belongs if that ever changes.
 #
 # If inline suppressions proliferate (>~15), promote to local stub packages under
 # `typings/` + `stubPath = "typings"` — a follow-up, not this issue.

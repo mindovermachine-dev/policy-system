@@ -44,7 +44,9 @@ from ps_test_support.mock_oidc_provider import (
 )
 
 if TYPE_CHECKING:
-    from conftest import AlwaysRaisingKeyringBackend, InMemoryKeyringBackend
+    from collections.abc import Callable
+
+    from conftest import AlwaysRaisingPersistenceBackend, InMemoryPersistenceBackend
 
     from ps_cli.catalog_repo import CuratedArtifact
     from ps_test_support.mock_oidc_provider import MockOidcProvider
@@ -912,7 +914,7 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mock_oidc_provider: MockOidcProvider,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Issue #111 Slice 2: closes a real coverage gap on already-shipped AC-BI-003 code.
 
@@ -936,7 +938,7 @@ def test_resolve_client_attaches_a_freshly_refreshed_bearer_token_to_a_real_busi
     (AC-BI-003), so this test seeds a real refresh_token and lets a genuine refresh
     happen against `mock_oidc_provider`.
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     client_id = "ps-cli-test-client"
@@ -1233,7 +1235,7 @@ def test_ingest_document_still_rejects_invalid_local_file_before_any_network_cal
 def test_run_config_set_context_never_constructs_ps_service_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """`config set-context` never calls `load_config()` -- the critical D8 property.
 
@@ -1245,7 +1247,7 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     routed straight to `handle_config_set_context`, never the `else` branch (PLAN.md §4
     Slice 24).
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     (tmp_path / "targets.toml").write_text(
         'current_context = "missing"\n\n[contexts.dev]\nurl = "http://127.0.0.1:8000"\n'
@@ -1263,10 +1265,10 @@ def test_run_config_set_context_never_constructs_ps_service_client(
     assert targets.contexts["prod"].url == "https://ps.example.com"
 
 
-def test_run_config_set_context_surfaces_actionable_keyring_error_via_real_dispatch(
+def test_run_config_set_context_surfaces_actionable_credential_store_error_via_real_dispatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    unusable_keyring: AlwaysRaisingKeyringBackend,
+    unusable_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-006/007's CLI-level proof: the real dispatch chain, not just the
@@ -1276,7 +1278,7 @@ def test_run_config_set_context_surfaces_actionable_keyring_error_via_real_dispa
     AC-BI-008).
 
     Exercises `run()` -> `CONFIG_DISPATCH` -> `handle_config_set_context` ->
-    `build_credential_store` -> `KeyringCredentialStore` end to end -- a wiring bug
+    `build_credential_store` -> `PersistenceCredentialStore` end to end -- a wiring bug
     anywhere in that chain would fail this test even though every narrower slice
     still passes on its own. `set-context` is the only command that ever touches
     `CredentialStore` (D13's unconditional `delete_tokens`) -- `use-context`/
@@ -1284,12 +1286,13 @@ def test_run_config_set_context_surfaces_actionable_keyring_error_via_real_dispa
     command's proof fully covers AC-BI-006/007's "every command that reads or
     writes it" wording for this issue's scope.
 
-    `unusable_keyring` (`conftest.py`) monkeypatches the real `keyring` module's
-    three free functions to raise a bare `OSError` -- reproducing "the failure is a
-    raw `win32ctypes.pywin32.pywintypes.error`, not a `keyring.errors.KeyringError`"
-    (TASK.md issue #121) -- rather than any `keyring.errors.*` subclass.
+    `unusable_persistence` (`conftest.py`) monkeypatches the production persistence
+    factory to raise a bare `OSError` -- reproducing "the failure is a raw OS-level
+    exception, not a reshaped library-specific error type" (TASK.md issue #121, the
+    original motivating case was a raw `win32ctypes.pywin32.pywintypes.error`) --
+    rather than any narrower library-specific exception subclass.
     """
-    del unusable_keyring  # only needed so build_credential_store() hits an unusable backend
+    del unusable_persistence  # only needed so build_credential_store() hits an unusable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     uncallable_client = _UnusedPsServiceClientMethods()
 
@@ -1311,7 +1314,7 @@ def test_run_config_set_context_surfaces_actionable_keyring_error_via_real_dispa
 def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-005's literal scenario: `set-context` then `use-context` drives resolution.
 
@@ -1321,7 +1324,7 @@ def test_ac_bi_005_set_context_then_use_context_drives_subsequent_resolution(
     resolve to next. The two `run()` calls use an uncallable client fake (this is `config
     set-context`/`use-context`, neither of which ever touches `PsServiceClient` -- D8).
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     uncallable_client = _UnusedPsServiceClientMethods()
@@ -1962,7 +1965,7 @@ def test_run_get_health_with_unreachable_real_service_returns_one_without_crashi
 def test_run_get_health_with_context_flag_resolves_named_targets_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-005/AC-BI-006 end-to-end for `get health`, per CHANGES.md M2 (the only valid proof
     mechanism for this slice): an independent `load_config(context=..., config_dir=...)`
@@ -1979,7 +1982,7 @@ def test_run_get_health_with_context_flag_resolves_named_targets_url(
     `DISPATCH` entry reaches that same generic code path as every other client-backed
     command (D9), so this proof transfers to `get health` without needing to invoke it at all.
     """
-    del portable_keyring  # only needed so build_credential_store() has a portable backend
+    del portable_persistence  # only needed so build_credential_store() has a portable backend
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("PS_CLI_SERVICE_URL", raising=False)
     uncallable_client = _UnusedPsServiceClientMethods()

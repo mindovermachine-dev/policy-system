@@ -74,9 +74,9 @@ from ps_test_support.mock_oidc_provider import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
-    from conftest import InMemoryKeyringBackend
+    from conftest import InMemoryPersistenceBackend
 
     from ps_cli.credentials import CredentialStore
     from ps_cli.device_flow import DeviceAuthorization
@@ -311,18 +311,19 @@ def _set_context_and_log_in(
 def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider(
     mock_oidc_provider: MockOidcProvider,
     fake_ps_service_metadata_server: _FakePsServiceMetadataServer,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-019: log in, make authenticated calls across several invocations, log out.
 
-    Issue #121, D-121-7: `portable_keyring` (`conftest.py`) replaces the old
-    `_force_no_keyring`-then-fall-back-to-file mechanism -- there is no file fallback
-    left to fall back to (AC-BI-008); this fixture just gives `build_credential_
-    store()`'s real, zero-argument production wiring a portable, working in-memory
-    keyring so this test never depends on a real OS keyring backend being present.
-    Requested for its monkeypatching side effect only -- never read directly.
+    Issue #121, D-121-7: `portable_persistence` (`conftest.py`) replaces the old
+    "force no real credential-storage backend, then fall back to file" mechanism --
+    there is no file fallback left to fall back to (AC-BI-008); this fixture just gives
+    `build_credential_store()`'s real, zero-argument production wiring a portable,
+    working in-memory backend so this test never depends on a real OS
+    credential-storage backend being present. Requested for its monkeypatching side
+    effect only -- never read directly.
 
     Issue #121, Slice 4: AC-BI-003 ("exactly one refresh-token exchange... before its
     first business-endpoint call") and AC-BI-004 ("reused... within the same
@@ -432,7 +433,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
 def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogin_error(
     mock_oidc_provider: MockOidcProvider,
     fake_ps_service_metadata_server: _FakePsServiceMetadataServer,
-    portable_keyring: InMemoryKeyringBackend,
+    portable_persistence: Callable[[str], InMemoryPersistenceBackend],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -446,7 +447,7 @@ def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogi
     real `_refresh_tokens` parsing path: `refresh_grant_tokens` proves exactly one
     refresh attempt was made (and rejected), not skipped or retried.
     """
-    del portable_keyring
+    del portable_persistence
     auth_override, credential_store, _device_code = _set_context_and_log_in(
         mock_oidc_provider, fake_ps_service_metadata_server, monkeypatch
     )

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 import httpx
 import pytest
 
-from ps_cli.credentials import KeyringCredentialStore, TokenBundle
+from ps_cli.credentials import PersistenceCredentialStore, TokenBundle
 from ps_cli.device_flow import AccessTokenCache
 from ps_cli.mcp_bridge import (
     _LOG_FILE_NAME,  # pyright: ignore[reportPrivateUsage]  # unit-tested directly, see module docstring
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TextIO
 
-    from conftest import InMemoryKeyringBackend
+    from conftest import InMemoryPersistenceBackend
 
 _MCP_URL = "https://ps.example.test/mcp/"
 _SERVICE_URL = "https://ps.example.test"
@@ -52,37 +52,39 @@ _OPENID_CONFIGURATION_URL = f"{_FAKE_ISSUER}/.well-known/openid-configuration"
 _TOKEN_URL = f"{_FAKE_ISSUER}/token"
 
 
-def _in_memory_credential_store(keyring_backend: InMemoryKeyringBackend) -> KeyringCredentialStore:
-    """A fresh, portable `KeyringCredentialStore` backed by an in-memory fake (D-121-7).
+def _in_memory_credential_store(
+    build_persistence: Callable[[str], InMemoryPersistenceBackend],
+) -> PersistenceCredentialStore:
+    """A fresh, portable `PersistenceCredentialStore` backed by an in-memory fake (D-121-7).
 
     Replaces `FileCredentialStore(tmp_path)` (issue #121: that class is gone entirely,
     AC-BI-008) -- just enough to keep this suite green; Slice 2 adds the
     bridge-specific reuse-across-messages/expiry-recovery proofs on top. Takes the
-    shared `keyring_backend` fixture (`conftest.py`) as a parameter rather than
-    constructing one itself -- pytest's `--import-mode=importlib` (this repo's
+    shared `build_in_memory_persistence` fixture (`conftest.py`) as a parameter rather
+    than constructing one itself -- pytest's `--import-mode=importlib` (this repo's
     convention, `pyproject.toml`) means `conftest.py`'s classes can only be
     instantiated via fixture injection, never a direct `from conftest import ...` at
     module level in a test file.
     """
-    return KeyringCredentialStore(keyring_backend=keyring_backend)
+    return PersistenceCredentialStore(build_persistence=build_persistence)
 
 
 def _ctx(
     tmp_path: Path,
-    keyring_backend: InMemoryKeyringBackend,
+    build_persistence: Callable[[str], InMemoryPersistenceBackend],
     *,
     context_name: str | None = None,
     log_file: TextIO | None = None,
     access_token_cache: AccessTokenCache | None = None,
 ) -> _BridgeContext:
     """Build a `_BridgeContext` with literal values -- no real config/service needed."""
-    del tmp_path  # unused now that credential storage is keyring-only, not file-based
+    del tmp_path  # unused now that credential storage is persistence-backed, not file-based
     return _BridgeContext(
         mcp_url=_MCP_URL,
         context_name=context_name,
         service_url="https://ps.example.test",
         auth_override=None,
-        credential_store=_in_memory_credential_store(keyring_backend),
+        credential_store=_in_memory_credential_store(build_persistence),
         access_token_cache=(
             access_token_cache if access_token_cache is not None else AccessTokenCache()
         ),
@@ -91,13 +93,16 @@ def _ctx(
 
 
 def _ctx_with_stale_bundle(
-    keyring_backend: InMemoryKeyringBackend, *, context_name: str, log_file: TextIO | None = None
+    build_persistence: Callable[[str], InMemoryPersistenceBackend],
+    *,
+    context_name: str,
+    log_file: TextIO | None = None,
 ) -> _BridgeContext:
     """A `_BridgeContext` whose stored bundle has no `refresh_token` -- the very next
     `ensure_valid_access_token` call fails closed (AC-BI-002), with an empty (never
     populated) `AccessTokenCache`.
     """
-    store = _in_memory_credential_store(keyring_backend)
+    store = _in_memory_credential_store(build_persistence)
     store.set_tokens(context_name, TokenBundle(refresh_token=None, issuer="https://idp.example"))
     return _BridgeContext(
         mcp_url=_MCP_URL,
@@ -111,7 +116,7 @@ def _ctx_with_stale_bundle(
 
 
 def _ctx_with_cached_access_token(
-    keyring_backend: InMemoryKeyringBackend,
+    build_persistence: Callable[[str], InMemoryPersistenceBackend],
     *,
     context_name: str,
     access_token: str,
@@ -128,7 +133,7 @@ def _ctx_with_cached_access_token(
     `refresh_token` is also needed so `_resolve_access_token`'s own "nothing stored
     for this context" check doesn't short-circuit before ever consulting the cache.
     """
-    store = _in_memory_credential_store(keyring_backend)
+    store = _in_memory_credential_store(build_persistence)
     store.set_tokens(
         context_name, TokenBundle(refresh_token="rt-unused", issuer="https://idp.example")
     )
@@ -195,7 +200,7 @@ def _build_auth_and_mcp_transport(
 
 
 def _ctx_with_refresh_token_and_transport(
-    keyring_backend: InMemoryKeyringBackend,
+    build_persistence: Callable[[str], InMemoryPersistenceBackend],
     *,
     context_name: str,
     transport: httpx.BaseTransport,
@@ -206,7 +211,7 @@ def _ctx_with_refresh_token_and_transport(
     Slice 2) -- distinct from `_ctx_with_cached_access_token` above, which exists
     specifically to bypass the refresh path for tests that don't care about it.
     """
-    store = _in_memory_credential_store(keyring_backend)
+    store = _in_memory_credential_store(build_persistence)
     store.set_tokens(context_name, TokenBundle(refresh_token="seed-rt", issuer=_FAKE_ISSUER))
     return _BridgeContext(
         mcp_url=_MCP_URL,
@@ -231,7 +236,7 @@ class TestOneRefreshReusedAcrossManyForwardedMessages:
     """
 
     def test_two_forwarded_messages_share_exactly_one_refresh_and_identical_bearer_header(
-        self, keyring_backend: InMemoryKeyringBackend
+        self, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
     ) -> None:
         """PLAN.md Slice 2's original ask: two forwarded messages against a fake PS
         Service MCP endpoint requiring a bearer token trigger exactly one refresh,
@@ -245,7 +250,7 @@ class TestOneRefreshReusedAcrossManyForwardedMessages:
 
         transport, refresh_calls = _build_auth_and_mcp_transport(_mcp_handler)
         ctx = _ctx_with_refresh_token_and_transport(
-            keyring_backend, context_name="prod", transport=transport
+            build_in_memory_persistence, context_name="prod", transport=transport
         )
         client = httpx.Client(transport=transport)
 
@@ -266,7 +271,7 @@ class TestOneRefreshReusedAcrossManyForwardedMessages:
         assert captured_headers == ["Bearer refreshed-token-1", "Bearer refreshed-token-1"]
 
     def test_stale_cached_token_between_two_forwarded_messages_triggers_a_second_refresh(
-        self, keyring_backend: InMemoryKeyringBackend
+        self, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
     ) -> None:
         """CHANGES.md CRITICAL-1's own regression proof: a long-lived mcp_bridge
         process whose cached token goes stale mid-session (wall-clock advances past
@@ -289,7 +294,7 @@ class TestOneRefreshReusedAcrossManyForwardedMessages:
 
         transport, refresh_calls = _build_auth_and_mcp_transport(_mcp_handler)
         ctx = _ctx_with_refresh_token_and_transport(
-            keyring_backend, context_name="prod", transport=transport
+            build_in_memory_persistence, context_name="prod", transport=transport
         )
         client = httpx.Client(transport=transport)
 
@@ -386,7 +391,7 @@ def test_main_logs_unhandled_exception_before_propagating(
 
 
 def test_forward_message_logs_success_with_method_id_outcome_latency_session(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-003: a successful forward logs method, id, outcome, latency, session id."""
 
@@ -398,7 +403,7 @@ def test_forward_message_logs_success_with_method_id_outcome_latency_session(
         )
 
     log_file = io.StringIO()
-    ctx = _ctx(tmp_path, keyring_backend, log_file=log_file)
+    ctx = _ctx(tmp_path, build_in_memory_persistence, log_file=log_file)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, session_id = _forward_message(
@@ -419,7 +424,7 @@ def test_forward_message_logs_success_with_method_id_outcome_latency_session(
 
 
 def test_forward_message_logs_transport_failure_with_latency_and_session(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-004: a transport error is logged (retained + extended) and swallowed."""
 
@@ -427,7 +432,7 @@ def test_forward_message_logs_transport_failure_with_latency_and_session(
         raise httpx.ConnectError("connection refused")
 
     log_file = io.StringIO()
-    ctx = _ctx(tmp_path, keyring_backend, log_file=log_file)
+    ctx = _ctx(tmp_path, build_in_memory_persistence, log_file=log_file)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, session_id = _forward_message(
@@ -448,7 +453,7 @@ def test_forward_message_logs_transport_failure_with_latency_and_session(
 
 
 def test_forward_message_returns_generic_error_reply_when_body_is_not_jsonrpc_shaped(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-004/007: a non-2xx response whose body isn't the JSON-RPC error shape
     PS Service emits still gets a real reply (not silence) -- with a generic,
@@ -459,7 +464,7 @@ def test_forward_message_returns_generic_error_reply_when_body_is_not_jsonrpc_sh
         return httpx.Response(500, text="internal error")
 
     log_file = io.StringIO()
-    ctx = _ctx(tmp_path, keyring_backend, log_file=log_file)
+    ctx = _ctx(tmp_path, build_in_memory_persistence, log_file=log_file)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, session_id = _forward_message(
@@ -485,7 +490,7 @@ def test_forward_message_returns_generic_error_reply_when_body_is_not_jsonrpc_sh
 
 
 def test_forward_message_returns_jsonrpc_error_on_ge400_status_with_upstream_message(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-004: a >=400 PS Service response for a genuine request returns a real
     JSON-RPC error reply carrying PS Service's own message text -- not silence.
@@ -501,7 +506,7 @@ def test_forward_message_returns_jsonrpc_error_on_ge400_status_with_upstream_mes
             },
         )
 
-    ctx = _ctx(tmp_path, keyring_backend)
+    ctx = _ctx(tmp_path, build_in_memory_persistence)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, _ = _forward_message(
@@ -520,7 +525,7 @@ def test_forward_message_returns_jsonrpc_error_on_ge400_status_with_upstream_mes
 
 
 def test_forward_message_ge400_for_a_notification_still_returns_no_reply(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-005: a notification (no `id`) never gets a reply, even on a >=400
     PS Service response -- JSON-RPC 2.0 forbids replying to a notification.
@@ -536,7 +541,7 @@ def test_forward_message_ge400_for_a_notification_still_returns_no_reply(
             },
         )
 
-    ctx = _ctx(tmp_path, keyring_backend)
+    ctx = _ctx(tmp_path, build_in_memory_persistence)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, _ = _forward_message(
@@ -550,7 +555,7 @@ def test_forward_message_ge400_for_a_notification_still_returns_no_reply(
 
 
 def test_forward_message_session_not_found_error_distinguishes_expired_session(
-    tmp_path: Path, keyring_backend: InMemoryKeyringBackend
+    tmp_path: Path, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
 ) -> None:
     """AC-BI-004/006: PS Service's literal "Session not found" (mcp SDK's fixed text
     for an unknown/expired session id -- e.g. after a pod restart wiped in-memory
@@ -568,7 +573,7 @@ def test_forward_message_session_not_found_error_distinguishes_expired_session(
             },
         )
 
-    ctx = _ctx(tmp_path, keyring_backend)
+    ctx = _ctx(tmp_path, build_in_memory_persistence)
     client = httpx.Client(transport=httpx.MockTransport(_handler))
 
     reply, _ = _forward_message(
@@ -588,13 +593,13 @@ def test_forward_message_session_not_found_error_distinguishes_expired_session(
 
 
 def test_forward_message_ge400_error_never_leaks_bearer_token_or_raw_body(
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-007: the >=400 error reply never includes the bearer token or PS
     Service's raw response body -- only the sanitized, extracted message text.
     """
     ctx = _ctx_with_cached_access_token(
-        keyring_backend, context_name="prod", access_token="sk-topsecret-access-token"
+        build_in_memory_persistence, context_name="prod", access_token="sk-topsecret-access-token"
     )
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -618,7 +623,7 @@ def test_forward_message_ge400_error_never_leaks_bearer_token_or_raw_body(
 
 
 def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-004: a token-resolution failure (no refresh token stored) is logged.
 
@@ -626,7 +631,9 @@ def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
     `reply`'s own shape is covered separately below.
     """
     log_file = io.StringIO()
-    ctx = _ctx_with_stale_bundle(keyring_backend, context_name="prod", log_file=log_file)
+    ctx = _ctx_with_stale_bundle(
+        build_in_memory_persistence, context_name="prod", log_file=log_file
+    )
     client = httpx.Client(
         transport=httpx.MockTransport(lambda _req: pytest.fail("must not reach PS Service"))
     )
@@ -649,14 +656,14 @@ def test_forward_message_logs_token_resolution_failure_with_latency_and_session(
 
 
 def test_forward_message_returns_jsonrpc_error_on_token_resolution_failure(
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Issue #119, AC-BI-005/006/007: a token-resolution failure returns a real
     JSON-RPC error reply -- not a silent no-reply -- so the MCP host (Claude
     Desktop) surfaces the actual cause instead of a generic timeout. Carries the
     original request's own `id`, and never a token value.
     """
-    ctx = _ctx_with_stale_bundle(keyring_backend, context_name="prod")
+    ctx = _ctx_with_stale_bundle(build_in_memory_persistence, context_name="prod")
     client = httpx.Client(
         transport=httpx.MockTransport(lambda _req: pytest.fail("must not reach PS Service"))
     )
@@ -678,13 +685,13 @@ def test_forward_message_returns_jsonrpc_error_on_token_resolution_failure(
 
 
 def test_forward_message_token_resolution_failure_for_a_notification_still_returns_no_reply(
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """Issue #119, AC-BI-005: a notification (no `id`) never gets a reply, even on a
     token failure -- JSON-RPC 2.0 forbids replying to a notification; only the log
     line (asserted above) carries the failure for that case.
     """
-    ctx = _ctx_with_stale_bundle(keyring_backend, context_name="prod")
+    ctx = _ctx_with_stale_bundle(build_in_memory_persistence, context_name="prod")
     client = httpx.Client(
         transport=httpx.MockTransport(lambda _req: pytest.fail("must not reach PS Service"))
     )
@@ -756,12 +763,12 @@ def test_main_still_proxies_when_log_file_cannot_be_opened(
 
 
 def test_forward_message_never_logs_message_params_or_bearer_token(
-    keyring_backend: InMemoryKeyringBackend,
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
 ) -> None:
     """AC-BI-009: log lines never include the bearer token or the message body/params."""
     log_file = io.StringIO()
     ctx = _ctx_with_cached_access_token(
-        keyring_backend,
+        build_in_memory_persistence,
         context_name="prod",
         access_token="sk-topsecret-access-token",
         log_file=log_file,
