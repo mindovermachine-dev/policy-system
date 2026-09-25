@@ -416,13 +416,18 @@ model_remaining_quota() {
   printf '%s' "$((limit - current))"
 }
 
-# validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity> <region>: hard
-# stops with a quota-increase message unless <usage_key>'s remaining quota covers
-# <requested_capacity> (AC-BI-007). Reports working alternative regions via
+# validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity> <region>
+# <account_name>: hard stops with a quota-increase message unless <usage_key>'s remaining quota
+# covers <requested_capacity> (AC-BI-007). Reports working alternative regions via
 # fail_region_not_viable rather than a bare exit, since this is one of the three ways LLM_REGION
-# itself can fail.
+# itself can fail. Also prints the delete/purge commands for <account_name> -- a prior deploy left
+# soft-deleted keeps reserving its models' capacity against the subscription's regional quota
+# until purged (same gotcha as the Key Vault soft-delete purge documented for teardown), and this
+# script's account name is deterministic, so the exact remedy command is always knowable even
+# though the script itself only detects quota exhaustion, never resolves it automatically.
 validate_model_quota() {
   local usage="$1" usage_key="$2" field_name="$3" requested_capacity="$4" region="$5"
+  local account_name="$6"
   local remaining
   remaining="$(model_remaining_quota "$usage" "$usage_key")"
   if (( remaining < requested_capacity )); then
@@ -430,19 +435,29 @@ validate_model_quota() {
       "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$requested_capacity" "$remaining" "$region"
     print_error 'Request a quota increase for %s, or use one of the working alternatives below.\n' \
       "$region"
+    print_error \
+      'If a previous deploy left %s soft-deleted, it may still be reserving this quota -- free it with:\n' \
+      "$account_name"
+    print_error '  az cognitiveservices account delete --name %s --resource-group %s\n' \
+      "$account_name" "$RESOURCE_GROUP_NAME"
+    print_error '  az cognitiveservices account purge --name %s --resource-group %s --location %s\n' \
+      "$account_name" "$RESOURCE_GROUP_NAME" "$region"
     fail_region_not_viable "$region"
   fi
 }
 
-# check_quota <region>: hard-stops if either model's remaining quota at <region> is less than
-# its configured capacity (AC-BI-007) -- runs once, against LLM_REGION only; a failure reports
-# working alternatives instead of trying one automatically.
+# check_quota <region> <account_name>: hard-stops if either model's remaining quota at <region>
+# is less than its configured capacity (AC-BI-007) -- runs once, against LLM_REGION only; a
+# failure reports working alternatives instead of trying one automatically. <account_name> is
+# only used to print the delete/purge remedy in validate_model_quota's failure message.
 check_quota() {
-  local region="$1"
+  local region="$1" account_name="$2"
   local usage
   usage="$(az cognitiveservices usage list --location "$region")"
-  validate_model_quota "$usage" "chat" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_CAPACITY" "$region"
-  validate_model_quota "$usage" "embed" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY" "$region"
+  validate_model_quota "$usage" "chat" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_CAPACITY" \
+    "$region" "$account_name"
+  validate_model_quota "$usage" "embed" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY" \
+    "$region" "$account_name"
 }
 
 # resource_group_exists: true if the fixed-name resource group already exists.
@@ -737,7 +752,7 @@ main() {
   log_step "Validating configured capacity against $region's reported ranges"
   validate_capacity_range "$model_list" "$region"
   log_step "Checking remaining Azure quota in $region"
-  check_quota "$region"
+  check_quota "$region" "$account_name"
 
   log_step "Provisioning Azure resources in $region"
   provision_resources "$region" "$account_name" "$vault_name"

@@ -73,3 +73,21 @@ def test_sufficient_quota_at_both_models_passes(deploy_llm_fixture: DeployLlmFix
     deploy_llm_fixture.seed_subscription()  # conftest baseline's ample quota fits 1000/350
 
     deploy_llm_fixture.run_deploy("--yes", expect=0)
+
+
+def test_quota_failure_reports_delete_and_purge_remedy(
+    deploy_llm_fixture: DeployLlmFixture,
+) -> None:
+    """A prior deploy's account can be left soft-deleted, still reserving the very capacity
+    the current run is short on -- the failure message should give the exact az commands to
+    free it, not just point at the increase-request/other-regions options.
+    """
+    deploy_llm_fixture.seed_subscription()
+    deploy_llm_fixture.seed_usage("swedencentral", chat=(950, 1000), embed=(0, 10_000))
+
+    run = deploy_llm_fixture.run_deploy("--yes", expect=1)
+
+    assert "az cognitiveservices account delete --name" in run.stderr
+    assert "az cognitiveservices account purge --name" in run.stderr
+    assert "--resource-group rg-policy-system" in run.stderr
+    assert "--location swedencentral" in run.stderr
