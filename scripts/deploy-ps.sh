@@ -1411,7 +1411,10 @@ EOF
 # already wrote, never read back), whether anything actually changed anywhere in the whole chain,
 # and the resulting HTTPS URL. Reads $made_changes/$public_hostname directly (both already
 # process-wide state by this point, top-of-file note) rather than taking parameters, matching
-# scripts/deploy-llm.sh's own print_provisioning_summary's no-argument shape.
+# scripts/deploy-llm.sh's own print_provisioning_summary's no-argument shape. Also surfaces
+# $TLS_CONTACT_EMAIL when set (ps-defaults.conf or the interactive prompt in
+# prompt_for_tls_contact_email) so the evaluator can see which address cert-expiry notices go to
+# without having to dig through the conf file.
 print_provisioning_summary() {
   if [[ "$made_changes" == true ]]; then
     printf 'Policy System provisioned. Wrote secrets: AZURE-API-BASE, AZURE-API-KEY, AZURE-API-VERSION.\n'
@@ -1419,6 +1422,9 @@ print_provisioning_summary() {
     printf 'Policy System already up to date -- no changes made.\n'
   fi
   printf 'PS Service: https://%s\n' "$public_hostname"
+  if [[ -n "$TLS_CONTACT_EMAIL" ]]; then
+    printf 'TLS contact email: %s\n' "$TLS_CONTACT_EMAIL"
+  fi
 }
 
 # require_account_exists <account_name>: fails clearly if the AIServices account has not been
