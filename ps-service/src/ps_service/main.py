@@ -36,6 +36,7 @@ from ps_service.dependency_health import (
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
+    all_healthy,
     is_healthy,
 )
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
@@ -51,7 +52,7 @@ from ps_service.logging.facade import configure, emit_log_entry
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_streamable_http_app
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -113,6 +114,14 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI)
 
+# Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only
+# being named in `unhealthy_dependencies` (issue #75). A single-element tuple today
+# (FalkorDB only), but `_check_dependencies_at_startup`/`_retry_gating_dependencies`
+# below are written against this set, not against FalkorDB by name, so a future
+# gating dependency (e.g. an identity provider) is added here and inherits both
+# functions' behavior unchanged (issue #124).
+_GATING_DEPENDENCIES = (FALKORDB,)
+
 
 class LocalTestBypassBindRefusedError(Exception):
     """The local-test bypass is active but `config.host` is not loopback (AC-BI-002)."""
@@ -155,16 +164,34 @@ def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
         raise LocalTestBypassBindRefusedError(message)
 
 
+def _all_dependency_probes(
+    config: ServiceConfig,
+) -> tuple[tuple[str, Callable[[], None]], ...]:
+    """The fixed (name, probe) pairs for FalkorDB, LLM Interface, and Cellar/ELI.
+
+    The single source of truth both `_check_dependencies_at_startup` (probes
+    all three, unconditionally) and `_retry_gating_dependencies` (re-probes
+    only `_GATING_DEPENDENCIES`) build on, so the two never drift apart on
+    which callable answers for which dependency name.
+    """
+    return (
+        (FALKORDB, lambda: check_falkordb_connectivity(config)),
+        (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
+        (CELLAR_ELI, check_cellar_eli_connectivity),
+    )
+
+
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     """Probe FalkorDB, LLM Interface, and Cellar/ELI once at startup, logging a warning per failure.
 
-    Returns whether FalkorDB's own probe succeeded -- the only outcome that
-    gates `app.state.ready` (issue #75, AC-BI-002). LLM Interface and
-    Cellar/ELI are still probed unconditionally, in the same fixed order,
-    and a failure in either is still logged below exactly as before -- only
-    their effect on this function's *return value* is removed. `ready()`'s
-    live gate still reports either by name via `unhealthy_dependencies`,
-    unchanged (AC-BI-003).
+    Returns whether every `_GATING_DEPENDENCIES` member's probe succeeded --
+    the only outcome that gates `app.state.ready` (issue #75/#124,
+    AC-BI-002). LLM Interface and Cellar/ELI are still probed
+    unconditionally, in the same fixed order, and a failure in either is
+    still logged below exactly as before -- they are simply never members of
+    `_GATING_DEPENDENCIES`, so they never affect this function's return
+    value. `ready()`'s live gate still reports either by name via
+    `unhealthy_dependencies`, unchanged (AC-BI-003).
 
     Deliberately never raises (issue #22): unlike
     `configure()`'s failures above, a dependency outage must never crash the
@@ -176,26 +203,50 @@ def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
     (`falkordb_client.check_connectivity_from_config`, `llm_interface.check_connectivity`,
     `cellar_eli.fetch.check_connectivity` all do this themselves) — that
     registry is what lets `/ready` self-heal from a later real-traffic
-    success without a restart, beyond this one-time startup snapshot.
+    success without a restart, beyond this one-time startup snapshot, and is
+    also what this function's `all_healthy(_GATING_DEPENDENCIES)` return
+    value reads back.
     """
-    falkordb_succeeded = True
-    for dependency, probe in (
-        (FALKORDB, lambda: check_falkordb_connectivity(config)),
-        (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
-        (CELLAR_ELI, check_cellar_eli_connectivity),
-    ):
+    for dependency, probe in _all_dependency_probes(config):
         try:
             probe()
         except Exception as exc:  # noqa: BLE001 - a dependency outage must never crash the process (see docstring)
-            if dependency == FALKORDB:
-                falkordb_succeeded = False
             emit_log_entry(
                 component="entrypoint",
                 action="startup",
                 outcome="warning",
                 extra={"dependency": dependency, "error": str(exc)},
             )
-    return falkordb_succeeded
+    return all_healthy(_GATING_DEPENDENCIES)
+
+
+def _retry_gating_dependencies(config: ServiceConfig) -> bool:
+    """Re-probe every `_GATING_DEPENDENCIES` member, returning whether all now succeed.
+
+    Called from `ready()` while `app.state.ready` is still `False` (issue
+    #124): each periodic `/ready` poll becomes a retry attempt this way,
+    instead of `app.state.ready` only ever reflecting the one-time startup
+    snapshot `_check_dependencies_at_startup` took. Fixes the exact race
+    `spikes/deploy-ps-azure/README.md` documented, where FalkorDB became
+    reachable seconds after ps-service's own startup probe had already
+    failed and latched `not_ready` for the rest of the process's life.
+
+    Deliberately never raises, mirroring `_check_dependencies_at_startup`:
+    a still-down dependency must keep `/ready` at `503`, not fail the
+    request that was only trying to check.
+    """
+    gating_probes = dict(_all_dependency_probes(config))
+    for dependency in _GATING_DEPENDENCIES:
+        try:
+            gating_probes[dependency]()
+        except Exception as exc:  # noqa: BLE001 - see docstring: a retry failure must not fail the request
+            emit_log_entry(
+                component="entrypoint",
+                action="ready_retry",
+                outcome="warning",
+                extra={"dependency": dependency, "error": str(exc)},
+            )
+    return all_healthy(_GATING_DEPENDENCIES)
 
 
 def create_app(config: ServiceConfig) -> FastAPI:
@@ -295,9 +346,9 @@ def create_app(config: ServiceConfig) -> FastAPI:
         startup-failure path reports it to stderr.
 
         `app.state.ready` only flips `True` once `_check_dependencies_at_startup`
-        (issue #22) confirms FalkorDB itself is reachable AND every
-        `INGESTION_REQUIRED_CONFIG_FIELDS` value resolved (issue #16
-        follow-up) — LLM Interface and Cellar/ELI are still probed
+        (issue #22) confirms every `_GATING_DEPENDENCIES` member is reachable
+        AND every `INGESTION_REQUIRED_CONFIG_FIELDS` value resolved (issue
+        #16 follow-up) — LLM Interface and Cellar/ELI are still probed
         unconditionally at startup and still logged on failure, but neither
         one's outcome affects this flag (issue #75, AC-BI-002): a transient
         LLM/Cellar-ELI outage at boot must not wedge readiness for the rest
@@ -313,7 +364,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
         `ServiceConfig` resolved once by `load_config()` before `create_app`
         is even called, so unlike dependency reachability it cannot change,
         recover, or need re-probing for the life of this process — a
-        one-time startup check is the whole story.
+        one-time startup check is the whole story. Its result is stashed on
+        `app.state.config_complete` rather than only folded into this one
+        `app.state.ready` assignment, because `ready()` (issue #124) reads
+        it again on every later retry attempt: `app.state.ready` itself can
+        now flip `True` after this function returns (once a gating
+        dependency recovers), and `app.state.config_complete` being `False`
+        must keep blocking that forever, exactly as it blocks it here.
         """
         _refuse_non_loopback_bypass_bind(config)
         log_path = (config.logging_dir / _LOG_FILENAME) if config.logging_dir is not None else None
@@ -341,13 +398,15 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 outcome="warning",
                 extra={"missing_config": missing_config},
             )
+        app.state.config_complete = not missing_config
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
-            app.state.ready = _check_dependencies_at_startup(config) and not missing_config
+            app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
     app.state.ready = False
+    app.state.config_complete = False
     app.state.config = config
     # AC-BI-001/AC-BI-002: resolved synchronously here, not inside the async `lifespan`
     # closure, so that a bare (never-entered) `TestClient`/ASGI middleware added in a
@@ -389,23 +448,35 @@ def create_app(config: ServiceConfig) -> FastAPI:
         return {"status": "alive", "version": installed_version("ps-service")}
 
     async def ready() -> JSONResponse:
-        """Report "ready" only once startup succeeded AND FalkorDB is currently healthy.
+        """Report "ready" only once startup succeeded AND every gating dependency is healthy now.
 
-        Two independent gates (issue #22): `app.state.ready` (the one-time
-        startup probe from `lifespan` — which itself folds in both the three
-        dependency probes AND ingestion config completeness, issue #16
-        follow-up) AND the live `dependency_health` registry's FalkorDB entry
-        (updated by real FalkorDB traffic as it happens, read via
-        `is_healthy`) both have to hold. The live gate is what lets `/ready`
-        flip back to `not_ready` if FalkorDB fails mid-run, and self-heal on
-        its next success, without waiting for a restart — config
-        completeness has no equivalent live gate because it cannot change
-        mid-run (see `lifespan`'s docstring), so `app.state.ready` alone is
-        the whole story for that half. LLM Interface and Cellar/ELI are
-        deliberately excluded from this predicate (issue #75): they are
-        still probed at startup and still tracked live in
-        `dependency_health`, but neither their startup nor live health ever
-        flips `/ready`'s status — only FalkorDB does.
+        Two independent gates (issue #22): `app.state.ready` AND the live
+        `dependency_health` registry's `_GATING_DEPENDENCIES` entries
+        (updated by real traffic as it happens, read via `all_healthy`) both
+        have to hold. The live gate is what lets `/ready` flip back to
+        `not_ready` if a gating dependency fails mid-run, and self-heal on
+        its next success, without waiting for a restart.
+
+        Unlike the live gate, `app.state.ready` used to be a pure one-time
+        snapshot from `lifespan`'s startup probe — which is exactly what let
+        it latch `False` forever if a gating dependency was still down at
+        boot, even once it recovered seconds later (issue #124, the race
+        `spikes/deploy-ps-azure/README.md` documented). While it is still
+        `False`, this handler now re-runs `_retry_gating_dependencies` on
+        every call, so each periodic `/ready` poll is itself a retry
+        attempt — no separate background task needed, since Kubernetes'
+        own `readinessProbe` cadence drives it. `app.state.config_complete`
+        (issue #16 follow-up, stashed once in `lifespan`) gates the retry
+        itself: it cannot change mid-run, so once it is `False` no amount of
+        dependency recovery may ever flip `app.state.ready` `True`. Once
+        `app.state.ready` does flip `True`, it is never reset back to
+        `False` by this handler again (only `lifespan`'s shutdown does) —
+        from that point on, live degradation is caught solely by the
+        `all_healthy(_GATING_DEPENDENCIES)` half below, exactly as before
+        issue #124. LLM Interface and Cellar/ELI are deliberately excluded
+        from `_GATING_DEPENDENCIES` (issue #75): they are still probed at
+        startup and still tracked live in `dependency_health`, but neither
+        their startup nor live health ever flips `/ready`'s status.
 
         `unhealthy_dependencies` (issue #68) names every currently-unhealthy
         member of `_READY_DEPENDENCIES` (still all three dependencies, issue
@@ -424,10 +495,12 @@ def create_app(config: ServiceConfig) -> FastAPI:
         Service rotation on a real outage, since the chart's `readinessProbe`
         is a plain body-blind `httpGet`.
         """
+        if not app.state.ready and app.state.config_complete:
+            app.state.ready = _retry_gating_dependencies(config)
         unhealthy_dependencies = [
             dependency for dependency in _READY_DEPENDENCIES if not is_healthy(dependency)
         ]
-        is_ready = app.state.ready and is_healthy(FALKORDB)
+        is_ready = app.state.ready and all_healthy(_GATING_DEPENDENCIES)
         return JSONResponse(
             status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
             content={

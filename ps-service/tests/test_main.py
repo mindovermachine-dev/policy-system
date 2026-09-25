@@ -10,6 +10,7 @@ Uses `TestClient` in two distinct modes, per PLAN_REVIEWED.md §4:
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import json
 import tomllib
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
     import httpx
+    from fastapi.responses import JSONResponse
+    from fastapi.routing import APIRoute
     from starlette.applications import Starlette
 
     from ps_service.auth.verifier import PsTokenVerifier
@@ -1404,6 +1407,158 @@ def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_depende
     ]
 
     assert any(entry.get("dependency") == "cellar_eli" for entry in warning_entries)
+
+
+# --- /ready retries a still-latched gating dependency instead of restarting (issue #124) ---
+
+
+def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_probe(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-002: the exact race `spikes/deploy-ps-azure/README.md` documented --
+    FalkorDB unreachable at ps-service startup, then reachable seconds later.
+    Before issue #124, `app.state.ready` latched `False` forever once the
+    startup probe failed; now the next `/ready` poll after recovery reports
+    `ready`, with no process restart.
+    """
+    falkordb_reachable = False
+
+    def flaky_falkordb_check(config: ServiceConfig) -> None:
+        if falkordb_reachable:
+            dependency_health.mark_healthy(dependency_health.FALKORDB)
+            return
+        error = IngestionConfigurationError("FalkorDB connection failed at 127.0.0.1:6379")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", flaky_falkordb_check)
+
+    with TestClient(app) as client:
+        assert client.get("/ready").json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": ["falkordb"],
+        }
+
+        falkordb_reachable = True
+
+        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+
+
+def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_down(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-008: a retried gating-dependency probe failing again must not
+    raise out of the request handler -- polling `/ready` repeatedly while
+    FalkorDB is still down keeps answering `503 not_ready`, poll after poll.
+    """
+
+    def failing_falkordb_check(config: ServiceConfig) -> None:
+        error = IngestionConfigurationError("FalkorDB connection failed at 127.0.0.1:6379")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+
+    with TestClient(app) as client:
+        for _ in range(3):
+            response = client.get("/ready")
+            assert response.status_code == 503
+            assert response.json() == {
+                "status": "not_ready",
+                "unhealthy_dependencies": ["falkordb"],
+            }
+
+
+def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succeeds(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-005: the retry loop is written against `_GATING_DEPENDENCIES`
+    (today: FalkorDB alone), not hardcoded to FalkorDB by name -- proven
+    here with a second, fake gating dependency standing in for a future one
+    (e.g. an identity provider, issue #124's discussion). `app.state.ready`
+    must flip `True` only once every gating dependency succeeds, and each is
+    retried independently on later polls.
+    """
+    fake_dependency = "fake_identity_provider"
+    falkordb_reachable = False
+    fake_dependency_reachable = False
+
+    def flaky_falkordb_probe() -> None:
+        if falkordb_reachable:
+            dependency_health.mark_healthy(dependency_health.FALKORDB)
+            return
+        error = ConnectionError("falkordb down")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    def flaky_fake_dependency_probe() -> None:
+        if fake_dependency_reachable:
+            dependency_health.mark_healthy(fake_dependency)
+            return
+        error = ConnectionError("fake dependency down")
+        dependency_health.mark_unhealthy(fake_dependency, error=error)
+        raise error
+
+    def fake_all_dependency_probes(
+        config: ServiceConfig,
+    ) -> tuple[tuple[str, Callable[[], None]], ...]:
+        del config
+        return (
+            (dependency_health.FALKORDB, flaky_falkordb_probe),
+            (fake_dependency, flaky_fake_dependency_probe),
+        )
+
+    monkeypatch.setattr(main_module, "_all_dependency_probes", fake_all_dependency_probes)
+    monkeypatch.setattr(
+        main_module, "_GATING_DEPENDENCIES", (dependency_health.FALKORDB, fake_dependency)
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/ready").json()["status"] == "not_ready"
+
+        falkordb_reachable = True
+
+        assert client.get("/ready").json()["status"] == "not_ready"
+
+        fake_dependency_reachable = True
+
+        assert client.get("/ready").json()["status"] == "ready"
+
+
+def test_concurrent_ready_polls_while_not_ready_leave_app_state_consistent(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """AC-BI-009: concurrent `/ready` requests while `app.state.ready` is
+    `False` must not corrupt `dependency_health` registry state or leave
+    `app.state.ready` inconsistent. `ready()`'s retry body has no `await`
+    point, so within one process no two calls ever truly interleave --
+    proven here by actually racing many concurrent calls via
+    `asyncio.gather` against the same running app.
+    """
+
+    def failing_falkordb_check(config: ServiceConfig) -> None:
+        error = ConnectionError("boom")
+        dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
+        raise error
+
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+
+    ready_route = cast(
+        "APIRoute", next(route for route in app.routes if getattr(route, "path", None) == "/ready")
+    )
+
+    async def poll() -> JSONResponse:
+        return cast("JSONResponse", await ready_route.endpoint())
+
+    async def poll_many() -> list[JSONResponse]:
+        return await asyncio.gather(*(poll() for _ in range(20)))
+
+    with TestClient(app):
+        responses = asyncio.run(poll_many())
+
+    assert all(response.status_code == 503 for response in responses)
+    assert app.state.ready is False
+    assert dependency_health.is_healthy(dependency_health.FALKORDB) is False
 
 
 # --- Config-completeness-gated readiness (issue #16 follow-up) -------------
