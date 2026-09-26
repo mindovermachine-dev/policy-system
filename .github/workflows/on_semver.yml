@@ -177,6 +177,9 @@ jobs:
           HELM_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$HELM_REGISTRY_PASSWORD" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
+      - name: Add the Helm chart repos used by the chart's dependencies
+        run: helm repo add authentik https://charts.goauthentik.io
+
       - name: Fetch the Helm chart's dependencies (e.g. Authentik)
         run: helm dependency build charts/policy-system
 
