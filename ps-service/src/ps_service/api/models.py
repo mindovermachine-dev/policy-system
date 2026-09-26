@@ -163,6 +163,26 @@ class RestorationRequest(BaseModel):
     native_blob_base64: str = Field(min_length=1)
 
 
+class CatalogRestorationRequest(BaseModel):
+    """``POST /restorations/from-catalog`` body: the instrument to fetch and restore.
+
+    Additive sibling to ``RestorationRequest`` (D5) -- the upload-path
+    ``POST /restorations`` request/response models are unchanged by this
+    issue (D-NEW-ROUTE). ``instrument_id``'s ``pattern`` mirrors
+    ``ExportRequest``'s own charset: this value reaches a URL path segment
+    when the curated-content source is fetched
+    (``curated_source.artifact_client.fetch_artifact``) -- L2 Data
+    Modeling's defense-in-depth for any value reaching a URL/file-path
+    construction sink.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    instrument_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    )
+
+
 class RestorationStageOutcome(BaseModel):
     """One completed restore stage as reported in the accepted response."""
 

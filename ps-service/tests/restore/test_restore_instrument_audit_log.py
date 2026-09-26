@@ -123,6 +123,47 @@ def test_succeeded_entry_carries_caller_and_schema_version(
         assert entry["caller"] == _ACTOR
         assert entry["schema_version"] == DOMAIN_SCHEMA_VERSION
         assert "actor" not in entry  # MA2's explicit correction: never extra["actor"]
+        # Issue #125/D-AUDIT: the upload path (this call passes no `source`)
+        # must keep a byte-identical audit log shape -- no "source" key at all.
+        assert "source" not in entry
+
+
+_SOURCE_URL = (
+    "https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/curated-content"
+)
+
+
+def test_started_and_succeeded_entries_carry_source_when_given(
+    make_emitter: MakeEmitter, read_lines: ReadLines, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #125/D-AUDIT/AC-BI-011: `run_restoration_from_catalog_source` passes the
+    resolved effective source URL, which every emitted audit log entry then carries.
+    """
+    emitter, log_path = make_emitter()
+    monkeypatch.setattr(restore_instrument_module, "stage_graph", _stage_graph_stub)
+    monkeypatch.setattr(
+        restore_instrument_module,
+        "stage_and_finalize_policy_system_leg",
+        _stage_and_finalize_noop_stub,
+    )
+    monkeypatch.setattr(restore_instrument_module, "raw_connection", _raw_connection_stub)
+
+    restore_instrument(
+        _artifact(),
+        db=_NEVER_TOUCHED_DB,
+        single_tenant_graph_name="unused-single-tenant",
+        similarity_threshold=0.9,
+        actor=_ACTOR,
+        emitter=emitter,
+        source=_SOURCE_URL,
+    )
+    emitter.flush()
+
+    entries = _restore_log_entries(read_lines(log_path))
+    outcomes = [entry["outcome"] for entry in entries]
+    assert outcomes == ["started", "succeeded"]
+    for entry in entries:
+        assert entry["source"] == _SOURCE_URL
 
 
 _CLASSIFICATION_COUNTS: dict[str, int] = {
@@ -241,3 +282,6 @@ def test_failed_entry_recorded_with_no_succeeded_entry_when_merge_step_raises(
     failed_entry = entries[-1]
     assert failed_entry["caller"] == _ACTOR
     assert failed_entry["schema_version"] == DOMAIN_SCHEMA_VERSION
+    # Issue #125/D-AUDIT: no `source` was passed -- the upload path's audit
+    # log shape stays byte-identical, including on the failure path.
+    assert "source" not in failed_entry

@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from ps_service.curated_source.errors import CuratedSourceConfigurationError
+from ps_service.curated_source.source_url import validate_source_url
+
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 10
@@ -23,6 +26,13 @@ _DEFAULT_FALKORDB_PORT = 6379
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
+# D-DEFAULT-URL (issue #125, AC-BI-001): this repo's own public GitHub remote,
+# `raw.githubusercontent.com`-served, at the default branch's `curated-content/`
+# tree -- the same layout `ps_cli.catalog_repo` already reads locally
+# (`{base}/catalog.json`, `{base}/{instrument_id}/manifest.json` etc.).
+_DEFAULT_CURATED_SOURCE_BASE_URL = (
+    "https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/curated-content"
+)
 
 # The fixed caller identity attached to every query answered while the
 # local-test bypass (issue #67, AC-BI-008) is active. Colocated with the
@@ -73,6 +83,15 @@ class ServiceConfig:
     issue #67, is inactive) is enforced by
     `ps_service.auth.startup.resolve_auth_context`'s own call site inside
     `create_app`, not by `load_config()`.
+
+    `curated_source_base_url`/`curated_source_allow_insecure_http` (from
+    `PS_CURATEDSOURCE_URL`/`PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP`, issue #125)
+    configure where `GET /catalog` fetches the curated-content catalog
+    listing from at runtime (AC-BI-001/002/003). Both are validated through
+    the shared `ps_service.curated_source.source_url.validate_source_url`
+    guard at load time (AC-BI-008/010) -- the same function the runtime
+    `set-catalog-source` MCP tool (Slice 3) validates a new override URL
+    through, so both surfaces reject exactly the same inputs.
     """
 
     host: str
@@ -92,6 +111,8 @@ class ServiceConfig:
     auth_audience: str | None = None
     auth_cli_client_id: str | None = None
     auth_scopes: tuple[str, ...] = ()
+    curated_source_base_url: str = _DEFAULT_CURATED_SOURCE_BASE_URL
+    curated_source_allow_insecure_http: bool = False
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -296,6 +317,41 @@ def _parse_local_test_bypass(raw: str | None) -> bool:
     raise ServiceConfigurationError(message)
 
 
+def _parse_curated_source_allow_insecure_http(raw: str | None) -> bool:
+    """Parse `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP`, failing closed on any unrecognized value.
+
+    Mirrors `_parse_local_test_bypass`'s exact shape: unset or empty/
+    whitespace-only resolves to `False` (TLS required by default, AC-BI-010)
+    rather than raising. Only `"true"`/`"false"` (case-insensitive) are
+    recognized; anything else fails config loading closed (AC-BI-008/010).
+    """
+    if raw is None or not raw.strip():
+        return False
+    normalized = raw.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    message = f"PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP must be 'true' or 'false', got {raw!r}"
+    raise ServiceConfigurationError(message)
+
+
+def _parse_curated_source_base_url(raw: str, *, allow_insecure_http: bool) -> str:
+    """Validate `PS_CURATEDSOURCE_URL` via the shared http(s)/TLS guard (D-VALIDATION).
+
+    Delegates to `curated_source.source_url.validate_source_url` -- the same
+    function the runtime `set-catalog-source` MCP tool (Slice 3) validates a
+    new override URL through -- and translates its
+    `CuratedSourceConfigurationError` into `ServiceConfigurationError` so
+    this layer's failure type stays uniform with every other `load_config()`
+    validation failure (AC-BI-001/008/010).
+    """
+    try:
+        return validate_source_url(raw, allow_insecure_http=allow_insecure_http)
+    except CuratedSourceConfigurationError as exc:
+        raise ServiceConfigurationError(str(exc)) from exc
+
+
 def _parse_model_string(raw: str, *, env_var_name: str) -> str:
     """Validate a `PS_LLMINTERFACE_MODEL`/`PS_LLMINTERFACE_EMBED_MODEL` value.
 
@@ -425,6 +481,14 @@ def load_config() -> ServiceConfig:
     auth_scopes_raw = os.environ.get("PS_AUTH_SCOPES")
     auth_scopes = _parse_auth_scopes(auth_scopes_raw) if auth_scopes_raw is not None else ()
 
+    curated_source_allow_insecure_http = _parse_curated_source_allow_insecure_http(
+        os.environ.get("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP")
+    )
+    curated_source_base_url = _parse_curated_source_base_url(
+        os.environ.get("PS_CURATEDSOURCE_URL", _DEFAULT_CURATED_SOURCE_BASE_URL),
+        allow_insecure_http=curated_source_allow_insecure_http,
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -443,4 +507,6 @@ def load_config() -> ServiceConfig:
         auth_audience=auth_audience,
         auth_cli_client_id=auth_cli_client_id,
         auth_scopes=auth_scopes,
+        curated_source_base_url=curated_source_base_url,
+        curated_source_allow_insecure_http=curated_source_allow_insecure_http,
     )

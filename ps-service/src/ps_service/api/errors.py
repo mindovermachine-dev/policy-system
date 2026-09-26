@@ -152,6 +152,18 @@ class ExportStageFailedError(ApiError):
         self.reason: str = reason
 
 
+class CuratedSourceUnavailableError(ApiError):
+    """The configured curated-content source could not be fetched (issue #125, AC-BI-006).
+
+    The API-boundary translation of ``ps_service.curated_source.errors.
+    CuratedSourceFetchError`` -- raised by ``GET /catalog``'s route handler
+    when the injected fetch dependency raises (the source is unreachable, or
+    its response is missing/malformed). Never a silent fallback to stale
+    data. Handled as HTTP 502; ``str(exc)`` is domain-level (names the source
+    URL and the failure) and surfaced verbatim.
+    """
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

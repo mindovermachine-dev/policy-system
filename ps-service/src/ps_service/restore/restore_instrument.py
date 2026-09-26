@@ -142,6 +142,7 @@ def _emit_restore_log(
     actor: str,
     schema_version: str,
     emitter: LogEmitter | None,
+    source: str | None = None,
     extra: dict[str, int] | None = None,
 ) -> None:
     """Emit one D14/AC-BI-016 audit log entry, in MA2's corrected call shape.
@@ -163,13 +164,25 @@ def _emit_restore_log(
     merge vs. restore) a given caller exercises. `"started"`/`"failed"`
     never pass `extra`, since no classification pass has necessarily run by
     those points.
+
+    Issue #125/AC-BI-011 (D-AUDIT): `source` folds in a `"source"` key --
+    the resolved curated-content source URL -- only when not `None`. The
+    existing `POST /restorations` (upload) call site never passes `source`
+    (it defaults to `None` on every `restore_instrument` call it makes), so
+    its audit log entries stay byte-identical to before this issue; only
+    `run_restoration_from_catalog_source` (issue #125, Slice 2) passes the
+    resolved effective source URL.
     """
+    payload: dict[str, object] = {"caller": actor, "schema_version": schema_version}
+    if source is not None:
+        payload["source"] = source
+    payload.update(extra or {})
     emit_log_entry(
         component=_COMPONENT,
         action=_ACTION,
         entity_id=instrument_id,
         outcome=outcome,
-        extra={"caller": actor, "schema_version": schema_version, **(extra or {})},
+        extra=payload,
         emitter=emitter,
     )
 
@@ -423,6 +436,7 @@ def restore_instrument(
     similarity_threshold: float,
     actor: str,
     emitter: LogEmitter | None = None,
+    source: str | None = None,
 ) -> RestoreOutcome:
     """Restore one curated instrument's artifact end to end (D8's full staged-write sequence).
 
@@ -443,6 +457,13 @@ def restore_instrument(
     `RestoreConcurrencyConflictError`), one `outcome="failed"` audit log
     entry is emitted and the exception is re-raised unchanged -- no
     `"succeeded"` entry ever follows a `"failed"` one.
+
+    `source` (issue #125, D-AUDIT) is `None` by default -- the existing
+    `POST /restorations` (upload) call site never passes it, so its audit
+    log entries are unaffected by this parameter. `run_restoration_from_
+    catalog_source` passes the resolved effective curated-content source
+    URL, which is folded into every emitted audit log entry's `"source"`
+    key (AC-BI-011, mirrors #66 AC-BI-016).
     """
     _verify_checksums(artifact)
     _verify_schema_version(artifact)
@@ -465,6 +486,7 @@ def restore_instrument(
         actor=actor,
         schema_version=manifest.schema_version,
         emitter=emitter,
+        source=source,
     )
 
     # Issue #106/AC-BI-011: populated by `_run_offline_merge` below (via
@@ -527,6 +549,7 @@ def restore_instrument(
             actor=actor,
             schema_version=manifest.schema_version,
             emitter=emitter,
+            source=source,
         )
         raise
 
@@ -536,6 +559,7 @@ def restore_instrument(
         actor=actor,
         schema_version=manifest.schema_version,
         emitter=emitter,
+        source=source,
         extra=classification_counts,
     )
     return RestoreOutcome(

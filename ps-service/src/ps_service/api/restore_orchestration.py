@@ -43,8 +43,15 @@ from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; mirrors ingestion_orchestration.py's own reuse
     is_safe_verbatim,
 )
-from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
+from ps_service.api.errors import (
+    CuratedSourceUnavailableError,
+    RestoreArtifactRejectedError,
+    RestoreStageFailedError,
+)
 from ps_service.api.models import RestorationAcceptedResponse, RestorationStageOutcome
+from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_artifact
+from ps_service.curated_source.errors import CuratedSourceFetchError
+from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.export.models import InstrumentManifest
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
@@ -56,8 +63,13 @@ if TYPE_CHECKING:
         FalkorDB,  # pyright: ignore[reportMissingTypeStubs] -- falkordb ships no py.typed marker
     )
 
-    from ps_service.api.models import RestorationManifestPayload, RestorationRequest
+    from ps_service.api.models import (
+        CatalogRestorationRequest,
+        RestorationManifestPayload,
+        RestorationRequest,
+    )
     from ps_service.config import ServiceConfig
+    from ps_service.curated_source.store import GraphHandle
     from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreOutcome
 
@@ -90,6 +102,53 @@ class RestoreDependencies:
     open_db: Callable[[ServiceConfig], FalkorDB]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
     restore: RestoreStage
+
+
+class CatalogRestoreStage(Protocol):
+    """Call shape of ``restore_instrument`` when invoked with a resolved ``source`` (D-AUDIT).
+
+    A strict superset of :class:`RestoreStage`'s call shape (the same
+    callable, ``ps_service.restore.restore_instrument.restore_instrument``,
+    satisfies both Protocols structurally) -- kept separate from
+    ``RestoreStage`` rather than widening it in place, so
+    ``RestoreDependencies``'s existing shape (and every test constructing
+    one) is untouched by issue #125 (AC-BI-005: the upload path is
+    unaffected).
+    """
+
+    def __call__(
+        self,
+        artifact: RestoreArtifact,
+        *,
+        db: FalkorDB,
+        single_tenant_graph_name: str,
+        similarity_threshold: float,
+        actor: str,
+        emitter: LogEmitter | None = None,
+        source: str | None = None,
+    ) -> RestoreOutcome:
+        """Restore one curated instrument's artifact end to end, recording ``source``."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogRestoreDependencies:
+    """Everything :func:`run_restoration_from_catalog_source` needs that is not per-request.
+
+    Composes the curated-content fetch step (``fetch_artifact``) alongside
+    the same restore-step shape :class:`RestoreDependencies` uses
+    (``open_db``/``single_tenant_graph_name``/``restore``) -- declared as its
+    own fields rather than nesting a :class:`RestoreDependencies` instance,
+    so a test can override just the fetch step or just the restore step
+    independently, mirroring every other ``*Dependencies`` bundle in this
+    package.
+    """
+
+    fetch_artifact: FetchArtifactCall
+    resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
+    open_db: Callable[[ServiceConfig], FalkorDB]
+    single_tenant_graph_name: Callable[[ServiceConfig], str]
+    restore: CatalogRestoreStage
 
 
 # --- request decoding ---------------------------------------------------
@@ -246,6 +305,86 @@ def run_restoration(
     return _to_accepted_response(outcome)
 
 
+def run_restoration_from_catalog_source(
+    request_body: CatalogRestorationRequest,
+    *,
+    config: ServiceConfig,
+    actor: str,
+    dependencies: CatalogRestoreDependencies,
+) -> RestorationAcceptedResponse:
+    """Fetch and restore one curated instrument's artifact from the curated-content source.
+
+    Issue #125, ``POST /restorations/from-catalog`` (D-NEW-ROUTE) --
+    restores via the same delegate :func:`run_restoration` (the upload
+    path) uses. Since Slice 3, the source fetched from is the *effective*
+    curated-content source: a persisted FalkorDB override when one exists,
+    else ``config.curated_source_base_url``, resolved on every call via
+    ``dependencies.resolve_effective_source`` (AC-BI-013) before
+    ``dependencies.fetch_artifact`` is called -- a FalkorDB outage during
+    that check falls open to ``config.curated_source_base_url`` rather than
+    failing the request (D-FAILOPEN). The fetched artifact is passed to the
+    injected ``restore`` delegate unmodified -- the exact same D9 checksum /
+    D10 schema_version verification :func:`run_restoration` relies on runs
+    first and unconditionally inside that one shared delegate (never
+    duplicated here), so a fetched-but-corrupted or version-mismatched
+    artifact is rejected exactly like an uploaded one (AC-BI-007/009, mirrors
+    #66). The resolved effective source URL is passed through as ``source``
+    so the restore's own audit log entries carry it (AC-BI-011, mirrors #66
+    AC-BI-016) -- distinct from :func:`run_restoration`, whose call site
+    never passes ``source`` at all, keeping the upload path's audit log shape
+    byte-identical (D-AUDIT).
+
+    Args:
+        request_body: The ``POST /restorations/from-catalog`` request body
+            (just the instrument id to fetch).
+        config: The resolved service configuration -- names the effective
+            curated-content source URL to fetch from.
+        actor: The requesting client host (mirrors ``run_restoration``'s own
+            ``actor`` derivation).
+        dependencies: The injected fetch-and-restore dependency bundle (the
+            production bundle in production; a fake in fast tests).
+
+    Returns:
+        A :class:`RestorationAcceptedResponse` naming the completed stages.
+
+    Raises:
+        CuratedSourceUnavailableError: The configured source is unreachable,
+            or the fetched artifact is missing/malformed (AC-BI-004/006) --
+            502, naming the source and instrument.
+        RestoreArtifactRejectedError: The fetched artifact fails checksum
+            (D9) / schema_version (D10) verification (422, AC-BI-007/009).
+        RestoreStageFailedError: Any other restore failure, including a
+            missing similarity-threshold configuration value (502).
+    """
+    effective_source = dependencies.resolve_effective_source(config)
+    try:
+        fetched = dependencies.fetch_artifact(effective_source.url, request_body.instrument_id)
+    except CuratedSourceFetchError as exc:
+        raise CuratedSourceUnavailableError(str(exc)) from exc
+    artifact = RestoreArtifact(
+        manifest=fetched.manifest,
+        baseline_blob=fetched.baseline_blob,
+        native_blob=fetched.native_blob,
+    )
+    threshold = _require_similarity_threshold(config)
+    db = dependencies.open_db(config)
+    single_tenant_graph_name = dependencies.single_tenant_graph_name(config)
+    try:
+        outcome = dependencies.restore(
+            artifact,
+            db=db,
+            single_tenant_graph_name=single_tenant_graph_name,
+            similarity_threshold=threshold,
+            actor=actor,
+            source=effective_source.url,
+        )
+    except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
+        raise RestoreArtifactRejectedError(str(exc)) from exc
+    except Exception as exc:
+        raise _classify_restore_failure(exc) from exc
+    return _to_accepted_response(outcome)
+
+
 # --- default wiring (M6 -- every restore/company_merge import below is function-local) ---
 
 
@@ -286,6 +425,60 @@ def build_default_restore_dependencies() -> RestoreDependencies:
     )
 
     return RestoreDependencies(
+        open_db=_default_open_db,
+        single_tenant_graph_name=_default_single_tenant_graph_name,
+        restore=restore_instrument,
+    )
+
+
+def _default_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
+    """Resolve the effective curated-content source (issue #125, Slice 3, AC-BI-013).
+
+    ``ps_service.company_merge.falkordb_client`` is imported
+    **function-locally**, exactly like :func:`_default_open_db` (M6 --
+    ``ps_service.main`` never transitively loads ``ps_service.company_merge``
+    at module load). The graph opened is the same single-tenant
+    ``policy_system`` graph :func:`_default_open_db`/
+    :func:`_default_single_tenant_graph_name` already resolve against.
+    """
+    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
+        connect_from_config,
+        select_graph,
+        single_tenant_graph_name,
+    )
+
+    def _open_graph() -> GraphHandle:
+        return select_graph(connect_from_config(config), single_tenant_graph_name())
+
+    return resolve_effective_source(config, open_graph=_open_graph)
+
+
+def build_default_restore_from_catalog_dependencies() -> CatalogRestoreDependencies:
+    """Wire the real fetch-and-restore path into a ``CatalogRestoreDependencies``.
+
+    ``restore_instrument`` is imported **function-locally**, exactly like
+    :func:`build_default_restore_dependencies` (M6 -- ``ps_service.main``
+    never transitively loads ``ps_service.restore``/``ps_service.
+    company_merge`` at module load). ``curated_source.artifact_client.
+    fetch_artifact`` carries no such restriction (it has no
+    ``ps_service.restore``/``ps_service.company_merge`` dependency of its
+    own -- confirmed by its imports) and is wired via this module's ordinary
+    module-level import.
+
+    Returns:
+        A :class:`CatalogRestoreDependencies` bound to the production
+        curated-content fetch step, the production `resolve_effective_source`
+        (issue #125, Slice 3), and the same restore entry point / FalkorDB
+        connection/graph-name helpers :func:`build_default_
+        restore_dependencies` uses.
+    """
+    from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- M6: function-local
+        restore_instrument,
+    )
+
+    return CatalogRestoreDependencies(
+        fetch_artifact=fetch_artifact,
+        resolve_effective_source=_default_resolve_effective_source,
         open_db=_default_open_db,
         single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,

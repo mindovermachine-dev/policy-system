@@ -26,6 +26,7 @@
    - [Company Merge](#company-merge)
    - [Export](#export)
    - [Restore](#restore)
+   - [Curated Source](#curated-source)
    - [Query Engine](#query-engine)
    - [MCP Interface](#mcp-interface)
    - [Regulatory Change Monitor](#regulatory-change-monitor)
@@ -75,6 +76,7 @@ graph TB
         Cellar{{Cellar/ELI}}
         LLMProvider{{LLM Provider}}
         PSSkill{{PS Question Skill}}
+        CuratedContentSource{{Curated Content Source}}
     end
 
     subgraph PSService["PS Service"]
@@ -87,6 +89,7 @@ graph TB
         subgraph Curation["Curation"]
             Export[Export]
             Restore[Restore]
+            CuratedSource[Curated Source]
         end
 
         subgraph QuerySurface["Query Surface"]
@@ -116,6 +119,11 @@ graph TB
     Export -->|"backfill Capability/Policy embeddings onto {short}_baseline"| FalkorDB
     Restore -->|"write {short}_native / {short}_baseline / policy_system"| FalkorDB
 
+    CuratedContentSource -->|"catalog.json; manifest/baseline/native.json"| CuratedSource
+    CuratedSource -->|"read/write CatalogSourceOverride"| FalkorDB
+    CuratedSource -->|"fetched, unverified artifact"| Restore
+    MCPInterface -->|"delegates to"| CuratedSource
+
     DomainMapper -->|"extraction calls"| LLMInterface
     CompanyMerge -->|"semantic convergence calls (embeddings)"| LLMInterface
     Export -->|"RouteEmbedding calls"| LLMInterface
@@ -130,6 +138,7 @@ graph TB
     CompanyMerge -->|"log entries"| Logging
     Export -->|"log entries"| Logging
     Restore -->|"log entries"| Logging
+    CuratedSource -->|"log entries"| Logging
     QueryEngine -->|"log entries"| Logging
     MCPInterface -->|"log entries"| Logging
     ChangeMonitor -->|"log entries"| Logging
@@ -139,6 +148,7 @@ graph TB
     style Cellar fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style LLMProvider fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style PSSkill fill:#90CAF9,stroke:#333,stroke-width:2px,color:#333
+    style CuratedContentSource fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style FalkorDB fill:#81C784,stroke:#333,stroke-width:2px,color:#333
     style LogFiles fill:#CFD8DC,stroke:#333,stroke-width:2px,color:#333
 
@@ -147,6 +157,7 @@ graph TB
     style CompanyMerge fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Export fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Restore fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style CuratedSource fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style QueryEngine fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style MCPInterface fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style ChangeMonitor fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
@@ -170,6 +181,7 @@ graph TB
 | Company Merge | `ps.service.companymerge` | Merge per-regulation baseline graphs into the single-tenant graph; dedupe canonical nodes |
 | Export | `ps.service.export` | Serialize an already-ingested instrument's `{short}_baseline`/`{short}_native` graphs into a curated, checksummed, schema-versioned artifact for `curated-content/`; backfill Capability/Policy embeddings onto the source baseline graph so restore never needs a live LLM call |
 | Restore | `ps.service.restore` | Verify a curated artifact's checksum and `schema_version`, then load it into a target deployment: baseline via an offline replay of Company Merge's own dedup/convergence, native as a straight load, both atomically |
+| Curated Source | `ps.service.curatedsource` | Fetch the curated catalog listing and, on demand, one instrument's artifact (manifest/baseline/native) from a configurable HTTP(S) source at runtime; persist and resolve a FalkorDB-backed runtime override of that source, taking precedence over the env-var/default when present |
 | Query Engine | `ps.service.queryengine` | Execute read-only Cypher queries against the graph |
 | MCP Interface | `ps.service.mcpinterface` | Expose Query Engine to PS Question Skill via MCP |
 | Authentication | `ps.service.auth` | Validate OIDC bearer tokens for both REST and MCP Interface via one shared verifier; fail closed at startup when auth config and the local-test bypass are both absent |
@@ -595,6 +607,54 @@ None — writes into the existing baseline/native/single-tenant graph shapes Dom
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
 | RestoreInstrument | Load one curated instrument's artifact into the target deployment: baseline merged into the single-tenant graph via an offline dedup replay, native loaded straight into its own per-instrument graph space | No (deferred — REST-layer concern, same posture as ingestion) | n/a (deferred) | Artifact's checksum and `schema_version` both verified | `{short}_native`, `{short}_baseline`, and `policy_system` all reflect the instrument, or (on any failure) none of them do | Reads/writes FalkorDB (staged keys, then one atomic multi-key rename) | FalkorDB | Not yet set — bounded by the offline dedup step's candidate-scoring cost, no LLM latency | Yes (re-restoring an instrument overwrites its own `{short}_native`/`{short}_baseline` via the same rename-based finalize) | A checksum or `schema_version` mismatch refuses before any FalkorDB call; any failure after staging discards every staged key and re-raises, leaving the target unchanged; exhausting the `policy_system` leg's concurrency retries raises `RestoreConcurrencyConflictError` with the same no-partial-write guarantee |
+
+---
+
+### Curated Source
+
+#### Domain Concepts
+
+None — the persisted source override is operational configuration, not a PS Conceptual Model domain concept, and a fetched artifact's bytes stay unverified/opaque here; mirrors Export/Restore's own "introduces no new domain concept" posture.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`urllib.request` HTTP GET, plain parameterized Cypher) | Python 3.14 | `ps-service/src/ps_service/curated_source/` | `ps_service.curated_source` |
+
+**Implementation Guidance:**
+- Fetches, at runtime, both the curated catalog listing (`GET /catalog`) and, on demand, one instrument's artifact (manifest/baseline/native, `POST /restorations/from-catalog`) from a configurable HTTP(S) base URL, replacing the earlier build-time-packaged `catalog.json` copy for the listing path. Layout is `{base_url}/catalog.json` and `{base_url}/{instrument_id}/{manifest,baseline,native}.json` — 1:1 with `ps-cli`'s own local-checkout layout, just over HTTP instead of local disk.
+- Default source is the public Policy System GitHub repo's `curated-content` tree (`PS_CURATEDSOURCE_URL`, https only unless `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP=true` is explicitly set) — an operator can point PS Service at a different source with config alone, no code change.
+- A FalkorDB-persisted, single-tenant `policy_system`-graph override (a singleton `CatalogSourceOverride {id: "singleton"}` node) takes precedence over the env-var/default on every fetch once set via the `set-catalog-source` MCP tool — readable via `get-catalog-source`, clearable via `reset-catalog-source`, no restart required either way.
+- A FalkorDB outage while checking for that override never blocks `GET /catalog` or an artifact fetch: the check fails open to the env-var/default source, logging a warning rather than surfacing an error to the caller. This is a per-call, transient fallback, not a sticky suppression of a persisted override — the next call after FalkorDB recovers sees the override again.
+- Both the catalog fetch and the artifact fetch fail hard and name the source (and, for an artifact, the instrument id) on any network/HTTP failure or malformed response — no partial result and no silent fallback to stale data.
+- A fetched artifact's bytes are handed to Restore unverified; checksum and `schema_version` verification happen there, not here, so verification logic is never duplicated between the upload path (`POST /restorations`) and the fetch-and-restore path (`POST /restorations/from-catalog`).
+- One shared http(s)/TLS validator gates both startup configuration and the runtime `set-catalog-source` tool, so both surfaces reject the same inputs (a non-http(s) scheme, or plain `http://` without the insecure opt-in) identically.
+- The three MCP-exposed actions (`SetCatalogSource`/`ResetCatalogSource`/`GetCatalogSource`) require only the shared OIDC bearer-token check every other MCP tool already requires — no role/attribute permission gating exists yet, same posture as `IngestRegulation`/`CheckRegulations`/etc. (see [MCP Interface](#mcp-interface)).
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/curated_source/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/curated_source/errors.py` | `CuratedSourceConfigurationError` (bad scheme/TLS), `CuratedSourceFetchError` (network/HTTP/malformed-data failure naming the source), `CuratedSourceOverridePersistenceError` (a persisted-override FalkorDB write failure) | — |
+| `ps-service/src/ps_service/curated_source/source_url.py` | `validate_source_url` — the one http(s)/TLS guard shared by startup config and `set-catalog-source` | — |
+| `ps-service/src/ps_service/curated_source/http_fetch.py` | `fetch_bytes` — injectable-transport HTTP GET mechanics | — |
+| `ps-service/src/ps_service/curated_source/catalog_client.py` | `fetch_catalog` — GETs `{base_url}/catalog.json` and parses it; `CuratedCatalogDependencies`/`build_default_curated_catalog_dependencies`, the DI seam `GET /catalog`'s route handler calls through | FetchCatalog |
+| `ps-service/src/ps_service/curated_source/artifact_client.py` | `fetch_artifact` — GETs `{base_url}/{instrument_id}/manifest.json`+`baseline.json`+`native.json`, stopping at the first failure | FetchArtifact |
+| `ps-service/src/ps_service/curated_source/manifest_parser.py` | `parse_manifest_json` — validates a fetched `manifest.json`'s shape | — |
+| `ps-service/src/ps_service/curated_source/store.py` | `get_override`/`set_override`/`reset_override` — plain parameterized Cypher CRUD on the singleton `CatalogSourceOverride` node in the `policy_system` graph; backs the `set-catalog-source`/`reset-catalog-source` MCP tools (`mcp_interface/mcp_server.py`) | SetCatalogSource, ResetCatalogSource |
+| `ps-service/src/ps_service/curated_source/resolve.py` | `resolve_effective_source`/`EffectiveCatalogSource` — checks the persisted override, falling open to the env-var/default on any FalkorDB failure (fail-open); backs `GET /catalog`, the artifact fetch, and the `get-catalog-source` MCP tool | GetCatalogSource |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| FetchCatalog | Fetch and parse `catalog.json` from the effective curated-content source's base URL, returning every curated instrument entry | No (internal call — reached only via `GET /catalog`'s own REST auth posture, not directly network-reachable) | n/a (no role/scope model exists anywhere in this architecture yet) | The effective source URL has already been resolved (persisted override, else the env-var/default) | Every entry in `catalog.json` returned as a `CuratedInstrumentEntry` tuple, or the call raises before returning anything | None — read-only HTTP GET | The configured curated-content source (HTTP(S)) | Not yet set — bounded by one HTTP round trip to the configured source | Yes | An unreachable source or a missing/malformed `catalog.json` raises `CuratedSourceFetchError` naming the source and the specific failure — no partial result, never a silent fallback to stale data |
+| FetchArtifact | Fetch one curated instrument's `manifest.json`, `baseline.json`, and `native.json` from the effective curated-content source, on demand | No (internal call — reached only via `POST /restorations/from-catalog`'s own REST auth posture) | n/a (no role/scope model exists anywhere in this architecture yet) | The effective source URL has already been resolved; a well-formed `instrument_id` | A `FetchedArtifact` carrying the parsed manifest plus both raw, unverified blob bytes — checksum/`schema_version` verification happens downstream, in Restore | None — read-only HTTP GETs; stops at the first failure (manifest fetched and parsed before baseline/native are ever requested) | The configured curated-content source (HTTP(S)) | Not yet set — bounded by up to three sequential HTTP round trips | Yes | An unreachable source or a missing/malformed file raises `CuratedSourceFetchError` naming the source, the instrument id, and the specific failure — no partial artifact ever returned |
+| SetCatalogSource | Validate and persist a new curated-content source URL as the effective override, taking precedence over the env-var/default on every subsequent fetch, no restart required | Yes — bearer token validated via the shared `ps.service.auth` verifier; local-test bypass remains the loopback-only exception | n/a (no role/scope model exists anywhere in this architecture yet) | `url` is non-empty | On success, `{"url": <validated url>, "source": "override"}`; the persisted `CatalogSourceOverride` node reflects the new URL | Writes/overwrites the singleton `CatalogSourceOverride` node in the `policy_system` graph | FalkorDB | Not yet set — bounded by one FalkorDB write | Yes (re-setting the same URL leaves the same persisted state) | A non-http(s) scheme or a plain `http://` URL without the insecure opt-in returns `error: <message>` before any FalkorDB call; a FalkorDB write failure returns the same graph-unavailable `error:` string every other MCP write tool returns, with detail logged server-side only |
+| ResetCatalogSource | Clear the persisted curated-content source override, reverting the effective source to the env-var/default, no restart required | Yes — same shared verifier | n/a (no role/scope model exists anywhere in this architecture yet) | None — a no-op, not an error, when no override is currently persisted | On success, `{"url": <the env-var/default url>, "source": "default"}`; the persisted `CatalogSourceOverride` node (if any) is deleted | Deletes the singleton `CatalogSourceOverride` node, if present | FalkorDB | Not yet set — bounded by one FalkorDB write | Yes | A FalkorDB write failure returns the same graph-unavailable `error:` string every other MCP write tool returns |
+| GetCatalogSource | Report the currently effective curated-content source URL and whether it is the persisted override or the env-var/default | Yes — same shared verifier | n/a (no role/scope model exists anywhere in this architecture yet) | None — takes zero parameters | `{"url": ..., "source": "override"}` when a persisted override is in effect, else `{"url": ..., "source": "default"}` | None — read-only | FalkorDB (for the override check; never blocks on it) | Not yet set — bounded by one FalkorDB read | Yes | A FalkorDB outage during the override check is never surfaced as an error — it fails open, reporting the env-var/default source instead; this tool's `error:` string is reserved for its own residual, unrelated unexpected-failure safety net |
 
 ---
 

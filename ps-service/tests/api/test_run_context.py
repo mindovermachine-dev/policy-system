@@ -25,8 +25,15 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import build_fake_pipeline_dependencies
-from ps_service.api.dependencies import provide_pipeline_dependencies
+from api._fakes import (
+    FakeCuratedSourceTransport,
+    build_fake_curated_catalog_dependencies,
+    build_fake_pipeline_dependencies,
+)
+from ps_service.api.dependencies import (
+    provide_curated_catalog_dependencies,
+    provide_pipeline_dependencies,
+)
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.logging import facade
@@ -158,7 +165,9 @@ def test_error_body_carries_the_request_run_id() -> None:
     assert fake.recorder.order == ["ingestion", "extraction"]
 
 
-def test_get_catalog_succeeds_on_two_consecutive_requests(client: TestClient) -> None:
+def test_get_catalog_succeeds_on_two_consecutive_requests(
+    configured_logging: Path,
+) -> None:
     """`GET /catalog` is stateless and repeat-request-safe.
 
     Replaces the deleted `GET /regulations` route's per-request run-id test
@@ -166,7 +175,34 @@ def test_get_catalog_succeeds_on_two_consecutive_requests(client: TestClient) ->
     and has no `run_id` field in its response, so there is nothing
     per-request to assert differs. Instead this proves the route survives
     two consecutive calls, returning the same non-empty catalog both times.
+
+    Since issue #125, `GET /catalog` fetches over HTTP -- `provide_curated_
+    catalog_dependencies` is overridden with a fake transport (never real
+    network, BASELINE's hermetic-suite requirement), and `configured_logging`
+    installs a real Logging facade since `fetch_catalog` now always logs.
     """
+    _ = configured_logging
+    app = create_app(_app_config())
+    transport = FakeCuratedSourceTransport(
+        json.dumps(
+            [
+                {
+                    "instrument_id": "CRA-1.0",
+                    "celex": "32024R2847",
+                    "title": "Cyber Resilience Act",
+                    "source_type": "external",
+                    "jurisdiction": "EU",
+                    "short_name": "CRA",
+                    "version": "1.0",
+                }
+            ]
+        ).encode("utf-8")
+    )
+    app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
+        build_fake_curated_catalog_dependencies(transport)
+    )
+    client = TestClient(app)
+
     first = client.get("/catalog")
     second = client.get("/catalog")
 

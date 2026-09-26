@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol, Self
 
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.ingestion_orchestration import (
@@ -34,19 +34,27 @@ from ps_service.api.ingestion_orchestration import (
 )
 from ps_service.change_monitor.models import PollReport
 from ps_service.company_merge.models import MergeResult
+from ps_service.curated_source.catalog_client import (
+    CuratedCatalogDependencies,
+    ResolveEffectiveSourceCall,
+    fetch_catalog,
+)
+from ps_service.curated_source.resolve import EffectiveCatalogSource
 from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
 from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
 from ps_service.ingestion.models import IngestResult
 
 if TYPE_CHECKING:
+    import urllib.request
     from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
-    from ps_service.api.catalog import CatalogEntry
+    from ps_service.api.catalog import CatalogEntry, CuratedInstrumentEntry
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.change_monitor.models import ReingestionOutcome, TrackedInstrumentNode
     from ps_service.config import ServiceConfig
+    from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_service.domain_mapper.models import ExtractionUnit
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
@@ -727,4 +735,145 @@ def build_fake_change_check_dependencies(
         find_catalog_entry_calls=find_catalog_entry_calls,
         open_native_short_names=open_native_short_names,
         trigger_reingestion_calls=trigger_reingestion_calls,
+    )
+
+
+# --- curated-source fakes (issue #125, PLAN.md Slice 1) ---------------------
+
+
+class FakeCuratedSourceResponse:
+    """A minimal stand-in for what `urllib.request.urlopen` returns.
+
+    A context manager whose `read()` yields a scripted body -- mirrors
+    `tests/ingestion/adapters/cellar_eli/test_fetch.py`'s own `_FakeResponse`.
+    """
+
+    def __init__(self, body: bytes) -> None:
+        """Script the body `read()` returns."""
+        self._body = body
+
+    def __enter__(self) -> Self:
+        """Enter the context manager, returning `self`."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Exit the context manager -- nothing to clean up."""
+        return
+
+    def read(self) -> bytes:
+        """Return the scripted body."""
+        return self._body
+
+
+class FakeCuratedSourceTransport:
+    """Records every `Request` it was called with and returns a fixed scripted body.
+
+    Satisfies `ps_service.curated_source.http_fetch.CuratedSourceTransport`
+    structurally -- mirrors `tests/ingestion/adapters/cellar_eli/test_fetch.py`'s
+    own `_RecordingTransport` (mocking at the transport boundary, L2 Testing
+    Patterns), shared here since more than one `tests/api/` file now needs it
+    (issue #125).
+    """
+
+    def __init__(self, body: bytes) -> None:
+        """Script the response body every call returns."""
+        self._body = body
+        self.requests: list[urllib.request.Request] = []
+
+    def __call__(
+        self, request: urllib.request.Request, /, *, timeout: float
+    ) -> FakeCuratedSourceResponse:
+        """Record `request` and return the scripted body."""
+        _ = timeout
+        self.requests.append(request)
+        return FakeCuratedSourceResponse(self._body)
+
+
+class FakeFailingCuratedSourceTransport:
+    """Always raises -- mirrors `cellar_eli/test_fetch.py`'s own `_FailingTransport`."""
+
+    def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> NoReturn:
+        """Raise unconditionally -- simulates an unreachable curated-content source."""
+        _ = (request, timeout)
+        message = "connection refused"
+        raise ConnectionRefusedError(message)
+
+
+class FakeCuratedArtifactTransport:
+    """Scripts a different response body per requested filename (issue #125, Slice 2).
+
+    One `fetch_artifact` call makes three requests (`manifest.json`,
+    `baseline.json`, `native.json`) under the same instrument subdirectory --
+    unlike `FakeCuratedSourceTransport` (a single fixed body for every
+    request, correct for `fetch_catalog`'s single `catalog.json` GET), this
+    fake dispatches on the request URL's last path segment.
+    """
+
+    def __init__(self, bodies_by_filename: dict[str, bytes]) -> None:
+        """Script the response body for each of `manifest.json`/`baseline.json`/`native.json`."""
+        self._bodies_by_filename = bodies_by_filename
+        self.requests: list[urllib.request.Request] = []
+
+    def __call__(
+        self, request: urllib.request.Request, /, *, timeout: float
+    ) -> FakeCuratedSourceResponse:
+        """Record `request` and return the body scripted for its filename."""
+        _ = timeout
+        self.requests.append(request)
+        filename = request.full_url.rsplit("/", 1)[-1]
+        body = self._bodies_by_filename.get(filename)
+        if body is None:
+            message = f"unscripted request for {request.full_url!r}"
+            raise AssertionError(message)
+        return FakeCuratedSourceResponse(body)
+
+
+def _default_fake_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
+    """Config-only resolution: no persisted override, mirrors pre-Slice-3 behavior.
+
+    Touches no FalkorDB fixture at all -- the safe default for every test
+    that isn't specifically exercising the FalkorDB-persisted override
+    (issue #125, Slice 3), so `build_fake_curated_catalog_dependencies`
+    stays a drop-in for every existing caller.
+    """
+    return EffectiveCatalogSource(url=config.curated_source_base_url, is_override=False)
+
+
+def build_fake_curated_catalog_dependencies(
+    transport: CuratedSourceTransport,
+    *,
+    resolve_effective_source: ResolveEffectiveSourceCall | None = None,
+) -> CuratedCatalogDependencies:
+    """Wire the real ``fetch_catalog`` to a fake HTTP transport (PLAN.md Slice 1 test 1).
+
+    Deliberately not a canned-entries stand-in: per L2 Testing Patterns
+    ("mock at component boundaries... not internals of the component under
+    test"), the true external boundary here is the HTTP transport, not
+    ``fetch_catalog`` itself -- wiring the fake transport into the *real*
+    ``ps_service.curated_source.catalog_client.fetch_catalog`` lets a
+    route-level test also exercise that function's own JSON-shape parsing
+    and error classification end to end, never reaching real network.
+
+    Args:
+        transport: A fake satisfying ``CuratedSourceTransport`` (mirrors
+            ``tests/ingestion/adapters/cellar_eli/test_fetch.py``'s own
+            ``_RecordingTransport``/``_FailingTransport`` fakes).
+        resolve_effective_source: When given (issue #125, Slice 3), wires a
+            real or fake override-resolution call so a test can prove
+            `GET /catalog` reflects a persisted override. `None` (default)
+            wires a no-FalkorDB-touching stand-in that always resolves to
+            `config.curated_source_base_url` -- correct for every test that
+            predates the override feature.
+
+    Returns:
+        A :class:`CuratedCatalogDependencies` whose ``fetch_catalog`` calls
+        the real ``fetch_catalog`` with ``transport`` bound.
+    """
+
+    def _fetch_catalog(base_url: str) -> tuple[CuratedInstrumentEntry, ...]:
+        return fetch_catalog(base_url, transport=transport)
+
+    return CuratedCatalogDependencies(
+        fetch_catalog=_fetch_catalog,
+        resolve_effective_source=resolve_effective_source or _default_fake_resolve_effective_source,
     )

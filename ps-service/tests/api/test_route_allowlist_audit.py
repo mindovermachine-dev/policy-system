@@ -115,6 +115,7 @@ _REQUEST_BODIES: dict[str, dict[str, object]] = {
         "baseline_blob_base64": "YQ==",
         "native_blob_base64": "YQ==",
     },
+    "/restorations/from-catalog": {"instrument_id": "test-instrument"},
     "/exports": {"instrument_id": "test-instrument"},
     "/near-misses/{review_id}/resolve": {"decision": "keep-separate"},
     # "/change-checks" takes no request body at all -- absent from this map.

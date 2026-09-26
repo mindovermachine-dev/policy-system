@@ -24,6 +24,10 @@ from ps_service.config import (
     missing_ingestion_config_fields,
 )
 
+_DEFAULT_CURATED_SOURCE_BASE_URL = (
+    "https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/curated-content"
+)
+
 
 def test_service_config_field_mutation_raises_frozen_instance_error() -> None:
     """`ServiceConfig` is frozen (AC-BI-001): mutating any field raises."""
@@ -57,6 +61,8 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_SERVICE_MAX_REQUEST_BODY_BYTES", raising=False)
     monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
+    monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
+    monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
 
     result = load_config()
 
@@ -548,3 +554,77 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_row
 
     with pytest.raises(ServiceConfigurationError):
         load_config()
+
+
+def test_load_config_with_no_ps_curatedsource_env_vars_set_defaults_to_the_public_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-001: no `PS_CURATEDSOURCE_URL` set -> defaults to the public GitHub repo."""
+    monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
+    monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
+
+    result = load_config()
+
+    assert result.curated_source_base_url == _DEFAULT_CURATED_SOURCE_BASE_URL
+    assert result.curated_source_allow_insecure_http is False
+
+
+def test_load_config_honors_ps_curatedsource_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-002: an operator-configured `PS_CURATEDSOURCE_URL` takes effect, no code change."""
+    monkeypatch.setenv("PS_CURATEDSOURCE_URL", "https://example.com/my-curated-content")
+
+    assert load_config().curated_source_base_url == "https://example.com/my-curated-content"
+
+
+def test_load_config_raises_for_plain_http_curatedsource_url_without_the_allow_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-008/AC-BI-010 (startup half): plain `http://` is refused unless explicitly allowed."""
+    monkeypatch.setenv("PS_CURATEDSOURCE_URL", "http://example.com/curated-content")
+    monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "http://example.com/curated-content" in str(excinfo.value)
+
+
+def test_load_config_raises_for_file_scheme_curatedsource_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-008: a non-http(s) scheme (e.g. `file://`) is always rejected."""
+    monkeypatch.setenv("PS_CURATEDSOURCE_URL", "file:///etc/passwd")
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "file:///etc/passwd" in str(excinfo.value)
+
+
+def test_load_config_honors_ps_curatedsource_allow_insecure_http_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-010: `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP=true` opts in to a plain `http://`."""
+    monkeypatch.setenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", "true")
+    monkeypatch.setenv("PS_CURATEDSOURCE_URL", "http://example.com/curated-content")
+
+    result = load_config()
+
+    assert result.curated_source_allow_insecure_http is True
+    assert result.curated_source_base_url == "http://example.com/curated-content"
+
+
+@pytest.mark.parametrize("invalid_value", ["1", "yes", "on", "nope"])
+def test_load_config_raises_for_unrecognized_curatedsource_allow_insecure_http_value(
+    invalid_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fails closed rather than silently defaulting (mirrors the local-test bypass)."""
+    monkeypatch.setenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", invalid_value)
+
+    with pytest.raises(ServiceConfigurationError) as excinfo:
+        load_config()
+
+    assert "PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP" in str(excinfo.value)

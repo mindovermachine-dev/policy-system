@@ -57,6 +57,10 @@ from ps_service.api.routes import (
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
+from ps_service.curated_source import store as catalog_source_store
+from ps_service.curated_source.errors import CuratedSourceConfigurationError
+from ps_service.curated_source.resolve import resolve_effective_source
+from ps_service.curated_source.source_url import validate_source_url
 from ps_service.logging import bind_run_context, current_run_id, emit_log_entry
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
@@ -681,6 +685,100 @@ def near_misses_resolve(
         return result.model_dump()
 
     return _run_mcp_action("near_misses_resolve", principal, _body)
+
+
+@server.tool(name="set-catalog-source")
+def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+    """SetCatalogSource: override the effective curated-content source (issue #125, AC-BI-012).
+
+    Validates `url` against the exact same http(s)/TLS rules startup
+    configuration uses (`ps_service.curated_source.source_url.
+    validate_source_url` -- AC-BI-008/010): only `http(s)://` schemes are
+    accepted, and a plain `http://` URL is rejected unless
+    `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP` is set for this process. On
+    success, persists `url` in FalkorDB as the effective curated-content
+    source -- no restart required -- and it takes precedence over
+    `PS_CURATEDSOURCE_URL`/the public default on every subsequent
+    `GET /catalog` and artifact fetch (AC-BI-013), until `reset-catalog-source`
+    is called.
+
+    On success, returns `{"url": <the validated url>, "source": "override"}`.
+    Returns a string beginning `error: ` when `url` fails validation, when
+    the policy graph database cannot be reached, or (this tool's own
+    residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        try:
+            validated_url = validate_source_url(
+                url, allow_insecure_http=config.curated_source_allow_insecure_http
+            )
+        except CuratedSourceConfigurationError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+            catalog_source_store.set_override(graph, validated_url)
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {"url": validated_url, "source": "override"}
+
+    return _run_mcp_action("set_catalog_source", principal, _body)
+
+
+@server.tool(name="reset-catalog-source")
+def reset_catalog_source() -> dict[str, object] | str:
+    """ResetCatalogSource: clear the persisted curated-content source override (AC-BI-014).
+
+    Takes no parameters. On success, deletes the persisted FalkorDB override
+    (a no-op if none was set) -- the effective source immediately reverts to
+    `PS_CURATEDSOURCE_URL`/the public default on every subsequent
+    `GET /catalog` and artifact fetch, no restart required.
+
+    On success, returns `{"url": <the env-var/default url>, "source": "default"}`.
+    Returns a string beginning `error: ` when the policy graph database
+    cannot be reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        try:
+            graph = _resolve_graph(config)
+            catalog_source_store.reset_override(graph)
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {"url": config.curated_source_base_url, "source": "default"}
+
+    return _run_mcp_action("reset_catalog_source", principal, _body)
+
+
+@server.tool(name="get-catalog-source")
+def get_catalog_source() -> dict[str, object] | str:
+    """GetCatalogSource: report the currently effective curated-content source (AC-BI-015).
+
+    Takes no parameters. Checks for a persisted FalkorDB override first,
+    falling back to `PS_CURATEDSOURCE_URL`/the public default when none is
+    set, OR when the policy graph database is unreachable for that check
+    (D-FAILOPEN) -- this tool never fails on a FalkorDB outage; it simply
+    reports the fallback source.
+
+    On success, returns `{"url": <the effective url>, "source": "override"}`
+    when a persisted override is in effect, or `{"url": ..., "source":
+    "default"}` otherwise. Returns a string beginning `error: ` only on this
+    tool's own residual safety net (an unexpected failure unrelated to the
+    FalkorDB override check, which always fails open rather than erroring).
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        effective = resolve_effective_source(config, open_graph=lambda: _resolve_graph(config))
+        return {"url": effective.url, "source": "override" if effective.is_override else "default"}
+
+    return _run_mcp_action("get_catalog_source", principal, _body)
 
 
 @server.tool()

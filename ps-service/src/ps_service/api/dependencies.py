@@ -36,10 +36,16 @@ from ps_service.api.near_miss_review_orchestration import (
     build_default_near_miss_review_dependencies,
 )
 from ps_service.api.restore_orchestration import (
+    CatalogRestoreDependencies,
     RestoreDependencies,
     build_default_restore_dependencies,
+    build_default_restore_from_catalog_dependencies,
 )
 from ps_service.auth import Principal
+from ps_service.curated_source.catalog_client import (
+    CuratedCatalogDependencies,
+    build_default_curated_catalog_dependencies,
+)
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
@@ -139,6 +145,24 @@ def provide_restore_dependencies() -> RestoreDependencies:
     return build_default_restore_dependencies()
 
 
+def provide_restore_from_catalog_dependencies() -> CatalogRestoreDependencies:
+    """Return the production ``CatalogRestoreDependencies`` for ``POST /restorations/from-catalog``.
+
+    Mirrors :func:`provide_restore_dependencies` exactly: a plain provider
+    (not a generator) so tests can swap it wholesale via
+    ``app.dependency_overrides`` with a fake bundle wired to a fake HTTP
+    transport and a fake restore stage. The real bundle wires the shipped
+    ``ps_service.curated_source.artifact_client.fetch_artifact`` entry point
+    and the same restore entry point / FalkorDB helpers
+    ``provide_restore_dependencies`` uses through ``build_default_restore_
+    from_catalog_dependencies`` (issue #125).
+
+    Returns:
+        The production :class:`CatalogRestoreDependencies` bundle.
+    """
+    return build_default_restore_from_catalog_dependencies()
+
+
 def provide_export_dependencies() -> ExportDependencies:
     """Return the production ``ExportDependencies`` for the export orchestration.
 
@@ -173,6 +197,22 @@ def provide_near_miss_review_dependencies() -> NearMissReviewDependencies:
         The production :class:`NearMissReviewDependencies` bundle.
     """
     return build_default_near_miss_review_dependencies()
+
+
+def provide_curated_catalog_dependencies() -> CuratedCatalogDependencies:
+    """Return the production ``CuratedCatalogDependencies`` for ``GET /catalog``.
+
+    Mirrors :func:`provide_restore_dependencies` exactly: a plain provider
+    (not a generator) so tests can swap it wholesale via
+    ``app.dependency_overrides`` with a fake bundle wired to a fake HTTP
+    transport. The real bundle wires the shipped
+    ``ps_service.curated_source.catalog_client.fetch_catalog`` entry point
+    (issue #125) through ``build_default_curated_catalog_dependencies``.
+
+    Returns:
+        The production :class:`CuratedCatalogDependencies` bundle.
+    """
+    return build_default_curated_catalog_dependencies()
 
 
 def provide_change_check_dependencies() -> ChangeCheckDependencies:

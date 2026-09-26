@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 
-from ps_service.api.catalog import CATALOG, find_by_celex
+from ps_service.api.catalog import find_by_celex
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     ChangeCheckResult,
@@ -22,12 +22,15 @@ from ps_service.api.dependencies import (
     get_principal,
     get_service_config,
     provide_change_check_dependencies,
+    provide_curated_catalog_dependencies,
     provide_export_dependencies,
     provide_near_miss_review_dependencies,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
+    provide_restore_from_catalog_dependencies,
     provide_run_id,
 )
+from ps_service.api.errors import CuratedSourceUnavailableError
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
@@ -37,6 +40,7 @@ from ps_service.api.ingestion_orchestration import (
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
+    CatalogRestorationRequest,
     ChangeCheckResponse,
     CuratedCatalogResponse,
     ExportAcceptedResponse,
@@ -57,7 +61,12 @@ from ps_service.api.near_miss_review_orchestration import (
     run_list_near_misses,
     run_resolve_near_miss,
 )
-from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
+from ps_service.api.restore_orchestration import (
+    CatalogRestoreDependencies,
+    RestoreDependencies,
+    run_restoration,
+    run_restoration_from_catalog_source,
+)
 from ps_service.api.run_status import get_stage
 from ps_service.auth import (
     Principal,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
@@ -65,6 +74,10 @@ from ps_service.auth import (
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
+from ps_service.curated_source.catalog_client import (
+    CuratedCatalogDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
+)
+from ps_service.curated_source.errors import CuratedSourceFetchError
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
@@ -158,16 +171,31 @@ async def create_ingestion(
 
 
 async def list_curated_catalog(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[
+        CuratedCatalogDependencies, Depends(provide_curated_catalog_dependencies)
+    ],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> CuratedCatalogResponse:
     """Return every curated instrument (external and internal), AC-BI-011.
 
-    This is **not** CELEX-filtered -- it reads
-    the full ``catalog.json`` listing (D12's ``load_regulation_catalog()``
-    result, unfiltered) so ``ps-cli catalog list`` sees internal-source
-    instruments too. Depends on no FalkorDB/LLM fixture at all -- a
-    ``TestClient`` call against an app with neither wired still succeeds
-    (AC-BI-011's "no LLM provider configured").
+    This is **not** CELEX-filtered -- it reflects the full ``catalog.json``
+    listing so ``ps-cli catalog list`` sees internal-source instruments too.
+    Since issue #125, the listing is fetched at runtime from the *effective*
+    curated-content source: a persisted FalkorDB override when one exists,
+    else ``config.curated_source_base_url`` (default: the public Policy
+    System GitHub repo, AC-BI-001; overridable with no code change,
+    AC-BI-002), resolved on every call via the injected
+    ``dependencies.resolve_effective_source`` (AC-BI-013) before fetching via
+    ``dependencies.fetch_catalog`` (AC-BI-003) -- no longer read from the
+    build-time-packaged ``catalog.json`` copy. Both calls are blocking and
+    dispatched off the event loop via ``run_in_threadpool``, mirroring
+    ``create_change_check``'s own async/blocking-call pattern. Depends on no
+    FalkorDB/LLM fixture at all -- a ``TestClient`` call against an app with
+    neither wired still succeeds (AC-BI-011's "no LLM provider configured"):
+    a FalkorDB outage during the override check falls open to
+    ``config.curated_source_base_url`` rather than failing the request
+    (D-FAILOPEN, ``ps_service.curated_source.resolve.resolve_effective_source``).
 
     ``principal`` (issue #58, AC-BI-005) is the representative route this
     plan proves the ``get_principal`` dependency against end to end: the
@@ -178,13 +206,27 @@ async def list_curated_catalog(
     other route that does need it.
 
     Args:
+        config: The resolved service configuration (injected) -- names the
+            effective curated-content source URL to fetch from.
+        dependencies: The curated-catalog dependency bundle (injected;
+            overridden in tests with a fake HTTP transport).
         principal: The request's verified identity, injected by
             :func:`ps_service.api.dependencies.get_principal`.
 
     Returns:
         A :class:`CuratedCatalogResponse` listing every curated entry.
+
+    Raises:
+        CuratedSourceUnavailableError: The configured source is unreachable,
+            or its response is missing/malformed (AC-BI-006) -- HTTP 502,
+            never a silent fallback to stale data.
     """
     del principal  # unused on this representative route; see docstring above
+    effective_source = await run_in_threadpool(dependencies.resolve_effective_source, config)
+    try:
+        entries = await run_in_threadpool(dependencies.fetch_catalog, effective_source.url)
+    except CuratedSourceFetchError as exc:
+        raise CuratedSourceUnavailableError(str(exc)) from exc
     return CuratedCatalogResponse(
         instruments=[
             CatalogInstrumentEntry(
@@ -193,7 +235,7 @@ async def list_curated_catalog(
                 source_type=entry.source_type,
                 jurisdiction=entry.jurisdiction,
             )
-            for entry in CATALOG
+            for entry in entries
         ]
     )
 
@@ -223,6 +265,45 @@ async def create_restoration(
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration(request_body, config=config, actor=caller, dependencies=dependencies)
+
+
+async def create_restoration_from_catalog(
+    request_body: CatalogRestorationRequest,
+    http_request: Request,
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    dependencies: Annotated[
+        CatalogRestoreDependencies, Depends(provide_restore_from_catalog_dependencies)
+    ],
+) -> RestorationAcceptedResponse:
+    """Fetch and restore one curated instrument's artifact from the curated-content source.
+
+    Issue #125, ``POST /restorations/from-catalog`` -- an additive sibling to
+    ``POST /restorations`` (D-NEW-ROUTE): the upload path
+    (``create_restoration``) is entirely unaffected by this route. Thin route
+    wiring over ``restore_orchestration.run_restoration_from_catalog_source``:
+    an unreachable source or a missing/malformed fetched artifact surfaces as
+    502 (``CuratedSourceUnavailableError``, AC-BI-004/006); a checksum/
+    schema_version rejection surfaces as 422
+    (``RestoreArtifactRejectedError``, AC-BI-007/009, mirrors #66); any other
+    restore failure surfaces as 502 naming the failing stage
+    (``RestoreStageFailedError``).
+
+    Args:
+        request_body: The curated instrument id to fetch and restore.
+        http_request: The raw request, for the caller host (mirrors
+            ``create_restoration``'s own ``caller`` derivation).
+        config: The resolved service configuration (injected) -- names the
+            effective curated-content source URL to fetch from.
+        dependencies: The fetch-and-restore dependency bundle (injected;
+            overridden in tests).
+
+    Returns:
+        A :class:`RestorationAcceptedResponse` naming the completed stages.
+    """
+    caller = http_request.client.host if http_request.client else "unknown"
+    return run_restoration_from_catalog_source(
+        request_body, config=config, actor=caller, dependencies=dependencies
+    )
 
 
 async def create_export(
@@ -405,6 +486,12 @@ def build_api_router() -> APIRouter:
     router.add_api_route(
         "/restorations",
         create_restoration,
+        methods=["POST"],
+        status_code=status.HTTP_200_OK,
+    )
+    router.add_api_route(
+        "/restorations/from-catalog",
+        create_restoration_from_catalog,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
     )

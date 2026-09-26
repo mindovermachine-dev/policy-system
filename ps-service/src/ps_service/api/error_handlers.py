@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from ps_service.api.errors import (
     ApiError,
     CatalogIdentifierNotFoundError,
+    CuratedSourceUnavailableError,
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
@@ -92,6 +93,7 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     PendingReviewNotFoundError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
+    CuratedSourceUnavailableError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -210,6 +212,11 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "export_config_incomplete",
         status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
+    (
+        CuratedSourceUnavailableError,
+        "curated_source_unavailable",
+        status.HTTP_502_BAD_GATEWAY,
+    ),
 )
 
 
@@ -320,9 +327,10 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``IngestionConfigIncompleteError`` 503,
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
     ``PendingReviewNotFoundError`` 404, ``ExportInstrumentNotFoundError`` 404,
-    ``ExportConfigIncompleteError`` 503, ``PipelineStageError`` 502,
-    ``RestoreStageFailedError`` 502, ``ExportStageFailedError`` 502,
-    ``RequestValidationError`` 422, everything else 500.
+    ``ExportConfigIncompleteError`` 503, ``CuratedSourceUnavailableError`` 502,
+    ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
+    ``ExportStageFailedError`` 502, ``RequestValidationError`` 422,
+    everything else 500.
 
     Args:
         app: The FastAPI application to register handlers on.
