@@ -5,14 +5,6 @@
 # If auth is missing we warn and exit 0 so the container still comes up usable.
 set -uo pipefail
 
-# uuidgen (package uuid-runtime) isn't in the base image. scripts/deploy-ps.sh's
-# new_scope_uuid() prefers it over its `python3 -c 'import uuid...'` fallback, and
-# the deploy_ps tests sandbox PATH to just /usr/bin and /bin (see
-# ps-service/tests/deploy_ps/conftest.py), where the system python3 lacks the
-# stdlib uuid module -- so without uuidgen here, every deploy_ps test that
-# generates a new OAuth2 scope id fails.
-sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends uuid-runtime
-
 # Optional per-developer setup, kept outside the repo on the host home mount
 # (/localhome). No-op for anyone who doesn't have the file.
 if [ -x /localhome/.devcontainer-local/post-create.sh ]; then

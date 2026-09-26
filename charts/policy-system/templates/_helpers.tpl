@@ -74,3 +74,39 @@ falkordb-pvc.yaml never duplicate the literal name string.
 {{- define "policy-system.falkordbStorageClassName" -}}
 {{- printf "%s-falkordb-durable" (include "policy-system.fullname" .) -}}
 {{- end }}
+
+{{/*
+Name of the durable (Premium SSD, Retain) StorageClass for Authentik's
+hand-rolled Postgres PVC (AC-BI-008, issue #129). Mirrors
+policy-system.falkordbStorageClassName exactly, so
+authentik-postgres-storageclass.yaml and authentik-postgres-pvc.yaml never
+duplicate the literal name string.
+*/}}
+{{- define "policy-system.authentikPostgresStorageClassName" -}}
+{{- printf "%s-authentik-postgres-durable" (include "policy-system.fullname" .) -}}
+{{- end }}
+
+{{/*
+Name of the Secret consumed by the upstream `authentik` dependency's own
+`authentik.existingSecret.secretName` value (AC-BI-010, issue #129 S3). This
+chart never generates this Secret's contents itself -- scripts/deploy-ps.sh (a
+later slice) provisions it from Key-Vault-sourced values, matching the
+`llm.existingSecret`/authentik-postgres-credentials consume-only convention
+already used elsewhere in this chart.
+
+IMPORTANT: this helper's output cannot be embedded as live `{{ }}` template
+syntax inside values.yaml/values-prod.yaml -- Helm never templates values
+files, and the upstream chart's own `authentik.secret.name` helper
+(charts/authentik/templates/_helpers.tpl) substitutes
+`authentik.existingSecret.secretName` verbatim with no `tpl` re-evaluation
+(embedding template syntax there breaks `helm template` outright with a YAML
+parse error, verified empirically -- see IMPL_SLICE_3.md). This helper exists
+as the single documented definition of the pattern; values-prod.yaml's own
+comment cites it and hardcodes its *resolved* literal output for this repo's
+one fixed Helm release name ("policy-system", scripts/deploy-ps.sh's
+HELM_RELEASE_NAME), so any other consumer of this exact Secret name (e.g. a
+later slice's deploy-ps.sh) computes the identical string.
+*/}}
+{{- define "policy-system.authentikCredentialsSecretName" -}}
+{{- printf "%s-authentik-credentials" (include "policy-system.fullname" .) -}}
+{{- end }}

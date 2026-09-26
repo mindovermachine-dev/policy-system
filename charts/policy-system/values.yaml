@@ -91,3 +91,63 @@ llm:
     apiVersion: "preview"
   ollama:
     apiBase: "http://host.containers.internal:11434"
+
+authentik:
+  # Off by default (local-test/kind). See values-prod.yaml — bundled as the
+  # production auth broker (invite-only local-account signup), gated on this
+  # same condition at the Chart.yaml dependency level (see #129).
+  enabled: false
+  postgres:
+    # Authentik's own hand-rolled Postgres (AC-BI-008, #129 S2) — mirrors
+    # FalkorDB's durable-StorageClass/Retain/NetworkPolicy pattern rather
+    # than depending on the upstream `authentik` chart's own nested Bitnami
+    # Postgres dependency, so this chart keeps full control of the
+    # StorageClass name and the NetworkPolicy's pod-selector labels (see
+    # PLAN.md §0.3 for the rationale).
+    image:
+      repository: postgres
+      tag: "16-alpine"
+    database: authentik
+    user: authentik
+    persistence:
+      size: 10Gi
+      storageClassName: ""
+      durableStorageClass:
+        # Off by default (local-test/kind), mirroring
+        # falkordb.persistence.durableStorageClass above (values.yaml:14-17)
+        # exactly, per PLAN.md S2's own instruction to mirror the FalkorDB
+        # trio "exactly" -- this key was missing from S2's original render
+        # (authentik-postgres-storageclass.yaml/-pvc.yaml unconditionally
+        # required the Azure-only disk.csi.azure.com provisioner whenever
+        # authentik.enabled=true, with no local-cluster fallback, unlike
+        # FalkorDB's own dual-path). See values-prod.yaml — Premium SSD,
+        # Retain-reclaim StorageClass for Authentik's Postgres volume
+        # (AC-BI-008).
+        enabled: false
+  postgresql:
+    # Off by default (local-test/kind, matches authentik.enabled: false
+    # above). See values-prod.yaml -- disables the upstream `authentik`
+    # dependency's own nested Bitnami Postgres subchart so it never runs
+    # alongside authentik.postgres.* above (PLAN.md §0.3, #129 S3).
+    enabled: false
+  authentik:
+    # The upstream `authentik` dependency has no alias, so this chart's own
+    # top-level `authentik:` key IS the entire subchart values context --
+    # the subchart's own app-config lives one level further down, under its
+    # own `authentik:` key, hence `authentik.authentik.*` here and in
+    # values-prod.yaml.
+    existingSecret:
+      # Never set a real value here -- values-prod.yaml points this at the
+      # deterministic name computed by policy-system.authentikCredentialsSecretName
+      # (_helpers.tpl). Empty here is inert anyway (authentik.enabled: false
+      # above drops the whole dependency from the render).
+      secretName: ""
+    postgresql:
+      # Non-secret connection values only -- never a password/secret_key
+      # here (see values-prod.yaml's own comment on why, and secret.yaml's
+      # "never a real value here" convention). See values-prod.yaml for the
+      # real (still non-secret) values pointed at S2's hand-rolled Postgres.
+      host: ""
+      port: 5432
+      name: ""
+      user: ""

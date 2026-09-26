@@ -1,0 +1,41 @@
+{{- if .Values.authentik.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "policy-system.fullname" . }}-authentik-postgres
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik-postgres
+spec:
+  # Restricts inbound connections to Authentik's hand-rolled Postgres to
+  # Authentik's own server+worker pods only (AC-BI-008), on the Postgres
+  # protocol port only. Labels mirror the real upstream `authentik` chart's
+  # own server/worker Deployment labels, confirmed empirically in S1
+  # (IMPL_SLICE_1.md) — not guessed. No values gate beyond authentik.enabled:
+  # rendering it under `kind`/local-test is harmless, since `kind`'s default
+  # CNI doesn't enforce NetworkPolicy without a supporting add-on (mirrors
+  # falkordb-networkpolicy.yaml's own convention).
+  podSelector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: authentik-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/part-of: authentik
+              app.kubernetes.io/component: server
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: authentik
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/part-of: authentik
+              app.kubernetes.io/component: worker
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

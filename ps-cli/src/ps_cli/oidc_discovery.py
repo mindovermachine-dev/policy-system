@@ -288,6 +288,23 @@ def _parse_openid_discovery_document(payload: object) -> OidcDiscoveryDocument:
     )
 
 
+def _normalize_issuer_for_discovery_url(issuer: str) -> str:
+    """Strip exactly one trailing slash from `issuer`, if present.
+
+    Some IdPs' fixed per-application issuer shape ends in `/` (Authentik's own
+    `.../application/o/<slug>/`, for one). `fetch_openid_configuration` builds its
+    request URL by string concatenation, so an un-normalized issuer produces a
+    double slash before `.well-known` (`.../<slug>//.well-known/openid-configuration`),
+    which the discovery endpoint 404s on. Only one trailing slash is stripped --
+    not `.rstrip("/")` -- since an issuer is a URL, not a path to be collapsed;
+    a hypothetical `.../slug//` is left as the caller supplied it beyond the first
+    strip, same as this module treats every other issuer string as opaque.
+    """
+    if issuer.endswith("/"):
+        return issuer[:-1]
+    return issuer
+
+
 def fetch_openid_configuration(
     issuer: str, *, transport: httpx.BaseTransport | None = None
 ) -> OidcDiscoveryDocument:
@@ -296,7 +313,7 @@ def fetch_openid_configuration(
     Raises `PsCliError` on connection failure/timeout, a non-2xx response, or a
     malformed body.
     """
-    url = f"{issuer}{_OPENID_CONFIGURATION_PATH}"
+    url = f"{_normalize_issuer_for_discovery_url(issuer)}{_OPENID_CONFIGURATION_PATH}"
     payload = _get_json(url, transport=transport)
     return _parse_openid_discovery_document(payload)
 

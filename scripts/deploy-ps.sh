@@ -4,6 +4,7 @@
 # Usage:
 #   scripts/deploy-ps.sh [--yes]
 #   scripts/deploy-ps.sh --rotate-key
+#   scripts/deploy-ps.sh --rotate-authentik-secrets
 #
 #   --yes         Skip the "Proceed with these values? [Y/n]" prompt (the table still prints).
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
@@ -13,6 +14,17 @@
 #                 matter for rotating an already-provisioned account's key). Fails clearly if run
 #                 before a first successful deploy (require_account_exists/require_keyvault_exists
 #                 below).
+#   --rotate-authentik-secrets
+#                 Regenerate Authentik's own Django `secret_key` and Postgres password
+#                 (AC-BI-009), write them to Key Vault and re-sync the cluster's
+#                 `policy-system-authentik-credentials` Secret, issue an in-database `ALTER USER`
+#                 against the live Postgres pod (a plain postgres image ignores
+#                 `POSTGRES_PASSWORD` after first init -- see rotate_authentik_secrets_main), and
+#                 roll-restart the Authentik server/worker Deployments so the new secret_key
+#                 (session-signing key) takes effect immediately. Branches immediately after flag
+#                 parsing, same as --rotate-key; fails clearly if run before a first successful
+#                 deploy (require_keyvault_exists/require_authentik_secrets_exist/
+#                 require_aks_cluster_exists below).
 #
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success -- including
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
@@ -43,10 +55,11 @@ readonly POSITIVE_INTEGER_PATTERN='^[1-9][0-9]*$'
 # Matches scripts/deploy-llm.sh's own AZURE_API_VERSION_LITERAL (issue #105) -- not evaluator-
 # tunable there either; the API version is a platform constant, not a per-subscription choice.
 readonly AZURE_API_VERSION_LITERAL="preview"
-readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key]"
+readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key] [--rotate-authentik-secrets]"
 
 skip_confirmation=false
 rotate_key=false
+rotate_authentik_secrets=false
 # account_endpoint / made_changes are process-wide state written by ensure_account/ensure_*
 # below (S9). Set via plain assignment inside functions that are always called as a plain
 # statement, never wrapped in a `$(...)` command substitution -- that would fork a subshell
@@ -56,29 +69,22 @@ rotate_key=false
 # ensure_* function's own idempotency contract matches deploy-llm.sh's/the spike's proven shape.
 account_endpoint=""
 made_changes=false
-# api_app_id / api_audience / api_scope_id / cli_app_id are process-wide state written by
-# ensure_api_app_registration/ensure_cli_app_registration below (S10/S11) -- same discipline as
-# account_endpoint above (plain assignment inside a plain-statement function call, never through
-# a `$(...)` subshell). ensure_cli_app_registration reads api_app_id/api_scope_id, so
-# ensure_api_app_registration must run first (main() below calls them in that order).
-api_app_id=""
-api_audience=""
-api_scope_id=""
-cli_app_id=""
 # public_hostname is set by S16's own main() steps below (fetch_public_ip_fqdn) -- S18 needs it
 # for the PS Service Ingress and the closing summary line. Same plain-assignment state-sharing
 # discipline as every other process-wide variable above.
 public_hostname=""
 
-# parse_args <args...>: sets skip_confirmation/rotate_key from CLI flags; fails fast otherwise.
-# --rotate-key is checked in main() BEFORE any of S5-S18's provisioning body runs, mirroring
-# scripts/deploy-llm.sh's own proven shape (its own parse_args/main()) -- see rotate_key_main
+# parse_args <args...>: sets skip_confirmation/rotate_key/rotate_authentik_secrets from CLI
+# flags; fails fast otherwise. --rotate-key/--rotate-authentik-secrets are both checked in
+# main() BEFORE any of S5-S18's provisioning body runs, mirroring scripts/deploy-llm.sh's own
+# proven shape (its own parse_args/main()) -- see rotate_key_main/rotate_authentik_secrets_main
 # below.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes) skip_confirmation=true ;;
       --rotate-key) rotate_key=true ;;
+      --rotate-authentik-secrets) rotate_authentik_secrets=true ;;
       *)
         print_error 'unknown flag: %s\n%s\n' "$1" "$USAGE"
         exit "$EXIT_USAGE"
@@ -344,12 +350,35 @@ readonly REQUIRED_PROVIDERS=(
   Microsoft.Compute Microsoft.ManagedIdentity Microsoft.OperationsManagement
   Microsoft.OperationalInsights Microsoft.Insights
 )
-# Entra app registration names/URIs (S10/S11) -- match
-# docs/artifacts/idp-configuration-contract.md's worked example (Steps 2-3) exactly.
-readonly API_APP_NAME="Policy System API"
-readonly CLI_APP_NAME="Policy System CLI"
-readonly CLI_REDIRECT_URI="https://login.microsoftonline.com/common/oauth2/nativeclient"
-readonly ACCESS_AS_USER_SCOPE_VALUE="access_as_user"
+# Bundled Authentik, as broker (issue #129) -- one fixed OAuth2 Provider + Application, both
+# named "ps-cli" (PLAN.md §0.5: no Entra-style API-app-vs-CLI-app split; S4's blueprint,
+# charts/policy-system/files/authentik-blueprint.yaml, is the single source of truth for this
+# literal on the chart side). AUTHENTIK_SCOPES matches S4's blueprint's own actual
+# `property_mappings` (openid/profile/email/offline_access) -- confirmed via IMPL_SLICE_0B.md's
+# live-checkpoint finding that a Provider with no `offline_access` scope mapping never issues a
+# `refresh_token`, breaking every ps-cli command after the very first `auth login`.
+readonly AUTHENTIK_APP_SLUG="ps-cli"
+readonly AUTHENTIK_SCOPES="openid profile email offline_access"
+# Key Vault secret names for Authentik's own generate-once secrets (S7, AC-BI-010) -- dash-named
+# to match Key Vault's own character restrictions, same convention as AZURE-API-KEY/etc above.
+readonly AUTHENTIK_SECRET_KEY_VAULT_NAME="AUTHENTIK-SECRET-KEY"
+readonly AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME="AUTHENTIK-POSTGRES-PASSWORD"
+# The Kubernetes Secret name ensure_authentik_secrets below creates/reads -- must exactly match
+# charts/policy-system/templates/_helpers.tpl's own policy-system.authentikCredentialsSecretName
+# helper's resolved output for this repo's one fixed Helm release name ("policy-system",
+# HELM_RELEASE_NAME below), and values-prod.yaml's own hardcoded
+# authentik.authentik.existingSecret.secretName literal (IMPL_SLICE_3.md) -- confirmed identical
+# by reading both.
+readonly AUTHENTIK_SECRET_NAME="policy-system-authentik-credentials"
+# Non-secret Postgres connection values (S2's own hand-rolled Postgres Service/database/user) --
+# must match charts/policy-system/values-prod.yaml's own documented
+# authentik.authentik.postgresql.host/port/name/user literals exactly (IMPL_SLICE_3.md: these
+# values are the single documented source of truth this script copies from, kept in sync by hand,
+# not by any Helm wiring).
+readonly AUTHENTIK_POSTGRES_HOST="policy-system-authentik-postgres"
+readonly AUTHENTIK_POSTGRES_PORT="5432"
+readonly AUTHENTIK_POSTGRES_USER="authentik"
+readonly AUTHENTIK_POSTGRES_DB="authentik"
 
 # Fixed AKS node shape (AC-BI-011, PLAN.md §0.6) -- not evaluator-tunable, matching the spike's
 # own resolved "testing one deployment shape" decision (scripts/ps-defaults.conf has no
@@ -384,6 +413,23 @@ readonly HELM_RELEASE_NAME="policy-system"
 # template before writing this): fullname resolves to the bare release name whenever the chart
 # name is already contained in the release name, which is the case here (both "policy-system").
 readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
+# Authentik server Service name (S5, #129/CHANGES.md row F1) -- the upstream `authentik`
+# dependency chart's own rendered server Service name, confirmed empirically by running
+# `helm template charts/policy-system policy-system -f values-prod.yaml ...` (this repo's fixed
+# Helm release name, HELM_RELEASE_NAME) and reading the rendered `kind: Service` document's own
+# `metadata.name`: the upstream chart's `authentik.fullname` template renders
+# "<release-name>-authentik" (release name "policy-system" does not already contain "authentik",
+# so it is NOT collapsed to the bare release name the way PS_SERVICE_NAME's own fullname is), and
+# its `authentik.server.fullname` template appends "-server" to that -- see IMPL_SLICE_5.md for
+# the full derivation and the exact `helm template` output this was read from.
+readonly AUTHENTIK_SERVICE_NAME="${HELM_RELEASE_NAME}-authentik-server"
+# Authentik worker Deployment name (S9, #129, AC-BI-009) -- the upstream `authentik` dependency
+# chart's own `authentik.worker.fullname` template appends "-worker" to the same
+# "<release-name>-authentik" base AUTHENTIK_SERVICE_NAME's own comment derives, confirmed
+# empirically the same way (IMPL_SLICE_5.md's own `helm template` derivation already reads this
+# Deployment name off the rendered manifest, just never assigned it to a constant since S5 had no
+# caller for it yet -- rotate_authentik_secrets_main below is the first).
+readonly AUTHENTIK_WORKER_NAME="${HELM_RELEASE_NAME}-authentik-worker"
 # Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- reads
 # charts/policy-system/values-prod.yaml from the repo's actual chart directory, never a local
 # copy that could silently drift from it. This script (scripts/deploy-ps.sh) lives ONE directory
@@ -781,153 +827,6 @@ write_secret_if_changed() {
   made_changes=true
 }
 
-# new_scope_uuid: prints a fresh lowercase v4-format UUID for a new oauth2PermissionScope id --
-# Microsoft Graph requires each oauth2PermissionScope's `id` to be a valid UUID. Built from
-# bash's $RANDOM rather than uuidgen/python3 so the script has no extra tool dependency; the
-# id only needs to be unique within this app's scope list, not cryptographically random.
-new_scope_uuid() {
-  printf '%04x%04x-%04x-4%03x-%x%03x-%04x%04x%04x\n' \
-    "$RANDOM" "$RANDOM" "$RANDOM" "$((RANDOM % 4096))" \
-    "$(((RANDOM % 4) + 8))" "$((RANDOM % 4096))" \
-    "$RANDOM" "$RANDOM" "$RANDOM"
-}
-
-# fetch_app_id_by_name <display_name>: prints the app's appId, or empty if it doesn't exist yet.
-fetch_app_id_by_name() {
-  local display_name="$1"
-  az ad app list --display-name "$display_name" --query "[0].appId" -o tsv
-}
-
-# print_app_registration_manual_steps: the exact commands a privileged colleague (Application
-# Administrator -- Contributor alone cannot create app registrations, docs/artifacts/
-# idp-configuration-contract.md's own "Common pitfalls") must run when the signed-in identity
-# can't create them itself. The operator re-runs this script afterwards, which picks up the
-# now-existing apps via fetch_app_id_by_name (same create-if-absent idiom as every other
-# ensure_* function here).
-print_app_registration_manual_steps() {
-  printf 'Creating Entra app registrations failed -- the signed-in identity likely lacks the Application Administrator role.\n' >&2
-  printf 'Ask a colleague with Application Administrator to run:\n\n' >&2
-  printf '  api_app_id=$(az ad app create --display-name "%s" --query appId -o tsv)\n' "$API_APP_NAME" >&2
-  printf '  az ad sp create --id "$api_app_id"\n' >&2
-  printf '  az ad app update --id "$api_app_id" --identifier-uris "api://$api_app_id"\n' >&2
-  printf '  # then add an "%s" oauth2PermissionScope and set api.requestedAccessTokenVersion=2 --\n' \
-    "$ACCESS_AS_USER_SCOPE_VALUE" >&2
-  printf '  # see docs/artifacts/idp-configuration-contract.md Step 2.7-2.8 and its Common pitfalls.\n\n' >&2
-  printf '  cli_app_id=$(az ad app create --display-name "%s" --is-fallback-public-client true --query appId -o tsv)\n' \
-    "$CLI_APP_NAME" >&2
-  printf '  az ad sp create --id "$cli_app_id"\n' >&2
-  printf '  az ad app update --id "$cli_app_id" --public-client-redirect-uris "%s"\n' "$CLI_REDIRECT_URI" >&2
-  printf '  az ad app permission add --id "$cli_app_id" --api "$api_app_id" --api-permissions <access_as_user-scope-id>=Scope\n' >&2
-  printf '  az ad app permission admin-consent --id "$cli_app_id"\n\n' >&2
-  printf 'Then re-run %s -- it will pick up the now-existing app registrations.\n' "$(basename "$0")" >&2
-  exit "$EXIT_FAILURE"
-}
-
-# ensure_service_principal <app_id>: create-if-absent the paired service principal -- `az ad app
-# create` provisions only the application object, not its tenant service principal, so skipping
-# this reproduces AADSTS650052 ("lacks a service principal") on first login -- docs/artifacts/
-# idp-configuration-contract.md's own "Common pitfalls" section documents this exact gap.
-ensure_service_principal() {
-  local app_id="$1"
-  if az ad sp show --id "$app_id" >/dev/null 2>&1; then
-    return 0
-  fi
-  az ad sp create --id "$app_id" >/dev/null
-  made_changes=true
-}
-
-# ensure_api_app_registration: create-if-absent the API app registration (the resource server PS
-# Service represents), its service principal, Application ID URI, and the access_as_user
-# delegated scope with api.requestedAccessTokenVersion=2 set explicitly -- docs/artifacts/
-# idp-configuration-contract.md's "Common pitfalls" documents that a Graph-API-created
-# registration (what `az ad app create` calls) defaults this unset (v1 tokens), unlike the
-# Portal's "Expose an API" wizard which sets it automatically. Sets process-wide
-# api_app_id/api_audience/api_scope_id (top-of-file state note).
-ensure_api_app_registration() {
-  api_app_id="$(fetch_app_id_by_name "$API_APP_NAME")"
-  if [[ -z "$api_app_id" ]]; then
-    api_app_id="$(az ad app create --display-name "$API_APP_NAME" --query appId -o tsv 2>/dev/null)" \
-      || print_app_registration_manual_steps
-    ensure_service_principal "$api_app_id"
-    az ad app update --id "$api_app_id" --identifier-uris "api://$api_app_id" >/dev/null
-    local scope_id
-    scope_id="$(new_scope_uuid)"
-    az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications(appId='$api_app_id')" \
-      --headers "Content-Type=application/json" \
-      --body "$(jq -nc --arg id "$scope_id" --arg value "$ACCESS_AS_USER_SCOPE_VALUE" '{
-        api: {
-          requestedAccessTokenVersion: 2,
-          oauth2PermissionScopes: [{
-            id: $id, value: $value, type: "User", isEnabled: true,
-            adminConsentDisplayName: "Access Policy System as the signed-in user",
-            adminConsentDescription: "Allows PS-Cli to call Policy System on behalf of the signed-in user",
-            userConsentDisplayName: "Access Policy System as the signed-in user",
-            userConsentDescription: "Allows PS-Cli to call Policy System on behalf of the signed-in user"
-          }]
-        }
-      }')" >/dev/null
-    made_changes=true
-  else
-    ensure_service_principal "$api_app_id"
-  fi
-  api_audience="api://$api_app_id"
-  api_scope_id="$(az ad app show --id "$api_app_id" \
-    --query "api.oauth2PermissionScopes[?value=='$ACCESS_AS_USER_SCOPE_VALUE'].id | [0]" -o tsv)"
-}
-
-# print_admin_consent_manual_step: the one command a privileged colleague must run when the
-# signed-in identity can create/configure app registrations but can't consent for them -- admin
-# consent needs Global Administrator or Privileged Role Administrator, a step up from Application
-# Administrator (already enough to reach this point). cli_app_id is already set by the time this
-# runs, so only the consent step itself needs re-running -- every step before it
-# (ensure_api_app_registration, ensure_cli_app_registration's own create+permission-add) already
-# succeeded and is idempotent, so the rerun this message asks for resumes cleanly rather than
-# redoing any of that work. Exits EXIT_FAILURE, the same controlled exit code every other
-# preflight/business failure in this script uses -- not an uncaught crash.
-print_admin_consent_manual_step() {
-  printf 'Granting admin consent failed -- the signed-in identity lacks the Global Administrator / Privileged Role Administrator role Entra requires to grant tenant-wide consent (a step up from Application Administrator, which was enough to create the app registrations above).\n' >&2
-  printf 'Ask a colleague with that role to run:\n\n' >&2
-  printf '  az ad app permission admin-consent --id %s\n\n' "$cli_app_id" >&2
-  printf 'Then re-run %s -- it will detect the grant and skip straight past this step.\n' "$(basename "$0")" >&2
-  exit "$EXIT_FAILURE"
-}
-
-# admin_consent_granted <cli_app_id>: true if tenant-wide ("AllPrincipals") consent already
-# exists for <cli_app_id>. Reading existing grants (`permission list-grants`) is an unprivileged
-# read, unlike creating one (`permission admin-consent`) -- checking this first is what lets a
-# non-admin operator's rerun recognize consent a privileged colleague already granted out of
-# band, instead of re-attempting (and re-failing) the same privilege-gated write every time
-# (AC-BI-005).
-admin_consent_granted() {
-  local cli_app_id="$1"
-  az ad app permission list-grants --id "$cli_app_id" \
-    --query "[?consentType=='AllPrincipals']" -o tsv 2>/dev/null | grep -q .
-}
-
-# ensure_cli_app_registration: create-if-absent the public-client app registration PS-Cli
-# authenticates as (device-authorization flow, issue #57) -- native-client redirect URI, public
-# client flows allowed, delegated permission on the API app's access_as_user scope, and one-time
-# admin consent -- checked via admin_consent_granted *before* attempting the privileged
-# admin-consent write (AC-BI-005's headline claim). Requires api_app_id/api_scope_id to already
-# be set (ensure_api_app_registration must run first). Sets process-wide cli_app_id.
-ensure_cli_app_registration() {
-  cli_app_id="$(fetch_app_id_by_name "$CLI_APP_NAME")"
-  if [[ -z "$cli_app_id" ]]; then
-    cli_app_id="$(az ad app create --display-name "$CLI_APP_NAME" --is-fallback-public-client true \
-      --query appId -o tsv 2>/dev/null)" || print_app_registration_manual_steps
-    ensure_service_principal "$cli_app_id"
-    az ad app update --id "$cli_app_id" --public-client-redirect-uris "$CLI_REDIRECT_URI" >/dev/null
-    made_changes=true
-  else
-    ensure_service_principal "$cli_app_id"
-  fi
-  az ad app permission add --id "$cli_app_id" --api "$api_app_id" \
-    --api-permissions "${api_scope_id}=Scope" >/dev/null
-  if ! admin_consent_granted "$cli_app_id"; then
-    az ad app permission admin-consent --id "$cli_app_id" >/dev/null 2>&1 || print_admin_consent_manual_step
-  fi
-}
-
 # fetch_vm_sku_json <region>: prints az's `vm list-skus` response for AKS_NODE_VM_SIZE at
 # <region> (server-side filtered by --size, so this is a handful of tier/zone-variant entries for
 # one VM size, not the whole SKU catalog). New for S12 -- see PLAN.md §0.6, this AC's mechanism
@@ -1152,14 +1051,81 @@ ensure_llm_secret() {
   return 0
 }
 
-# fetch_tenant_id: prints the signed-in az session's Entra tenant id, used to build the OIDC
-# issuer URL (docs/artifacts/idp-configuration-contract.md). Deliberately fetched here, just
-# before its only consumer (ensure_release below) rather than up front alongside
-# fetch_subscription_id -- fetching it earlier would add an extra `account show` call ahead of
-# the confirmation prompt, breaking test_decline_path.py's existing exact-log assertion
-# (test_answering_n_makes_no_az_calls_beyond_account_show).
-fetch_tenant_id() {
-  az account show --query tenantId -o tsv
+# generate_random_secret <length>: prints a fresh random alphanumeric string of exactly <length>
+# characters, read from /dev/urandom -- no extra tool dependency beyond what bash scripts already
+# assume (tr/head, both POSIX coreutils), matching new_scope_uuid's own now-removed "no extra
+# tool" precedent (issue #129 S6 deleted that Entra-only helper) rather than introducing a new
+# dependency on openssl/uuidgen/python3 this script has never required. Never printed/logged by
+# any caller beyond feeding the next comparison/`az`/`kubectl` call (AC-BI-013's never-log
+# discipline, same convention read_secret_value's own docstring establishes).
+generate_random_secret() {
+  local length="$1"
+  # `|| true` swallows the SIGPIPE-driven 141 `tr` gets once `head -c` has read exactly $length
+  # bytes and closes its end of the pipe -- an expected, harmless race under `set -o pipefail`
+  # (tr's own exit status, not head's, becomes the pipeline's exit status), not a real failure;
+  # without this, `set -e` would abort the whole script on every single call.
+  (LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length") || true
+}
+
+# ensure_authentik_secrets <vault_name>: generate-once (never regenerated once present), write-
+# if-changed into Key Vault, then sync ALL required `AUTHENTIK_*` keys into the cluster as a
+# single Kubernetes Secret (issue #129 S7, AC-BI-009's non-rotation half, AC-BI-010) -- mirrors
+# ensure_llm_secret's own read-from-Key-Vault -> `kubectl create secret --dry-run=client -o yaml |
+# apply` idiom, reusing the SAME Key Vault <vault_name> the LLM secrets already use (no new
+# vault). Unlike the LLM key (re-fetched from a live Azure resource every run), Authentik's own
+# Django secret_key and Postgres password have no external source of truth -- read_secret_value
+# returning an empty string is this script's own "never generated before" signal (same
+# empty-means-absent convention write_secret_if_changed already relies on), so a value already in
+# Key Vault is always reused verbatim, never silently replaced.
+#
+# Per IMPL_SLICE_3.md's own load-bearing finding: the upstream `authentik` chart's
+# `existingSecret` mechanism is all-or-nothing once set -- the server/worker Deployments source
+# 100% of their config via `envFrom: secretRef` against this one Secret, ignoring every
+# `authentik.authentik.*` non-secret value entirely. This Secret must therefore carry ALL of
+# AUTHENTIK_POSTGRESQL__{HOST,PORT,USER,PASSWORD,NAME} plus AUTHENTIK_SECRET_KEY, not just the
+# two generated values -- the non-secret connection literals
+# (AUTHENTIK_POSTGRES_HOST/PORT/USER/DB above) match values-prod.yaml's own documented
+# authentik.authentik.postgresql.* values exactly (kept in sync by hand, no automatic Helm
+# wiring). S2's own hand-rolled Postgres container (charts/policy-system/templates/
+# authentik-postgres-deployment.yaml) was updated to read its OWN password from this exact same
+# Secret/key -- one source of truth, no second, duplicate password Secret.
+# sync_authentik_secret_to_cluster <secret_key> <pg_password>: writes/re-applies the
+# `policy-system-authentik-credentials` K8s Secret with the given values -- the single
+# `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` idiom both
+# ensure_authentik_secrets (generate-once) and rotate_authentik_secrets_main (S9, force-
+# regenerate) apply against, so the Secret's exact key set (AC-BI-010) is defined in exactly one
+# place. Sets made_changes the same way every other apply_output_changed caller does.
+sync_authentik_secret_to_cluster() {
+  local secret_key="$1" pg_password="$2" apply_output
+  apply_output="$(kubectl create secret generic "$AUTHENTIK_SECRET_NAME" \
+    --from-literal="AUTHENTIK_SECRET_KEY=$secret_key" \
+    --from-literal="AUTHENTIK_POSTGRESQL__HOST=$AUTHENTIK_POSTGRES_HOST" \
+    --from-literal="AUTHENTIK_POSTGRESQL__PORT=$AUTHENTIK_POSTGRES_PORT" \
+    --from-literal="AUTHENTIK_POSTGRESQL__USER=$AUTHENTIK_POSTGRES_USER" \
+    --from-literal="AUTHENTIK_POSTGRESQL__PASSWORD=$pg_password" \
+    --from-literal="AUTHENTIK_POSTGRESQL__NAME=$AUTHENTIK_POSTGRES_DB" \
+    --dry-run=client -o yaml | kubectl apply -f -)"
+  apply_output_changed "$apply_output" && made_changes=true
+  return 0
+}
+
+ensure_authentik_secrets() {
+  local vault_name="$1"
+  local secret_key pg_password
+
+  secret_key="$(read_secret_value "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME")"
+  if [[ -z "$secret_key" ]]; then
+    secret_key="$(generate_random_secret 60)"
+  fi
+  pg_password="$(read_secret_value "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME")"
+  if [[ -z "$pg_password" ]]; then
+    pg_password="$(generate_random_secret 32)"
+  fi
+
+  write_secret_if_changed "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME" "$secret_key"
+  write_secret_if_changed "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME" "$pg_password"
+
+  sync_authentik_secret_to_cluster "$secret_key" "$pg_password"
 }
 
 # release_values_json <issuer> <audience> <cli_client_id> <scopes>: prints the JSON shape of the
@@ -1417,6 +1383,52 @@ EOF
   return 0
 }
 
+# ensure_authentik_ingress <hostname>: create-if-absent a SECOND Ingress object exposing
+# Authentik's own server Service at the SAME <hostname> ensure_ps_service_ingress already resolved
+# for PS Service -- S5, #129, per CHANGES.md row F1 (this supersedes PLAN.md §0.6/§5's original
+# dual-hostname/dual-DNS-label design, rejected there as infeasible: one Azure Public IP has
+# exactly one `dnsSettings.domainNameLabel`, so a second `ensure_dns_label` call would steal PS
+# Service's own label rather than add a second hostname).
+#
+# Routes only the `/auth` path prefix to $AUTHENTIK_SERVICE_NAME (the upstream `authentik`
+# dependency chart's own rendered server Service, confirmed via `helm template` -- see this
+# script's own AUTHENTIK_SERVICE_NAME comment and IMPL_SLICE_5.md), leaving PS Service's existing
+# Ingress (ensure_ps_service_ingress) to keep handling every other path on the same host.
+#
+# Deliberately carries NO `tls:` block and NO `cert-manager.io/cluster-issuer` annotation:
+# ensure_ps_service_ingress's own Ingress for this exact same $hostname already provisions the one
+# Certificate/Secret (named "${PS_SERVICE_NAME}-tls"), and nginx-ingress applies that Secret to
+# every Ingress object for the same host, regardless of which object declared the `tls:` block. A
+# second cert-manager annotation here would create a second, competing Certificate request for the
+# same host -- CHANGES.md Appendix A's own explicit rationale.
+#
+# Idempotent via the same apply_output_changed detection ensure_ps_service_ingress uses.
+ensure_authentik_ingress() {
+  local hostname="$1" apply_output
+  apply_output="$(kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${AUTHENTIK_SERVICE_NAME}
+spec:
+  ingressClassName: ${INGRESS_CLASS}
+  rules:
+    - host: ${hostname}
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: ${AUTHENTIK_SERVICE_NAME}
+                port:
+                  name: http
+EOF
+)"
+  apply_output_changed "$apply_output" && made_changes=true
+  return 0
+}
+
 # print_provisioning_summary: evaluator-visible closing message (S18) -- names which secrets now
 # exist (never their values, AC-BI-013's summary-line half -- only the fixed secret NAMES S9
 # already wrote, never read back), whether anything actually changed anywhere in the whole chain,
@@ -1452,12 +1464,43 @@ require_account_exists() {
   fi
 }
 
-# require_keyvault_exists <vault_name>: fails clearly if the Key Vault has not been created yet.
+# require_keyvault_exists <vault_name> <flag_name>: fails clearly if the Key Vault has not been
+# created yet. <flag_name> (e.g. "--rotate-key", "--rotate-authentik-secrets") names the calling
+# rotation mode's own flag in the error message -- shared by both rotate_key_main and
+# rotate_authentik_secrets_main, neither of which has anything to rotate before a first
+# successful plain deploy.
 require_keyvault_exists() {
-  local vault_name="$1"
+  local vault_name="$1" flag_name="$2"
   if ! keyvault_exists "$vault_name"; then
-    print_error 'Key Vault %s not found. Run scripts/deploy-ps.sh first (without --rotate-key).\n' \
+    print_error 'Key Vault %s not found. Run scripts/deploy-ps.sh first (without %s).\n' \
+      "$vault_name" "$flag_name"
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+# require_authentik_secrets_exist <vault_name>: fails clearly if Authentik's own secret_key/
+# Postgres password have never been generated -- a Key Vault can already exist (e.g. from LLM
+# provisioning, S9) without ensure_authentik_secrets (S7) ever having run against it, so
+# require_keyvault_exists alone is not a sufficient guard for --rotate-authentik-secrets.
+# Mirrors require_account_exists/require_keyvault_exists's own guard shape.
+require_authentik_secrets_exist() {
+  local vault_name="$1"
+  if [[ -z "$(read_secret_value "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME")" ]] || \
+     [[ -z "$(read_secret_value "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME")" ]]; then
+    print_error 'Authentik secrets not found in %s. Run scripts/deploy-ps.sh first (without --rotate-authentik-secrets).\n' \
       "$vault_name"
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+# require_aks_cluster_exists <cluster_name>: fails clearly if the AKS cluster has not been
+# created yet -- --rotate-authentik-secrets needs a live cluster to `kubectl exec`/`rollout
+# restart` against. Mirrors require_account_exists/require_keyvault_exists's own guard shape.
+require_aks_cluster_exists() {
+  local cluster_name="$1"
+  if ! aks_cluster_exists "$cluster_name"; then
+    print_error 'AKS cluster %s not found. Run scripts/deploy-ps.sh first (without --rotate-authentik-secrets).\n' \
+      "$cluster_name"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -1501,7 +1544,7 @@ rotate_key_main() {
 
   log_step "Checking AIServices account and Key Vault exist"
   require_account_exists "$account_name"
-  require_keyvault_exists "$vault_name"
+  require_keyvault_exists "$vault_name" "--rotate-key"
 
   local stored_value keys_json key2_value active_slot inactive_slot new_value
   log_step "Determining active key slot"
@@ -1525,6 +1568,84 @@ rotate_key_main() {
     "$inactive_slot" "$active_slot"
 }
 
+# rotate_authentik_secrets_main: `--rotate-authentik-secrets` mode (issue #129 S9, AC-BI-009's
+# rotation half). main() branches into this immediately after flag parsing, before any of
+# S5-S18's provisioning body runs -- same shape as rotate_key_main above.
+#
+# Unlike rotate_key_main (which only overwrites a Key Vault value -- the next full deploy run is
+# what eventually syncs it into the cluster), this rotation re-syncs the cluster's own
+# `policy-system-authentik-credentials` Secret immediately, for two credentials with very
+# different "how do I actually take effect" answers:
+#
+#   Postgres password -- a plain postgres image (charts/policy-system/templates/
+#   authentik-postgres-deployment.yaml's own container) only ever reads `POSTGRES_PASSWORD` at
+#   first-`initdb` time, inside docker-entrypoint.sh's own "is $PGDATA already initialized?"
+#   branch. Once S2's PVC already holds an initialized data directory -- true for every rotation
+#   (by definition, there was already a first successful deploy) -- that branch is always
+#   skipped, so a changed `POSTGRES_PASSWORD` env var has ZERO effect on the live role's actual
+#   password, restart or not. Silently writing a new password into the Secret and restarting only
+#   the Deployment would desync the Secret from the real DB password and lock Authentik out of
+#   its own DB the moment ITS pods next restart and try to reconnect with the "new" value. The
+#   only correct fix is an in-database `ALTER USER`, issued here directly against the
+#   already-running Postgres pod over `kubectl exec` (a local, unix-socket connection --
+#   `trust`-authenticated by the official postgres image's own default pg_hba.conf, so no
+#   password is required to issue this specific command). The Postgres Deployment itself is
+#   never restarted -- there is nothing a restart would accomplish here.
+#
+#   Django secret_key -- rotating it invalidates every existing Authentik session (it's Django's
+#   session-signing key), and the Authentik server/worker pods only ever read their
+#   envFrom-sourced config once, at process start. Since this rotation DOES re-sync the cluster
+#   Secret right away (unlike rotate_key_main's LLM-key rotation, which never touches the
+#   cluster and so needs no restart of anything), the server/worker Deployments must be
+#   explicitly roll-restarted for the new secret_key to take effect now rather than at some
+#   unrelated future restart.
+#
+# Never prints a secret value -- new_secret_key/new_pg_password only ever feed the next
+# `az`/`kubectl` call or comparison, matching read_secret_value's own never-log discipline
+# (AC-BI-013).
+rotate_authentik_secrets_main() {
+  local subscription_id vault_name cluster_name
+  subscription_id="$(fetch_subscription_id)"
+  vault_name="$(llm_keyvault_name "$subscription_id")"
+  cluster_name="$(aks_cluster_name "$subscription_id")"
+
+  log_step "Checking Key Vault, Authentik secrets, and AKS cluster exist"
+  require_keyvault_exists "$vault_name" "--rotate-authentik-secrets"
+  require_authentik_secrets_exist "$vault_name"
+  require_aks_cluster_exists "$cluster_name"
+
+  log_step "Fetching AKS credentials for $cluster_name"
+  ensure_aks_credentials "$cluster_name"
+
+  local new_secret_key new_pg_password
+  log_step "Regenerating the Django secret_key"
+  new_secret_key="$(generate_random_secret 60)"
+
+  log_step "Regenerating the Postgres password"
+  new_pg_password="$(generate_random_secret 32)"
+  # See this function's own comment above: a restart alone cannot rotate a live postgres role's
+  # password -- only an in-database ALTER USER can. generate_random_secret is alnum-only
+  # (A-Za-z0-9), so it is always safe to embed directly in this single-quoted SQL literal without
+  # further escaping.
+  kubectl exec "deployment/${AUTHENTIK_POSTGRES_HOST}" -- \
+    psql -U "$AUTHENTIK_POSTGRES_USER" -d "$AUTHENTIK_POSTGRES_DB" \
+    -c "ALTER USER ${AUTHENTIK_POSTGRES_USER} WITH PASSWORD '${new_pg_password}';" >/dev/null
+
+  log_step "Writing rotated secrets to $vault_name"
+  write_secret_if_changed "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME" "$new_secret_key"
+  write_secret_if_changed "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME" "$new_pg_password"
+
+  log_step "Syncing rotated secrets into the cluster"
+  sync_authentik_secret_to_cluster "$new_secret_key" "$new_pg_password"
+
+  log_step "Restarting Authentik server/worker to pick up the rotated secrets"
+  kubectl rollout restart "deployment/${AUTHENTIK_SERVICE_NAME}" >/dev/null
+  kubectl rollout restart "deployment/${AUTHENTIK_WORKER_NAME}" >/dev/null
+
+  printf 'Rotated Authentik secret_key and Postgres password. Restarted %s and %s.\n' \
+    "$AUTHENTIK_SERVICE_NAME" "$AUTHENTIK_WORKER_NAME"
+}
+
 main() {
   parse_args "$@"
 
@@ -1532,6 +1653,12 @@ main() {
 
   if [[ "$rotate_key" == true ]]; then
     rotate_key_main
+    return
+  fi
+
+  if [[ "$rotate_authentik_secrets" == true ]]; then
+    check_required_tools kubectl
+    rotate_authentik_secrets_main
     return
   fi
 
@@ -1596,11 +1723,6 @@ main() {
   write_secret_if_changed "$vault_name" "AZURE-API-KEY" "$key1"
   write_secret_if_changed "$vault_name" "AZURE-API-VERSION" "$AZURE_API_VERSION_LITERAL"
 
-  log_step "Ensuring API app registration $API_APP_NAME"
-  ensure_api_app_registration
-  log_step "Ensuring CLI app registration $CLI_APP_NAME"
-  ensure_cli_app_registration
-
   log_step "Checking AKS node VM size and quota in $selected_region"
   check_aks_vm_size "$cluster_name" "$selected_region"
 
@@ -1613,17 +1735,15 @@ main() {
 
   log_step "Syncing LLM credentials into the cluster"
   ensure_llm_secret "$vault_name"
+  log_step "Syncing Authentik credentials into the cluster"
+  ensure_authentik_secrets "$vault_name"
 
-  log_step "Reconciling the Helm release"
-  local tenant_id issuer audience scopes
-  tenant_id="$(fetch_tenant_id)"
-  issuer="https://login.microsoftonline.com/${tenant_id}/v2.0"
-  # Bare $api_app_id, never $api_audience's "api://..." URI form -- see ensure_release's own
-  # comment (AC-BI-002's exact regression).
-  audience="$api_app_id"
-  scopes="${api_audience}/${ACCESS_AS_USER_SCOPE_VALUE}"
-  ensure_release "$issuer" "$audience" "$cli_app_id" "$scopes"
-
+  # issue #129 (CHANGES.md row F3): the ingress/DNS-label/hostname-resolution steps below moved
+  # here, ahead of "Reconciling the Helm release" -- Authentik's own issuer is now a path under PS
+  # Service's own hostname (row F1: "https://<hostname>/auth/application/o/ps-cli/"), so
+  # $public_hostname must already be resolved before ensure_release can compute it. This is the
+  # exact reordering PLAN.md §0.6 originally flagged (there, for a since-rejected dual-hostname
+  # design; the reordering itself still applies to this single, already-existing hostname).
   log_step "Enabling the application-routing ingress add-on on $cluster_name"
   ensure_approuting "$cluster_name"
 
@@ -1639,6 +1759,17 @@ main() {
   public_hostname="$(fetch_public_ip_fqdn "$public_ip_id")"
   log_step "Public hostname: $public_hostname"
 
+  log_step "Reconciling the Helm release"
+  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: zero Entra
+  # app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
+  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, unlike the
+  # old Entra shape's two distinct app IDs. issuer is path-based under PS Service's own
+  # already-resolved $public_hostname (CHANGES.md row F1) -- never a second, Authentik-only
+  # hostname, never `login.microsoftonline.com`.
+  local issuer
+  issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
+  ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES"
+
   log_step "Installing cert-manager"
   ensure_cert_manager
 
@@ -1647,6 +1778,12 @@ main() {
 
   log_step "Ensuring the PS Service Ingress"
   ensure_ps_service_ingress "$public_hostname"
+
+  # S5 (#129/CHANGES.md row F1): a second Ingress, same $public_hostname, routing only /auth to
+  # Authentik's own server Service -- called alongside (never instead of)
+  # ensure_ps_service_ingress.
+  log_step "Ensuring the Authentik Ingress"
+  ensure_authentik_ingress "$public_hostname"
 
   print_provisioning_summary
 

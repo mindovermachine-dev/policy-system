@@ -896,19 +896,40 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     ], "the pushed image must be the loaded, smoke-tested one and nothing else"
 
 
+def _invokes_docker_build(body: str) -> bool:
+    """Whether a `run:` body invokes `docker build` or `docker buildx build`.
+
+    Matched as an adjacent token pair -- `build` immediately preceded by `docker` or
+    `buildx` -- not a bare substring, so a command that merely takes the *word* "build" as
+    an argument (`helm dependency build`, `uv build`) does not false-positive. Those fetch
+    or package bytes that were never an image identity in the first place; only
+    `docker build`/`docker buildx build` conjures a *second* image the smoke test never ran
+    against, which is the one thing this test exists to catch.
+    """
+    tokens = _tokens(body)
+    return any(
+        tokens[index] == "build" and tokens[index - 1] in ("docker", "buildx")
+        for index in range(1, len(tokens))
+    )
+
+
 def test_publish_job_never_rebuilds_the_image() -> None:
     """AC-BI-007: no second image identity is created in the job that holds the push token.
 
     A `docker build` — or a `build-push-action` — inside `publish` would ship bytes no smoke
     test ever ran against, however green both build legs were. `docker buildx imagetools`
-    is not a build: it merges manifests that already exist in the registry.
+    is not a build: it merges manifests that already exist in the registry. Nor is
+    `helm dependency build`: it fetches Helm subchart archives from a chart repository
+    (`charts/policy-system/Chart.yaml`'s `dependencies:`), never touching the container
+    image at all -- it merely happens to share the English word "build" with the thing
+    this test guards against.
     """
     publish = _job(_PUBLISH_JOB)
 
     assert not _steps_using(publish, "docker/build-push-action"), (
         f"`{_PUBLISH_JOB}` builds an image instead of shipping the smoke-tested one"
     )
-    rebuilding = [body for body in _run_bodies(publish) if "build" in _tokens(body)]
+    rebuilding = [body for body in _run_bodies(publish) if _invokes_docker_build(body)]
     assert not rebuilding, f"a `run:` body in `{_PUBLISH_JOB}` rebuilds the image: {rebuilding}"
 
 

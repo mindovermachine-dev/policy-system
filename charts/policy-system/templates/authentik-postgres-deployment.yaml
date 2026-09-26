@@ -1,0 +1,62 @@
+{{- if .Values.authentik.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "policy-system.fullname" . }}-authentik-postgres
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: authentik-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: authentik-postgres
+    spec:
+      containers:
+        - name: authentik-postgres
+          image: "{{ .Values.authentik.postgres.image.repository }}:{{ .Values.authentik.postgres.image.tag }}"
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            # A dedicated PGDATA subdirectory avoids the well-known
+            # "initdb: directory not empty" failure some CSI drivers trigger
+            # by pre-seeding the PVC root (e.g. lost+found).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_DB
+              value: {{ .Values.authentik.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.authentik.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  # Provisioned by scripts/deploy-ps.sh's ensure_authentik_secrets (#129 S7) —
+                  # the chart only ever consumes this Secret's name/key, never generates it
+                  # (matches AC-BI-010's Key-Vault-sourced Secret convention). Deliberately the
+                  # SAME Secret the upstream `authentik` dependency's own
+                  # `authentik.existingSecret.secretName` consumes (policy-system.
+                  # authentikCredentialsSecretName, _helpers.tpl) rather than a second,
+                  # postgres-only Secret — one source of truth for every AUTHENTIK_* value
+                  # ensure_authentik_secrets writes, since that existingSecret must already carry
+                  # AUTHENTIK_POSTGRESQL__PASSWORD for the upstream chart's own server/worker
+                  # Deployments (IMPL_SLICE_3.md's own finding: existingSecret is all-or-nothing,
+                  # every AUTHENTIK_* key must already be baked in). This hand-rolled Postgres
+                  # container reads that exact same key, rather than requiring
+                  # deploy-ps.sh to provision a second, duplicate password Secret.
+                  name: {{ include "policy-system.authentikCredentialsSecretName" . }}
+                  key: AUTHENTIK_POSTGRESQL__PASSWORD
+          volumeMounts:
+            - name: authentik-postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: authentik-postgres-data
+          persistentVolumeClaim:
+            claimName: {{ include "policy-system.fullname" . }}-authentik-postgres-data
+{{- end }}

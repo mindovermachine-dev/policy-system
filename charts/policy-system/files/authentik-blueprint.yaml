@@ -1,0 +1,513 @@
+# Authentik declarative blueprint — issue #129, S4.
+#
+# Mounted into the bundled Authentik instance via a ConfigMap
+# (templates/authentik-blueprint-configmap.yaml) wired through
+# `authentik.blueprints.configMaps` (values-prod.yaml). Authentik
+# auto-discovers and auto-applies any `.yaml`/`.yml`-suffixed key in a
+# ConfigMap listed there, on startup and on change — no manual `ak
+# apply_blueprint` step required in production.
+#
+# Every model name/field below was confirmed against a primary source before
+# being used here (never guessed) — see IMPL_SLICE_4.md's Evidence section
+# for the exact doc/source URL backing each one. F6 (CHANGES.md) additionally
+# requires this file be applied against a real Authentik instance + scratch
+# Postgres to catch any schema error that static review alone would miss;
+# that run's outcome is also recorded in IMPL_SLICE_4.md.
+#
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: "PS Service — bundled Authentik setup (issue #129)"
+entries:
+  # --- 1. Brand patch: point flow_device_code at Authentik's own shipped
+  # default authentication flow. Without this, PS-Cli's device-code
+  # verification_uri 404s (the exact silent-404 gap #128's spike flagged) --
+  # Authentik ships no flow_device_code by default on a fresh Brand.
+  # Model + field confirmed directly against authentik/brands/models.py
+  # (Brand.flow_device_code, a nullable FK to Flow) and against the
+  # upstream `default-brand.yaml` blueprint's own identifiers shape
+  # (`domain: authentik-default` — this repo's patch updates that same,
+  # single default Brand row created by that blueprint; `domain` is not
+  # DB-unique in general, but is the one fixed literal the shipped default
+  # blueprint itself uses, so it is unambiguous on a fresh install).
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      flow_device_code:
+        !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+
+  # --- 1b. Patch the shipped default IdentificationStage to accept a WebAuthn
+  # passkey directly at login (no password), satisfying AC-BI-004's literal
+  # "log in via passkey instead of password" -- not merely "as well as".
+  # Confirmed live during S11 (#129) by reading
+  # authentik/stages/identification/stage.py: IdentificationChallengeResponse's
+  # own passkey short-circuit (a POST carrying a `passkey` WebAuthn assertion sets
+  # `pre_user` directly and skips straight past the password stage) is gated
+  # entirely on `IdentificationStage.webauthn_stage` being set -- a FK to an
+  # AuthenticatorValidateStage (NOT an AuthenticatorWebAuthnStage; confirmed by a
+  # live `ValueError` when the wrong stage type was first tried) whose
+  # `device_classes` includes `webauthn`. Without this patch, `passkey_challenge`
+  # in the identification response stays `null` forever and every login -- even
+  # for an account with an enrolled passkey -- requires a password first,
+  # contradicting AC-BI-004 (WebAuthn only usable as a *second* factor after
+  # password, via the shipped default-authentication-mfa-validation stage at
+  # order 30). Points at that same shipped stage (its device_classes already
+  # includes 'webauthn' out of the box) rather than defining a new one.
+  # Verified live (S11): after this patch, `GET .../executor/default-authentication-flow/`
+  # returns a populated `passkey_challenge` object, and a real CDP virtual-authenticator
+  # browser session redeemed it -- reaching a fully logged-in state with zero password
+  # ever submitted.
+  #
+  # user_fields (S4B fix, IMPL_SLICE_4B.md): this entry's `attrs` originally carried
+  # ONLY `webauthn_stage`, on the assumption that a partial-update blueprint entry
+  # would inherit the target object's existing `user_fields` (Authentik's own shipped
+  # default already sets it). That assumption is wrong: confirmed against
+  # authentik/stages/identification/stage.py's `IdentificationStageSerializer.validate()`,
+  # which reads `attrs.get("user_fields", [])` -- this only sees THIS entry's own
+  # submitted payload under DRF partial-update semantics, never the target instance's
+  # existing/default value. On a genuinely fresh blueprint apply this reads as an empty
+  # list and the serializer rejects the whole entry ("at least one source must be
+  # selected"), which fails the ENTIRE blueprint transactionally, not just this stage.
+  # Fixed by stating the value explicitly here so the serializer always sees a real,
+  # non-empty list regardless of partial-update semantics. Value confirmed verbatim
+  # (not guessed) against Authentik's own shipped
+  # blueprints/default/flow-default-authentication-flow.yaml at this chart's pinned
+  # Authentik version (2026.8.3):
+  # `attrs.user_fields: [email, username]` on this same `default-authentication-identification`
+  # stage.
+  - model: authentik_stages_identification.identificationstage
+    identifiers:
+      name: default-authentication-identification
+    attrs:
+      user_fields:
+        - email
+        - username
+      webauthn_stage:
+        !Find [
+          authentik_stages_authenticator_validate.authenticatorvalidatestage,
+          [name, default-authentication-mfa-validation],
+        ]
+
+  # --- 2. One fixed OAuth2 Provider for PS-Cli's device-code login
+  # (PLAN.md §0.5 — one Provider, not an Entra-style API-app/CLI-app pair).
+  # `client_id` is a blueprint-authored literal, "ps-cli", reused verbatim
+  # as scripts/deploy-ps.sh's fixed AUTHENTIK_APP_SLUG constant (S8) and as
+  # psService.auth.cliClientId/audience -- Authentik's `aud` claim is always
+  # the bare OAuth2 Provider client_id (#128 spike finding).
+  # access_code_validity widens the "minutes=1" default per #128's second
+  # comment / this issue's own deliverables list (60s device-code window
+  # was too tight).
+  # grant_types/client_type confirmed against
+  # authentik/providers/oauth2/models.py (ClientType, GrantType) and
+  # authentik/common/oauth/constants.py (GRANT_TYPE_DEVICE_CODE =
+  # "urn:ietf:params:oauth:grant-type:device_code"). redirect_uris is
+  # explicitly empty: RFC 8628 device-code exchanges never redirect a
+  # browser back to the client, so no redirect_uri is ever consulted for
+  # this provider's own grant.
+  # authorization_flow is Authentik's shipped default
+  # "implicit consent" provider-authorization flow (no consent-screen
+  # stage) -- confirmed via the upstream
+  # flow-default-provider-authorization-implicit-consent.yaml default
+  # blueprint (slug: default-provider-authorization-implicit-consent);
+  # deliberately not the "explicit consent" variant, since re-consenting
+  # on every CLI device-code login would be poor UX for a first-party tool.
+  - model: authentik_providers_oauth2.oauth2provider
+    id: ps-cli-provider
+    identifiers:
+      name: ps-cli
+    attrs:
+      client_type: public
+      client_id: ps-cli
+      grant_types:
+        - "urn:ietf:params:oauth:grant-type:device_code"
+        - refresh_token
+      redirect_uris: []
+      access_code_validity: "minutes=5"
+      # property_mappings -- a blueprint-created Provider gets NO scope mappings
+      # by default (unlike one created through Authentik's own Admin UI wizard,
+      # which auto-attaches these as a wizard-only convenience step, not
+      # server-side default behavior on the model/serializer). Without an
+      # explicit `offline_access` ScopeMapping attached here, Authentik silently
+      # drops the unrecognized `offline_access` scope from every device-code
+      # token request and never issues a `refresh_token` -- ps-cli's own device
+      # flow (issue #57/#119) always requests `offline_access` and its
+      # `ensure_valid_access_token` *unconditionally* refreshes on every
+      # invocation after the first (see device_flow.py's own docstring), so
+      # this omission breaks every single ps-cli command after the first login,
+      # not just long-lived sessions. Caught live by #129's F8 early checkpoint
+      # (IMPL_SLICE_0B.md): the stored `TokenBundle.refresh_token` was `None`
+      # after a real device-code login, and a manual refresh-grant POST against
+      # the real token endpoint failed with `invalid_grant`. Points at
+      # Authentik's own shipped default OAuth scope mappings (names confirmed
+      # live via `ak shell` against a fresh bootstrap -- created automatically
+      # by Authentik's own system blueprint, `System - OAuth2 Provider -
+      # Scopes`, never generated by this blueprint); `openid`/`profile`/`email`
+      # are included too since a hand-listed `property_mappings` here replaces
+      # Authentik's own defaults entirely rather than adding to them.
+      property_mappings:
+        - !Find [
+            authentik_providers_oauth2.scopemapping,
+            [name, "authentik default OAuth Mapping: OpenID 'openid'"],
+          ]
+        - !Find [
+            authentik_providers_oauth2.scopemapping,
+            [name, "authentik default OAuth Mapping: OpenID 'profile'"],
+          ]
+        - !Find [
+            authentik_providers_oauth2.scopemapping,
+            [name, "authentik default OAuth Mapping: OpenID 'email'"],
+          ]
+        - !Find [
+            authentik_providers_oauth2.scopemapping,
+            [name, "authentik default OAuth Mapping: OpenID 'offline_access'"],
+          ]
+      authorization_flow:
+        !Find [
+          authentik_flows.flow,
+          [slug, default-provider-authorization-implicit-consent],
+        ]
+      # invalidation_flow is nullable on the model (Provider.invalidation_flow,
+      # on_delete=SET_DEFAULT, null=True) but F6's empirical apply run (see
+      # IMPL_SLICE_4.md) proved the OAuth2ProviderSerializer nonetheless
+      # requires it -- confirmed empirically, not from static model reading
+      # alone. Points at Authentik's own shipped default invalidation flow
+      # (slug confirmed via the upstream flow-default-invalidation-flow.yaml
+      # default blueprint).
+      invalidation_flow:
+        !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+      # signing_key -- without an asymmetric signing key, Authentik falls back to
+      # HS256 (a symmetric algorithm keyed on the provider's own client secret) for
+      # this provider's id_token/access_token, and advertises only "HS256" in
+      # id_token_signing_alg_values_supported. PS Service's existing, unmodified
+      # OIDC validator (issue #58) requires an asymmetric algorithm (RS256/ES256/
+      # etc, verified via the issuer's published JWKS) and never accepts a
+      # symmetric-signed token from a public client with no client secret -- this
+      # omission was caught live by #129's F8 early checkpoint (IMPL_SLICE_0B.md):
+      # PS Service raised `AuthDiscoveryError` ("advertises no supported asymmetric
+      # signing algorithm") against a real bundled-Authentik install with this
+      # blueprint applied. Points at Authentik's own default self-signed
+      # certificate (`authentik_crypto.certificatekeypair`, name confirmed via a
+      # live `ak shell` query against a fresh bootstrap -- created automatically by
+      # Authentik's own shipped bootstrap blueprint on every install, never
+      # generated by this blueprint).
+      signing_key:
+        !Find [
+          authentik_crypto.certificatekeypair,
+          [name, "authentik Self-signed Certificate"],
+        ]
+
+  # --- 3. One Application bound to that Provider. Per authentik/core/urls.py's
+  # own comment ("everything else uses application/o or application/saml"),
+  # the OIDC issuer path segment (`/application/o/<slug>/`) is filled by the
+  # *Application's own slug*, not automatically by the Provider's client_id
+  # -- confirmed by reading that source file directly, not assumed. This
+  # blueprint deliberately gives the Application the *same* literal slug
+  # ("ps-cli") as the Provider's client_id above, purely as this repo's own
+  # naming convention for readability; nothing in Authentik forces them to
+  # match. S8's issuer computation
+  # (`https://<hostname>/auth/application/o/ps-cli/`, per CHANGES.md F1)
+  # depends on this exact Application slug -- if this slug ever changes,
+  # S8's AUTHENTIK_APP_SLUG constant must change with it.
+  - model: authentik_core.application
+    identifiers:
+      slug: ps-cli
+    attrs:
+      name: "PS-Cli"
+      provider: !KeyOf ps-cli-provider
+
+  # --- 4. Invite-only Enrollment flow: Invitation -> Prompt (username, name,
+  # email, password) -> User Write -> WebAuthn -> User Login, each an
+  # ordered flowstagebinding. Structure confirmed against the upstream
+  # example blueprint blueprints/example/flows-invitation-enrollment-minimal.yaml
+  # (same stage sequence/ordering convention, literal names here instead of
+  # that example's !Context-parameterized ones since this chart has exactly
+  # one fixed enrollment flow, not a reusable wizard template).
+  - model: authentik_flows.flow
+    id: ps-enrollment-flow
+    identifiers:
+      slug: ps-invite-enrollment
+    attrs:
+      name: "PS Service Invite Enrollment"
+      title: "Welcome — redeem your invite to create your PS Service account"
+      designation: enrollment
+      authentication: require_unauthenticated
+
+  # continue_flow_without_invitation: false is the exact field/value AC-BI-003
+  # depends on -- no invite code (missing, garbage, or expired) means this
+  # stage never lets the flow continue, so no open self-registration path
+  # exists. Model confirmed against
+  # blueprints/example/flows-invitation-enrollment-minimal.yaml.
+  - model: authentik_stages_invitation.invitationstage
+    id: ps-enrollment-invitation-stage
+    identifiers:
+      name: ps-enrollment-invitation
+    attrs:
+      continue_flow_without_invitation: false
+
+  - model: authentik_stages_prompt.prompt
+    id: ps-enrollment-field-username
+    identifiers:
+      name: ps-enrollment-field-username
+    attrs:
+      field_key: username
+      label: Username
+      type: username
+      required: true
+      placeholder: Username
+      placeholder_expression: false
+      order: 0
+
+  - model: authentik_stages_prompt.prompt
+    id: ps-enrollment-field-name
+    identifiers:
+      name: ps-enrollment-field-name
+    attrs:
+      field_key: name
+      label: Name
+      type: text
+      required: true
+      placeholder: Name
+      placeholder_expression: false
+      order: 1
+
+  - model: authentik_stages_prompt.prompt
+    id: ps-enrollment-field-email
+    identifiers:
+      name: ps-enrollment-field-email
+    attrs:
+      field_key: email
+      label: Email
+      type: email
+      required: true
+      placeholder: Email
+      placeholder_expression: false
+      order: 2
+
+  - model: authentik_stages_prompt.prompt
+    id: ps-enrollment-field-password
+    identifiers:
+      name: ps-enrollment-field-password
+    attrs:
+      field_key: password
+      label: Password
+      type: password
+      required: true
+      placeholder: Password
+      placeholder_expression: false
+      order: 3
+
+  - model: authentik_stages_prompt.prompt
+    id: ps-enrollment-field-password-repeat
+    identifiers:
+      name: ps-enrollment-field-password-repeat
+    attrs:
+      field_key: password_repeat
+      label: Password (repeat)
+      type: password
+      required: true
+      placeholder: Password (repeat)
+      placeholder_expression: false
+      order: 4
+
+  - model: authentik_stages_prompt.promptstage
+    id: ps-enrollment-prompt-stage
+    identifiers:
+      name: ps-enrollment-credentials-and-details
+    attrs:
+      fields:
+        - !KeyOf ps-enrollment-field-username
+        - !KeyOf ps-enrollment-field-name
+        - !KeyOf ps-enrollment-field-email
+        - !KeyOf ps-enrollment-field-password
+        - !KeyOf ps-enrollment-field-password-repeat
+
+  - model: authentik_stages_user_write.userwritestage
+    id: ps-enrollment-user-write-stage
+    identifiers:
+      name: ps-enrollment-user-write
+    attrs:
+      user_creation_mode: always_create
+      user_type: internal
+      user_path_template: "users/internal"
+
+  # WebAuthn (passkey) enrollment (AC-BI-004) embedded directly in the
+  # enrollment flow -- not a separate, skippable "configure later" branch --
+  # so every invite-registered account enrolls a passkey as part of signup.
+  # Model confirmed against authentik/stages/authenticator_webauthn/models.py
+  # and the upstream flow-default-authenticator-webauthn-setup.yaml default
+  # blueprint's own attrs shape.
+  - model: authentik_stages_authenticator_webauthn.authenticatorwebauthnstage
+    id: ps-enrollment-webauthn-stage
+    identifiers:
+      name: ps-enrollment-webauthn
+    attrs:
+      friendly_name: "Passkey"
+
+  - model: authentik_stages_user_login.userloginstage
+    id: ps-enrollment-user-login-stage
+    identifiers:
+      name: ps-enrollment-user-login
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-invitation-stage
+      order: 5
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: true
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-prompt-stage
+      order: 10
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-user-write-stage
+      order: 20
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-webauthn-stage
+      order: 30
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-enrollment-flow
+      stage: !KeyOf ps-enrollment-user-login-stage
+      order: 100
+
+  # --- 5. Reputation Policy (AC-BI-012), enforced via a dedicated DenyStage
+  # -- NOT via excluding the shipped password stage's own binding. This is a
+  # deliberate redesign of this entry (S13/IMPL_SLICE_13.md), replacing an
+  # earlier version of this same entry that bound the Reputation Policy
+  # directly onto Authentik's own shipped default-authentication-password
+  # FlowStageBinding via `policy: !Find [...]` with `negate: false` inherited
+  # (implicitly a no-op, confirmed live by S11 -- see IMPL_SLICE_11.md step
+  # 7) and that S11 speculatively proposed "fixing" by flipping to
+  # `policy_engine_mode: all` + `negate: true` on that *same* shipped
+  # binding, without live-verifying it. That speculative fix was checked
+  # here BEFORE being applied (per this slice's own mandate) and found to be
+  # actively wrong, not merely unverified:
+  #
+  # Root cause, confirmed by reading Authentik's own source
+  # (authentik/flows/planner.py `_build_plan`): a FlowStageBinding whose
+  # bound policies evaluate to `passing=False` is not "denied" -- the stage
+  # is simply left out of the flow plan (`stage = None`, never appended),
+  # and the flow *continues to the next stage* as if that stage never
+  # existed. Excluding Authentik's own shipped password-stage binding (via
+  # `policy_engine_mode: all` + `negate: true`, so the binding fails
+  # precisely when reputation is bad) would therefore have made the
+  # password check silently SKIP for accounts already over the failed-
+  # login threshold -- letting an attacker who has already racked up enough
+  # failures log in with no password at all on the next attempt. That is
+  # the opposite of a lockout: it is a bypass of the password gate, and a
+  # real security regression the sandbox's live security review would very
+  # likely have flagged as a genuine [Security Weaken] had it been attempted
+  # against the running instance (a live experimental write here was
+  # correctly declined for the same underlying reason in S11's run).
+  #
+  # This distinction between "excluded => skipped" and "excluded => denied"
+  # is exactly why Authentik's own official example that pairs this same
+  # Reputation Policy with a PolicyBinding --
+  # blueprints/example/flows-login-conditional-captcha.yaml, this repo's
+  # existing precedent for the model/attrs shape -- does NOT bind it onto
+  # an already-mandatory stage. It defines a brand-new, ADDITIONAL stage (a
+  # CaptchaStage there) and binds the Reputation Policy to *that* stage's
+  # own binding with the policy UNNEGATED (`negate` left at its `false`
+  # default): bad reputation => policy passes => the extra stage is
+  # INCLUDED => the user gets an extra challenge. Inclusion, not exclusion,
+  # is the enforcement mechanism -- confirmed against
+  # authentik/policies/engine.py's `_combine_results` (MODE_ANY/MODE_ALL
+  # combine multiple bindings' `passing` via `any()`/`all()`) and
+  # authentik/policies/process.py (`if self.binding.negate: policy_result.
+  # passing = not policy_result.passing` -- negate simply inverts one
+  # binding's own passing/failing result before that combination, it does
+  # not change what "excluded" means for the stage it's bound to).
+  #
+  # This repo has no CAPTCHA provider credentials configured (no hCaptcha/
+  # reCaptcha/Turnstile keys anywhere in this chart), so this entry mirrors
+  # the *same* inclusion-based mechanism using Authentik's built-in
+  # `authentik_stages_deny.denystage` instead (confirmed model/field via
+  # authentik/stages/deny/models.py: `deny_message`, no external provider
+  # needed) -- a dedicated stage placed right after the password stage
+  # (order 25, between the shipped password stage's order 20 and MFA
+  # validation's order 30 -- both confirmed live via `ak shell` query of
+  # this flow's own FlowStageBindings) whose *inclusion* denies the login.
+  # `policy_engine_mode`/`negate` are therefore UNCHANGED from their
+  # defaults on this binding (`policy_engine_mode: any`, `negate: false`)
+  # -- deliberately, not by oversight: with only one PolicyBinding on this
+  # new stage, ANY vs ALL is moot, and `negate: false` is exactly what makes
+  # "policy passes" (bad reputation, `score <= threshold`, confirmed via
+  # authentik/policies/reputation/models.py) mean "stage included" (deny
+  # shown), matching the upstream example precisely.
+  #
+  # Live-verified (IMPL_SLICE_13.md): after 9 failed logins drop a test
+  # account's score to the configured threshold, a fresh login attempt for
+  # that account is now met with the Deny stage instead of a normal
+  # password re-prompt, while a different, never-failed account logs in
+  # normally through the same flow unaffected.
+  #
+  # threshold: -5 matches the upstream example's own literal value --
+  # documented here as this repo's starting default, not independently
+  # re-derived; PLAN.md's own S13 slice is where this value's real-world
+  # effect gets confirmed/tuned against a live instance.
+  - model: authentik_policies_reputation.reputationpolicy
+    id: ps-login-reputation-policy
+    identifiers:
+      name: ps-login-reputation-policy
+    attrs:
+      check_ip: true
+      check_username: true
+      threshold: -5
+
+  # Dedicated Deny stage -- this blueprint's own object (created here, not
+  # Authentik's shipped one), so none of F6/S11's !Find-into-a-shipped-
+  # FlowStageBinding reapply-race caveat applies to it: that race was
+  # specifically about resolving a *pre-existing, independently-reconciled*
+  # object's identity fresh on every apply. This stage/binding pair is
+  # instead identified via this blueprint's own !KeyOf, the same pattern
+  # already used for ps-enrollment-flow's own stages above.
+  - model: authentik_stages_deny.denystage
+    id: ps-login-reputation-deny-stage
+    identifiers:
+      name: ps-login-reputation-deny-stage
+    attrs:
+      deny_message: "Too many failed sign-in attempts for this account. Please wait a few minutes and try again."
+
+  - model: authentik_flows.flowstagebinding
+    id: ps-login-reputation-deny-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !KeyOf ps-login-reputation-deny-stage
+      order: 25
+    attrs:
+      # Matches the upstream captcha example's own attrs exactly:
+      # evaluated when the stage is about to be presented (per-attempt),
+      # not baked into the plan once up front -- so a score that changes
+      # mid-flow (e.g. this very attempt's own failure) is reflected
+      # immediately on the next request, not stale from plan time.
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf ps-login-reputation-deny-binding
+      order: 0
+    attrs:
+      policy:
+        !Find [
+          authentik_policies_reputation.reputationpolicy,
+          [name, ps-login-reputation-policy],
+        ]
+      # Deliberately unchanged from defaults -- see the enforcement-
+      # mechanism comment above. negate: false means "policy passes (bad
+      # reputation) => this Deny stage binding passes => Deny stage
+      # INCLUDED in the plan", which is the correct polarity for a stage
+      # whose own inclusion is itself the enforcement action.
+      negate: false

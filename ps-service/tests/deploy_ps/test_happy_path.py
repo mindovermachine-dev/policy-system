@@ -36,8 +36,6 @@ if TYPE_CHECKING:
 RESOURCE_GROUP_NAME = "rg-policy-system"
 CHAT_MODEL_NAME = "gpt-5.4-mini"
 EMBED_MODEL_NAME = "text-embedding-3-large"
-API_APP_NAME = "Policy System API"
-CLI_APP_NAME = "Policy System CLI"
 LLM_SECRET_NAME = "policy-system-llm-credentials"
 HELM_RELEASE_NAME = "policy-system"
 CERT_MANAGER_RELEASE_NAME = "cert-manager"
@@ -54,13 +52,6 @@ _DISALLOWED_VERB_SUBSTRINGS = ("create", "register", "regenerate", "consent")
 def _seed(fixture: DeployPsFixture) -> None:
     fixture.fill_tls_contact_email()
     fixture.seed_subscription()
-
-
-def fake_app_id(display_name: str) -> str:
-    """Independently reproduce the fake `az ad app create`'s deterministic appId, same helper as
-    every other deploy_ps test module's own `fake_app_id`.
-    """
-    return f"appid-{display_name.lower().replace(' ', '-')}"
 
 
 def _lines_starting_with(lines: list[str], prefix: str) -> list[str]:
@@ -144,15 +135,21 @@ def test_fresh_subscription_completes_end_to_end_provisioning_everything(
     for secret_name in ("AZURE-API-BASE", "AZURE-API-KEY", "AZURE-API-VERSION"):
         assert any(secret_name in line for line in secret_sets), f"{secret_name} was never set"
 
-    # Both Entra app registrations + their service principals (S10/S11).
-    app_creates = _lines_starting_with(az_log, "ad app create")
-    assert any(API_APP_NAME in line for line in app_creates), "API app registration missing"
-    assert any(CLI_APP_NAME in line for line in app_creates), "CLI app registration missing"
-    api_app_id = fake_app_id(API_APP_NAME)
-    cli_app_id = fake_app_id(CLI_APP_NAME)
-    sp_creates = _lines_starting_with(az_log, "ad sp create")
-    assert any(api_app_id in line for line in sp_creates), "API app's service principal missing"
-    assert any(cli_app_id in line for line in sp_creates), "CLI app's service principal missing"
+    # AC-BI-001 (issue #129): zero Entra app registrations anywhere in the default production
+    # flow -- no `az ad app`/`az ad sp` call of any kind appears in the mocked `az` call log.
+    # This is this AC's actual proof: S6 deleted every call site
+    # (`ensure_api_app_registration`/`ensure_cli_app_registration`/their service-principal and
+    # admin-consent helpers); S7/S8 replaced them with Authentik's own bundled secret
+    # provisioning and a fixed `ps-cli` OAuth2 Provider/Application, needing no Entra API call at
+    # all.
+    assert not _lines_starting_with(az_log, "ad app"), "an `az ad app` call was made (AC-BI-001)"
+    assert not _lines_starting_with(az_log, "ad sp"), "an `az ad sp` call was made (AC-BI-001)"
+
+    # Authentik's own secrets synced into the cluster (S7, issue #129).
+    assert (
+        deploy_ps_fixture.read_kubectl_applied("Secret", "policy-system-authentik-credentials")
+        is not None
+    ), "Authentik credentials Secret was never applied"
 
     # AKS node VM-size allowlist + vCPU quota preflight (S12, AC-BI-011).
     assert _lines_starting_with(az_log, "vm list-skus"), "VM-size allowlist check never ran"
@@ -226,9 +223,6 @@ def test_second_run_with_unchanged_inputs_reports_already_up_to_date_and_makes_z
     # the second run's delta -- proving the filter above is discriminating, not just an empty log.
     assert _lines_starting_with(new_az_lines, "keyvault set-policy"), (
         "keyvault set-policy should still re-run every pass by design"
-    )
-    assert _lines_starting_with(new_az_lines, "ad app permission add"), (
-        "ad app permission add should still re-run every pass by design"
     )
 
     assert second_run.returncode == 0

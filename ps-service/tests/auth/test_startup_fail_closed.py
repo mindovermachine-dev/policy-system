@@ -185,6 +185,45 @@ def test_resolve_auth_context_raises_naming_issuer_when_no_recognized_algorithm_
     assert _ISSUER in str(excinfo.value)
 
 
+class _AuthentikShapedFailingDiscoveryTransport:
+    """Simulates a discovery-fetch failure whose underlying transport exception carries an
+    internal-looking detail (a synthetic marker standing in for e.g. an internal hostname or
+    error code) -- AC-BI-013's "leaks no internal config" half of the requirement, exercised
+    against an issuer URL shaped like a real bundled-Authentik issuer.
+    """
+
+    def __call__(
+        self, request: urllib.request.Request, /, *, timeout: float
+    ) -> _FakeDiscoveryResponse:
+        raise urllib.error.URLError(
+            "Failed to establish a new connection: [Errno 111] Connection refused to "
+            "internal-authentik-postgres.svc.cluster.local:5432 (INTERNAL_ERROR_CODE_7734)"
+        )
+
+
+_SENSITIVE_MARKER = "INTERNAL_ERROR_CODE_7734"
+_AUTHENTIK_SHAPED_ISSUER = "https://auth-a1b2c3d4.eastus.cloudapp.azure.com/application/o/ps-cli/"
+
+
+def test_resolve_auth_context_discovery_failure_names_issuer_but_not_raw_exception_text() -> None:
+    """AC-BI-013: an unreachable/misconfigured Authentik issuer's `AuthDiscoveryError` must
+    name the issuer (actionable) and must NOT embed the underlying transport exception's own
+    text (non-leaking). `from exc` is still preserved -- the full chain remains available via
+    `__cause__`/a log-viewer's stderr traceback, a separate mechanism from this message's own
+    `str()`, which is what this assertion (and AC-BI-013) actually governs.
+    """
+    with pytest.raises(AuthDiscoveryError) as excinfo:
+        resolve_auth_context(
+            _config(auth_issuer=_AUTHENTIK_SHAPED_ISSUER, auth_audience=_AUDIENCE),
+            transport=_AuthentikShapedFailingDiscoveryTransport(),
+        )
+
+    message = str(excinfo.value)
+    assert _AUTHENTIK_SHAPED_ISSUER in message
+    assert _SENSITIVE_MARKER not in message
+    assert excinfo.value.__cause__ is not None
+
+
 def test_resolve_auth_context_allow_list_excludes_symmetric_and_none_from_mixed_list() -> None:
     transport = _ScriptedDiscoveryTransport(
         {

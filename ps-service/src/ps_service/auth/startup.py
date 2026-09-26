@@ -80,7 +80,10 @@ def resolve_auth_context(
     try:
         document = fetch_discovery_document(issuer, transport=transport)
     except Exception as exc:
-        raise AuthDiscoveryError(f"OIDC discovery failed for issuer {issuer!r}: {exc}") from exc
+        raise AuthDiscoveryError(
+            f"OIDC discovery failed for issuer {issuer!r}. "
+            "Verify the issuer URL is reachable and correctly configured."
+        ) from exc
 
     jwks_uri: object = document.get("jwks_uri")
     if not isinstance(jwks_uri, str) or not jwks_uri:

@@ -8,6 +8,10 @@ ps-cli/logs/
 # Spikes
 spikes/
 
+# Fetched Helm chart dependency archives (Chart.lock is committed; the
+# archives themselves are re-fetched via `helm dependency build`).
+charts/policy-system/charts/*.tgz
+
 # AI tools
 CLAUDE.md
 .github/agents/*

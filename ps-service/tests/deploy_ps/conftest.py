@@ -59,13 +59,6 @@ DEFAULT_EMBED_MODEL_VERSION = "1"
 # (200/350) -- tests that want quota to bind call seed_usage()/seed_empty_usage() themselves.
 AMPLE_QUOTA_LIMIT = 10_000
 
-# Mirrors scripts/deploy-ps.sh's own API_APP_NAME/CLI_APP_NAME/ACCESS_AS_USER_SCOPE_VALUE
-# literals (S10/S11) -- hardcoded here rather than parsed from the script, same precedent as the
-# DEFAULT_* constants above.
-API_APP_NAME = "Policy System API"
-CLI_APP_NAME = "Policy System CLI"
-ACCESS_AS_USER_SCOPE_VALUE = "access_as_user"
-
 # Mirrors scripts/deploy-ps.sh's own fixed AKS-node-shape literals (S12, PLAN.md §0.6) --
 # hardcoded here rather than parsed from the script, same precedent as the constants above.
 AKS_NODE_VM_SIZE = "Standard_D4as_v7"
@@ -159,15 +152,6 @@ def _default_node_resource_group(cluster_name: str, region: str) -> str:
     combination a test ends up exercising.
     """
     return f"MC_{RESOURCE_GROUP_NAME}_{cluster_name}_{region}"
-
-
-def fake_app_id(display_name: str) -> str:
-    """Independently reproduce the fake `az ad app create`'s deterministic appId
-    ("appid-<slugified display name>") -- lets a test predict an app's fake id (e.g. to seed an
-    `ad-consent/<id>.never-grants` marker) without first parsing the az log for it.
-    """
-    slug = display_name.lower().replace(" ", "-")
-    return f"appid-{slug}"
 
 
 def _usage_key(sku: str, model_name: str) -> str:
@@ -534,99 +518,6 @@ case "${1:-} ${2:-}" in
         ;;
     esac
     ;;
-  "ad app")
-    # ad app {list,create,show,update,permission} -- Entra API/CLI app registration
-    # (fetch_app_id_by_name/ensure_api_app_registration/ensure_cli_app_registration, S10/S11).
-    # Real command shapes read from spikes/deploy-ps-azure/deploy-ps.sh's own equivalents, not
-    # guessed. Fake appIds are deterministic ("appid-<slugified display name>"), so a test can
-    # predict one without parsing the az log -- see this fixture's own _fake_app_id helper.
-    verb="${3:-}"
-    case "$verb" in
-      list)
-        # ad app list --display-name <name> --query [0].appId -o tsv
-        name="$(get_arg --display-name "$@")"
-        if [[ -f "$state/ad-apps/$name.json" ]]; then
-          jq -r '.appId' "$state/ad-apps/$name.json"
-        fi
-        ;;
-      create)
-        # ad app create --display-name <name> [--is-fallback-public-client true]
-        # --query appId -o tsv
-        name="$(get_arg --display-name "$@")"
-        mkdir -p "$state/ad-apps"
-        if [[ -f "$state/ad-apps/${name}.never-creates" ]]; then
-          echo "fake az: ad app create denied (Application Administrator required)" >&2
-          exit 1
-        fi
-        app_id="appid-$(printf '%s' "$name" | tr '[:upper:] ' '[:lower:]-')"
-        jq -n --arg id "$app_id" '{appId: $id}' > "$state/ad-apps/$name.json"
-        printf '%s' "$app_id"
-        ;;
-      show)
-        # ad app show --id <appId> --query "api.oauth2PermissionScopes[?value=='...'].id | [0]"
-        # -o tsv (ensure_api_app_registration's post-PATCH scope-id lookup, S10)
-        id="$(get_arg --id "$@")"
-        if [[ -f "$state/ad-apps/$id-scopes.json" ]]; then
-          jq -r '.id' "$state/ad-apps/$id-scopes.json"
-        fi
-        ;;
-      update)
-        # ad app update --id <appId> --identifier-uris ... / --public-client-redirect-uris ...
-        # -- no-op success (not asserted on beyond the call-log itself)
-        :
-        ;;
-      permission)
-        subverb="${4:-}"
-        id="$(get_arg --id "$@")"
-        case "$subverb" in
-          add)
-            # ad app permission add --id <appId> --api <apiId> --api-permissions <id>=Scope
-            :
-            ;;
-          admin-consent)
-            # ad app permission admin-consent --id <appId>
-            if [[ -f "$state/ad-consent/${id}.never-grants" ]]; then
-              echo "fake az: admin-consent denied (Global Administrator required)" >&2
-              exit 1
-            fi
-            mkdir -p "$state/ad-consent"
-            touch "$state/ad-consent/$id"
-            ;;
-          list-grants)
-            # ad app permission list-grants --id <appId>
-            # --query "[?consentType=='AllPrincipals']" -o tsv
-            if [[ -f "$state/ad-consent/$id" ]]; then
-              printf 'AllPrincipals\n'
-            fi
-            ;;
-        esac
-        ;;
-    esac
-    ;;
-  "ad sp")
-    # ad sp {show,create} --id <appId> (ensure_service_principal, S10/S11) -- closes the
-    # AADSTS650052 gap docs/artifacts/idp-configuration-contract.md's "Common pitfalls" documents:
-    # `ad app create` provisions only the application object, not its service principal.
-    verb="${3:-}"; id="$(get_arg --id "$@")"
-    case "$verb" in
-      show) [[ -f "$state/ad-sp/$id" ]] ;;
-      create) mkdir -p "$state/ad-sp"; touch "$state/ad-sp/$id" ;;
-    esac
-    ;;
-  "rest --method")
-    # rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications(appId='<id>')"
-    # --headers ... --body <json> -- sets api.requestedAccessTokenVersion=2 and the
-    # access_as_user oauth2PermissionScope (ensure_api_app_registration, S10). Extracts the
-    # appId from the URI's `appId='<id>'` segment and the scope id from the piped --body JSON,
-    # writing it to ad-apps/<id>-scopes.json so a later `ad app show --query
-    # api.oauth2PermissionScopes...` (above) can read it back -- PLAN.md §2.1's documented shape.
-    uri="$(get_arg --uri "$@")"
-    body="$(get_arg --body "$@")"
-    app_id="${uri#*appId=\'}"; app_id="${app_id%\'*}"
-    scope_id="$(jq -r '.api.oauth2PermissionScopes[0].id' <<< "$body")"
-    mkdir -p "$state/ad-apps"
-    jq -n --arg id "$scope_id" '{id: $id}' > "$state/ad-apps/${app_id}-scopes.json"
-    ;;
   *)
     echo "fake az: unsupported invocation '$*'" >&2
     exit 2
@@ -735,6 +626,23 @@ case "${1:-} ${2:-}" in
           fi
         done
         [[ "$all_ready" == true ]]
+        ;;
+      "exec deployment/"*)
+        # exec deployment/<name> -- psql -U <user> -d <db> -c "ALTER USER ... PASSWORD '...';"
+        # (rotate_authentik_secrets_main, S9/#129) -- the live in-database password change this
+        # rotation issues against the already-running Postgres pod (see that function's own
+        # comment for why a plain Deployment restart cannot rotate a postgres role's password by
+        # itself). Nothing for this fake to persist -- the outer branch above already logged the
+        # full invocation (including the ALTER USER text) to $PS_TEST_KUBECTL_LOG, which is all
+        # the tests need to observe -- this just reproduces psql's own success output.
+        printf 'ALTER ROLE\n'
+        ;;
+      "rollout restart")
+        # rollout restart deployment/<name> (rotate_authentik_secrets_main, S9/#129) -- a
+        # fire-and-forget rollout trigger with no state this fake models; reproduces kubectl's
+        # own "deployment.apps/<name> restarted" stdout line.
+        name="${3#deployment/}"
+        printf 'deployment.apps/%s restarted\n' "$name"
         ;;
       *)
         echo "fake kubectl: unsupported invocation '$*'" >&2
@@ -1420,86 +1328,6 @@ class DeployPsFixture:
         """Every `keyvault set-policy` line recorded for <vault>, in order."""
         path = self.azure_state / "keyvaults" / f"{vault}-policies.log"
         return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-
-    def seed_existing_app(self, display_name: str) -> str:
-        """Pre-populate an already-existing Entra app registration (S10/S11) -- for idempotency
-        tests (`test_rerun_with_existing_api_app_makes_no_ad_app_create_call`) and for the
-        AC-BI-004 "existing app missing only its SP" case, where the test seeds the app here but
-        deliberately does *not* call `seed_service_principal` for it. Returns the deterministic
-        fake appId (`fake_app_id`) so the test can use it in further seeding/assertions.
-        """
-        app_id = fake_app_id(display_name)
-        directory = self.azure_state / "ad-apps"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{display_name}.json").write_text(
-            json.dumps({"appId": app_id}), encoding="utf-8"
-        )
-        return app_id
-
-    def seed_service_principal(self, app_id: str) -> None:
-        """Pre-populate an already-existing service principal for <app_id> (S10/S11) --
-        `ad sp show --id <app_id>` succeeds without a corresponding `ad sp create` call.
-        """
-        directory = self.azure_state / "ad-sp"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / app_id).touch()
-
-    def seed_app_create_denied(self, display_name: str) -> None:
-        """Marks `ad app create --display-name <display_name>` to fail (nonzero exit) -- for the
-        "insufficient Application Administrator role" test (S10/S11): the app doesn't exist yet
-        (no `seed_existing_app` call), and creating it is denied, exercising
-        `print_app_registration_manual_steps`.
-        """
-        directory = self.azure_state / "ad-apps"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{display_name}.never-creates").touch()
-
-    def seed_admin_consent_granted(self, display_name: str) -> str:
-        """Pre-populate tenant-wide ("AllPrincipals") admin consent as already granted for the
-        app registered under <display_name> (S11) -- `admin_consent_granted` reads this via
-        `ad app permission list-grants`, so the AC-BI-005 rerun case never reaches
-        `ad app permission admin-consent`. Returns the app's deterministic fake appId.
-        """
-        app_id = fake_app_id(display_name)
-        directory = self.azure_state / "ad-consent"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / app_id).touch()
-        return app_id
-
-    def seed_admin_consent_denied(self, display_name: str) -> str:
-        """Marks `ad app permission admin-consent` to fail (nonzero exit) for the app registered
-        under <display_name> (S11) -- for the "non-admin operator, consent not yet granted" test:
-        consent is neither already granted nor grantable by this identity, exercising
-        `print_admin_consent_manual_step`. Returns the app's deterministic fake appId.
-        """
-        app_id = fake_app_id(display_name)
-        directory = self.azure_state / "ad-consent"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{app_id}.never-grants").touch()
-        return app_id
-
-    def read_service_principal_exists(self, app_id: str) -> bool:
-        """True if `ad-sp/<app_id>` exists -- i.e. a service principal was created (or seeded)
-        for <app_id>.
-        """
-        return (self.azure_state / "ad-sp" / app_id).exists()
-
-    def read_api_scope_id(self, api_app_id: str) -> str | None:
-        """The `access_as_user` scope id the fake `az rest --method PATCH` recorded for
-        <api_app_id> (`ad-apps/<api_app_id>-scopes.json`), or None if the PATCH never ran --
-        `new_scope_uuid` generates a fresh real UUID each run, so a test reads it back here
-        rather than hardcoding one.
-        """
-        path = self.azure_state / "ad-apps" / f"{api_app_id}-scopes.json"
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))["id"]
-
-    def read_consent_granted(self, app_id: str) -> bool:
-        """True if `ad-consent/<app_id>` exists -- i.e. admin consent was granted (or seeded)
-        for <app_id>.
-        """
-        return (self.azure_state / "ad-consent" / app_id).exists()
 
     def read_kubectl_log(self) -> list[str]:
         """Every argv line the fake `kubectl` recorded, in order (S14) -- `create secret

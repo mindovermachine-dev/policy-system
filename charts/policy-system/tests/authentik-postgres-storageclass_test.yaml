@@ -1,0 +1,97 @@
+suite: authentik postgres durable storage class
+set:
+  authentik.enabled: true
+  # Unrelated to this suite's assertions — set only so the chart's fail-closed
+  # OIDC guard (#58) and azure-credentials guard (secret.yaml) don't block
+  # rendering while we assert on Authentik Postgres's own storage class
+  # (mirrors falkordb-networkpolicy_test.yaml's convention).
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+templates:
+  - authentik-postgres-storageclass.yaml
+  - authentik-postgres-pvc.yaml
+tests:
+  - it: authentik disabled renders no StorageClass resource
+    set:
+      authentik.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-storageclass.yaml
+
+  - it: durableStorageClass disabled (default, local-test/kind) renders no StorageClass resource
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-storageclass.yaml
+
+  - it: authentik enabled + durableStorageClass enabled renders a StorageClass with reclaimPolicy Retain
+    set:
+      authentik.postgres.persistence.durableStorageClass.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: authentik-postgres-storageclass.yaml
+      - isKind:
+          of: StorageClass
+        template: authentik-postgres-storageclass.yaml
+      - equal:
+          path: reclaimPolicy
+          value: Retain
+        template: authentik-postgres-storageclass.yaml
+      - equal:
+          path: provisioner
+          value: disk.csi.azure.com
+        template: authentik-postgres-storageclass.yaml
+      - equal:
+          path: volumeBindingMode
+          value: WaitForFirstConsumer
+        template: authentik-postgres-storageclass.yaml
+
+  - it: authentik enabled + durableStorageClass enabled renders Premium_LRS skuName parameter
+    set:
+      authentik.postgres.persistence.durableStorageClass.enabled: true
+    asserts:
+      - equal:
+          path: parameters.skuName
+          value: Premium_LRS
+        template: authentik-postgres-storageclass.yaml
+
+  - it: authentik enabled + durableStorageClass enabled makes the PVC reference the same computed StorageClass name
+    set:
+      authentik.postgres.persistence.durableStorageClass.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-authentik-postgres-durable
+        template: authentik-postgres-storageclass.yaml
+      - equal:
+          path: spec.storageClassName
+          value: RELEASE-NAME-policy-system-authentik-postgres-durable
+        template: authentik-postgres-pvc.yaml
+
+  - it: durableStorageClass disabled and storageClassName set falls back to the plain string (local-cluster override, e.g. kind)
+    set:
+      authentik.postgres.persistence.storageClassName: my-plain-storage-class
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: my-plain-storage-class
+        template: authentik-postgres-pvc.yaml
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-storageclass.yaml
+
+  - it: durableStorageClass disabled and storageClassName unset omits storageClassName entirely (lets the cluster default provisioner bind it, e.g. kind's local-path-provisioner)
+    asserts:
+      - notExists:
+          path: spec.storageClassName
+        template: authentik-postgres-pvc.yaml
+
+  - it: authentik disabled renders no PVC resource
+    set:
+      authentik.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-pvc.yaml

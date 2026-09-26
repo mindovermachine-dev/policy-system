@@ -1,0 +1,56 @@
+suite: authentik postgres persistence
+set:
+  authentik.enabled: true
+  # Unrelated to this suite's assertions — see authentik-postgres-storageclass_test.yaml.
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+templates:
+  - authentik-postgres-deployment.yaml
+  - authentik-postgres-pvc.yaml
+tests:
+  - it: authentik enabled renders a PVC and uses it as the Deployment's volume source
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: RELEASE-NAME-policy-system-authentik-postgres-data
+        template: authentik-postgres-deployment.yaml
+      - notExists:
+          path: spec.template.spec.volumes[0].emptyDir
+        template: authentik-postgres-deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: authentik-postgres-pvc.yaml
+      - isKind:
+          of: PersistentVolumeClaim
+        template: authentik-postgres-pvc.yaml
+      - equal:
+          path: spec.accessModes
+          value:
+            - ReadWriteOnce
+        template: authentik-postgres-pvc.yaml
+
+  - it: authentik enabled runs a single-replica Deployment mounting the PVC on the Postgres data path
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+        template: authentik-postgres-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].name
+          value: authentik-postgres-data
+        template: authentik-postgres-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 5432
+        template: authentik-postgres-deployment.yaml
+
+  - it: authentik disabled renders no Deployment or PVC
+    set:
+      authentik.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: authentik-postgres-pvc.yaml

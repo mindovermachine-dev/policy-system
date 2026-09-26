@@ -4,3 +4,8 @@ description: PS Service + FalkorDB Helm chart for local kind (Podman) and prod K
 type: application
 version: 2.14.0
 appVersion: "2.14.0"
+dependencies:
+  - name: authentik
+    version: 2026.8.3
+    repository: https://charts.goauthentik.io
+    condition: authentik.enabled

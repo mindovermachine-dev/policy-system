@@ -122,5 +122,50 @@ check_no_credential_leak() {
   echo "verify-chart-independence: PASS — credential value renders only inside templates/secret.yaml ($total occurrence(s))"
 }
 
+# check_no_authentik_credential_leak: issue #129 S7's own second sentinel. The upstream
+# `authentik` dependency's `existingSecret.secretName` mechanism is consume-only (IMPL_SLICE_3.md
+# — the chart never accepts a raw Authentik secret VALUE via any values field, only the Secret's
+# NAME), so there is no `--set`-able literal secret value to plant here the way
+# check_no_credential_leak does for llm.azure.apiKey. This proves the analogous claim instead:
+# the Secret NAME the upstream chart is told to consume (`authentik.authentik.existingSecret.
+# secretName`) renders ONLY inside the documents that actually consume it as a Secret reference —
+# the upstream server/worker Deployments' own `envFrom.secretRef.name` — never anywhere else in
+# the render (e.g. leaked into a ConfigMap, a log-shaped field, or any other document). This
+# chart's OWN hand-rolled `authentik-postgres-deployment.yaml` deliberately does NOT read this
+# same values field — it computes its own secretKeyRef.name via the fixed
+# `policy-system.authentikCredentialsSecretName` helper (S7's "one source of truth" fix), which
+# by hand-kept production convention resolves to the identical literal (proved separately by
+# `tests/authentik-credentials-secret_test.yaml`'s own helm-unittest assertion), so it is
+# correctly NOT expected to carry this run's sentinel value.
+check_no_authentik_credential_leak() {
+  local sentinel="zz-test-sentinel-authentik-secret-zz"
+  local out
+  out="$("$HELM" template "$CHART_DIR" \
+    --set llm.provider=azure \
+    --set llm.azure.apiKey=throwaway \
+    --set llm.azure.apiBase=https://example.test/ \
+    --set psService.localTestBypass.enabled=true \
+    --set authentik.enabled=true \
+    --set authentik.authentik.existingSecret.secretName="$sentinel")"
+
+  local total in_consuming_docs
+  total="$(grep -c "$sentinel" <<<"$out")"
+  in_consuming_docs="$(awk -v s="$sentinel" '
+    /^# Source: policy-system\/charts\/authentik\/templates\/server\/deployment.yaml$/{f=1}
+    /^# Source: policy-system\/charts\/authentik\/templates\/worker\/deployment.yaml$/{f=1}
+    /^---/{f=0}
+    f && index($0, s) {c++}
+    END {print c+0}
+  ' <<<"$out")"
+
+  if [ "$total" -ne "$in_consuming_docs" ]; then
+    echo "verify-chart-independence: FAILED — Authentik secret-name sentinel appears outside its Secret-consuming documents ($total total occurrences, $in_consuming_docs inside consuming documents)" >&2
+    exit 1
+  fi
+
+  echo "verify-chart-independence: PASS — Authentik secret name renders only inside its own Secret-consuming documents ($total occurrence(s))"
+}
+
 check_independence
 check_no_credential_leak
+check_no_authentik_credential_leak

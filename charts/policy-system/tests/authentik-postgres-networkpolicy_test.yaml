@@ -1,0 +1,65 @@
+suite: authentik postgres network policy
+templates:
+  - authentik-postgres-networkpolicy.yaml
+set:
+  authentik.enabled: true
+  # Unrelated to this suite's assertions — see authentik-postgres-storageclass_test.yaml.
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # --- S2: NetworkPolicy restricting Authentik's hand-rolled Postgres to
+  # Authentik's own server+worker pods only (AC-BI-008) ---
+
+  - it: NetworkPolicy selects only authentik-postgres component pods
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: policy-system
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: authentik-postgres
+
+  - it: NetworkPolicy allows ingress only from Authentik's own server and worker pods
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 2
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: authentik
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/part-of: authentik
+            app.kubernetes.io/component: server
+      - equal:
+          path: spec.ingress[0].from[1].podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: authentik
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/part-of: authentik
+            app.kubernetes.io/component: worker
+
+  - it: NetworkPolicy restricts to port 5432 TCP only
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].ports
+          count: 1
+      - equal:
+          path: spec.ingress[0].ports[0]
+          value:
+            protocol: TCP
+            port: 5432
+
+  - it: policyTypes is exactly [Ingress]
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+
+  - it: authentik disabled renders no NetworkPolicy resource
+    set:
+      authentik.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -1,0 +1,14 @@
+{{- if and .Values.authentik.enabled .Values.authentik.postgres.persistence.durableStorageClass.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ include "policy-system.authentikPostgresStorageClassName" . }}
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik-postgres
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_LRS
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+{{- end }}

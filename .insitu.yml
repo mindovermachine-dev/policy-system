@@ -112,6 +112,14 @@ inventory:
       uv export --no-emit-workspace --format requirements-txt --no-hashes \
         | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off
 
+  - id: helm-dependency-build
+    name: Fetch the Helm chart's dependencies (e.g. Authentik)
+    # `helm dependency build` requires each dependency's repo to already be
+    # registered via `helm repo add`, which a fresh CI runner never has. `helm
+    # dependency update` resolves unmanaged repository URLs directly, so it
+    # works on a clean runner without an extra `helm repo add` step.
+    command: helm dependency update charts/policy-system
+
   - id: helm-lint
     name: Lint the Helm chart
     command: helm lint charts/policy-system
@@ -185,6 +193,7 @@ waves:
       - repo-gitconfig
       - install-actionlint
       - install-helm
+      - helm-dependency-build
       - install-lint-tools
       - verify-lint-tools
       - verify-uv
@@ -199,6 +208,7 @@ waves:
       - install-lint-tools
       - install-actionlint
       - install-helm
+      - helm-dependency-build
       - sync-dev-group
       - version-txt
 

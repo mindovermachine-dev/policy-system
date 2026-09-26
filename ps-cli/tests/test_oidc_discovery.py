@@ -185,6 +185,66 @@ def test_fetch_openid_configuration_ignores_unknown_fields(
     assert document.issuer == mock_oidc_provider.issuer
 
 
+# --- Baseline fix (issue #129, discovered in IMPL_SLICE_0B.md): trailing-slash issuer ---
+
+
+def test_fetch_openid_configuration_issuer_with_trailing_slash_requests_single_slash_url() -> None:
+    """An issuer ending in `/` (Authentik's own per-Application issuer shape,
+    `.../application/o/<slug>/`) must not produce a double-slash discovery URL.
+
+    Before the fix, `f"{issuer}{_OPENID_CONFIGURATION_PATH}"` concatenated
+    `https://auth.example.com/application/o/ps-cli/` with
+    `/.well-known/openid-configuration` verbatim, producing
+    `.../ps-cli//.well-known/openid-configuration` -- a path real IdPs 404 on.
+    """
+    requested_urls: list[str] = []
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "issuer": "https://auth.example.com/application/o/ps-cli/",
+                "device_authorization_endpoint": "https://auth.example.com/device",
+                "token_endpoint": "https://auth.example.com/token",
+            },
+        )
+
+    fetch_openid_configuration(
+        "https://auth.example.com/application/o/ps-cli/",
+        transport=httpx.MockTransport(_handle),
+    )
+
+    assert requested_urls == [
+        "https://auth.example.com/application/o/ps-cli/.well-known/openid-configuration"
+    ]
+
+
+def test_fetch_openid_configuration_issuer_without_trailing_slash_still_works() -> None:
+    """The pre-existing, no-trailing-slash case is unchanged by the normalization fix."""
+    requested_urls: list[str] = []
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "issuer": "https://auth.example.com/application/o/ps-cli",
+                "device_authorization_endpoint": "https://auth.example.com/device",
+                "token_endpoint": "https://auth.example.com/token",
+            },
+        )
+
+    fetch_openid_configuration(
+        "https://auth.example.com/application/o/ps-cli",
+        transport=httpx.MockTransport(_handle),
+    )
+
+    assert requested_urls == [
+        "https://auth.example.com/application/o/ps-cli/.well-known/openid-configuration"
+    ]
+
+
 # --- Slice 6: resolve_auth_parameters() --------------------------------------------
 
 

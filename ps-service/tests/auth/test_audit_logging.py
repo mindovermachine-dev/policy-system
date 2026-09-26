@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import jwt
 
@@ -284,6 +284,59 @@ def test_malformed_token_logs_reason_invalid_signature(
     assert entry["outcome"] == "unauthenticated"
     assert entry["reason"] == "invalid_signature"
     _assert_token_never_logged(lines, token)
+
+
+class _RaisingJwkClient:
+    """Stands in for `jwt.PyJWKClient` when its `get_signing_key_from_jwt` blows up mid-request
+    (e.g. the JWKS endpoint becoming unreachable after process startup, distinct from the
+    "kid never published" case `test_jwks_refresh.py` already covers) -- proves
+    `PsTokenVerifier` maps *any* such failure to the generic closed-set `invalid_signature`
+    reason (AC-BI-015), never the raw exception's own text (AC-BI-013/AC-BI-016).
+    """
+
+    def get_signing_key_from_jwt(self, token: str) -> object:
+        raise jwt.PyJWKClientError(
+            "Unable to fetch signing key: internal cache corrupted at "
+            "internal-authentik-server.svc.cluster.local (INTERNAL_ERROR_CODE_9911)"
+        )
+
+
+_JWK_CLIENT_FAILURE_MARKER = "INTERNAL_ERROR_CODE_9911"
+
+
+def test_jwk_client_failure_mid_request_logs_generic_reason_not_raw_exception_text(
+    mock_oidc_provider: MockOidcProvider, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """AC-BI-013/015/016: a `jwt.PyJWKClientError` raised while resolving a signing key must
+    map to the generic `invalid_signature` reason category -- never surfacing the raw
+    exception's own text anywhere in the logged entry.
+    """
+    emitter, log_path = make_emitter()
+    auth_context = AuthContext(
+        issuer=mock_oidc_provider.issuer,
+        audience=_AUDIENCE,
+        cli_client_id=None,
+        scopes=(),
+        jwks_uri=mock_oidc_provider.jwks_uri,
+        allowed_algorithms=_ALLOWED_ALGORITHMS,
+    )
+    # `_RaisingJwkClient` structurally satisfies only the one method `PsTokenVerifier` actually
+    # calls (`get_signing_key_from_jwt`) -- this cast restates that deliberate narrowing to
+    # basedpyright, mirroring `startup.py`'s own `cast` use for the same "test double, not the
+    # real class" reason.
+    fake_jwk_client = cast("jwt.PyJWKClient", _RaisingJwkClient())
+    verifier = PsTokenVerifier(auth_context, jwk_client=fake_jwk_client, emitter=emitter)
+    token = mock_oidc_provider.mint_token(sub=_DISTINCTIVE_SUB, aud=_AUDIENCE)
+
+    result = asyncio.run(verifier.verify_token(token))
+    emitter.flush()
+
+    assert result is None
+    lines = read_lines(log_path)
+    entry = lines[-1]
+    assert entry["outcome"] == "unauthenticated"
+    assert entry["reason"] == "invalid_signature"
+    assert _JWK_CLIENT_FAILURE_MARKER not in json.dumps(entry)
 
 
 def test_token_never_appears_across_every_captured_outcome(

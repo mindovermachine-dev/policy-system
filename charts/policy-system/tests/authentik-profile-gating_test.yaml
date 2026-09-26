@@ -1,0 +1,41 @@
+suite: authentik profile gating
+set:
+  # Unrelated to this suite's assertions — set only so the chart's fail-closed
+  # OIDC guard (#58) and azure-credentials guard (secret.yaml) don't block
+  # rendering the rest of the chart while we assert on Authentik's own
+  # profile gating (mirrors falkordb-networkpolicy_test.yaml's convention).
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # NOTE on test order: the `authentik` dependency is condition-gated
+  # (`condition: authentik.enabled`, Chart.yaml). Helm evaluates that
+  # condition once per render and, when false, drops the subchart from the
+  # chart tree entirely (not merely renders it empty) — so the
+  # `authentik.enabled: true` cases must run before the default/disabled
+  # case in this suite, or the shared in-memory chart object never regains
+  # the dependency for a later test.
+
+  - it: authentik enabled renders exactly one server Deployment
+    set:
+      authentik.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: charts/authentik/templates/server/deployment.yaml
+
+  - it: authentik enabled renders exactly one worker Deployment
+    set:
+      authentik.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: charts/authentik/templates/worker/deployment.yaml
+
+  - it: authentik disabled (default) renders no Authentik-labeled documents anywhere in the chart
+    documentSelector:
+      path: metadata.labels.app\.kubernetes\.io/part-of
+      value: authentik
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0

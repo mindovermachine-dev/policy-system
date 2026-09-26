@@ -1,0 +1,15 @@
+{{- if .Values.authentik.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "policy-system.fullname" . }}-authentik-blueprint
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik
+data:
+  # Key must be .yaml/.yml-suffixed -- Authentik's own blueprint discovery
+  # (wired via authentik.blueprints.configMaps in values-prod.yaml) only
+  # scans keys with that suffix, applying them on startup and on change.
+  authentik-blueprint.yaml: |-
+    {{- .Files.Get "files/authentik-blueprint.yaml" | nindent 4 }}
+{{- end }}

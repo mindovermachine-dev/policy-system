@@ -1,0 +1,18 @@
+{{- if .Values.authentik.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "policy-system.fullname" . }}-authentik-postgres
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik-postgres
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "policy-system.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: authentik-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+{{- end }}

@@ -1,0 +1,119 @@
+suite: authentik blueprint ConfigMap
+templates:
+  - authentik-blueprint-configmap.yaml
+set:
+  authentik.enabled: true
+  # Unrelated to this suite's assertions — see authentik-postgres-storageclass_test.yaml.
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # --- S4: Authentik blueprint ConfigMap (AC-BI-002, AC-BI-003, AC-BI-004,
+  # AC-BI-012, #128's flow_device_code/access_code_validity carry-overs) ---
+
+  - it: renders exactly one ConfigMap
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  - it: ConfigMap data key is .yaml-suffixed (Authentik's own auto-discovery convention)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "version: 1"
+
+  - it: blueprint patches the Brand's flow_device_code to the default authentication flow (#128 carry-over)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "flow_device_code:\\s*!Find \\[authentik_flows\\.flow, \\[slug, default-authentication-flow\\]\\]"
+
+  - it: OAuth2 Provider widens access_code_validity above the minutes=1 default (#128 carry-over)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: 'access_code_validity:\s*"minutes=5"'
+
+  - it: Enrollment flow's Invitation stage rejects registration without a valid invite (AC-BI-003)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "continue_flow_without_invitation:\\s*false"
+
+  - it: Enrollment flow includes a WebAuthn stage (AC-BI-004)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik_stages_authenticator_webauthn\\.authenticatorwebauthnstage"
+
+  - it: Reputation Policy is enforced via a dedicated Deny stage, not by excluding the shipped password stage (AC-BI-012, S12/IMPL_SLICE_12.md)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik_policies_reputation\\.reputationpolicy"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik_policies\\.policybinding"
+      # The Deny stage this Reputation Policy is actually bound to (S12
+      # redesign -- excluding the shipped password stage's own binding would
+      # only ever *skip* it, per authentik/flows/planner.py, which is a
+      # password bypass on bad reputation, not a lockout; live-verified
+      # (IMPL_SLICE_12.md): this Deny stage is what genuinely denies).
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "model: authentik_stages_deny\\.denystage"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "id: ps-login-reputation-deny-stage"
+      # Deliberately-unchanged-from-default polarity: negate: false means
+      # "policy passes (bad reputation) => Deny stage binding passes =>
+      # Deny stage INCLUDED", the same inclusion-based mechanism as
+      # Authentik's own official example
+      # (blueprints/example/flows-login-conditional-captcha.yaml).
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "negate: false"
+
+  - it: default IdentificationStage's webauthn_stage is patched so passkey login works without a password (S11 finding, IMPL_SLICE_11.md -- AC-BI-004 literally requires passkey INSTEAD of password, not only as a second factor)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "model: authentik_stages_identification\\.identificationstage"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "webauthn_stage:\\s*\\n\\s*!Find \\[\\s*\\n\\s*authentik_stages_authenticator_validate\\.authenticatorvalidatestage,"
+
+  - it: default IdentificationStage patch also states user_fields explicitly, so a genuinely fresh apply doesn't fail DRF partial-update validation (S4B fix, IMPL_SLICE_4B.md -- attrs.get("user_fields", []) only sees this entry's own submitted payload, not the shipped default's existing value)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "user_fields:\\s*\\n\\s*- email\\s*\\n\\s*- username"
+
+  - it: OAuth2 Provider sets an asymmetric signing_key (F8 early-checkpoint finding, IMPL_SLICE_0B.md -- PS Service's OIDC validator rejects HS256, Authentik's own no-signing-key fallback)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "signing_key:\\s*\\n\\s*!Find \\[\\s*\\n\\s*authentik_crypto\\.certificatekeypair,"
+
+  - it: OAuth2 Provider attaches the offline_access scope mapping so ps-cli's device flow gets a refresh_token (F8 early-checkpoint finding, IMPL_SLICE_0B.md -- a blueprint-created Provider gets no scope mappings by default)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "authentik default OAuth Mapping: OpenID 'offline_access'"
+
+  - it: Application slug is ps-cli, consistent with F1's issuer path (/auth/application/o/ps-cli/)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "model: authentik_core\\.application"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "slug: ps-cli"
+
+  - it: authentik disabled (default) renders no blueprint ConfigMap
+    set:
+      authentik.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

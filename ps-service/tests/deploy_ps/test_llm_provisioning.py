@@ -172,6 +172,15 @@ def test_rerun_with_everything_existing_makes_no_create_calls(
     )
     deploy_ps_fixture.seed_existing_secret(vault, "AZURE-API-KEY", DEFAULT_KEY1)
     deploy_ps_fixture.seed_existing_secret(vault, "AZURE-API-VERSION", "preview")
+    # Issue #129 (S7): ensure_authentik_secrets reuses this same vault -- pre-seed its two
+    # generate-once values too, so "everything existing" genuinely covers the whole run, not just
+    # the pre-#129 LLM-only surface this test predates.
+    deploy_ps_fixture.seed_existing_secret(
+        vault, "AUTHENTIK-SECRET-KEY", "existing-authentik-secret-key"
+    )
+    deploy_ps_fixture.seed_existing_secret(
+        vault, "AUTHENTIK-POSTGRES-PASSWORD", "existing-authentik-pg-password"
+    )
 
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 

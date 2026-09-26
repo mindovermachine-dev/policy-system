@@ -30,3 +30,107 @@ llm:
   # no local Podman gateway to reach. Credentials are
   # supplied at install time via --set/existingSecret, never committed here.
   provider: azure
+
+authentik:
+  # Prod-active path: bundled as the production auth broker (invite-only
+  # local-account signup), gating the `authentik` Chart.yaml dependency
+  # (see #129). Authentik's own config (blueprint, ingress, secret content)
+  # is wired in later slices — this key is the on/off switch only.
+  enabled: true
+
+  # Prod-active path: Premium SSD, Retain-reclaim StorageClass for
+  # Authentik's own hand-rolled Postgres (S2, AC-BI-008), matching
+  # falkordb.persistence.durableStorageClass's own prod override
+  # immediately above. Local-test/kind default (values.yaml) is false —
+  # falls back to the cluster's own default StorageClass.
+  postgres:
+    persistence:
+      durableStorageClass:
+        enabled: true
+
+  # Disables the upstream `authentik` dependency's own nested Bitnami
+  # PostgreSQL dependency (its own top-level `postgresql.enabled`, confirmed
+  # via `helm show values authentik --repo https://charts.goauthentik.io
+  # --version 2026.8.3` / charts/authentik-2026.8.3.tgz's own values.yaml) —
+  # we hand-roll our own Postgres instead (S2, PLAN.md §0.3), matching the
+  # FalkorDB precedent of full control over StorageClass/NetworkPolicy.
+  postgresql:
+    enabled: false
+
+  # S5 (#129/CHANGES.md row F1): serves Authentik from a subpath of PS Service's own hostname
+  # (path-based routing, /auth) rather than its own dedicated hostname. `global.env` is the
+  # upstream `authentik` dependency chart's own plain env-var list applied to every one of its
+  # Deployments EXCEPT GeoIP (confirmed via `helm show values authentik --repo
+  # https://charts.goauthentik.io --version 2026.8.3`: root-level `global.env: []`, single-nested
+  # like `blueprints` below, NOT doubled `authentik.authentik.*`) -- deliberately NOT set via the
+  # doubled `authentik.authentik.web.path` key just below: that key is only ever read by the
+  # upstream chart's own auto-generated config Secret (templates/secret.yaml), which S3 already
+  # disabled by setting `existingSecret.secretName` above (confirmed by reading that template:
+  # `{{- if and .Values.authentik.enabled (not .Values.authentik.existingSecret.secretName) }}` --
+  # once `existingSecret.secretName` is set, `authentik.authentik.web.path` is dead, unread
+  # Helm-values input). `global.env`'s plain `env:`/`envFrom:` container fields on the server and
+  # worker Deployments (templates/server/deployment.yaml, templates/worker/deployment.yaml) render
+  # unconditionally, independent of existingSecret -- confirmed via `helm template
+  # charts/policy-system policy-system -f values-prod.yaml ...` (IMPL_SLICE_5.md has the full
+  # rendered output): both Deployments carry `AUTHENTIK_WEB__PATH=/auth/`.
+  global:
+    env:
+      - name: AUTHENTIK_WEB__PATH
+        value: /auth/
+
+  # The upstream `authentik` dependency has no alias, so this chart's own
+  # top-level `authentik:` key above IS the entire subchart values context —
+  # the subchart's own app-config (confirmed via its values.yaml, and against
+  # https://docs.goauthentik.io/install-config/configuration/) lives one
+  # level further down, under its own `authentik:` key, hence the doubled
+  # `authentik.authentik.*` nesting below.
+  authentik:
+    existingSecret:
+      # Non-secret Secret *name* only — the chart never generates this
+      # Secret's contents (AC-BI-010); scripts/deploy-ps.sh (a later slice)
+      # creates/populates it from Key-Vault-sourced values. This is the
+      # *resolved literal* output of policy-system.authentikCredentialsSecretName
+      # (_helpers.tpl) for this repo's one fixed Helm release name
+      # ("policy-system", scripts/deploy-ps.sh's HELM_RELEASE_NAME) —
+      # NOT a live `{{ include ... }}` template call: Helm never templates
+      # values files, and the upstream chart's own `authentik.secret.name`
+      # helper substitutes this field verbatim with no `tpl` re-evaluation
+      # (embedding `{{ }}` syntax here breaks `helm template` outright with a
+      # YAML parse error — verified empirically, see IMPL_SLICE_3.md). Once
+      # this is set, the upstream server/worker Deployments source ALL
+      # config exclusively via `envFrom: secretRef` against this Secret —
+      # every other `authentik.authentik.*` value below (including
+      # postgresql.host/port/name/user) is consequently never read by the
+      # chart at all (upstream's own values.yaml WARNING: "when set,
+      # authentik.* secret values are ignored" — confirmed literally true
+      # for every key, not just the two secret ones).
+      secretName: "policy-system-authentik-credentials"
+    postgresql:
+      # Non-secret Postgres connection values, pointed at S2's hand-rolled
+      # Postgres Service/database/user
+      # (templates/authentik-postgres-service.yaml,
+      # values.yaml authentik.postgres.database/user). Per the existingSecret
+      # note above, these are currently inert dead values in this chart's own
+      # render (existingSecret takes over entirely) — they exist as the
+      # single documented source of truth for what a later slice
+      # (deploy-ps.sh) must write into the existingSecret's own
+      # AUTHENTIK_POSTGRESQL__* keys, and are kept correct/in sync with S2 by
+      # hand, not by any automatic Helm wiring.
+      host: "policy-system-authentik-postgres"
+      port: 5432
+      name: "authentik"
+      user: "authentik"
+
+  # Root-level (single-nested, NOT doubled `authentik.authentik.*` --
+  # confirmed via `helm show values authentik --repo
+  # https://charts.goauthentik.io --version 2026.8.3`: `blueprints:` is a
+  # sibling of the upstream chart's own `authentik:`/`server:`/`worker:`
+  # keys, not nested under any of them). Wires this chart's own
+  # authentik-blueprint-configmap.yaml (S4, #129) so Authentik auto-applies
+  # it on startup/change: Brand flow_device_code patch, the fixed ps-cli
+  # OAuth2 Provider + Application, the invite-gated Enrollment flow
+  # (Invitation -> Prompt -> User Write -> WebAuthn -> User Login), and the
+  # Reputation Policy binding (AC-BI-012).
+  blueprints:
+    configMaps:
+      - "policy-system-authentik-blueprint"

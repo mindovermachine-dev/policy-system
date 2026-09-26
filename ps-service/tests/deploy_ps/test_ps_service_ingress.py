@@ -73,9 +73,17 @@ def test_rerun_with_unchanged_ingress_reports_no_change_via_apply_unchanged_outp
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 
     output_lines = deploy_ps_fixture.read_kubectl_apply_output_log()
-    ingress_lines = [line for line in output_lines if line.startswith("ingress/")]
-    assert ingress_lines, f"no ingress apply-output line recorded: {output_lines}"
-    assert ingress_lines[-1] == f"ingress/{PS_SERVICE_NAME} unchanged"
+    # Filtered to this Ingress's own name specifically, not "the last ingress/ line overall" --
+    # S5 (#129/CHANGES.md row F1) added a second Ingress apply (Authentik's, ensure_authentik_
+    # ingress) right after this one in main(), so PS Service's own line is no longer necessarily
+    # last.
+    ps_service_ingress_lines = [
+        line for line in output_lines if line.startswith(f"ingress/{PS_SERVICE_NAME} ")
+    ]
+    assert ps_service_ingress_lines, (
+        f"no PS Service ingress apply-output line recorded: {output_lines}"
+    )
+    assert ps_service_ingress_lines[-1] == f"ingress/{PS_SERVICE_NAME} unchanged"
 
 
 def test_summary_line_prints_the_https_url_never_a_secret_value(
