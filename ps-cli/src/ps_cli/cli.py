@@ -153,10 +153,9 @@ def _dispatch_command(
     `_resolve_client` either: after Slice 15, `_resolve_client`'s
     `PsServiceClient` requires an *already-valid* token for every business
     call, which would make `auth login` itself circular); `NO_CLIENT_DISPATCH`
-    (`get_catalog`, issue #66 D13, reads the local curated-content repo only --
-    like `config_*`/`auth_*` above it must never construct a `PsServiceClient`,
-    but unlike those its own dispatch adapter still resolves `curated_repo_path`
-    via `load_config()` internally; `.service_url` is simply never touched);
+    (currently empty -- issue #127 removed its only entrant, `get_catalog`; kept
+    as a standing extensibility point for a future command that, like
+    `config_*`/`auth_*` above it, must never construct a `PsServiceClient`);
     otherwise `DISPATCH`, resolving `client` via `_resolve_client` first.
     Extracted out of `run()` to keep its own cyclomatic complexity under
     `level1-coding-principles.md`'s cap of 8.

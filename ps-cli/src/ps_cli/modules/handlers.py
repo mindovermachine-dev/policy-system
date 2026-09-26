@@ -17,8 +17,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from ps_cli import catalog_repo, render
-from ps_cli.config import load_config
 from ps_cli.errors import assert_contract
 from ps_cli.intake_validation import validate_local_seed_file
 
@@ -26,7 +24,6 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
 
-    from ps_cli.config import CliConfig
     from ps_cli.http_client import PsServiceClientProtocol
 
 # The dependency name PS Service's `/ready` reports when its LLM provider is unreachable
@@ -106,59 +103,6 @@ def handle_ingest_document(document_path: Path, client: PsServiceClientProtocol)
         print(line)
 
 
-def handle_get_catalog(config: CliConfig) -> None:
-    """Print the local curated-content catalog as a bordered table.
-
-    Reads `config.curated_repo_path`'s on-disk `catalog.json` directly via
-    `catalog_repo.read_catalog()` -- no `PsServiceClient` is ever constructed
-    (D13: `get catalog` needs no PS Service connection at all, unlike every
-    other command in this module). This is the only handler here that takes
-    a `CliConfig` instead of a client, by design -- see `ps_cli.cli.run()`'s
-    `NO_CLIENT_DISPATCH` branch, which never calls `_resolve_client` for it.
-    Format: one row per instrument with columns "Instrument ID", "Title",
-    "Source Type", "Jurisdiction" (rendered via `render.print_table()`), with
-    ``jurisdiction`` printed as ``"n/a"`` when `None` (an internal source,
-    D15). Prints nothing if the catalog is empty.
-    """
-    entries = catalog_repo.read_catalog(config.curated_repo_path)
-    rows = [
-        [
-            entry.instrument_id,
-            entry.title,
-            entry.source_type,
-            entry.jurisdiction if entry.jurisdiction is not None else "n/a",
-        ]
-        for entry in entries
-    ]
-    render.print_table(["Instrument ID", "Title", "Source Type", "Jurisdiction"], rows)
-
-
-def handle_restore_instrument(
-    instrument_id: str,
-    client: PsServiceClientProtocol,
-    *,
-    curated_repo_path: Path,
-) -> None:
-    """Restore one curated instrument's artifact into PS Service.
-
-    `instrument_id`'s format is already validated by argparse's
-    `type=_instrument_id_type` callback (`ps_cli.modules.parser`) before this
-    handler ever runs (L1 "Fail Fast at Boundaries"). Reads the artifact
-    locally via `catalog_repo.read_artifact` (D5: `ps-cli` reads the artifact
-    off `curated_repo_path`, PS Service does the FalkorDB work), then uploads
-    it via `client.restore_instrument()`. On success, prints the restored
-    instrument id and each completed stage's name and status. A `PsCliError`
-    raised by `catalog_repo.read_artifact` (missing local instrument directory) or
-    by the client (a structured PS Service rejection) propagates uncaught --
-    only `ps_cli.cli.run()` catches `PsCliError` (PLAN.md §1 D5/D9).
-    """
-    artifact = catalog_repo.read_artifact(curated_repo_path, instrument_id)
-    result = client.restore_instrument(artifact)
-    print(f"instrument_id: {result.instrument_id}")
-    for stage in result.stages:
-        print(f"{stage.stage}: {stage.status}")
-
-
 def handle_export_instrument(
     instrument_id: str,
     destination: Path | None,
@@ -185,9 +129,8 @@ def handle_export_instrument(
     (the base64-decoded blobs, written as raw bytes) and `manifest.json`
     (the manifest's fields, JSON-encoded). On success, prints the exported
     instrument id, each completed stage's name and status, then the three
-    written paths -- mirroring `handle_restore_instrument`'s summary-line
-    shape, plus the paths. A `PsCliError` raised by the client (a structured
-    PS Service rejection) propagates uncaught -- only `ps_cli.cli.run()`
+    written paths. A `PsCliError` raised by the client (a structured PS
+    Service rejection) propagates uncaught -- only `ps_cli.cli.run()`
     catches `PsCliError` (PLAN.md §1 D5/D9).
     """
     resolved_destination = destination or Path.cwd()
@@ -261,39 +204,12 @@ def handle_get_health(client: PsServiceClientProtocol) -> None:
     print(f"ready: {readiness.status}")
 
 
-def _dispatch_get_catalog(args: argparse.Namespace) -> None:
-    """Adapt `handle_get_catalog`'s signature to the `NO_CLIENT_DISPATCH` shape.
-
-    Calls `load_config()` directly -- never `ps_cli.cli._resolve_client` --
-    so no `PsServiceClient` is ever constructed for this command (D13).
-    Reads only `.curated_repo_path` off the result; `.service_url` is never
-    touched, per D13's "skip `_resolve_client`/`load_config().service_url`
-    entirely" requirement.
-    """
-    context = getattr(args, "context", None)
-    handle_get_catalog(load_config(context=context))
-
-
-def _dispatch_restore_instrument(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
-    """Adapt `handle_restore_instrument`'s signature to the `DISPATCH` shape.
-
-    Unlike `get_catalog`, `restore instrument` does contact PS Service (D5), so
-    `client` here is the real `_resolve_client`-built one -- only the extra
-    `curated_repo_path` value is resolved locally via `load_config()`.
-    """
-    context = getattr(args, "context", None)
-    curated_repo_path = load_config(context=context).curated_repo_path
-    handle_restore_instrument(
-        cast("str", args.instrument_id), client, curated_repo_path=curated_repo_path
-    )
-
-
 def _dispatch_export_instrument(args: argparse.Namespace, client: PsServiceClientProtocol) -> None:
     """Adapt `handle_export_instrument`'s signature to the `DISPATCH` shape.
 
-    Unlike `restore_instrument`, `export` never reads the local curated
-    catalog (D1's own scope point), so no `load_config()` call is needed
-    here -- only `args.instrument_id`/`args.destination` are unpacked.
+    `export` never reads the local curated catalog (D1's own scope point), so
+    no `load_config()` call is needed here -- only
+    `args.instrument_id`/`args.destination` are unpacked.
     """
     destination_raw = cast("str | None", args.destination)
     handle_export_instrument(
@@ -321,7 +237,6 @@ def _dispatch_get_health(args: argparse.Namespace, client: PsServiceClientProtoc
 
 DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None]] = {
     "ingest_document": _dispatch_ingest_document,
-    "restore_instrument": _dispatch_restore_instrument,
     "export_instrument": _dispatch_export_instrument,
     "get_health": _dispatch_get_health,
 }
@@ -329,6 +244,7 @@ DISPATCH: dict[str, Callable[[argparse.Namespace, PsServiceClientProtocol], None
 # Commands that, like `config_*` (`ps_cli.modules.config_handlers.CONFIG_DISPATCH`), must
 # never construct a `PsServiceClient` or resolve `.service_url` at all (D13). `ps_cli.
 # cli.run()` checks this dict before falling through to `DISPATCH` + `_resolve_client`.
-NO_CLIENT_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {
-    "get_catalog": _dispatch_get_catalog,
-}
+# Empty since `get_catalog` (its only entrant) was removed -- the mechanism itself is kept
+# for a future no-client command to reuse, mirroring `CONFIG_DISPATCH`/`AUTH_DISPATCH`'s
+# own standing dispatch-table pattern.
+NO_CLIENT_DISPATCH: dict[str, Callable[[argparse.Namespace], None]] = {}

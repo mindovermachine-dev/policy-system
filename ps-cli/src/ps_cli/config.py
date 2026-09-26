@@ -26,7 +26,6 @@ from ps_cli.targets import load_targets, resolve_config_dir
 
 _OVERRIDE_FILE_NAME = "ps-cli.toml"
 _ENV_VAR_NAME = "PS_CLI_SERVICE_URL"
-_CURATED_REPO_ENV_VAR_NAME = "PS_CLI_CURATED_REPO_PATH"
 _VALID_URL_SCHEMES = frozenset({"http", "https"})
 
 
@@ -35,7 +34,6 @@ class CliConfig:
     """Fully-resolved ps-cli configuration."""
 
     service_url: str
-    curated_repo_path: Path = Path("./curated-content")
     context_name: str | None = None
 
 
@@ -111,38 +109,6 @@ def _validate_service_url(url: str, *, source: str) -> None:
         msg=f"PS Service URL '{url}' is not a valid http(s) URL",
         hint=f"this value came from {source}",
     )
-
-
-def _resolve_curated_repo_path(cwd: Path) -> Path:
-    """Resolve `curated_repo_path`, independently of `service_url`'s resolution.
-
-    Precedence (highest wins): the `PS_CLI_CURATED_REPO_PATH` environment
-    variable; otherwise the project-root override file (`<cwd>/ps-cli.toml`)
-    deep-merged over the packaged default — the same env-var/override-file/
-    packaged-default chain `service_url` uses in `load_config`'s `else`
-    branch, but resolved by its own standalone function so it applies
-    unconditionally, regardless of which `service_url` case fires (env var /
-    `--context` / `targets.current_context` / the override-file chain). See
-    PLAN.md D3 / CHANGES.md MI2.
-    """
-    env_value = os.environ.get(_CURATED_REPO_ENV_VAR_NAME)
-    if env_value is not None:
-        assert_contract(
-            contract=env_value != "",
-            msg=(
-                f"{_CURATED_REPO_ENV_VAR_NAME} is set but empty; "
-                "unset it to use the default, or set a path"
-            ),
-        )
-        return Path(env_value)
-    override = _read_project_override(cwd)
-    merged = _deep_merge(_read_packaged_default(), override)
-    raw = merged.get("curated_repo_path")
-    assert_contract(
-        contract=isinstance(raw, str),
-        msg=f"resolved config's 'curated_repo_path' is not a string, got {raw!r}",
-    )
-    return Path(cast("str", raw))
 
 
 def load_config(
@@ -255,9 +221,7 @@ def load_config(
         service_url = cast("str", service_url_raw)
 
     _validate_service_url(service_url, source=source)
-    curated_repo_path = _resolve_curated_repo_path(resolved_cwd)
     return CliConfig(
         service_url=service_url,
-        curated_repo_path=curated_repo_path,
         context_name=context_name,
     )

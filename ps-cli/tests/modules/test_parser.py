@@ -155,9 +155,12 @@ def test_instrument_id_type_rejects_leading_hyphen() -> None:
 
 
 def test_instrument_id_type_rejects_path_traversal_segment() -> None:
-    """An instrument id containing '..' is rejected -- it is later used to build a
-    local filesystem path (`catalog_repo.read_artifact`), so this is the first of two
-    defense-in-depth validation layers against a path-traversal payload.
+    """An instrument id containing '..' is rejected -- defense-in-depth against a
+    path-traversal payload, retained even after issue #127 removed this type's
+    original filesystem-path-building consumer (`restore instrument`, via the now-
+    deleted `catalog_repo.read_artifact`) -- `export instrument` still uses this
+    same `type=` callback, and the strict charset remains the right validation for
+    an id sent on to PS Service either way.
     """
     with pytest.raises(argparse.ArgumentTypeError):
         _instrument_id_type("../../etc")
@@ -167,32 +170,6 @@ def test_instrument_id_type_rejects_forward_slash() -> None:
     """An instrument id containing '/' is rejected -- it must be a single path segment."""
     with pytest.raises(argparse.ArgumentTypeError):
         _instrument_id_type("CRA/1.0")
-
-
-def test_build_parser_parses_get_catalog() -> None:
-    """`ps-cli get catalog` (no arguments) parses correctly (D13)."""
-    args = build_parser().parse_args(["get", "catalog"])
-
-    assert args.command == "get_catalog"
-
-
-def test_build_parser_parses_restore_instrument_with_instrument_id() -> None:
-    """`ps-cli restore instrument CRA-1.0` parses the positional instrument_id (D13/D17)."""
-    args = build_parser().parse_args(["restore", "instrument", "CRA-1.0"])
-
-    assert args.command == "restore_instrument"
-    assert args.instrument_id == "CRA-1.0"
-
-
-def test_build_parser_restore_instrument_with_malformed_instrument_id_exits_two(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A malformed instrument_id is rejected by argparse's `type=` callback, exit code 2."""
-    with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["restore", "instrument", "../etc"])
-
-    assert excinfo.value.code == 2
-    assert "not a valid instrument id" in capsys.readouterr().err
 
 
 def test_build_parser_parses_get_health() -> None:

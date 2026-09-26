@@ -65,36 +65,6 @@ class IngestionResult:
     stages: list[StageOutcome]
 
 
-class RestorationStageOutcomeBody(TypedDict):
-    """Raw JSON shape of one entry in a `POST /restorations` 200 response's `stages` array."""
-
-    stage: str
-    status: str
-
-
-class RestorationAcceptedResponseBody(TypedDict):
-    """Raw JSON shape of a `POST /restorations` 200 response body."""
-
-    instrument_id: str
-    stages: list[RestorationStageOutcomeBody]
-
-
-@dataclass(frozen=True)
-class RestorationStageOutcome:
-    """One completed restore stage, as reported in a restore's success result."""
-
-    stage: str
-    status: str
-
-
-@dataclass(frozen=True)
-class RestorationResult:
-    """Parsed success result of `PsServiceClient.restore_instrument()`."""
-
-    instrument_id: str
-    stages: list[RestorationStageOutcome]
-
-
 class ExportManifestBody(TypedDict):
     """Raw JSON shape of the `manifest` field in a `POST /exports` 200 response body."""
 

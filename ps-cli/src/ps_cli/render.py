@@ -1,12 +1,13 @@
 """Shared bordered-table rendering for ps-cli's read commands.
 
-`handle_get_catalog` (`ps_cli/modules/handlers.py`) and
-`handle_config_get_contexts` (`ps_cli/modules/config_handlers.py`) need
-*identical* bordered/aligned-table rendering over different data shapes (4
-columns vs. 3 columns) -- this module is generic over `headers`/`rows` and
-has no knowledge of "catalog" or "context" shapes, per L1 DRY (extract
-shared logic into a single location), mirroring the existing
-`toml_writer.py` shared-module precedent.
+`handle_config_get_contexts` (`ps_cli/modules/config_handlers.py`) is this
+module's current consumer -- generic over `headers`/`rows`, with no
+knowledge of "context" shapes specifically, per L1 DRY (extract shared
+logic into a single location), mirroring the existing `toml_writer.py`
+shared-module precedent. (Issue #127 removed its other former consumer,
+`handle_get_catalog`, which rendered the local curated catalog as a table
+the same way; this module itself was untouched -- `handle_config_get_contexts`
+still needs it.)
 """
 
 from __future__ import annotations

@@ -6,6 +6,8 @@ One of the client types users use to access Policy System is Agent Skills. The f
 - ps-ingest-regulation. This skill ingests an EU regulation into the Company Policy Knowledge Graph by CELEX identifier, whether or not that CELEX is in the curated catalog.
 - ps-check-regulations. This skill sweeps every regulation tracked in the Company Policy Knowledge Graph for detected amendments, automatically re-ingesting any that are found, and reports the per-instrument outcome.
 - ps-near-miss-review. This skill lists near-miss pending reviews (Company Merge dedup candidates) awaiting a keep-separate/merge decision in the Company Policy Knowledge Graph, and resolves one by keeping its two entities separate or merging them.
+- ps-get-catalog-listing. This skill lists every curated instrument (external and internal) available from the Policy System's configured curated-content source.
+- ps-restore-instrument. This skill fetches one curated instrument's artifact from the Policy System's configured curated-content source and restores it into the Company Policy Knowledge Graph, given its instrument_id.
 
 ## Development of Policy System Skills
 

@@ -7,7 +7,6 @@ never see `httpx` exceptions directly.
 
 from __future__ import annotations
 
-import base64
 import sys
 from http import HTTPStatus
 from typing import TYPE_CHECKING, NoReturn, Protocol, cast
@@ -23,13 +22,10 @@ from ps_cli.models import (
     ExportStageOutcome,
     IngestionResult,
     ReadinessResult,
-    RestorationResult,
-    RestorationStageOutcome,
     StageOutcome,
 )
 
 if TYPE_CHECKING:
-    from ps_cli.catalog_repo import CuratedArtifact
     from ps_cli.credentials import CredentialStore
     from ps_cli.targets import AuthOverrides
 
@@ -56,7 +52,6 @@ _AUTHENTICATION_REJECTED_MSG = "authentication rejected by {base_url}; run `ps-c
 _READ_TIMEOUT_MSG = "PS Service at {base_url} did not respond in time."
 
 _INGESTIONS_PATH = "/ingestions"
-_RESTORATIONS_PATH = "/restorations"
 _EXPORTS_PATH = "/exports"
 _HEALTH_PATH = "/health"
 _READY_PATH = "/ready"
@@ -74,21 +69,12 @@ _READY_PATH = "/ready"
 # AMENDMENT / briefs/BATCH_H_FIX.md.
 _INGESTION_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=1800.0, write=5.0, pool=5.0)
 
-# `POST /restorations` never calls an LLM provider at all (D5/D6: restore's dedup replay
-# reuses the artifact's own embeddings, no live RouteEmbedding call) -- unlike
-# `_INGESTION_REQUEST_TIMEOUT`'s 30 minutes, there is no unbounded external-provider wait
-# to accommodate here. Still wider than the fast client-wide 30s default: a large curated
-# graph's staged writes + offline dedup merge run synchronously, in-process, on PS
-# Service, so this is a documented, generous-but-bounded assumption (no real curated
-# instrument has been timed yet), not a precisely measured value like ingestion's.
-_RESTORATION_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=5.0, pool=5.0)
-
 # `POST /exports` always runs a real LLM embeddings backfill (PLAN.md §1 D8) -- unlike
-# `_RESTORATION_REQUEST_TIMEOUT`'s carve-out above (restore's dedup replay reuses the
-# artifact's own embeddings, no live RouteEmbedding call), export has no such shortcut.
-# This mirrors `_INGESTION_REQUEST_TIMEOUT`'s own reasoning and exact value instead --
-# a real, larger instrument's embedding backfill could plausibly exceed restore's
-# shorter 300s budget.
+# a restore-from-catalog's dedup replay (which reuses the artifact's own embeddings, no
+# live RouteEmbedding call; issue #127 moved that path off `ps-cli` entirely, onto the
+# `ps-restore-instrument` skill), export has no such shortcut. This mirrors
+# `_INGESTION_REQUEST_TIMEOUT`'s own reasoning and exact value instead -- a real, larger
+# instrument's embedding backfill could plausibly exceed a shorter restore-style budget.
 _EXPORT_REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=1800.0, write=5.0, pool=5.0)
 
 
@@ -223,39 +209,6 @@ def _parse_ingestion_response(payload: object) -> IngestionResult:
     )
 
 
-def _parse_restoration_stage_outcome(payload: object) -> RestorationStageOutcome:
-    """Parse one raw JSON object into a `RestorationStageOutcome`.
-
-    Raises `PsCliError` (generic, defensive — D5) if the shape does not match.
-    """
-    if not isinstance(payload, dict):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    body = cast("dict[str, object]", payload)
-    stage = body.get("stage")
-    status = body.get("status")
-    if not isinstance(stage, str) or not isinstance(status, str):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    return RestorationStageOutcome(stage=stage, status=status)
-
-
-def _parse_restoration_response(payload: object) -> RestorationResult:
-    """Parse a `POST /restorations` 200 response body into a `RestorationResult`.
-
-    Raises `PsCliError` (generic, defensive — D5) if the body does not match the
-    expected `RestorationAcceptedResponse` shape.
-    """
-    if not isinstance(payload, dict):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    body = cast("dict[str, object]", payload)
-    instrument_id = body.get("instrument_id")
-    stages_raw = body.get("stages")
-    if not isinstance(instrument_id, str) or not isinstance(stages_raw, list):
-        raise PsCliError(msg=_UNEXPECTED_RESPONSE_SHAPE_MSG)
-    stage_items = cast("list[object]", stages_raw)
-    stages = [_parse_restoration_stage_outcome(item) for item in stage_items]
-    return RestorationResult(instrument_id=instrument_id, stages=stages)
-
-
 def _require_str_field(body: dict[str, object], key: str) -> str:
     """Return `body[key]` as `str`, or raise `PsCliError` if it is missing or not a string.
 
@@ -357,7 +310,7 @@ def _raise_from_error_body(response: httpx.Response) -> NoReturn:
     "failing_stage"}, "run_id"}`); falls back to a generic `PsCliError` naming
     the HTTP status if the body is not JSON or does not match that shape —
     never assume the server always returns the documented shape. Shared
-    verbatim by `ingest_internal()` and `restore_instrument()` — every PS
+    verbatim by `ingest_internal()` and `export_instrument()` — every PS
     Service endpoint returns this same structured error body shape.
     """
     generic_message = _UNEXPECTED_ERROR_RESPONSE_MSG.format(status=response.status_code)
@@ -414,10 +367,6 @@ class PsServiceClientProtocol(Protocol):
 
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """`POST /ingestions` with `{"source": "internal", "content": content}`."""
-        ...
-
-    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
-        """`POST /restorations` with `artifact`'s manifest fields + base64-encoded blobs."""
         ...
 
     def export_instrument(self, instrument_id: str) -> ExportResult:
@@ -590,50 +539,6 @@ class PsServiceClient:
         response = self._get(_READY_PATH)
         return _parse_readiness_body(response.json())
 
-    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
-        """`POST /restorations` with `artifact`'s manifest fields + base64-encoded blobs.
-
-        `artifact` was read locally off `curated_repo_path` by
-        `ps_cli.catalog_repo.read_artifact()` — this method never touches the
-        local filesystem itself, only uploads what it was given (D5: `ps-cli`
-        reads the artifact locally, PS Service does the FalkorDB work).
-        `baseline_blob`/`native_blob` are base64-encoded verbatim, unparsed —
-        `ps-cli` never inspects their JSON content (CHANGES2.md §3.7). Raises
-        `PsCliError` if PS Service cannot be reached, if it returns a non-2xx
-        response (parsed per D5's error-body mapping — a checksum/
-        schema_version rejection surfaces as `restore_artifact_rejected`, any
-        other restore failure as `restore_stage_failed` naming the failing
-        stage), or if a 200 response body does not match the expected
-        success shape.
-        """
-        manifest = artifact.manifest
-        body = {
-            "instrument_id": manifest.instrument_id,
-            "manifest": {
-                "instrument_id": manifest.instrument_id,
-                "celex": manifest.celex,
-                "title": manifest.title,
-                "short_name": manifest.short_name,
-                "version": manifest.version,
-                "source_type": manifest.source_type,
-                "jurisdiction": manifest.jurisdiction,
-                "schema_version": manifest.schema_version,
-                "exported_at": manifest.exported_at,
-                "baseline_sha256": manifest.baseline_sha256,
-                "native_sha256": manifest.native_sha256,
-            },
-            "baseline_blob_base64": base64.b64encode(artifact.baseline_blob).decode("ascii"),
-            "native_blob_base64": base64.b64encode(artifact.native_blob).decode("ascii"),
-        }
-        response = self._authenticated_post(
-            _RESTORATIONS_PATH,
-            json=body,
-            timeout=_RESTORATION_REQUEST_TIMEOUT,
-        )
-        if not response.is_success:
-            _raise_from_error_body(response)
-        return _parse_restoration_response(response.json())
-
     def export_instrument(self, instrument_id: str) -> ExportResult:
         """`POST /exports` with `{"instrument_id": instrument_id}`.
 
@@ -649,7 +554,8 @@ class PsServiceClient:
         Interface config as `export_config_incomplete`), or if a 200
         response body does not match the expected success shape. Uses
         `_EXPORT_REQUEST_TIMEOUT` (D8) -- export always runs a real LLM
-        embeddings backfill, unlike `restore_instrument()`'s shorter one.
+        embeddings backfill, so this needs a longer budget than a bounded,
+        no-LLM-call endpoint would.
         """
         response = self._authenticated_post(
             _EXPORTS_PATH,

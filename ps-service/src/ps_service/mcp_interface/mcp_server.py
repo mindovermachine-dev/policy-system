@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.mcpserver.resolve import Elicit, Resolve
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from ps_service import dependency_health
 from ps_service.api.catalog import find_by_celex
@@ -36,9 +36,12 @@ from ps_service.api.change_check_orchestration import (
 )
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
+    CuratedSourceUnavailableError,
     IngestionConfigIncompleteError,
     PendingReviewNotFoundError,
     PipelineStageError,
+    RestoreArtifactRejectedError,
+    RestoreStageFailedError,
 )
 from ps_service.api.ingestion_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
@@ -47,10 +50,19 @@ from ps_service.api.ingestion_orchestration import (
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
 )
+from ps_service.api.models import (
+    CatalogInstrumentEntry,
+    CatalogRestorationRequest,
+    CuratedCatalogResponse,
+)
 from ps_service.api.near_miss_review_orchestration import (
     build_default_near_miss_review_dependencies,
     run_list_near_misses,
     run_resolve_near_miss,
+)
+from ps_service.api.restore_orchestration import (
+    build_default_restore_from_catalog_dependencies,
+    run_restoration_from_catalog_source,
 )
 from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
@@ -58,7 +70,11 @@ from ps_service.api.routes import (
 )
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.curated_source import store as catalog_source_store
-from ps_service.curated_source.errors import CuratedSourceConfigurationError
+from ps_service.curated_source.catalog_client import build_default_curated_catalog_dependencies
+from ps_service.curated_source.errors import (
+    CuratedSourceConfigurationError,
+    CuratedSourceFetchError,
+)
 from ps_service.curated_source.resolve import resolve_effective_source
 from ps_service.curated_source.source_url import validate_source_url
 from ps_service.logging import bind_run_context, current_run_id, emit_log_entry
@@ -87,7 +103,9 @@ if TYPE_CHECKING:
     from ps_service.api.change_check_orchestration import ChangeCheckDependencies
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
+    from ps_service.api.restore_orchestration import CatalogRestoreDependencies
     from ps_service.config import ServiceConfig
+    from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.logging.emitter import LogEmitter
 
@@ -108,6 +126,35 @@ _LLM_INTERFACE_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
 _SHORT_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 # Same CELEX pattern `api/models.py`'s `CatalogIngestionRequest.celex` already enforces.
 _CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
+# D-INSTRUMENT-ID-STRICTNESS: same charset/length bound as ps-cli's own
+# `_INSTRUMENT_ID_PATTERN` (`ps-cli/src/ps_cli/modules/parser.py:31`) -- at least as
+# strict as `CatalogRestorationRequest.instrument_id`'s looser REST-sibling pattern
+# (`api/models.py:181-183`, no `".."` guard of its own). PLAN.md's own proposed
+# single-regex collapse (`^(?!.*\.\.)...`) does not work here: pydantic-core's regex
+# backend (the Rust `regex` crate, wired in by the MCP SDK's own `func_metadata` ->
+# `create_model` call) does not support look-around at all -- confirmed by the
+# `SchemaError: look-around... is not supported` raised at tool-registration time
+# when that pattern was tried. `_reject_path_traversal_segment` below (an
+# `AfterValidator`) supplies the `".."` rejection instead, still entirely within
+# pydantic's own schema-validation pass -- i.e. still before this tool's body ever
+# runs -- mirroring ps-cli's own two-step `_instrument_id_type` check (regex
+# fullmatch, then an explicit `".." in value` scan) rather than collapsing it.
+_RESTORE_INSTRUMENT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+
+
+def _reject_path_traversal_segment(value: str) -> str:
+    """`AfterValidator` companion to `_RESTORE_INSTRUMENT_ID_PATTERN` (D-INSTRUMENT-ID-STRICTNESS).
+
+    Runs immediately after the base charset pattern matches, within the same
+    pydantic schema-validation pass the MCP SDK runs before dispatching to
+    `restore_instrument`'s body -- see `_RESTORE_INSTRUMENT_ID_PATTERN`'s own
+    comment for why this is a separate validator rather than a single regex.
+    """
+    if ".." in value:
+        msg = "instrument_id must not contain '..'"
+        raise ValueError(msg)
+    return value
+
 
 # CHANGES.md H2: the merge-decision confirmation gate's own warning text --
 # both the resolver's `Elicit(...)` message the client actually sees and the
@@ -401,6 +448,24 @@ def _sanitize_near_miss_review_graph_opens(
         dependencies,
         open_single_tenant_graph=_sanitize_graph_open(dependencies.open_single_tenant_graph),
     )
+
+
+def _sanitize_restore_graph_opens(
+    dependencies: CatalogRestoreDependencies,
+) -> CatalogRestoreDependencies:
+    """Wrap `dependencies.open_db` (D-SANITIZE-RESTORE).
+
+    `run_restoration_from_catalog_source` calls `dependencies.open_db`
+    directly, with no try/except of its own -- confirmed by reading the
+    function's full body. Mirrors `_sanitize_pipeline_graph_opens`'s/
+    `_sanitize_change_check_graph_opens`'s/`_sanitize_near_miss_review_graph_opens`'s
+    own shape exactly, reusing the same generic per-opener
+    `_sanitize_graph_open` wrapper (not reinvented) rather than duplicating
+    its try/except body a fourth time. `dependencies.single_tenant_graph_name`
+    is a pure name lookup with no I/O of its own (`_default_single_tenant_graph_name`,
+    `restore_orchestration.py:400-407`) and needs no wrapping.
+    """
+    return dataclasses.replace(dependencies, open_db=_sanitize_graph_open(dependencies.open_db))
 
 
 def _resolve_and_ingest(
@@ -779,6 +844,117 @@ def get_catalog_source() -> dict[str, object] | str:
         return {"url": effective.url, "source": "override" if effective.is_override else "default"}
 
     return _run_mcp_action("get_catalog_source", principal, _body)
+
+
+@server.tool(name="get-catalog-listing")
+def get_catalog_listing() -> dict[str, object] | str:
+    """GetCatalogListing: list every curated instrument (external and internal), issue #127.
+
+    Runs in-process, exactly like `GET /catalog` does (D-CATALOG-NO-ORCH-LAYER
+    -- there is no separate orchestration module for this route to delegate
+    to, so this tool replicates `list_curated_catalog`'s own two-call
+    sequence and response mapping inline): resolves the effective
+    curated-content source (a persisted FalkorDB override when one exists,
+    else the configured env-var/default -- D-FAILOPEN, so this tool never
+    fails on a FalkorDB outage during that check), then fetches and parses
+    `catalog.json` from it. Takes zero parameters -- there is no
+    client-supplied input to validate, so AC-BI-005's format-validation
+    surface does not apply here, a deliberate absence mirroring
+    `check_regulations`/`near_misses_list`.
+
+    On success, returns the same structured listing `GET /catalog` returns:
+    an `instruments` list, one entry per curated instrument (external and
+    internal, unfiltered), each carrying `instrument_id`, `title`,
+    `source_type`, and `jurisdiction` (`None` for an internal-source entry).
+    Returns a string beginning `error: ` when the configured curated-content
+    source is unreachable or returns a missing/malformed `catalog.json`, or
+    (this tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        dependencies: CuratedCatalogDependencies = build_default_curated_catalog_dependencies()
+        effective_source = dependencies.resolve_effective_source(config)
+        try:
+            entries = dependencies.fetch_catalog(effective_source.url)
+        except CuratedSourceFetchError as exc:
+            return f"error: {exc}"
+        return CuratedCatalogResponse(
+            instruments=[
+                CatalogInstrumentEntry(
+                    instrument_id=entry.instrument_id,
+                    title=entry.title,
+                    source_type=entry.source_type,
+                    jurisdiction=entry.jurisdiction,
+                )
+                for entry in entries
+            ]
+        ).model_dump()
+
+    return _run_mcp_action("get_catalog_listing", principal, _body)
+
+
+@server.tool()
+def restore_instrument(
+    instrument_id: Annotated[
+        str,
+        Field(pattern=_RESTORE_INSTRUMENT_ID_PATTERN),
+        AfterValidator(_reject_path_traversal_segment),
+    ],
+) -> dict[str, object] | str:
+    """RestoreInstrumentFromCatalog: fetch and restore a curated instrument's artifact (#127).
+
+    Runs in-process, exactly like `POST /restorations/from-catalog` does
+    (D-RESTORE-DELEGATE): fetches `instrument_id`'s manifest/baseline/native
+    artifact from the effective curated-content source (a persisted
+    FalkorDB override when one exists, else the configured env-var/default),
+    then restores it into the policy graph -- delegating directly to
+    `run_restoration_from_catalog_source`, the exact same function the REST
+    route calls, never reimplemented. `instrument_id` is validated against
+    the same charset/length bound ps-cli's own `restore instrument`
+    positional used, plus its explicit rejection of any `".."` substring
+    (AC-BI-005, D-INSTRUMENT-ID-STRICTNESS) -- rejected at the MCP schema
+    layer, before this tool's body ever runs.
+
+    On success, returns the same structured summary ps-cli's `restore
+    instrument` used to print: `instrument_id` and one `stages` entry per
+    completed restore stage, each carrying its own `stage`/`status`
+    (AC-BI-004). Returns a string beginning `error: ` when the configured
+    curated-content source is unreachable or the fetched artifact is
+    missing/malformed, when the fetched artifact fails checksum/
+    schema_version verification, when any other restore stage genuinely
+    fails (including a missing `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
+    configuration value), when the policy graph database cannot be reached,
+    or (this tool's own residual safety net) on any other unexpected
+    failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        request_body = CatalogRestorationRequest(instrument_id=instrument_id)
+        dependencies: CatalogRestoreDependencies = _sanitize_restore_graph_opens(
+            build_default_restore_from_catalog_dependencies()
+        )
+        try:
+            outcome = run_restoration_from_catalog_source(
+                request_body,
+                config=config,
+                actor=principal or "unknown",
+                dependencies=dependencies,
+            )
+        except (
+            CuratedSourceUnavailableError,
+            RestoreArtifactRejectedError,
+            RestoreStageFailedError,
+        ) as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return outcome.model_dump()
+
+    return _run_mcp_action("restore_instrument", principal, _body)
 
 
 @server.tool()

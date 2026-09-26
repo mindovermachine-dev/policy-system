@@ -29,8 +29,6 @@ from ps_cli.models import (
     ExportStageOutcome,
     IngestionResult,
     ReadinessResult,
-    RestorationResult,
-    RestorationStageOutcome,
 )
 from ps_cli.modules.parser import build_parser
 from ps_cli.oidc_discovery import ResolvedAuthParameters
@@ -44,7 +42,6 @@ if TYPE_CHECKING:
 
     from conftest import AlwaysRaisingPersistenceBackend, InMemoryPersistenceBackend
 
-    from ps_cli.catalog_repo import CuratedArtifact
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _MAIN_MODULE_PATH = Path(__file__).resolve().parent.parent / "src" / "ps_cli" / "__main__.py"
@@ -76,11 +73,6 @@ class _UnusedPsServiceClientMethods:
     def ingest_internal(self, content: dict[str, object]) -> IngestionResult:
         """Fail: this test's fake does not expect `ingest_internal()` to be called."""
         msg = f"ingest_internal must not be called in this test (content={content!r})"
-        raise AssertionError(msg)
-
-    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
-        """Fail: this test's fake does not expect `restore_instrument()` to be called."""
-        msg = f"restore_instrument must not be called in this test (artifact={artifact!r})"
         raise AssertionError(msg)
 
     def export_instrument(self, instrument_id: str) -> ExportResult:
@@ -998,13 +990,15 @@ def test_ac_bi_006_context_param_overrides_for_one_call_only_not_persisted(
 
 
 def test_parser_context_flag_before_subcommand_parses_correctly() -> None:
-    """`ps-cli --context dev get catalog` (flag before subcommand) parses `args.context`.
+    """`ps-cli --context dev get health` (flag before subcommand) parses `args.context`.
 
     The issue's own literal example (PLAN.md §1 D7's shared-parent-parser `SUPPRESS`
     mechanism, §0.4) -- proves the flag survives the subparser dispatch's namespace copy
-    when given before the subcommand name, not only after it.
+    when given before the subcommand name, not only after it. Uses `get health` (`get
+    catalog` was removed by issue #127) -- either leaf exercises the same shared-parser
+    mechanism, since the assertion is only about `args.context`, not the resolved command.
     """
-    args = build_parser().parse_args(["--context", "dev", "get", "catalog"])
+    args = build_parser().parse_args(["--context", "dev", "get", "health"])
 
     assert args.context == "dev"
 
@@ -1038,141 +1032,6 @@ def test_run_config_get_contexts_never_constructs_ps_service_client_and_prints_c
     assert "http://ctx-dev:9000" in captured.out
     assert "prod" in captured.out
     assert "https://ps.example.com" in captured.out
-
-
-def _write_catalog_fixture(repo_path: Path) -> None:
-    (repo_path / "catalog.json").write_text(
-        json.dumps(
-            [
-                {
-                    "instrument_id": "CRA-1.0",
-                    "title": "Cyber Resilience Act",
-                    "source_type": "external",
-                    "jurisdiction": "EU",
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_instrument_fixture(repo_path: Path, instrument_id: str) -> None:
-    instrument_dir = repo_path / instrument_id
-    instrument_dir.mkdir(parents=True)
-    manifest = {
-        "instrument_id": instrument_id,
-        "celex": "32024R2847",
-        "title": "Cyber Resilience Act",
-        "short_name": "CRA",
-        "version": "1.0",
-        "source_type": "external",
-        "jurisdiction": "EU",
-        "schema_version": "1.0.0",
-        "exported_at": "2026-09-04T00:00:00Z",
-        "baseline_sha256": "a" * 64,
-        "native_sha256": "b" * 64,
-    }
-    (instrument_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (instrument_dir / "baseline.json").write_bytes(b'{"nodes": [], "edges": []}')
-    (instrument_dir / "native.json").write_bytes(b'{"nodes": [], "edges": []}')
-
-
-def test_run_get_catalog_never_constructs_client_but_resolves_curated_repo_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """`get catalog` reads `curated_repo_path` via `load_config()` but never touches
-    `PsServiceClient` at all (D13) -- proven via an uncallable client fake, mirroring
-    `test_run_config_set_context_never_constructs_ps_service_client`'s own proof shape:
-    if `run()` ever called a method on `uncallable_client`, this test would fail with an
-    uncaught `AssertionError`, not a graceful exit code.
-    """
-    curated_repo_path = tmp_path / "curated-content"
-    curated_repo_path.mkdir()
-    _write_catalog_fixture(curated_repo_path)
-    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
-    uncallable_client = _UnusedPsServiceClientMethods()
-
-    exit_code = run(["get", "catalog"], client=uncallable_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "CRA-1.0" in captured.out
-    assert "Cyber Resilience Act" in captured.out
-    assert "external" in captured.out
-    assert "EU" in captured.out
-
-
-def test_get_catalog_unaffected_by_llm_interface_outage(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """AC-BI-008: `get catalog` succeeds unaffected while LLM Interface is down.
-
-    Mirrors `test_run_get_catalog_never_constructs_client_but_resolves_curated_repo_path`:
-    `get catalog` never receives a real `PsServiceClient` at all (D13), so it is
-    structurally unaffected by any PS Service dependency state, LLM Interface included.
-    Proven via an uncallable client fake -- if `run()` ever called a method on
-    `uncallable_client`, this test would fail with an uncaught `AssertionError`.
-    """
-    curated_repo_path = tmp_path / "curated-content"
-    curated_repo_path.mkdir()
-    _write_catalog_fixture(curated_repo_path)
-    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
-    uncallable_client = _UnusedPsServiceClientMethods()
-
-    exit_code = run(["get", "catalog"], client=uncallable_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "CRA-1.0" in captured.out
-    assert "Cyber Resilience Act" in captured.out
-    assert "external" in captured.out
-    assert "EU" in captured.out
-
-
-class _FakeRestoreSuccessClient(_UnusedPsServiceClientMethods):
-    """A duck-typed PsServiceClient stand-in whose restore_instrument() succeeds."""
-
-    def restore_instrument(self, artifact: CuratedArtifact) -> RestorationResult:
-        """Return a fixed RestorationResult, echoing the artifact's own instrument id."""
-        return RestorationResult(
-            instrument_id=artifact.manifest.instrument_id,
-            stages=[RestorationStageOutcome(stage="verified", status="succeeded")],
-        )
-
-
-def test_run_restore_instrument_prints_instrument_id_on_mocked_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The full parser -> dispatch -> handler -> client wiring for `restore instrument`."""
-    curated_repo_path = tmp_path / "curated-content"
-    curated_repo_path.mkdir()
-    _write_instrument_fixture(curated_repo_path, "CRA-1.0")
-    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
-    fake_client = _FakeRestoreSuccessClient()
-
-    exit_code = run(["restore", "instrument", "CRA-1.0"], client=fake_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "instrument_id: CRA-1.0" in captured.out
-    assert "verified: succeeded" in captured.out
-
-
-def test_run_restore_instrument_missing_local_artifact_exits_one_without_crashing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A missing local instrument directory surfaces as a clean PsCliError, exit 1."""
-    curated_repo_path = tmp_path / "curated-content"
-    curated_repo_path.mkdir()
-    monkeypatch.setenv("PS_CLI_CURATED_REPO_PATH", str(curated_repo_path))
-    uncallable_client = _UnusedPsServiceClientMethods()
-
-    exit_code = run(["restore", "instrument", "MISSING-1.0"], client=uncallable_client)
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "curated instrument directory not found" in captured.err
-    assert "Traceback" not in captured.err
 
 
 # --- issue #71, new S3 (CHANGES.md A2): `ps-cli export instrument` end to end ----------------

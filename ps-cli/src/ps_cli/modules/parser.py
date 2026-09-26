@@ -21,13 +21,14 @@ _CONTEXT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # D1) is not constrained by any existing server-side pattern -- `RestorationManifestPayload
 # .instrument_id`/`CatalogInstrumentEntry.instrument_id` (ps_service/api/models.py) are both
 # bare `Field(min_length=1)`, no `pattern=`. This charset is instead this module's own
-# documented assumption, chosen because `restore instrument <instrument_id>` later uses the
-# value to build a local filesystem path (`catalog_repo.read_artifact`, Slice 7.1) -- alnum
-# start, alnum/`_`/`-`/`.` body, no `/`, matching every real `catalog.json` entry
-# (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal payload at parse
-# time (L1 "Fail Fast at Boundaries" -- the first of two defense-in-depth layers for this
-# security-critical filesystem-path sink; `read_artifact`'s own `instrument_dir.is_dir()`
-# check is the second).
+# documented assumption -- alnum start, alnum/`_`/`-`/`.` body, no `/`, matching every real
+# `catalog.json` entry (`CRA-1.0`, `GDPR-1.0`, `NIS2-1.0`) while rejecting a path-traversal
+# payload at parse time (L1 "Fail Fast at Boundaries"). Originally chosen because `restore
+# instrument <instrument_id>` used the value to build a local filesystem path
+# (`catalog_repo.read_artifact`, Slice 7.1); issue #127 removed that command and
+# `catalog_repo` entirely, but this type/pattern survives (D-DECOMMISSION-SHARED-HELPER) --
+# `export instrument`'s own `instrument_id` positional (`_add_export_parser`) still uses it,
+# and the same charset remains the right validation for an id that will reach PS Service.
 _INSTRUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -74,14 +75,17 @@ def _auth_scopes_type(value: str) -> tuple[str, ...]:
 
 
 def _instrument_id_type(value: str) -> str:
-    """`type=` callback for the `instrument_id` positional (`restore instrument`).
+    """`type=` callback for the `instrument_id` positional (`export instrument`).
 
     Format-validates at parse time -- same `type=`-callback convention as
     `_context_name_type`. Rejects anything outside `_INSTRUMENT_ID_PATTERN`'s
     charset (which already excludes `/`); the redundant explicit `..`
     substring check below is defense-in-depth documentation, not load-
     bearing on its own -- see `_INSTRUMENT_ID_PATTERN`'s own comment for why
-    this matters (the value later builds a local filesystem path).
+    this matters (the value was originally used to build a local filesystem
+    path via `restore instrument`, before issue #127 removed that command;
+    the strict charset is retained regardless, as the right validation for
+    an id sent on to PS Service, e.g. by `export instrument`).
     """
     if not _INSTRUMENT_ID_PATTERN.fullmatch(value) or ".." in value:
         msg = (
@@ -299,9 +303,9 @@ def _add_auth_parser(
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level parser: a strict kubectl-style `<verb> <resource>` surface.
 
-    Every top-level group except `config` is a verb (`get`, `ingest`, `restore`);
+    Every top-level group except `config` is a verb (`get`, `ingest`, `export`);
     each verb group is itself an `add_subparsers()` group whose leaves are
-    resource nouns (e.g. `ingest document`, `restore instrument`) -- `ps-cli <verb>
+    resource nouns (e.g. `ingest document`, `export instrument`) -- `ps-cli <verb>
     <resource> [name] [flags]`, modeled on kubectl. `config` is the one exception
     group, mirroring kubectl's own `kubectl config` subcommands: its leaves are
     verb-noun compounds (`set-context`/`use-context`/`get-contexts`) rather than
@@ -360,15 +364,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     top_level_subparsers = parser.add_subparsers(dest="group", required=False)
 
-    # `get` (read-only lookups): service health, or the local curated catalog. Neither
-    # leaf mutates any state -- `get health` reports PS Service's reachability/health/
-    # readiness, `get catalog` reads `curated_repo_path`'s on-disk `catalog.json`
-    # directly and never contacts PS Service at all (D13: it skips
-    # `_resolve_client`/`load_config().service_url` entirely, like `config`'s commands).
+    # `get` (read-only lookups): service health. Its only leaf, `get health`, reports
+    # PS Service's reachability/health/readiness (issue #127 removed the sibling
+    # `get catalog` leaf, which read the local curated-content repo -- see
+    # `ps-get-catalog-listing`, the skill that replaced it).
     get_parser = top_level_subparsers.add_parser(
         "get",
         parents=[verbose_parent_parser],
-        help="Read-only lookups: service health, or the local curated catalog.",
+        help="Read-only lookups: service health.",
     )
     get_subparsers = get_parser.add_subparsers(dest="get_command", required=True)
 
@@ -378,16 +381,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report PS Service's reachability, health (`/health`), and readiness (`/ready`).",
     )
     get_health_parser.set_defaults(command="get_health")
-
-    get_catalog_parser = get_subparsers.add_parser(
-        "catalog",
-        parents=[verbose_parent_parser],
-        help=(
-            "List every curated instrument in the local curated-content repo "
-            "(no PS Service connection needed)."
-        ),
-    )
-    get_catalog_parser.set_defaults(command="get_catalog")
 
     # `ingest` (bring new content into PS Service): an internal-document fixture by
     # path. (A curated EU regulation by CELEX is ingested via the `ps-ingest-regulation`
@@ -425,32 +418,12 @@ def build_parser() -> argparse.ArgumentParser:
     # helper rather than inlined.
     _add_auth_parser(top_level_subparsers, verbose_parent_parser)
 
-    # `restore` (restore a curated instrument's artifact into PS Service): reads the
-    # artifact off `curated_repo_path` locally and uploads it (`POST /restorations`),
-    # reusing `_resolve_client` exactly like `ingest document`.
-    restore_parser = top_level_subparsers.add_parser(
-        "restore",
-        parents=[verbose_parent_parser],
-        help="Restore a curated instrument's artifact into PS Service.",
-    )
-    restore_subparsers = restore_parser.add_subparsers(dest="restore_command", required=True)
-
-    restore_instrument_parser = restore_subparsers.add_parser(
-        "instrument",
-        parents=[verbose_parent_parser],
-        help="Restore one curated instrument's artifact into PS Service.",
-    )
-    restore_instrument_parser.add_argument(
-        "instrument_id",
-        type=_instrument_id_type,
-        help="The curated instrument's id, e.g. 'CRA-1.0'.",
-    )
-    restore_instrument_parser.set_defaults(command="restore_instrument")
-
     # `export` (export an already-ingested instrument's baseline/native graphs plus a
-    # generated manifest into local files, issue #71): mirrors `restore`'s block above,
-    # in the opposite direction. See `_add_export_parser`'s own docstring for why this
-    # one verb group is factored into a helper rather than inlined like every other.
+    # generated manifest into local files, issue #71). See `_add_export_parser`'s own
+    # docstring for why this one verb group is factored into a helper rather than
+    # inlined like every other. (Issue #127 removed the sibling `restore` verb group,
+    # which used to sit here and which this comment used to mirror -- restoring a
+    # curated instrument is now reached via the `ps-restore-instrument` skill instead.)
     _add_export_parser(top_level_subparsers, verbose_parent_parser)
 
     return parser

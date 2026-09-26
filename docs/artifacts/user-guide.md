@@ -96,27 +96,18 @@ between multiple environments, per-command overrides, and credential storage.
 
 ### Load curated content
 
-`ps-cli get catalog` lists every curated instrument in the local curated-content
-repo — no PS Service connection needed:
-
-```bash
-ps-cli get catalog
-```
+The `ps-get-catalog-listing` skill (see [Using Claude Desktop](#using-claude-desktop))
+lists every curated instrument PS Service's configured curated-content source
+currently serves — external and internal, no local checkout needed. Ask Claude to
+use it, e.g. _"Use the ps-get-catalog-listing skill to list the curated catalog."_
 
 Restore one from its pre-ingested artifact — faster than a full ingestion pipeline
-run — using the id `get catalog` printed:
-
-```bash
-ps-cli restore instrument CRA-1.0
-```
-
-```bash
-ps-cli restore instrument <id>
-```
-
-The second example loads whichever internal instrument is curated under that id —
-for example, an Engineering Practices standard. A freshly deployed instance has an
-empty graph and answers nothing until something is restored or ingested.
+run — using the id the listing printed. The `ps-restore-instrument` skill fetches
+the artifact and restores it, given just the `instrument_id`: _"Use the
+ps-restore-instrument skill to restore CRA-1.0."_ This loads whichever curated
+instrument — external or internal, e.g. an Engineering Practices standard — is
+registered under that id. A freshly deployed instance has an empty graph and
+answers nothing until something is restored or ingested.
 
 ### Find and ingest a regulation from EUR-Lex
 
@@ -195,9 +186,7 @@ Global flags, usable before or after any subcommand:
 | Command | Arguments | Description |
 | --- | --- | --- |
 | `ps-cli get health` | — | Report reachability, health (`/health`), and readiness (`/ready`) for the configured target, naming any unhealthy dependency; readiness reflects FalkorDB only — an unhealthy LLM Interface/Cellar-ELI is still named when present, but does not by itself make the target unready. |
-| `ps-cli get catalog` | — | List every curated instrument in the local curated-content repo (id, title, source_type/jurisdiction). No PS Service connection needed. |
 | `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
-| `ps-cli restore instrument <instrument_id>` | `instrument_id` — the curated instrument's id (e.g. `CRA-1.0`) | Restore one curated instrument's pre-ingested artifact into PS Service. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
 | `ps-cli auth status` | — | Show the current context's login status (context, issuer) — reads the local store only, no network call. |
@@ -308,23 +297,9 @@ is ever silently carried over to a new URL.
 
 ### Running commands
 
-```bash
-ps-cli get catalog
-```
-
-Local curated catalog — no FalkorDB/LLM dependency.
-
-```bash
-ps-cli restore instrument CRA-1.0
-```
-
-Restores a curated instrument's pre-ingested artifact — faster than a full
-ingestion run via the `ps-ingest-regulation` skill (see [Find and ingest a
-regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex)).
-`<instrument_id>` is one of the ids `ps-cli get catalog` just printed. A freshly
-deployed instance has an empty graph and answers nothing until something is
-restored or ingested; until then, questions get an explicit "graph is unseeded" error
-rather than an empty result.
+The curated catalog listing and restore-from-catalog are both `ps-cli`-external now
+— reached via the `ps-get-catalog-listing`/`ps-restore-instrument` skills (see
+[Load curated content](#load-curated-content)), not a `ps-cli` subcommand.
 
 ```bash
 ps-cli ingest document <document_path>.json
