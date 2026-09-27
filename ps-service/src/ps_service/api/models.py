@@ -92,13 +92,21 @@ class StageOutcome(BaseModel):
 
 
 class IngestionAcceptedResponse(BaseModel):
-    """Success body for ``POST /ingestions``: the run id, instrument id, and per-stage outcomes."""
+    """Success body for ``POST /ingestions``: the run id, instrument id, and per-stage outcomes.
+
+    ``outcome`` (issue #135) is ``"fresh"`` for a run that executed its
+    stages, or ``"already_ingested"`` (catalog path only) when a pre-flight
+    check found an existing fully-merged ``RegulatoryInstrument`` and skipped
+    Domain Mapper and Company Merge entirely -- ``stages`` is empty in that
+    case.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     run_id: str = Field(min_length=1)
     regulatory_instrument_id: str = Field(min_length=1)
     source: Literal["catalog", "internal"]
+    outcome: Literal["fresh", "already_ingested"] = "fresh"
     stages: list[StageOutcome]
 
 

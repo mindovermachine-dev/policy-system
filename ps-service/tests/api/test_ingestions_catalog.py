@@ -140,9 +140,28 @@ def test_valid_celex_runs_pipeline_and_returns_run_id_and_stages() -> None:
     assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
 
 
+def test_valid_celex_already_merged_skips_pipeline_and_reports_already_ingested() -> None:
+    """Issue #135, AC-BI-002/003: a CELEX with an existing fully-merged
+    ``RegulatoryInstrument`` runs no stage at all and the body reports
+    ``outcome="already_ingested"`` with an empty ``stages`` list.
+    """
+    fake = build_fake_pipeline_dependencies(preflight_hit=True)
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "catalog"
+    assert body["outcome"] == "already_ingested"
+    assert body["stages"] == []
+    assert fake.recorder.order == []
+
+
 def test_ingestion_accepted_response_has_exactly_the_documented_fields() -> None:
     """AC-BI-011 regression proof: adding ``GET /ingestions/{run_id}`` (Increment 12)
-    does not add or remove a field from ``IngestionAcceptedResponse``'s wire shape.
+    and the ``outcome`` field (issue #135) does not otherwise add or remove a
+    field from ``IngestionAcceptedResponse``'s wire shape.
     """
     fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
     client = _client_with_fake(fake.dependencies)
@@ -151,7 +170,13 @@ def test_ingestion_accepted_response_has_exactly_the_documented_fields() -> None
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"run_id", "regulatory_instrument_id", "source", "stages"}
+    assert set(body.keys()) == {
+        "run_id",
+        "regulatory_instrument_id",
+        "source",
+        "outcome",
+        "stages",
+    }
 
 
 def test_unknown_celex_returns_404_structured_and_starts_no_pipeline(

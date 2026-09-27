@@ -103,17 +103,25 @@ class FakeGraphHandle:
     """Satisfies the orchestration's ``GraphHandle`` Protocol, recording every ``query()`` call.
 
     ``results`` is consumed in order, one :class:`FakeQueryResult` per ``query()``
-    call; once exhausted every further call yields an empty result.
+    call; once exhausted every further call yields an empty result. When
+    ``error`` is set, every ``query()`` call raises it instead (issue #135's
+    pre-flight-check failure fixture -- e.g. a graph-unreachable error raised
+    before any stage runs).
     """
 
-    def __init__(self, results: list[FakeQueryResult] | None = None) -> None:
-        """Prime the scripted results (default: always an empty result)."""
+    def __init__(
+        self, results: list[FakeQueryResult] | None = None, *, error: Exception | None = None
+    ) -> None:
+        """Prime the scripted results (default: always an empty result), or an error to raise."""
         self.calls: list[RecordedQuery] = []
         self._results: deque[FakeQueryResult] = deque(results or [])
+        self._error = error
 
     def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
-        """Record ``(q, params)`` and return the next scripted result."""
+        """Record ``(q, params)`` and return the next scripted result, or raise ``error``."""
         self.calls.append(RecordedQuery(q, params))
+        if self._error is not None:
+            raise self._error
         return self._results.popleft() if self._results else FakeQueryResult([])
 
 
@@ -409,6 +417,8 @@ def build_fake_pipeline_dependencies(
     derive_unmatched_obligation_ids: tuple[str, ...] = (),
     internal_rid: str = "ENGPRAC-3.0",
     ingest_internal_error: Exception | None = None,
+    preflight_hit: bool = False,
+    preflight_error: Exception | None = None,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -424,6 +434,12 @@ def build_fake_pipeline_dependencies(
             ``ingest_internal`` stage returns (issue #54, S2).
         ingest_internal_error: If set, the ``ingest_internal`` stage raises
             this instead of returning.
+        preflight_hit: If ``True``, the single-tenant graph's pre-flight
+            existence query (issue #135) returns a matching row, simulating an
+            already-fully-merged ``RegulatoryInstrument``.
+        preflight_error: If set, the single-tenant graph's pre-flight
+            existence query raises this instead of returning (issue #135,
+            AC-BI-006 -- e.g. a graph-unreachable error).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
@@ -432,7 +448,10 @@ def build_fake_pipeline_dependencies(
     recorder = StageRecorder()
     native = FakeGraphHandle()
     baseline = FakeGraphHandle()
-    single_tenant = FakeGraphHandle()
+    single_tenant = FakeGraphHandle(
+        results=[FakeQueryResult([["existing-id"]])] if preflight_hit else None,
+        error=preflight_error,
+    )
 
     def _open_native(config: ServiceConfig, short_name: str) -> GraphHandle:
         _ = (config, short_name)
