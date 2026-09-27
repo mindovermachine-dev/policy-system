@@ -185,6 +185,12 @@ def _complete_config(**overrides: object) -> ServiceConfig:
     (issue #144): `create_app` now also fails closed
     (`AccessRoleBootstrapConfigurationError`) unless the local-test bypass is
     active or both are set, so a fake placeholder pair is defaulted here too.
+
+    `authentik_api_token`/`authentik_base_url` (issue #140) are also
+    defaulted here -- unlike the pairs above, `create_app`'s check for these
+    (`require_authentik_credential_configured`) is unconditional, with no
+    local-test-bypass exemption, so every test funnelling through this
+    helper needs both set regardless of `is_local_test_bypass_active`.
     """
     defaults: dict[str, object] = {
         "host": "127.0.0.1",
@@ -198,6 +204,8 @@ def _complete_config(**overrides: object) -> ServiceConfig:
         "auth_audience": "https://api.example.com",
         "authz_bootstrap_owner_subject": "first-owner-subject",
         "authz_bootstrap_owner_issuer": "https://issuer.example.com",
+        "authentik_api_token": "test-authentik-token",
+        "authentik_base_url": "https://authentik.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
@@ -501,14 +509,17 @@ def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
 def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every `PS_SERVICE_*` env var, giving `load_config()` a clean-env precondition.
 
-    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58) and
-    a fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
-    pair (issue #144): these tests call `main()` end to end (real
-    `load_config()`, not `_complete_config()`), have nothing to do with auth
-    or RBAC bootstrap, and don't set the local-test bypass -- without fake
-    pairs, `create_app` would now fail closed (`AuthConfigurationError`, then
-    `AccessRoleBootstrapConfigurationError`). Kept deliberately independent of
-    the bypass (never set here) so a host override to a non-loopback address
+    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58), a
+    fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
+    pair (issue #144), and a fake `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`
+    pair (issue #140): these tests call `main()` end to end (real
+    `load_config()`, not `_complete_config()`), have nothing to do with auth,
+    RBAC bootstrap, or Authentik, and don't set the local-test bypass --
+    without fake values, `create_app` would now fail closed
+    (`AuthConfigurationError`, then `AccessRoleBootstrapConfigurationError`,
+    then `AuthentikCredentialConfigurationError` -- the last one
+    unconditionally, bypass or not). Kept deliberately independent of the
+    bypass (never set here) so a host override to a non-loopback address
     (see the parametrized test below) never collides with
     `_refuse_non_loopback_bypass_bind`'s bypass-active-only guard.
     """
@@ -518,6 +529,8 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_AUTH_AUDIENCE", "https://api.example.com")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT", "first-owner-subject")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER", "https://issuer.example.com")
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
 
 
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
@@ -659,6 +672,8 @@ def test_create_app_instances_have_independent_readiness_state() -> None:
         graceful_shutdown_seconds=10,
         logging_dir=None,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
     started_app = create_app(config)
     untouched_app = create_app(config)
@@ -708,6 +723,8 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
         graceful_shutdown_seconds=10,
         logging_dir=tmp_path,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
     scoped_app = create_app(config)
 
@@ -747,6 +764,8 @@ def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path
         graceful_shutdown_seconds=10,
         logging_dir=first_logging_dir,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
     second_config = ServiceConfig(
         host="127.0.0.1",
@@ -754,6 +773,8 @@ def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path
         graceful_shutdown_seconds=10,
         logging_dir=second_logging_dir,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
     first_app = create_app(first_config)
     second_app = create_app(second_config)
@@ -803,6 +824,8 @@ def test_lifespan_with_none_logging_dir_falls_back_to_resolve_default_log_path(
         graceful_shutdown_seconds=10,
         logging_dir=None,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
     scoped_app = create_app(config)
 

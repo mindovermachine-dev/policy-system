@@ -94,6 +94,23 @@ a usable JWKS endpoint and at least one trusted (asymmetric) signing
 algorithm — Authentik's discovery document advertises `RS256` by default,
 which PS Service trusts.
 
+### Inviting a new user
+
+As of issue #140, inviting a new user no longer requires an admin to
+hand-craft the curl call in step 1 of the [Verify](#verify) example below.
+Call the `invite-user` MCP tool directly, or use the `ps-invite-user` skill
+from Claude Desktop, with the target email — PS Service calls Authentik's
+invitation-stage API itself, using its own `PS_AUTHENTIK_API_TOKEN`/
+`PS_AUTHENTIK_BASE_URL` service credentials (never a caller-supplied token),
+gated to callers holding `SystemAdmin` or above. The tool returns the
+created invite's `itoken` and redemption `invite_url`; delivering that URL
+to the invitee is still the admin's own responsibility — no email is sent
+by PS Service or the skill.
+
+The curl-based workflow below is still valid as a manual fallback or
+verification method — for example when diagnosing a deployment directly
+against Authentik's API, outside of PS Service.
+
 ### Verify
 
 The following is a representative excerpt of a real, live end-to-end run

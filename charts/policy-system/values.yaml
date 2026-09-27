@@ -73,6 +73,24 @@ psService:
     # SystemOwner via RBAC bootstrap. See docs/artifacts/idp-configuration-contract.md.
     subject: ""
     issuer: ""
+  authentik:
+    # PS Service's own service credential for calling Authentik's
+    # invitation-stage API on behalf of the `invite_user` MCP tool (issue
+    # #140) -- never a caller-supplied token. Unlike auth.*/authzBootstrapOwner.*
+    # above, `require_authentik_credential_configured` (CHANGES.md #140 Row 2)
+    # enforces both fields below UNCONDITIONALLY at startup, with no
+    # localTestBypass exemption -- so, mirroring psServiceSigning.postgres.
+    # password's own "non-empty dev default, read only when existingSecret is
+    # empty" shape (never auth.issuer's empty-default-plus-fail()-guard shape),
+    # apiToken/baseUrl below always carry a non-empty dev-default placeholder,
+    # so a default local-test/kind render (where authentik.enabled=false and
+    # no real Authentik exists) still starts cleanly.
+    apiToken: "ps-service-authentik-dev-token"
+    # Set to reuse an operator-managed Secret name instead of the plain
+    # apiToken value above -- mirrors psServiceSigning.postgres.existingSecret's
+    # convention exactly.
+    existingSecret: ""
+    baseUrl: "https://authentik.example.com"
   # IP of the Podman network gateway (e.g. `podman network inspect podman
   # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
   # entry so pods can resolve host.containers.internal when llm.provider is

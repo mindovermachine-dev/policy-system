@@ -55,6 +55,7 @@ from ps_service.ingestion.adapters.cellar_eli.fetch import (
 from ps_service.ingestion.falkordb_client import (
     check_connectivity_from_config as check_falkordb_connectivity,
 )
+from ps_service.invitations.startup import require_authentik_credential_configured
 from ps_service.llm_interface import (
     check_connectivity as check_llm_interface_connectivity,
 )
@@ -429,6 +430,14 @@ def create_app(config: ServiceConfig) -> FastAPI:
     `SYSTEM_OWNER` by `ps_service.authz.store.PsycopgAccessRoleStore.
     bootstrap_first_owner`.
 
+    Since issue #140, `require_authentik_credential_configured(config)` runs
+    unconditionally right after `require_bootstrap_owner_configured(config)`
+    (AC-BI-003): unlike that call, this one carries no local-test-bypass
+    exemption -- if `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL` are not
+    both set, this raises `AuthentikCredentialConfigurationError` and
+    `create_app` never returns an app, regardless of
+    `config.is_local_test_bypass_active`.
+
     Since Slice 8 (AC-BI-010), `GET /.well-known/oauth-protected-resource`
     is registered here too, alongside `/health`/`/ready` -- the exact URL
     `RestAuthMiddleware`'s `WWW-Authenticate` header already names. It is
@@ -546,6 +555,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # unless the local-test bypass is active or both
     # `authz_bootstrap_owner_subject`/`_issuer` are set.
     require_bootstrap_owner_configured(config)
+    # AC-BI-003 (issue #140): resolved synchronously here too, right after
+    # `require_bootstrap_owner_configured` -- unlike that call, this check is
+    # unconditional (no local-test-bypass exemption, CHANGES.md #140 Row 2):
+    # raises `AuthentikCredentialConfigurationError` unless both
+    # `authentik_api_token`/`authentik_base_url` are set, regardless of
+    # `config.is_local_test_bypass_active`.
+    require_authentik_credential_configured(config)
     # One `PsTokenVerifier` instance per `create_app()` call, never module-level (the
     # import-time-hazard rule PLAN.md §0.1 documents) -- this exact instance is what
     # both `RestAuthMiddleware` below and, from Slice 5 onward, the MCP

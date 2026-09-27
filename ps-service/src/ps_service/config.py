@@ -141,6 +141,21 @@ class ServiceConfig:
     the local-test bypass is inactive) is enforced by
     `ps_service.authz.startup.require_bootstrap_owner_configured`'s own call
     site inside `create_app`, not by `load_config()`.
+
+    `authentik_api_token`/`authentik_base_url` (from `PS_AUTHENTIK_API_TOKEN`/
+    `PS_AUTHENTIK_BASE_URL`, issue #140) are PS Service's own service
+    credential for calling Authentik's invitation-stage API on behalf of the
+    `invite_user` MCP tool -- never a caller-supplied token. Follows the same
+    "record what the environment resolved to, absence is not an error here"
+    optional-at-load-time shape as every other credential field above --
+    but unlike those, whether both are *required* is enforced
+    **unconditionally** (no local-test-bypass exemption) by
+    `ps_service.invitations.startup.require_authentik_credential_configured`'s
+    own call site inside `create_app`, immediately after
+    `require_bootstrap_owner_configured` (CHANGES.md #140 Row 2: AC-BI-003's
+    wording carries no bypass carve-out, unlike AC-BI-002's). `authentik_api_token`
+    is excluded from this dataclass's `repr()` (`field(repr=False)`,
+    AC-BI-004) for the same reason `passkey_signing_postgres_password` is.
     """
 
     host: str
@@ -174,6 +189,8 @@ class ServiceConfig:
     authz_postgres_password: str | None = field(default=None, repr=False)
     authz_bootstrap_owner_subject: str | None = None
     authz_bootstrap_owner_issuer: str | None = None
+    authentik_api_token: str | None = field(default=None, repr=False)
+    authentik_base_url: str | None = field(default=None, repr=False)
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -538,6 +555,63 @@ def _parse_authz_bootstrap_owner_string(raw: str, *, env_var_name: str) -> str:
     return raw
 
 
+def _parse_authentik_api_token(raw: str) -> str:
+    """Validate `PS_AUTHENTIK_API_TOKEN`.
+
+    Mirrors `_parse_passkey_signing_postgres_string`'s exact shape: rejects
+    an explicitly-set empty/whitespace-only value rather than silently
+    treating it as unset -- never widens to a fallback. Never includes the
+    raw value in its error message (AC-BI-004): a validation failure here
+    must not leak a partial credential into a raised exception's message.
+    Only called when the env var is actually set -- absence is not an error
+    at this layer; whether it is *required* is enforced by
+    `ps_service.invitations.startup.require_authentik_credential_configured`,
+    not here (see `ServiceConfig`'s docstring).
+    """
+    if not raw.strip():
+        message = "PS_AUTHENTIK_API_TOKEN must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
+def _parse_authentik_base_url(raw: str) -> str:
+    """Validate `PS_AUTHENTIK_BASE_URL`.
+
+    Mirrors `_parse_authentik_api_token`'s exact shape: rejects an
+    explicitly-set empty/whitespace-only value rather than silently treating
+    it as unset. Only checks non-empty -- URL scheme/shape validation is not
+    required by any AC for this field, unlike `curated_source_base_url`'s
+    dedicated TLS guard.
+    """
+    if not raw.strip():
+        message = "PS_AUTHENTIK_BASE_URL must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
+def _resolve_authentik_api_token() -> str | None:
+    """Resolve `PS_AUTHENTIK_API_TOKEN`, validating it if set.
+
+    Factored out of `load_config()` itself (unlike every other optional
+    credential field's inline "raw env value, parse if not `None`" shape)
+    solely to keep `load_config` under this project's `PLR0915`
+    max-statements budget -- calling this from inside the final
+    `ServiceConfig(...)` constructor call adds no new statement to
+    `load_config`'s own body. Functionally identical to inlining it.
+    """
+    raw = os.environ.get("PS_AUTHENTIK_API_TOKEN")
+    return _parse_authentik_api_token(raw) if raw is not None else None
+
+
+def _resolve_authentik_base_url() -> str | None:
+    """Resolve `PS_AUTHENTIK_BASE_URL`, validating it if set.
+
+    Mirrors `_resolve_authentik_api_token`'s exact shape and rationale.
+    """
+    raw = os.environ.get("PS_AUTHENTIK_BASE_URL")
+    return _parse_authentik_base_url(raw) if raw is not None else None
+
+
 def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
 
@@ -760,4 +834,6 @@ def load_config() -> ServiceConfig:
         authz_postgres_password=authz_postgres_password,
         authz_bootstrap_owner_subject=authz_bootstrap_owner_subject,
         authz_bootstrap_owner_issuer=authz_bootstrap_owner_issuer,
+        authentik_api_token=_resolve_authentik_api_token(),
+        authentik_base_url=_resolve_authentik_base_url(),
     )

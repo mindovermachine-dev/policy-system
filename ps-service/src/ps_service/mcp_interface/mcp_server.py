@@ -17,6 +17,7 @@ the plugin model made the HTTP endpoint the only supported client path.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import os
@@ -87,7 +88,14 @@ from ps_service.curated_source.errors import (
 )
 from ps_service.curated_source.resolve import resolve_effective_source
 from ps_service.curated_source.source_url import validate_source_url
-from ps_service.logging import bind_run_context, current_run_id, emit_log_entry
+from ps_service.invitations.client import create_invitation
+from ps_service.invitations.errors import AuthentikInvitationError
+from ps_service.logging import (
+    LoggingLifecycleError,
+    bind_run_context,
+    current_run_id,
+    emit_log_entry,
+)
 from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
@@ -153,6 +161,13 @@ _CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
 # runs -- mirroring ps-cli's own two-step `_instrument_id_type` check (regex
 # fullmatch, then an explicit `".." in value` scan) rather than collapsing it.
 _RESTORE_INSTRUMENT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+# A deliberately permissive structural "looks like an email" check for
+# `invite_user` (issue #140, AC-BI-007) -- full RFC 5322 validation is out of
+# scope; `pydantic.EmailStr` needs the `email-validator` package, which is
+# not an installed dependency in this workspace, and adding it is unwarranted
+# scope creep for a trust-boundary check whose real validation authority is
+# Authentik itself at redemption time.
+_INVITE_EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 def _reject_path_traversal_segment(value: str) -> str:
@@ -1055,6 +1070,99 @@ def get_catalog_source() -> dict[str, object] | str:
         return {"url": effective.url, "source": "override" if effective.is_override else "default"}
 
     return _run_mcp_action("get_catalog_source", principal, _body)
+
+
+def _emit_invite_created_audit_entry(
+    *, actor: tuple[str, str] | None, principal: str | None, email: str
+) -> None:
+    """AC-BI-009's audit trail: record actor, target email, timestamp, outcome.
+
+    `_run_mcp_action` (below) already emits the generic `component=
+    "mcp_interface"` started/succeeded/failed triad for every tool call,
+    including `invite_user` -- that already carries `principal` and a
+    `timestamp` (`LogEntry`'s default factory) on every call. AC-BI-009
+    additionally names the **target email** specifically, which that
+    generic triad's fixed `extra={"principal": ...}` shape does not carry.
+    This is a component-specific *additional* emission alongside that
+    triad, not a replacement for it -- mirrors `ps_service.authz.service`'s
+    `_maybe_log_system_owner_floor_warning` (same "extra, scoped log next
+    to the generic one" shape).
+
+    Called from `invite_user`'s `_body()` only on the success path, after
+    `create_invitation` returns and before the result is returned.
+
+    PII note: `ps_service.logging.models`'s module docstring says the
+    caller owns PII hygiene in `extra` and to never place PII there. Putting
+    the invitee's email in `entity_id` (and the actor's identity in `extra`)
+    is a deliberate, scoped exception to that general guidance: AC-BI-009
+    explicitly requires the target email in this audit trail -- an
+    admin-invite audit record with no target identity would be useless.
+
+    Swallows `LoggingLifecycleError` (mirrors
+    `_maybe_log_system_owner_floor_warning`'s own `contextlib.suppress`): a
+    missing log sink must never turn an otherwise-successful invite into a
+    failed tool call.
+
+    Args:
+        actor: The verified `(sub, iss)` pair `_resolve_authz_actor` already
+            resolved for this call, or `None` under the local-test bypass.
+        principal: `_resolve_principal`'s own resolved identity, used as the
+            fallback actor label when `actor` is `None` (bypass).
+        email: The invitee's target email address -- this call's
+            `entity_id`.
+    """
+    with contextlib.suppress(LoggingLifecycleError):
+        emit_log_entry(
+            component="invitations",
+            action="invite_user",
+            entity_id=email,
+            outcome="created",
+            extra={"actor": actor[0] if actor is not None else (principal or "unknown")},
+        )
+
+
+@server.tool(name="invite-user")
+def invite_user(
+    email: Annotated[str, Field(min_length=3, pattern=_INVITE_EMAIL_PATTERN)],
+) -> dict[str, object] | str:
+    """InviteUser: create a single-use Authentik enrollment invite for `email` (issue #140).
+
+    Requires the caller hold `SystemAdmin` or above (`ps_service.authz.
+    service.require_role`) -- skipped entirely under the local-test bypass,
+    mirroring `set-catalog-source`'s exact gate (issue #133). Uses PS
+    Service's own configured `PS_AUTHENTIK_API_TOKEN` service credential --
+    never a caller-supplied token -- to call Authentik's invitation-stage
+    API.
+
+    On success, returns `{"itoken": <pk>, "invite_url": <redemption URL>}`.
+    Returns a string beginning `error: ` when the caller lacks the required
+    access role, when `email` is not a plausible address (rejected at the
+    MCP schema layer, before this tool's body ever runs), when Authentik is
+    unreachable or returns a non-2xx response, or (this tool's own residual
+    safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
+        try:
+            result = create_invitation(config, email)
+        except AuthentikInvitationError as exc:
+            return f"error: {exc}"
+        _emit_invite_created_audit_entry(actor=actor, principal=principal, email=email)
+        return {"itoken": result.itoken, "invite_url": result.invite_url}
+
+    return _run_mcp_action("invite_user", principal, _body)
 
 
 @server.tool(name="get-catalog-listing")

@@ -46,6 +46,11 @@ def _config(provider: MockOidcProvider | None, **overrides: object) -> ServiceCo
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": provider is None,
+        # Unconditional (issue #140): `require_authentik_credential_configured`
+        # carries no bypass exemption, unlike the auth/bootstrap-owner fields
+        # below -- both dict entries must be set regardless of `provider`.
+        "authentik_api_token": "test-authentik-token",
+        "authentik_base_url": "https://authentik.example.com",
     }
     if provider is not None:
         defaults["auth_issuer"] = provider.issuer

@@ -10,6 +10,7 @@
 - [Using Claude Desktop](#using-claude-desktop)
   - [Ask a question](#ask-a-question)
   - [Manage access roles](#manage-access-roles)
+  - [Invite a new user](#invite-a-new-user)
 - [Role System](#role-system)
 - [Glossary](#glossary)
 - [Appendix: ps-cli reference](#appendix-ps-cli-reference)
@@ -37,6 +38,7 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | Ingest an internal policy, check service health, administer an instance | [Using ps-cli](#using-ps-cli) |
 | Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop](#using-claude-desktop) |
 | Grant, revoke, or list access roles | [Role System](#role-system) |
+| Invite a new user | [Invite a new user](#invite-a-new-user) |
 
 ---
 
@@ -179,6 +181,23 @@ controls.
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-manage-access-roles skill."_
 
+### Invite a new user
+
+```text
+Invite jane.doe@example.com to Policy System.
+```
+
+The `ps-invite-user` skill creates a single-use Authentik enrollment invite
+for a confirmed target email through the same MCP connector, confirming the
+exact address with you before calling (this creates a live, audited invite
+— never a plain read) and reporting the resulting `itoken` and `invite_url`,
+which you then deliver to the invitee yourself — no email is sent
+automatically. Requires `SystemAdmin` or above; see [Role
+System](#role-system).
+
+If the skill does not engage on its own, ask for it by name: _"Use the
+ps-invite-user skill."_
+
 ---
 
 ## Role System
@@ -190,7 +209,7 @@ Beyond that baseline, PS Service enforces three additional roles:
 | Role | How it's granted | What it currently gates |
 | --- | --- | --- |
 | `SystemOwner` | Automatically, once — the very first authenticated caller ever to reach the instance. Never grantable afterward; exactly one exists for the life of a real deployment. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
-| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`) and `list-access-roles`. |
+| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, and `invite-user`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 

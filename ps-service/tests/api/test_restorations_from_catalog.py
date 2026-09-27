@@ -155,6 +155,8 @@ def _app_config() -> ServiceConfig:
         company_merge_similarity_threshold=0.83,
         is_local_test_bypass_active=True,
         curated_source_base_url="https://example.com/curated-content",
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
 

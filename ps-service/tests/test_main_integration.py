@@ -560,6 +560,8 @@ def test_local_test_bypass_active_on_loopback_starts_and_answers_query_without_c
         graceful_shutdown_seconds=10,
         logging_dir=tmp_path,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
     def stub_check_falkordb_connectivity(_config: ServiceConfig) -> None:

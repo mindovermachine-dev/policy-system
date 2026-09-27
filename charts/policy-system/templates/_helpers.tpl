@@ -141,3 +141,19 @@ never appended to policy-system.authentikCredentialsSecretName's Secret
 {{- define "policy-system.signingPostgresCredentialsSecretName" -}}
 {{- .Values.psServiceSigning.postgres.existingSecret | default (printf "%s-signing-postgres-credentials" (include "policy-system.fullname" .)) -}}
 {{- end }}
+
+{{/*
+Name of the Secret carrying PS_AUTHENTIK_API_TOKEN (issue #140) -- PS
+Service's own service credential for calling Authentik's invitation-stage
+API, consumed by ps-service-deployment.yaml's PS_AUTHENTIK_API_TOKEN env var.
+Mirrors policy-system.signingPostgresCredentialsSecretName's exact shape
+("operator-managed name, or the chart renders one from a plain value") --
+deliberately NOT policy-system.authentikCredentialsSecretName above, which is
+a different Secret entirely (the upstream `authentik` dependency's own
+consume-only credentials, provisioned externally by scripts/deploy-ps.sh) --
+this chart generates and owns this Secret's contents itself, same as
+signing-postgres-secret.yaml does for Passkey Signing.
+*/}}
+{{- define "policy-system.authentikApiTokenSecretName" -}}
+{{- .Values.psService.authentik.existingSecret | default (printf "%s-authentik-api-token" (include "policy-system.fullname" .)) -}}
+{{- end }}

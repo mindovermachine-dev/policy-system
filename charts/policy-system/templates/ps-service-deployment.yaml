@@ -98,6 +98,18 @@ spec:
                 secretKeyRef:
                   name: {{ include "policy-system.signingPostgresCredentialsSecretName" . }}
                   key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+            # PS Service's own service credential for calling Authentik's
+            # invitation-stage API (issue #140) -- rendered unconditionally
+            # (never gated behind an `if`, unlike PS_AUTH_ISSUER/PS_AUTH_AUDIENCE
+            # below), since `require_authentik_credential_configured` fails
+            # closed on either being unset with no localTestBypass exemption.
+            - name: PS_AUTHENTIK_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "policy-system.authentikApiTokenSecretName" . }}
+                  key: PS_AUTHENTIK_API_TOKEN
+            - name: PS_AUTHENTIK_BASE_URL
+              value: {{ .Values.psService.authentik.baseUrl | quote }}
             - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
               value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS

@@ -76,6 +76,8 @@ def _app_config() -> ServiceConfig:
         llm_interface_embed_model="azure/text-embedding-3-large",
         company_merge_similarity_threshold=0.83,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
 

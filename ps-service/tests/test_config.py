@@ -628,3 +628,81 @@ def test_load_config_raises_for_unrecognized_curatedsource_allow_insecure_http_v
         load_config()
 
     assert "PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP" in str(excinfo.value)
+
+
+# --- PS_AUTHENTIK_API_TOKEN / PS_AUTHENTIK_BASE_URL (issue #140) -----------------
+
+
+@pytest.mark.parametrize("invalid_token", ["", "   ", "\t"])
+def test_load_config_raises_for_empty_or_whitespace_ps_authentik_api_token(
+    invalid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_AUTHENTIK_API_TOKEN` fails closed, never falls back."""
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", invalid_token)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+@pytest.mark.parametrize("invalid_base_url", ["", "   ", "\t"])
+def test_load_config_raises_for_empty_or_whitespace_ps_authentik_base_url(
+    invalid_base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_AUTHENTIK_BASE_URL` fails closed, never falls back."""
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", invalid_base_url)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_load_config_no_authentik_env_vars_returns_none_for_both_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL` set -> both fields default to `None`.
+
+    Whether both are *required* is enforced by
+    `ps_service.invitations.startup.require_authentik_credential_configured`,
+    not by `load_config()` itself -- mirrors every other credential field's
+    "record what the environment resolved to, absence is not an error here"
+    shape.
+    """
+    monkeypatch.delenv("PS_AUTHENTIK_API_TOKEN", raising=False)
+    monkeypatch.delenv("PS_AUTHENTIK_BASE_URL", raising=False)
+
+    result = load_config()
+
+    assert result.authentik_api_token is None
+    assert result.authentik_base_url is None
+
+
+def test_load_config_honors_ps_authentik_api_token_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_AUTHENTIK_API_TOKEN` override takes effect."""
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
+
+    assert load_config().authentik_api_token == "test-authentik-token"
+
+
+def test_load_config_honors_ps_authentik_base_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_AUTHENTIK_BASE_URL` override takes effect."""
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
+
+    assert load_config().authentik_base_url == "https://authentik.example.com"
+
+
+def test_service_config_repr_never_includes_authentik_api_token() -> None:
+    """AC-BI-004: `repr(config)` never includes the configured Authentik API token."""
+    config = ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        authentik_api_token="distinctive-authentik-token-value",
+    )
+
+    assert "distinctive-authentik-token-value" not in repr(config)

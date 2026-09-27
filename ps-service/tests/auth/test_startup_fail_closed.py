@@ -32,6 +32,12 @@ def _config(**overrides: object) -> ServiceConfig:
         "graceful_shutdown_seconds": 10,
         "logging_dir": None,
         "is_local_test_bypass_active": False,
+        # Unconditional (issue #140): `require_authentik_credential_configured`
+        # carries no bypass exemption, so every test in this file needs both
+        # set, including the ones below that raise before ever reaching it
+        # (harmless to those) and the one bypass=True "does not raise" test.
+        "authentik_api_token": "test-authentik-token",
+        "authentik_base_url": "https://authentik.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs

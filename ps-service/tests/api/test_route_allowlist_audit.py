@@ -146,6 +146,8 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
         "auth_audience": _AUDIENCE,
         "authz_bootstrap_owner_subject": "first-owner-subject",
         "authz_bootstrap_owner_issuer": provider.issuer,
+        "authentik_api_token": "test-authentik-token",
+        "authentik_base_url": "https://authentik.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs

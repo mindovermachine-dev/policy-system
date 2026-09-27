@@ -86,6 +86,8 @@ def app_config() -> ServiceConfig:
         graceful_shutdown_seconds=10,
         logging_dir=None,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
 

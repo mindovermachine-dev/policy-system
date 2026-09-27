@@ -140,6 +140,8 @@ def _app_config() -> ServiceConfig:
         logging_dir=None,
         is_local_test_bypass_active=True,
         curated_source_base_url=_DEFAULT_URL,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
 

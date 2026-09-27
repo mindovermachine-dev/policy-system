@@ -180,6 +180,8 @@ def _app_config(*, embed_model: str | None = "azure/text-embedding-3-large") -> 
         logging_dir=None,
         llm_interface_embed_model=embed_model,
         is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
     )
 
 
