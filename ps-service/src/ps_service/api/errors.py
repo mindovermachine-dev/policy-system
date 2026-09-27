@@ -214,6 +214,73 @@ class CuratedSourceUnavailableError(ApiError):
     """
 
 
+class AccessDeniedError(ApiError):
+    """A caller's active `AccessRole` set does not satisfy a role-gated action's minimum.
+
+    Raised by ``ps_service.authz.service.require_role`` (and, transitively,
+    ``grant_role``/``revoke_role``/``list_assignments``) -- a fixed message
+    baked into the raise site (never a caller-supplied value), matching
+    ``MergeApprovalRequiresAuthenticatedCallerError``'s own "fixed,
+    domain-level message" precedent (AC-BI-014's "leaks no internal detail").
+    Handled as HTTP 403; ``str(exc)`` is safe to surface verbatim.
+    """
+
+
+class InvalidAccessRoleError(ApiError):
+    """A grant/revoke call named an `AccessRole` outside the closed set this flow manages.
+
+    Raised by ``ps_service.authz.service.grant_role``/``revoke_role`` for
+    any string that either fails to construct as an ``AccessRole`` at all
+    (``AccessRole(access_role)`` raising ``ValueError`` -- the inner
+    defensive layer, PLAN.md §0.6) or that constructs fine but names a role
+    this particular flow does not manage (e.g. ``AuthenticatedUser``, never
+    grantable/revocable via these tools, PLAN.md §0.7). A fixed message
+    baked into the raise site (never a caller-supplied value), matching
+    ``AccessDeniedError``'s own "leaks no internal detail" precedent
+    (AC-BI-014). Handled as HTTP 400; ``str(exc)`` is safe to surface
+    verbatim.
+    """
+
+
+class SelfGrantOrRevokeBlockedError(ApiError):
+    """A caller attempted to grant or revoke one of their own `AccessRole`s (AC-BI-005).
+
+    Raised by ``ps_service.authz.service.grant_role``/``revoke_role`` when
+    ``ps_service.authz.rules.block_self_target`` rejects the call (actor and
+    target are the same `(sub, iss)` pair). A fixed message baked into the
+    raise site. Handled as HTTP 403; ``str(exc)`` is safe to surface
+    verbatim.
+    """
+
+
+class SystemOwnerFloorViolationError(ApiError):
+    """A revoke would leave zero active `SystemOwner`s (AC-BI-006).
+
+    Raised by ``ps_service.authz.service.revoke_role`` when
+    ``ps_service.authz.rules.enforce_system_owner_floor`` rejects a
+    `SYSTEM_OWNER` revoke (the target is the last remaining active
+    `SystemOwner`), and also when the store's own advisory-locked recount
+    (``ps_service.authz.store.PsycopgAccessRoleStore._revoke_system_owner``)
+    detects the same condition via a genuine concurrent-revoke race
+    (``AccessRoleSystemOwnerFloorRaceError``, translated here). A fixed
+    message baked into the raise site. Handled as HTTP 403; ``str(exc)`` is
+    safe to surface verbatim.
+    """
+
+
+class AuthorizationStoreUnavailableError(ApiError):
+    """The Authz Postgres store could not be reached for a role-gated action (issue #133).
+
+    Raised by ``ps_service.authz.service``'s functions when the underlying
+    ``ps_service.authz.store`` raises
+    ``AccessRolePostgresConnectionError``/``AccessRoleAssignmentPersistenceError``
+    -- the store is unconfigured or unreachable, so the action fails closed
+    rather than falling open (PLAN.md §0.11, AC-BI-011). A fixed message
+    baked into the raise site. Handled as HTTP 503; ``str(exc)`` is safe to
+    surface verbatim.
+    """
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

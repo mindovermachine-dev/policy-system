@@ -20,7 +20,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from ps_service.api.errors import (
+    AccessDeniedError,
     ApiError,
+    AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
     CuratedSourceUnavailableError,
     ExportConfigIncompleteError,
@@ -28,6 +30,7 @@ from ps_service.api.errors import (
     ExportStageFailedError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
+    InvalidAccessRoleError,
     MergeApprovalRequiresAuthenticatedCallerError,
     PendingApprovalInvalidOrExpiredError,
     PendingApprovalNotFoundError,
@@ -36,6 +39,8 @@ from ps_service.api.errors import (
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
     RestoreStageFailedError,
+    SelfGrantOrRevokeBlockedError,
+    SystemOwnerFloorViolationError,
 )
 
 if TYPE_CHECKING:
@@ -88,6 +93,8 @@ def _scrub_text(text: str) -> str:
 # --- safe-verbatim whitelist (PLAN_REVIEWED.md §1.1 M5) ----------------------
 
 _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
+    AccessDeniedError,
+    AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
     InternalSeedValidationError,
     IngestionConfigIncompleteError,
@@ -100,6 +107,9 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     MergeApprovalRequiresAuthenticatedCallerError,
     PendingApprovalNotFoundError,
     PendingApprovalInvalidOrExpiredError,
+    InvalidAccessRoleError,
+    SelfGrantOrRevokeBlockedError,
+    SystemOwnerFloorViolationError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -186,6 +196,12 @@ def _json(status_code: int, body: dict[str, object]) -> JSONResponse:
 # --- handlers ---------------------------------------------------------------
 
 _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
+    (AccessDeniedError, "access_denied", status.HTTP_403_FORBIDDEN),
+    (
+        AuthorizationStoreUnavailableError,
+        "authorization_store_unavailable",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     (CatalogIdentifierNotFoundError, "catalog_identifier_not_found", status.HTTP_404_NOT_FOUND),
     (InternalSeedValidationError, "internal_seed_invalid", status.HTTP_422_UNPROCESSABLE_CONTENT),
     (
@@ -237,6 +253,21 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         PendingApprovalInvalidOrExpiredError,
         "pending_approval_invalid_or_expired",
         status.HTTP_404_NOT_FOUND,
+    ),
+    (
+        InvalidAccessRoleError,
+        "invalid_access_role",
+        status.HTTP_400_BAD_REQUEST,
+    ),
+    (
+        SelfGrantOrRevokeBlockedError,
+        "self_grant_revoke_blocked",
+        status.HTTP_403_FORBIDDEN,
+    ),
+    (
+        SystemOwnerFloorViolationError,
+        "system_owner_floor_violation",
+        status.HTTP_403_FORBIDDEN,
     ),
 )
 
@@ -343,6 +374,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     for ``RestoreStageFailedError`` (502), one for ``ExportStageFailedError``
     (502), one for ``RequestValidationError`` (422), and a catch-all
     ``Exception`` handler (generic 500). Status map:
+    ``AccessDeniedError`` 403, ``AuthorizationStoreUnavailableError`` 503,
     ``CatalogIdentifierNotFoundError`` 404,
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,

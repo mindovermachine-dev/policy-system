@@ -24,6 +24,7 @@ _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
 _DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT = 5432
+_DEFAULT_AUTHZ_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
@@ -110,6 +111,23 @@ class ServiceConfig:
     excluded from this dataclass's `repr()` (`field(repr=False)` below) so
     it is never accidentally logged via `repr(config)`/`%r`/an uncaught
     exception's local-variable dump.
+
+    `authz_postgres_host`/`_port`/`_database`/`_user`/`_password` (from
+    `PS_AUTHZ_POSTGRES_HOST`/`_PORT`/`_DATABASE`/`_USER`/`_PASSWORD`, issue
+    #133) configure `ps_service.authz.store.connect_from_config`'s
+    connection to PS Service's own, distinct, second Postgres instance
+    (PLAN.md §0.3/§1.3/§1.4) -- a deliberately independent copy of the
+    `passkey_signing_postgres_*` pattern above (own tables, own
+    migration-tracking table, own config block), never sharing fields or
+    tables with Passkey Signing even if an operator points both at the same
+    physical instance. Follows the same "record what the environment
+    resolved to, absence is not an error here" optional-at-load-time shape
+    -- but unlike `passkey_signing_postgres_*`, an unset
+    `authz_postgres_host` is *not* treated as "not applicable" by
+    `ps_service.authz.store`'s own methods: every one of them fails closed
+    (raises `AccessRolePostgresConnectionError`) when unset, since every
+    role-gated action must deny by default rather than silently fall open
+    (PLAN.md §0.11).
     """
 
     host: str
@@ -136,6 +154,11 @@ class ServiceConfig:
     passkey_signing_postgres_database: str | None = None
     passkey_signing_postgres_user: str | None = None
     passkey_signing_postgres_password: str | None = field(default=None, repr=False)
+    authz_postgres_host: str | None = None
+    authz_postgres_port: int = _DEFAULT_AUTHZ_POSTGRES_PORT
+    authz_postgres_database: str | None = None
+    authz_postgres_user: str | None = None
+    authz_postgres_password: str | None = field(default=None, repr=False)
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -451,6 +474,38 @@ def _parse_passkey_signing_postgres_string(raw: str, *, env_var_name: str) -> st
     return raw
 
 
+def _parse_authz_postgres_port(raw: str) -> int:
+    """Parse and range-check `PS_AUTHZ_POSTGRES_PORT`, failing closed on any bad value.
+
+    Mirrors `_parse_passkey_signing_postgres_port`'s exact validation shape
+    -- a separate function, not a reused one, because the error message must
+    name `PS_AUTHZ_POSTGRES_PORT`, not `PS_PASSKEYSIGNING_POSTGRES_PORT`.
+    """
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        message = f"PS_AUTHZ_POSTGRES_PORT must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not (_MIN_PORT <= port <= _MAX_PORT):
+        message = f"PS_AUTHZ_POSTGRES_PORT must be between {_MIN_PORT} and {_MAX_PORT}, got {port}"
+        raise ServiceConfigurationError(message)
+    return port
+
+
+def _parse_authz_postgres_string(raw: str, *, env_var_name: str) -> str:
+    """Validate a `PS_AUTHZ_POSTGRES_HOST`/`_DATABASE`/`_USER`/`_PASSWORD` value.
+
+    Mirrors `_parse_passkey_signing_postgres_string`'s exact shape: rejects
+    an explicitly-set empty/whitespace-only value rather than silently
+    treating it as unset. Never includes the raw value in its error message
+    -- safe to reuse for `_password` too.
+    """
+    if not raw.strip():
+        message = f"{env_var_name} must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
 def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
 
@@ -592,6 +647,38 @@ def load_config() -> ServiceConfig:
         else None
     )
 
+    authz_postgres_host_raw = os.environ.get("PS_AUTHZ_POSTGRES_HOST")
+    authz_postgres_host = (
+        _parse_authz_postgres_string(authz_postgres_host_raw, env_var_name="PS_AUTHZ_POSTGRES_HOST")
+        if authz_postgres_host_raw is not None
+        else None
+    )
+    authz_postgres_port = _parse_authz_postgres_port(
+        os.environ.get("PS_AUTHZ_POSTGRES_PORT", str(_DEFAULT_AUTHZ_POSTGRES_PORT))
+    )
+    authz_postgres_database_raw = os.environ.get("PS_AUTHZ_POSTGRES_DATABASE")
+    authz_postgres_database = (
+        _parse_authz_postgres_string(
+            authz_postgres_database_raw, env_var_name="PS_AUTHZ_POSTGRES_DATABASE"
+        )
+        if authz_postgres_database_raw is not None
+        else None
+    )
+    authz_postgres_user_raw = os.environ.get("PS_AUTHZ_POSTGRES_USER")
+    authz_postgres_user = (
+        _parse_authz_postgres_string(authz_postgres_user_raw, env_var_name="PS_AUTHZ_POSTGRES_USER")
+        if authz_postgres_user_raw is not None
+        else None
+    )
+    authz_postgres_password_raw = os.environ.get("PS_AUTHZ_POSTGRES_PASSWORD")
+    authz_postgres_password = (
+        _parse_authz_postgres_string(
+            authz_postgres_password_raw, env_var_name="PS_AUTHZ_POSTGRES_PASSWORD"
+        )
+        if authz_postgres_password_raw is not None
+        else None
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -617,4 +704,9 @@ def load_config() -> ServiceConfig:
         passkey_signing_postgres_database=passkey_signing_postgres_database,
         passkey_signing_postgres_user=passkey_signing_postgres_user,
         passkey_signing_postgres_password=passkey_signing_postgres_password,
+        authz_postgres_host=authz_postgres_host,
+        authz_postgres_port=authz_postgres_port,
+        authz_postgres_database=authz_postgres_database,
+        authz_postgres_user=authz_postgres_user,
+        authz_postgres_password=authz_postgres_password,
     )

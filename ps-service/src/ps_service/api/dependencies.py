@@ -26,6 +26,7 @@ from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     build_default_change_check_dependencies,
 )
+from ps_service.api.errors import AccessDeniedError
 from ps_service.api.export_orchestration import (
     ExportDependencies,
     build_default_export_dependencies,
@@ -45,6 +46,8 @@ from ps_service.api.restore_orchestration import (
     build_default_restore_from_catalog_dependencies,
 )
 from ps_service.auth import Principal
+from ps_service.authz.service import require_role
+from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves `provide_pending_approval_store`'s own annotation at runtime
 )
@@ -56,7 +59,17 @@ from ps_service.logging import bind_run_context
 from ps_service.passkey_signing.store import PendingApprovalStore, PsycopgPendingApprovalStore
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
+
+    from ps_service.authz.models import AccessRole
+
+# PLAN.md §2.4: the fixed message `AccessDeniedError` always carries -- mirrors
+# `ps_service.authz.service`'s own private `_ACCESS_DENIED_MESSAGE` constant
+# verbatim (AC-BI-014's "leaks no internal detail"; the two are not imported
+# from one another so that each surface's own raise site stays self-contained,
+# matching `mcp_server.py`'s own `f"error: {exc}"` sites, which never import
+# `service.py`'s private constants either).
+_ACCESS_DENIED_MESSAGE = "You do not have the required access role for this action."
 
 
 def get_service_config(request: Request) -> ServiceConfig:
@@ -97,6 +110,53 @@ def get_principal(request: Request) -> Principal | None:
         # all simply never sets the key, so `.get(...)` already returns `None` here.
         return None
     return principal
+
+
+def require_access_role(role: AccessRole) -> Callable[[Request], None]:
+    """Return a FastAPI dependency enforcing `role`-or-above for the request's caller.
+
+    Issue #133, PLAN.md §0.5/§2.3, AC-BI-012: proves the one shared
+    `ps_service.authz.service` component both surfaces (MCP tools, via
+    `mcp_interface.mcp_server`, and REST) can enforce authorization
+    identically -- calling the exact same `require_role` function
+    `mcp_server.py`'s six gated tools call, never a second, parallel gating
+    mechanism. No REST route is wired to this dependency (PLAN.md §0.5 --
+    Deliverables names only MCP tools + a skill for every one of the six
+    gated actions; inventing a route to give this a "real" call site would
+    be scope creep beyond the 15 ACs). It exists as a directly-callable,
+    directly-unit-tested dependency-factory, mirroring
+    :func:`get_principal`/:func:`get_service_config`'s own shape: a small
+    function that reads what `create_app`/`RestAuthMiddleware` already
+    established on the request, with no dependency-injection machinery of
+    its own.
+
+    Args:
+        role: The minimum `AccessRole` a caller must hold.
+
+    Returns:
+        A dependency callable `(request) -> None`. Raises
+        `AccessDeniedError` when no verified `Principal` is bound to the
+        request (mirrors `mcp_server.py`'s own "no real actor identity"
+        fail-closed contract for access-role management -- there is no
+        synthetic identity to check a real, permanent Postgres role against)
+        or when the resolved `Principal` does not hold `role` (or above, per
+        `require_role`'s own §0.8 hierarchy fix). Raises
+        `AuthorizationStoreUnavailableError` when the authz store is
+        unreachable (AC-BI-011). Returns `None` (passes) otherwise.
+    """
+
+    def _require_access_role(request: Request) -> None:
+        principal = get_principal(request)
+        if principal is None:
+            raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
+        config = get_service_config(request)
+        require_role(
+            (principal.sub, principal.iss),
+            minimum=role,
+            store=PsycopgAccessRoleStore(config),
+        )
+
+    return _require_access_role
 
 
 async def provide_run_id(request: Request) -> AsyncIterator[str]:

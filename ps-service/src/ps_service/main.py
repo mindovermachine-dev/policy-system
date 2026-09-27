@@ -31,8 +31,16 @@ from ps_service.auth.middleware import RestAuthMiddleware
 from ps_service.auth.protected_resource import protected_resource_metadata
 from ps_service.auth.startup import resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_service.authz.migration_runner import apply_pending_migrations as apply_authz_migrations
+from ps_service.authz.store import (
+    check_connectivity_from_config as check_authz_postgres_connectivity,
+)
+from ps_service.authz.store import (
+    connect_from_config as connect_authz_postgres_from_config,
+)
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
+    AUTHZ_POSTGRES,
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
@@ -121,7 +129,13 @@ class _MaxBodySizeMiddleware:
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
-_READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI, PASSKEY_SIGNING_POSTGRES)
+_READY_DEPENDENCIES = (
+    FALKORDB,
+    LLM_INTERFACE,
+    CELLAR_ELI,
+    PASSKEY_SIGNING_POSTGRES,
+    AUTHZ_POSTGRES,
+)
 
 # Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only
 # being named in `unhealthy_dependencies` (issue #75). A single-element tuple today
@@ -131,7 +145,12 @@ _READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI, PASSKEY_SIGNING_POST
 # functions' behavior unchanged (issue #124). Passkey Signing Postgres (issue #131)
 # is deliberately NOT added here (PLAN.md §0.8): an outage of this optional,
 # pilot-scope instance must never block `/ready` for the rest of the system --
-# only the one gated merge path degrades.
+# only the one gated merge path degrades. Authz Postgres (issue #133) is
+# likewise deliberately NOT added here (issue #133 PLAN.md §0.11): AC-BI-011's
+# "fails closed for every role-gated action" is a per-action requirement, not
+# a `/ready` requirement -- an unconfigured/unreachable Authz Postgres instead
+# means every role-gated action is rejected for everyone, enforced at each
+# action's own call site, never by blocking process-wide readiness.
 _GATING_DEPENDENCIES = (FALKORDB,)
 
 
@@ -179,19 +198,26 @@ def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
 def _all_dependency_probes(
     config: ServiceConfig,
 ) -> tuple[tuple[str, Callable[[], None]], ...]:
-    """The fixed (name, probe) pairs for the four tracked dependencies.
+    """The fixed (name, probe) pairs for the five tracked dependencies.
 
-    Covers FalkorDB, LLM Interface, Cellar/ELI, and Passkey Signing Postgres.
+    Covers FalkorDB, LLM Interface, Cellar/ELI, Passkey Signing Postgres, and
+    (issue #133) Authz Postgres.
 
     The single source of truth both `_check_dependencies_at_startup` (probes
-    all four, unconditionally) and `_retry_gating_dependencies` (re-probes
+    all five, unconditionally) and `_retry_gating_dependencies` (re-probes
     only `_GATING_DEPENDENCIES`) build on, so the two never drift apart on
     which callable answers for which dependency name. Passkey Signing
     Postgres's own probe (`check_passkey_signing_postgres_connectivity`) is a
     no-op when `config.passkey_signing_postgres_host` is unset (issue #131,
     PLAN.md §0.8) -- unconditionally listed here regardless, mirroring how
     LLM Interface/Cellar/ELI are also always probed even though a deployment
-    may leave either unconfigured.
+    may leave either unconfigured. Authz Postgres's own probe
+    (`check_authz_postgres_connectivity`) deliberately does NOT no-op when
+    `config.authz_postgres_host` is unset (issue #133, PLAN.md §0.11) --
+    unlike Passkey Signing, an unconfigured Authz Postgres raises there too,
+    so an unconfigured deployment logs a startup warning here (never gating
+    `/ready`, since `AUTHZ_POSTGRES` is not in `_GATING_DEPENDENCIES`) rather
+    than silently appearing healthy.
     """
     return (
         (FALKORDB, lambda: check_falkordb_connectivity(config)),
@@ -201,6 +227,7 @@ def _all_dependency_probes(
             PASSKEY_SIGNING_POSTGRES,
             lambda: check_passkey_signing_postgres_connectivity(config),
         ),
+        (AUTHZ_POSTGRES, lambda: check_authz_postgres_connectivity(config)),
     )
 
 
@@ -227,6 +254,33 @@ def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
             action="startup",
             outcome="warning",
             extra={"dependency": PASSKEY_SIGNING_POSTGRES, "error": str(exc)},
+        )
+
+
+def _apply_authz_migrations_at_startup(config: ServiceConfig) -> None:
+    """Apply any pending Authz Postgres migrations once at startup (issue #133).
+
+    Gated on `config.authz_postgres_host` being configured, mirroring
+    `_apply_passkey_signing_migrations_at_startup`'s own shape exactly:
+    Authz Postgres is optional at *config-load* time (PLAN.md §1.4), so an
+    environment that never configures it skips this step entirely rather
+    than attempting a doomed connection. Deliberately never raises (mirrors
+    `_check_dependencies_at_startup` below): a migration failure is logged as
+    a warning and only degrades role-gated actions (which already fail
+    closed on an unreachable store, PLAN.md §0.11), never the whole
+    process's startup.
+    """
+    if config.authz_postgres_host is None:
+        return
+    try:
+        with connect_authz_postgres_from_config(config) as conn:
+            apply_authz_migrations(conn)
+    except Exception as exc:  # noqa: BLE001 - a migration failure must never crash the process (see docstring)
+        emit_log_entry(
+            component="entrypoint",
+            action="startup",
+            outcome="warning",
+            extra={"dependency": AUTHZ_POSTGRES, "error": str(exc)},
         )
 
 
@@ -456,6 +510,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
             )
         app.state.config_complete = not missing_config
         _apply_passkey_signing_migrations_at_startup(config)
+        _apply_authz_migrations_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield

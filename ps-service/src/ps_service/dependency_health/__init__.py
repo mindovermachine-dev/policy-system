@@ -7,6 +7,7 @@ any extra polling cost.
 """
 
 from ps_service.dependency_health.registry import (
+    AUTHZ_POSTGRES,
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
@@ -19,6 +20,7 @@ from ps_service.dependency_health.registry import (
 )
 
 __all__ = [
+    "AUTHZ_POSTGRES",
     "CELLAR_ELI",
     "FALKORDB",
     "LLM_INTERFACE",
