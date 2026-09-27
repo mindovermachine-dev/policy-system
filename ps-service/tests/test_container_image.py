@@ -290,6 +290,11 @@ _LOG_FILE_IN_IMAGE = "/var/log/ps-service/ps-service.jsonl"
 _FALKORDB_DEPENDENCY = "falkordb"
 _BARRIER_DEPENDENCY = "llm_interface"
 
+# Issue #133: Authz Postgres is unconditionally probed and never no-ops when unconfigured
+# (unlike Passkey Signing Postgres), so it always shows unhealthy in this smoke-test container,
+# which never sets `PS_AUTHZ_POSTGRES_HOST`.
+_AUTHZ_POSTGRES_DEPENDENCY = "authz_postgres"
+
 # RFC 2606 reserves `.invalid`, so this name cannot resolve on any runner -- the negative
 # control's unreachability is guaranteed rather than merely likely.
 _UNREACHABLE_FALKORDB_HOST = "falkordb-unreachable.invalid"
@@ -618,7 +623,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     )
     assert response.json() == {
         "status": "not_ready",
-        "unhealthy_dependencies": [_BARRIER_DEPENDENCY],
+        "unhealthy_dependencies": [_BARRIER_DEPENDENCY, _AUTHZ_POSTGRES_DEPENDENCY],
     }
 
 
@@ -791,7 +796,11 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
         assert response.status_code == _HTTP_SERVICE_UNAVAILABLE
         assert response.json() == {
             "status": "not_ready",
-            "unhealthy_dependencies": [_FALKORDB_DEPENDENCY, _BARRIER_DEPENDENCY],
+            "unhealthy_dependencies": [
+                _FALKORDB_DEPENDENCY,
+                _BARRIER_DEPENDENCY,
+                _AUTHZ_POSTGRES_DEPENDENCY,
+            ],
         }
     finally:
         _remove_container(container_cli, name)
