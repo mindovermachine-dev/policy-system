@@ -100,6 +100,7 @@ def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAc
         run_id=run_id,
         regulatory_instrument_id=outcome.regulatory_instrument_id,
         source=outcome.source,
+        outcome=outcome.outcome,
         stages=[
             StageOutcome(stage=report.stage, status="succeeded", summary=report.summary)
             for report in outcome.stages
@@ -118,7 +119,11 @@ async def create_ingestion(
 
     A ``source: "catalog"`` request runs the full external pipeline (Ingestion ->
     Domain Mapper -> Company Merge) for the named CELEX, off the event loop via
-    ``run_in_threadpool``, and returns the per-stage outcome (AC-BI-002). A CELEX
+    ``run_in_threadpool``, and returns the per-stage outcome (AC-BI-002) --
+    unless the resolved identifier already has a fully-merged
+    ``RegulatoryInstrument`` (issue #135), in which case Domain Mapper and
+    Company Merge are skipped entirely and the response reports
+    ``outcome="already_ingested"`` with an empty ``stages`` list. A CELEX
     absent from the curated catalog falls back to a Cellar/ELI existence lookup
     (``resolve_via_cellar``, also off the event loop) before the pipeline runs --
     a genuine miss on both sources 404s (AC-BI-005/006), a resolved CELEX runs the

@@ -867,3 +867,104 @@ def test_merge_summary_pending_reviews_zero_when_no_near_misses() -> None:
 
     assert summary["near_misses"] == 0
     assert summary["pending_reviews"] == 0
+
+
+# --- issue #135: reject redundant re-ingestion of an already-merged instrument ---
+
+
+def test_preflight_check_queries_single_tenant_graph_before_any_stage(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-001: the pre-flight check runs, querying the single-tenant graph
+    for the resolved ``{short_name}-{version}`` id, before any stage.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-preflight-miss",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    assert len(fake.single_tenant.calls) == 1
+    assert fake.single_tenant.calls[0].params == {"id": f"{_ENTRY.short_name}-{_ENTRY.version}"}
+
+
+def test_preflight_miss_runs_pipeline_exactly_as_before(make_emitter: MakeEmitter) -> None:
+    """AC-BI-004: when no fully-merged instrument exists, every stage still runs
+    and the outcome is reported as ``"fresh"``.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+
+    outcome = run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-preflight-miss-2",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    assert outcome.outcome == "fresh"
+    assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
+    assert [report.stage for report in outcome.stages] == [
+        "ingestion",
+        "extraction",
+        "derivation",
+        "merge",
+    ]
+
+
+def test_preflight_hit_skips_domain_mapper_and_company_merge(make_emitter: MakeEmitter) -> None:
+    """AC-BI-002/003: an existing fully-merged instrument skips every stage and
+    the response reports the distinct ``"already_ingested"`` outcome with no
+    stage reports at all.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(preflight_hit=True)
+
+    outcome = run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-preflight-hit",
+        caller="127.0.0.1",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    assert outcome.outcome == "already_ingested"
+    assert outcome.regulatory_instrument_id == f"{_ENTRY.short_name}-{_ENTRY.version}"
+    assert outcome.stages == ()
+    assert fake.recorder.order == []
+
+
+def test_preflight_check_failure_fails_closed_as_pipeline_stage_error(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-006: a pre-flight query failure (e.g. graph unreachable) surfaces as
+    a ``PipelineStageError`` naming the ``"preflight"`` stage -- never silently
+    treated as already ingested, and no stage ever runs.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(
+        preflight_error=FalkorDBConnectionError("FalkorDB connection failed at 10.0.0.5:6379")
+    )
+
+    with pytest.raises(PipelineStageError) as exc_info:
+        run_catalog_ingestion_pipeline(
+            _ENTRY,
+            config=_complete_config(),
+            run_id="run-preflight-error",
+            caller="127.0.0.1",
+            dependencies=fake.dependencies,
+            emitter=emitter,
+        )
+
+    assert exc_info.value.stage == "preflight"
+    assert exc_info.value.reason == "preflight failed"
+    assert fake.recorder.order == []

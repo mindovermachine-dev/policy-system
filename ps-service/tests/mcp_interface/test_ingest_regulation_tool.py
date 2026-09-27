@@ -280,7 +280,7 @@ def test_curated_celex_happy_path_returns_ingestion_accepted_response_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """D-RESPONSE-SHAPE: the returned dict matches `IngestionAcceptedResponse`
-    field for field -- run_id, regulatory_instrument_id, source, stages.
+    field for field -- run_id, regulatory_instrument_id, source, outcome, stages.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -305,7 +305,14 @@ def test_curated_celex_happy_path_returns_ingestion_accepted_response_shape(
         "merge",
     ]
     assert all(stage["status"] == "succeeded" for stage in body["stages"])
-    assert set(body.keys()) == {"run_id", "regulatory_instrument_id", "source", "stages"}
+    assert body["outcome"] == "fresh"
+    assert set(body.keys()) == {
+        "run_id",
+        "regulatory_instrument_id",
+        "source",
+        "outcome",
+        "stages",
+    }
     for stage in body["stages"]:
         assert set(stage.keys()) == {"stage", "status", "summary"}
 

@@ -131,8 +131,10 @@ Cellar/ELI — the EU's public document repository — directly.
 The skill runs the full pipeline — minutes, not seconds (a full CRA ingestion
 has measured ~10 minutes end to end) — and needs the target PS Service
 instance's FalkorDB and LLM interface configured. It reports the resolved
-`regulatory_instrument_id` and each pipeline stage's outcome, or a specific
-named error if something fails.
+`regulatory_instrument_id` and each pipeline stage's outcome; if this exact
+identifier was already fully ingested, it instead reports that immediately
+with no pipeline stages run; or, it reports a specific named error if
+something fails.
 
 ---
 

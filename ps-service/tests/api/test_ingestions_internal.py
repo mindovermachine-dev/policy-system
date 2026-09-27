@@ -117,10 +117,15 @@ def test_post_ingestions_internal_runs_real_pipeline() -> None:
     assert body["run_id"]
     assert body["regulatory_instrument_id"] == "ENGPRAC-3.0"
     assert body["source"] == "internal"
+    assert body["outcome"] == "fresh"
     assert [stage["stage"] for stage in body["stages"]] == ["internal_ingestion", "merge"]
     assert body["stages"][0]["status"] == "succeeded"
     assert body["stages"][1]["status"] == "succeeded"
     assert fake.recorder.order == ["internal_ingestion", "merge"]
+    # AC-BI-005 (issue #135): the catalog-only already-merged pre-flight check
+    # never runs for source="internal" -- the single-tenant graph is never
+    # queried by anything but the (faked, no-op) merge stage.
+    assert fake.single_tenant.calls == []
 
 
 def test_post_ingestions_internal_summary_reports_policies_key() -> None:

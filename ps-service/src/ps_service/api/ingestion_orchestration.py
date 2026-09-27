@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.error_handlers import (
@@ -512,11 +512,18 @@ class StageReport:
 
 @dataclass(frozen=True, slots=True)
 class IngestionOutcome:
-    """The result of a full ingestion pipeline run."""
+    """The result of a full ingestion pipeline run.
+
+    ``outcome`` defaults to ``"fresh"`` (a run that executed its stages).
+    ``"already_ingested"`` (issue #135, catalog path only) means the
+    pre-flight check found an existing fully-merged ``RegulatoryInstrument``
+    and skipped every stage -- ``stages`` is empty in that case.
+    """
 
     regulatory_instrument_id: str
     source: Literal["catalog", "internal"]
     stages: tuple[StageReport, ...]
+    outcome: Literal["fresh", "already_ingested"] = "fresh"
 
 
 def _ingestion_summary(result: IngestResult) -> dict[str, int]:
@@ -605,6 +612,37 @@ def _emit_run(
         extra=extra,
         emitter=emitter,
     )
+
+
+# --- pre-flight already-merged check (issue #135) ---
+
+_MERGED_INSTRUMENT_EXISTS_QUERY = "MATCH (n:RegulatoryInstrument {id: $id}) RETURN n.id"
+
+
+def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_id: str) -> bool:
+    """Return whether a fully-merged ``RegulatoryInstrument`` already exists for this id.
+
+    Company Merge's ``persist_canonical_nodes`` (``company_merge/graph_writer.py``)
+    writes a ``RegulatoryInstrument`` node into the single-tenant graph
+    unconditionally at the end of every merge run -- its existence there is
+    therefore a reliable proxy for "Domain Mapper and Company Merge already
+    completed for this exact identifier" (issue #135, AC-BI-001), mirroring
+    ``api.export_orchestration``'s own ``_EXISTENCE_QUERY`` shape, pointed at
+    the single-tenant graph instead of a ``{short}_baseline`` graph.
+
+    Args:
+        single_tenant_graph: The already-opened single-tenant graph.
+        regulatory_instrument_id: The ``{short_name}-{version}`` id the
+            catalog pipeline would ingest under.
+
+    Returns:
+        ``True`` if a matching ``RegulatoryInstrument`` node exists.
+    """
+    result = single_tenant_graph.query(
+        _MERGED_INSTRUMENT_EXISTS_QUERY, params={"id": regulatory_instrument_id}
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    return len(rows) > 0
 
 
 # --- the sequencer ---
@@ -728,8 +766,18 @@ def run_catalog_ingestion_pipeline(
     """Run the external ingestion pipeline for one catalog regulation.
 
     Sequences Ingestion -> Domain Mapper (extract, derive) -> Company Merge
-    in-process (AC-BI-002/003). Re-running for the same identifier converges on
-    the exact-canonical-identity nodes, but LLM-extraction non-determinism
+    in-process (AC-BI-002/003). Before any stage runs, a pre-flight check
+    (issue #135, AC-BI-001) looks for an already-fully-merged
+    ``RegulatoryInstrument`` for this exact ``{short_name}-{version}`` id in
+    the single-tenant graph (:func:`_is_already_merged`); if found, Domain
+    Mapper and Company Merge never run and this returns immediately with
+    ``outcome="already_ingested"`` and an empty ``stages`` tuple (AC-BI-002/
+    003) -- otherwise the pipeline runs exactly as before (AC-BI-004), and
+    the check itself failing (e.g. the graph is unreachable) fails closed into
+    the same ``PipelineStageError`` path a stage failure would (AC-BI-006),
+    never silently treated as already ingested. Re-running for the same
+    identifier when no merged instrument exists yet converges on the
+    exact-canonical-identity nodes, but LLM-extraction non-determinism
     (issue #34) can still fragment a reworded Capability across re-ingestions
     until #34 is addressed. The whole run shares one ``run_id`` -- it is
     passed explicitly into the ingest stage (the only stage fn that self-binds a
@@ -760,19 +808,43 @@ def run_catalog_ingestion_pipeline(
             does today.
 
     Returns:
-        An :class:`IngestionOutcome` with ``source="catalog"`` and one
-        :class:`StageReport` per completed stage.
+        An :class:`IngestionOutcome` with ``source="catalog"``, one
+        :class:`StageReport` per completed stage, and ``outcome="fresh"`` --
+        or, when the pre-flight check finds an existing merged instrument,
+        ``outcome="already_ingested"`` with no stage reports at all.
 
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an LLM
             model / embed model / similarity threshold (HTTP 503).
-        PipelineStageError: If any stage raises (HTTP 502).
+        PipelineStageError: If any stage -- or the pre-flight check itself --
+            raises (HTTP 502).
     """
     resolved = _require_ingestion_config(config)
+    regulatory_instrument_id = f"{entry.short_name}-{entry.version}"
+    single_tenant_graph = dependencies.graphs.single_tenant(config)
+    already_merged = _run_stage(
+        "preflight",
+        lambda: _is_already_merged(single_tenant_graph, regulatory_instrument_id),
+        emitter=emitter,
+    )
+    if already_merged:
+        _emit_run(
+            outcome="already_ingested",
+            run_id=run_id,
+            source_identifier=entry.celex,
+            caller=caller,
+            emitter=emitter,
+        )
+        return IngestionOutcome(
+            regulatory_instrument_id=regulatory_instrument_id,
+            source="catalog",
+            stages=(),
+            outcome="already_ingested",
+        )
     graphs = _OpenGraphs(
         native=dependencies.graphs.native(config, entry.short_name),
         baseline=dependencies.graphs.baseline(config, entry.short_name),
-        single_tenant=dependencies.graphs.single_tenant(config),
+        single_tenant=single_tenant_graph,
     )
     started = time.perf_counter()
     _emit_run(

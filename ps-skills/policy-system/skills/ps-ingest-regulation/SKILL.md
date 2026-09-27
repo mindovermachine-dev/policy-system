@@ -1,6 +1,6 @@
 ---
 name: ps-ingest-regulation
-description: Ingest an EU regulation into the Policy System compliance graph by CELEX identifier, running the full Ingestion -> Domain Mapper -> Company Merge pipeline and reporting the per-stage run summary.
+description: Ingest an EU regulation into the Policy System compliance graph by CELEX identifier, running the full Ingestion -> Domain Mapper -> Company Merge pipeline (or reporting that it is already ingested) and reporting the per-stage run summary.
 ---
 
 # ps-ingest-regulation
@@ -20,7 +20,9 @@ outside it, which is resolved against Cellar/ELI instead. Either way,
 
 **Deliverable:** confirmation that the ingestion ran, the resolved
 `regulatory_instrument_id`, and the per-stage outcome (ingestion,
-extraction, derivation, merge) with each stage's own small summary — or, on
+extraction, derivation, merge) with each stage's own small summary — or, when
+a fully-merged instrument already existed for this identifier, confirmation
+that nothing new ran (issue #135's `outcome: "already_ingested"`) — or, on
 failure, the specific named error state.
 
 ## On Load
@@ -77,19 +79,20 @@ one selected here.
    of the following named states — never collapsed into a generic
    "ingestion failed":
 
-   | Tool result shape                                                                                    | Named state to report                                                                                                                                                                    |
-   | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or an auth-rejection-shaped error                                      | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                             |
-   | `error: CELEX <celex> is curated under short_name '<catalog value>'; pass that value, not '<given>'` | The `short_name` given does not match this CELEX's curated value — report the catalog's actual value and ask the user whether to retry with it                                           |
-   | `error: No curated regulation has CELEX '<celex>', and it does not exist on Cellar/ELI.`             | This CELEX does not exist, in the curated catalog or on Cellar/ELI — report it as not found, do not retry                                                                                |
-   | `error: ingestion configuration incomplete: ...`                                                     | PS Service itself is missing a required LLM/embedding model or similarity-threshold setting — report this as a service-configuration problem, not something the user's input can fix     |
-   | `error: LLM Interface is unavailable.`                                                               | The LLM Interface dependency is currently unreachable — report it distinctly from a PS Service outage; do not retry silently                                                             |
-   | `error: the policy graph database is not reachable`                                                  | The compliance graph database cannot be reached — report it distinctly from an LLM Interface or transport failure                                                                        |
-   | `error: <stage> stage failed: <reason>`                                                              | One pipeline stage (ingestion, extraction, derivation, or merge) genuinely failed mid-run — name the failing stage exactly as returned; earlier stages' work is not implied to be undone |
-   | `error: an unexpected error occurred`                                                                | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                        |
-   | Successful structured response                                                                       | Report `regulatory_instrument_id`, `source`, and each stage's name and summary plainly                                                                                                   |
+   | Tool result shape                                                                                    | Named state to report                                                                                                                                                                                                   |
+   | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or an auth-rejection-shaped error                                      | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                                            |
+   | `error: CELEX <celex> is curated under short_name '<catalog value>'; pass that value, not '<given>'` | The `short_name` given does not match this CELEX's curated value — report the catalog's actual value and ask the user whether to retry with it                                                                          |
+   | `error: No curated regulation has CELEX '<celex>', and it does not exist on Cellar/ELI.`             | This CELEX does not exist, in the curated catalog or on Cellar/ELI — report it as not found, do not retry                                                                                                               |
+   | `error: ingestion configuration incomplete: ...`                                                     | PS Service itself is missing a required LLM/embedding model or similarity-threshold setting — report this as a service-configuration problem, not something the user's input can fix                                    |
+   | `error: LLM Interface is unavailable.`                                                               | The LLM Interface dependency is currently unreachable — report it distinctly from a PS Service outage; do not retry silently                                                                                            |
+   | `error: the policy graph database is not reachable`                                                  | The compliance graph database cannot be reached — report it distinctly from an LLM Interface or transport failure                                                                                                       |
+   | `error: <stage> stage failed: <reason>`                                                              | One pipeline stage (ingestion, extraction, derivation, or merge) genuinely failed mid-run — name the failing stage exactly as returned; earlier stages' work is not implied to be undone                                |
+   | `error: an unexpected error occurred`                                                                | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                       |
+   | Successful structured response with `outcome: "already_ingested"` and an empty `stages` list         | A fully-merged instrument already existed for this identifier (issue #135) — Domain Mapper and Company Merge did not run this time; report that the regulation is already ingested, not a fresh run's per-stage summary |
+   | Successful structured response with `outcome: "fresh"`                                               | Report `regulatory_instrument_id`, `source`, and each stage's name and summary plainly                                                                                                                                  |
 
-4. **Output**, in this shape on success:
+4. **Output**, in this shape on a fresh run (`outcome: "fresh"`):
 
    ```text
    Ingested: <celex> as <regulatory_instrument_id>
@@ -99,6 +102,13 @@ one selected here.
      2. extraction — <summary>
      3. derivation — <summary>
      4. merge — <summary>
+   ```
+
+   On `outcome: "already_ingested"`, report instead that nothing new ran —
+   never render a `Stages:` block, since none ran:
+
+   ```text
+   Already ingested: <celex> as <regulatory_instrument_id> (no changes to merge)
    ```
 
    On a named error state, report that state plainly instead — do not emit
