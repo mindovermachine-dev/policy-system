@@ -37,13 +37,18 @@ from ps_service.api.change_check_orchestration import (
     run_change_check_sweep,
 )
 from ps_service.api.errors import (
+    AccessDeniedError,
+    AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
     CuratedSourceUnavailableError,
     IngestionConfigIncompleteError,
+    InvalidAccessRoleError,
     PendingReviewNotFoundError,
     PipelineStageError,
     RestoreArtifactRejectedError,
     RestoreStageFailedError,
+    SelfGrantOrRevokeBlockedError,
+    SystemOwnerFloorViolationError,
 )
 from ps_service.api.ingestion_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
@@ -70,6 +75,9 @@ from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
+from ps_service.authz.models import AccessRole
+from ps_service.authz.service import grant_role, list_assignments, require_role, revoke_role
+from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.curated_source import store as catalog_source_store
 from ps_service.curated_source.catalog_client import build_default_curated_catalog_dependencies
@@ -108,6 +116,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
     from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+    from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
     from ps_service.ingestion.adapters.base import IngestionAdapter
@@ -309,6 +318,57 @@ def _resolve_signing_actor() -> tuple[str, str] | None:
         The verified `(sub, iss)` pair, or `None` if no verified bearer
         token is bound to this call.
     """
+    access_token = get_access_token()
+    if access_token is None or access_token.subject is None:
+        return None
+    iss = (access_token.claims or {}).get("iss")
+    if not isinstance(iss, str):
+        return None
+    return access_token.subject, iss
+
+
+_ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: access-role management requires a real authenticated caller"
+)
+
+# PLAN.md §3.3/§4 Slice 4: the catalog-source gate's own defensive fallback for
+# a non-bypass call with no verified bearer token bound to it -- unreachable
+# in practice (`ps_service.main.create_app` fails closed at startup whenever
+# no real auth is configured and the bypass is off, mirroring
+# `_resolve_principal`'s own documented invariant), but this keeps the gate
+# fail-closed rather than passing `None` through to `require_role` should
+# that invariant ever be violated.
+_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: this action requires a real authenticated caller"
+)
+
+
+def _resolve_authz_actor(config: ServiceConfig) -> tuple[str, str] | None:
+    """Resolve `(sub, iss)` for the access-role management flow's caller identity (issue #133).
+
+    Structurally identical to `_resolve_signing_actor` above but kept as its
+    own function -- a deliberate small duplication (L1 "prefer duplication
+    over the wrong abstraction", PLAN.md §3.1): the two concepts
+    (signing-ceremony ownership identity vs. access-role identity) are
+    independently owned, and coupling them through one shared private helper
+    would mean a future change to either component's own identity-resolution
+    rules silently changes the other's behavior too.
+
+    Deliberately does **not** fall back to `LOCAL_TEST_PRINCIPAL_ID` the way
+    `_resolve_principal` does (PLAN.md §3.3): `grant-access-role`/
+    `revoke-access-role`/`list-access-roles` write/read real, permanent,
+    identity-keyed Postgres rows, and bootstrapping the fixed bypass
+    principal string as `SystemOwner` in a real store would be actively
+    wrong -- a meaningless synthetic identity holding real elevated access.
+    `config` is accepted (unused beyond documenting this contract) so every
+    caller passes it uniformly, matching `_resolve_principal`'s own
+    signature shape.
+
+    Returns:
+        The verified `(sub, iss)` pair, or `None` if no verified bearer
+        token is bound to this call (bypass included).
+    """
+    del config
     access_token = get_access_token()
     if access_token is None or access_token.subject is None:
         return None
@@ -871,15 +931,31 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
     `GET /catalog` and artifact fetch (AC-BI-013), until `reset-catalog-source`
     is called.
 
+    Since issue #133, requires the caller hold `SystemAdmin` or above
+    (`ps_service.authz.service.require_role`) -- skipped entirely under the
+    local-test bypass (PLAN.md §3.3), which never sees a real actor
+    identity to check.
+
     On success, returns `{"url": <the validated url>, "source": "override"}`.
-    Returns a string beginning `error: ` when `url` fails validation, when
-    the policy graph database cannot be reached, or (this tool's own
-    residual safety net) on any other unexpected failure.
+    Returns a string beginning `error: ` when the caller lacks the required
+    access role, when `url` fails validation, when the policy graph database
+    cannot be reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         try:
             validated_url = validate_source_url(
                 url, allow_insecure_http=config.curated_source_allow_insecure_http
@@ -905,15 +981,30 @@ def reset_catalog_source() -> dict[str, object] | str:
     `PS_CURATEDSOURCE_URL`/the public default on every subsequent
     `GET /catalog` and artifact fetch, no restart required.
 
+    Since issue #133, requires the caller hold `SystemAdmin` or above
+    (`ps_service.authz.service.require_role`) -- skipped entirely under the
+    local-test bypass (PLAN.md §3.3), which never sees a real actor
+    identity to check.
+
     On success, returns `{"url": <the env-var/default url>, "source": "default"}`.
-    Returns a string beginning `error: ` when the policy graph database
-    cannot be reached, or (this tool's own residual safety net) on any other
-    unexpected failure.
+    Returns a string beginning `error: ` when the caller lacks the required
+    access role, when the policy graph database cannot be reached, or (this
+    tool's own residual safety net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         try:
             graph = _resolve_graph(config)
             catalog_source_store.reset_override(graph)
@@ -934,16 +1025,32 @@ def get_catalog_source() -> dict[str, object] | str:
     (D-FAILOPEN) -- this tool never fails on a FalkorDB outage; it simply
     reports the fallback source.
 
+    Since issue #133, requires the caller hold `SystemAdmin` or above
+    (`ps_service.authz.service.require_role`) -- skipped entirely under the
+    local-test bypass (PLAN.md §3.3), which never sees a real actor
+    identity to check.
+
     On success, returns `{"url": <the effective url>, "source": "override"}`
     when a persisted override is in effect, or `{"url": ..., "source":
-    "default"}` otherwise. Returns a string beginning `error: ` only on this
-    tool's own residual safety net (an unexpected failure unrelated to the
-    FalkorDB override check, which always fails open rather than erroring).
+    "default"}` otherwise. Returns a string beginning `error: ` when the
+    caller lacks the required access role, or (this tool's own residual
+    safety net) on any other unexpected failure unrelated to the FalkorDB
+    override check, which always fails open rather than erroring.
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         effective = resolve_effective_source(config, open_graph=lambda: _resolve_graph(config))
         return {"url": effective.url, "source": "override" if effective.is_override else "default"}
 
@@ -1123,3 +1230,174 @@ def read_domain_concepts() -> str:
         return _domain_concepts_path().read_text(encoding="utf-8")
     except OSError as exc:
         raise McpResourceUnavailableError(_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL) from exc
+
+
+def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:
+    """Shape one `AccessRoleAssignmentRow` for `list-access-roles`'s wire response."""
+    return {
+        "principal_subject": row.principal_subject,
+        "principal_issuer": row.principal_issuer,
+        "access_role": row.access_role.value,
+        "granted_at": row.granted_at.isoformat(),
+        "granted_by_subject": row.granted_by_subject,
+        "granted_by_issuer": row.granted_by_issuer,
+    }
+
+
+@server.tool(name="list-access-roles")
+def list_access_roles() -> dict[str, object] | str:
+    """ListAccessRoles: report every principal's current AccessRole assignments (issue #133).
+
+    Takes no parameters. The very first-ever caller, of any identity, is
+    auto-bootstrapped to `AuthenticatedUser` + `SystemOwner` (AC-BI-001)
+    before this tool's own gate is evaluated, so that one call always
+    succeeds; every later principal defaults to `AuthenticatedUser` alone
+    (AC-BI-002) and this tool then requires `SystemAdmin` or `SystemOwner`
+    to proceed (the full roster is sensitive -- a plan-original design
+    choice, not derived from any specific AC).
+
+    On success, returns `{"assignments": [{"principal_subject",
+    "principal_issuer", "access_role", "granted_at", "granted_by_subject",
+    "granted_by_issuer"}, ...], "system_owner_floor_warning": bool}`.
+    Returns a string beginning `error: ` when the caller has no real
+    authenticated session (the local-test bypass included -- access-role
+    management is never available under it), when the caller lacks the
+    required role, when the authorization store cannot be reached, or (this
+    tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        store = PsycopgAccessRoleStore(config)
+        try:
+            result = list_assignments(actor, store=store)
+        except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+            return f"error: {exc}"
+        return {
+            "assignments": [_assignment_to_dict(row) for row in result.assignments],
+            "system_owner_floor_warning": result.system_owner_floor_warning,
+        }
+
+    return _run_mcp_action("list_access_roles", principal, _body)
+
+
+_GRANT_REVOKE_ERRORS = (
+    InvalidAccessRoleError,
+    AccessDeniedError,
+    SelfGrantOrRevokeBlockedError,
+    SystemOwnerFloorViolationError,
+    AuthorizationStoreUnavailableError,
+)
+
+
+@server.tool(name="grant-access-role")
+def grant_access_role(
+    principal_subject: Annotated[str, Field(min_length=1)],
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"],
+) -> dict[str, object] | str:
+    """GrantAccessRole: grant `access_role` to `principal_subject` (issue #133).
+
+    RBAC (PLAN.md §0.7, widened per CHANGES.md Appendix A): granting
+    `SystemAdmin` or `SystemOwner` requires the caller hold `SystemOwner`;
+    granting `PolicyManager` requires the caller hold `SystemOwner` or
+    `SystemAdmin`. A caller may never grant a role to themselves
+    (AC-BI-005).
+
+    On success, returns `{"principal_subject", "access_role",
+    "granted_by_subject", "system_owner_floor_warning"}`. Returns a string
+    beginning `error: ` when the caller has no real authenticated session
+    (the local-test bypass included -- access-role management is never
+    available under it), when `access_role` is not one of the three
+    grantable roles, when the caller lacks the required role, when the
+    target is the caller themselves, when the authorization store cannot be
+    reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+    issuer = config.auth_issuer
+
+    def _body() -> dict[str, object] | str:
+        if actor is None or issuer is None:
+            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        store = PsycopgAccessRoleStore(config)
+        try:
+            result = grant_role(
+                actor=actor,
+                target_subject=principal_subject,
+                access_role=access_role,
+                store=store,
+                issuer=issuer,
+            )
+        except _GRANT_REVOKE_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "principal_subject": principal_subject,
+            "access_role": access_role,
+            "granted_by_subject": actor[0],
+            "system_owner_floor_warning": result.system_owner_floor_warning,
+        }
+
+    return _run_mcp_action("grant_access_role", principal, _body)
+
+
+@server.tool(name="revoke-access-role")
+def revoke_access_role(
+    principal_subject: Annotated[str, Field(min_length=1)],
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"],
+) -> dict[str, object] | str:
+    """RevokeAccessRole: revoke `access_role` from `principal_subject` (issue #133).
+
+    RBAC (PLAN.md §0.9, widened per CHANGES.md Appendix A): revoking
+    `SystemOwner` requires the caller hold `SystemOwner` **or**
+    `SystemAdmin` -- once a second `SystemOwner` exists (via
+    `grant-access-role`), a `SystemAdmin` can revoke one without the
+    self-revoke block ever intervening. Revoking `SystemAdmin`/
+    `PolicyManager` mirrors `grant-access-role`'s own actor requirement for
+    each role. A caller may never revoke a role from themselves
+    (AC-BI-005), checked before the `SystemOwner` floor check (AC-BI-006):
+    revoking the last remaining active `SystemOwner` is rejected regardless
+    of who the caller is.
+
+    On success, returns `{"principal_subject", "access_role",
+    "revoked_by_subject", "system_owner_floor_warning"}`. Returns a string
+    beginning `error: ` when the caller has no real authenticated session
+    (the local-test bypass included), when `access_role` is not one of the
+    three roles this tool manages, when the caller lacks the required role,
+    when the target is the caller themselves, when revoking `SystemOwner`
+    would leave zero active `SystemOwner`s, when the authorization store
+    cannot be reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+    issuer = config.auth_issuer
+
+    def _body() -> dict[str, object] | str:
+        if actor is None or issuer is None:
+            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        store = PsycopgAccessRoleStore(config)
+        try:
+            result = revoke_role(
+                actor=actor,
+                target_subject=principal_subject,
+                access_role=access_role,
+                store=store,
+                issuer=issuer,
+            )
+        except _GRANT_REVOKE_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "principal_subject": principal_subject,
+            "access_role": access_role,
+            "revoked_by_subject": actor[0],
+            "system_owner_floor_warning": result.system_owner_floor_warning,
+        }
+
+    return _run_mcp_action("revoke_access_role", principal, _body)

@@ -9,6 +9,8 @@
   - [Find and ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex)
 - [Using Claude Desktop](#using-claude-desktop)
   - [Ask a question](#ask-a-question)
+  - [Manage access roles](#manage-access-roles)
+- [Role System](#role-system)
 - [Glossary](#glossary)
 - [Appendix: ps-cli reference](#appendix-ps-cli-reference)
   - [Command reference](#command-reference)
@@ -34,6 +36,7 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | --- | --- |
 | Ingest an internal policy, check service health, administer an instance | [Using ps-cli](#using-ps-cli) |
 | Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop](#using-claude-desktop) |
+| Grant, revoke, or list access roles | [Role System](#role-system) |
 
 ---
 
@@ -159,6 +162,51 @@ retrieves from the graph, and constructs an answer that cites what it retrieved.
 the graph cannot answer, it says so rather than filling the gap from model recall.
 
 If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
+
+### Manage access roles
+
+```text
+List everyone's access roles.
+```
+
+The `ps-manage-access-roles` skill lists, grants, and revokes `SystemOwner`,
+`SystemAdmin`, and `PolicyManager` assignments through the same MCP
+connector, confirming the exact principal and role with you before any
+grant or revoke (these write a permanent, audited change — never a plain
+read). See [Role System](#role-system) for what each role currently
+controls.
+
+If the skill does not engage on its own, ask for it by name: _"Use the
+ps-manage-access-roles skill."_
+
+---
+
+## Role System
+
+Every authenticated caller is automatically a member of `AuthenticatedUser`
+— there is no explicit grant for it, and it can't be individually revoked.
+Beyond that baseline, PS Service enforces three additional roles:
+
+| Role | How it's granted | What it currently gates |
+| --- | --- | --- |
+| `SystemOwner` | Automatically, once — the very first authenticated caller ever to reach the instance. Never grantable afterward; exactly one exists for the life of a real deployment. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
+| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`) and `list-access-roles`. |
+| `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
+| `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
+
+Two safety rules apply to every grant or revoke, regardless of role:
+
+- **No self-service.** A caller can never grant or revoke their own access
+  roles.
+- **The SystemOwner floor.** Revoking `SystemOwner` is blocked outright if
+  it would leave zero active `SystemOwner`s — in practice this means the
+  sole `SystemOwner` can never revoke themselves (the no-self-service rule
+  blocks that first, before the floor check is even reached).
+
+Every grant, revoke, and the initial bootstrap is permanently recorded —
+who did what, to whom, and when — in an audit trail separate from the
+current-state roster. Manage roles through Claude Desktop's
+[Manage access roles](#manage-access-roles) skill.
 
 ---
 

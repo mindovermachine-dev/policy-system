@@ -77,6 +77,17 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     fine: `ps_service.dependency_health`'s registry already treats a
     never-recorded dependency as healthy by default, and `conftest.py`'s
     autouse fixture resets it before every test.
+
+    `check_authz_postgres_connectivity` (issue #133) is stubbed here too --
+    unlike `check_passkey_signing_postgres_connectivity` (a genuine no-op
+    when unconfigured, so it never needed a stub), Authz Postgres's own
+    connectivity check deliberately raises even when unconfigured (PLAN.md
+    §0.11's fail-closed divergence from Passkey Signing's own precedent), so
+    without this stub every test in this file that runs `lifespan` startup
+    would pick up a spurious `authz_postgres` entry in `unhealthy_dependencies`
+    and an extra startup warning log line, purely from `_complete_config()`
+    leaving `authz_postgres_host` at its `None` default -- unrelated to
+    whatever readiness/logging behavior each test actually exercises.
     """
 
     def stub_check_falkordb_connectivity(config: ServiceConfig) -> None:
@@ -88,6 +99,9 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     def stub_check_cellar_eli_connectivity() -> None:
         """No-op Cellar/ELI connectivity probe: a healthy dependency by default."""
 
+    def stub_check_authz_postgres_connectivity(config: ServiceConfig) -> None:
+        """No-op Authz Postgres connectivity probe: a healthy dependency by default."""
+
     monkeypatch.setattr(
         main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
     )
@@ -96,6 +110,9 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     )
     monkeypatch.setattr(
         main_module, "check_cellar_eli_connectivity", stub_check_cellar_eli_connectivity
+    )
+    monkeypatch.setattr(
+        main_module, "check_authz_postgres_connectivity", stub_check_authz_postgres_connectivity
     )
 
 

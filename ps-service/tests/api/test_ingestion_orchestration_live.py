@@ -24,10 +24,20 @@ instead of a fake:
    could expose (e.g. a second hidden fetch inside `extract_metadata` or
    `parse_structure`) would actually be caught.
 
-CELEX used: `32022R2554`, Regulation (EU) 2022/2554 (the Digital Operational
-Resilience Act / DORA) -- real, well-formed (`^3\\d{4}[A-Z]\\d{4}$`), type `R`
-(regulation), and confirmed absent from `REGULATION_CATALOG` (CRA/GDPR/NIS2
-only) by reading `ps_service/api/catalog.py` directly.
+CELEX used: `32023R1114`, Regulation (EU) 2023/1114 (the Markets in
+Crypto-Assets Regulation / MiCA) -- real, well-formed
+(`^3\\d{4}[A-Z]\\d{4}$`), type `R` (regulation), and confirmed absent from
+`REGULATION_CATALOG` (`ps_service/api/catalog.py`) as of 2026-09-27.
+
+**Re-substitution note (2026-09-27, Slice 0 baseline fix):** this module
+previously used `32022R2554` (DORA, see substitution note below). DORA was
+curated into `REGULATION_CATALOG` on 2026-09-15
+(`curated-content/catalog.json`), which broke this module's own
+non-curated-CELEX premise
+(`test_celex_under_test_is_genuinely_absent_from_the_curated_catalog`).
+Replaced with MiCA, re-confirmed absent from the catalog and genuinely
+Cellar-resolvable at fix time -- unrelated to the 32019R0881 finding below,
+which stays as originally recorded.
 
 **Substitution note, found during this increment's own red run, not assumed:**
 the task brief that seeded this file specified `32019R0881` (the EU
@@ -45,11 +55,12 @@ Online Regulation, the Data Act) -- all six resolve cleanly, so this is a
 narrow heading-phrasing gap specific to 32019R0881's drafting, not a systemic
 `resolve_via_cellar` defect. Out of this test-only increment's scope to fix
 (PLAN.md §3 Increment 17: "Changes: none"); reported to the orchestrator in
-`IMPL_17.md` as a follow-up-worthy finding. DORA is substituted here so this
-module still delivers its actual purpose -- a genuine, passing live proof of
-`resolve_via_cellar`'s happy path and fetch-once behaviour -- without erasing
-the 32019R0881 finding, which stays fully documented here and in `IMPL_17.md`
-rather than silently dropped.
+`IMPL_17.md` as a follow-up-worthy finding. DORA was substituted at the time
+so this module still delivered its actual purpose -- a genuine, passing live
+proof of `resolve_via_cellar`'s happy path and fetch-once behaviour --
+without erasing the 32019R0881 finding, which stays fully documented here and
+in `IMPL_17.md` rather than silently dropped. (DORA was itself later
+superseded by MiCA -- see the re-substitution note above.)
 """
 
 from __future__ import annotations
@@ -62,7 +73,7 @@ from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
 
 pytestmark = [pytest.mark.cellar_live]
 
-_NONCURATED_CELEX = "32022R2554"
+_NONCURATED_CELEX = "32023R1114"
 
 
 class _CountingFetch:
