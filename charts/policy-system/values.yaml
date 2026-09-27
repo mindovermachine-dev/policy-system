@@ -65,6 +65,14 @@ psService:
     audience: ""
     cliClientId: ""
     scopes: ""
+  authzBootstrapOwner:
+    # subject/issuer are required (render fails naming them) whenever
+    # localTestBypass.enabled=false -- see templates/ps-service-deployment.yaml's
+    # fail() guard. Operator-configured expected first-owner identity (issue #144):
+    # only a principal whose (sub, iss) matches these two values is ever granted
+    # SystemOwner via RBAC bootstrap. See docs/artifacts/idp-configuration-contract.md.
+    subject: ""
+    issuer: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
   # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
   # entry so pods can resolve host.containers.internal when llm.provider is

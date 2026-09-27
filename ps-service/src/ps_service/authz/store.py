@@ -297,6 +297,31 @@ class PsycopgAccessRoleStore:
                 if not store_is_empty:
                     conn.commit()
                     return frozenset({AccessRole.AUTHENTICATED_USER})
+                if principal != (
+                    self._config.authz_bootstrap_owner_subject,
+                    self._config.authz_bootstrap_owner_issuer,
+                ):
+                    # AC-BI-004/AC-BI-005: the store is empty, but this
+                    # principal is not the operator-configured expected first
+                    # owner -- grant nothing, leave the table empty, respond
+                    # exactly as the non-empty-store branch above (D-4), and
+                    # record a distinct 'bootstrap_rejected' audit event
+                    # naming the rejected principal (D-5), mirroring
+                    # `FakeAccessRoleStore.bootstrap_first_owner`'s own
+                    # no-match branch (`tests/authz/_fakes.py`) exactly.
+                    cur.execute(
+                        _INSERT_GRANT_EVENT,
+                        {
+                            "event_type": "bootstrap_rejected",
+                            "actor_subject": _BOOTSTRAP_SENTINEL,
+                            "actor_issuer": _BOOTSTRAP_SENTINEL,
+                            "target_subject": principal_subject,
+                            "target_issuer": principal_issuer,
+                            "access_role": AccessRole.SYSTEM_OWNER.value,
+                        },
+                    )
+                    conn.commit()
+                    return frozenset({AccessRole.AUTHENTICATED_USER})
                 for access_role in (AccessRole.AUTHENTICATED_USER, AccessRole.SYSTEM_OWNER):
                     cur.execute(
                         _INSERT_ASSIGNMENT,

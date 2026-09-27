@@ -50,6 +50,8 @@ def _config(provider: MockOidcProvider | None, **overrides: object) -> ServiceCo
     if provider is not None:
         defaults["auth_issuer"] = provider.issuer
         defaults["auth_audience"] = _AUDIENCE
+        defaults["authz_bootstrap_owner_subject"] = "first-owner-subject"
+        defaults["authz_bootstrap_owner_issuer"] = provider.issuer
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
 

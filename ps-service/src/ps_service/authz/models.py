@@ -64,7 +64,7 @@ class AccessRoleGrantEvent:
     """One row of the permanent, insert-only `access_role_grant_events` audit trail (§1.2)."""
 
     id: str
-    event_type: Literal["bootstrap", "grant", "revoke"]
+    event_type: Literal["bootstrap", "grant", "revoke", "bootstrap_rejected"]
     actor_subject: str
     actor_issuer: str
     target_subject: str

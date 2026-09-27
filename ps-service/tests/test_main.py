@@ -180,6 +180,11 @@ def _complete_config(**overrides: object) -> ServiceConfig:
     behavior) are undisturbed. A test exercising the new fail-closed
     behavior overrides the auth pair directly via
     `_complete_config(auth_issuer=None, auth_audience=None)`.
+
+    Same rationale applies to `authz_bootstrap_owner_subject`/`_issuer`
+    (issue #144): `create_app` now also fails closed
+    (`AccessRoleBootstrapConfigurationError`) unless the local-test bypass is
+    active or both are set, so a fake placeholder pair is defaulted here too.
     """
     defaults: dict[str, object] = {
         "host": "127.0.0.1",
@@ -191,6 +196,8 @@ def _complete_config(**overrides: object) -> ServiceConfig:
         "company_merge_similarity_threshold": 0.85,
         "auth_issuer": "https://issuer.example.com",
         "auth_audience": "https://api.example.com",
+        "authz_bootstrap_owner_subject": "first-owner-subject",
+        "authz_bootstrap_owner_issuer": "https://issuer.example.com",
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
@@ -494,12 +501,14 @@ def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
 def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every `PS_SERVICE_*` env var, giving `load_config()` a clean-env precondition.
 
-    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58):
-    these tests call `main()` end to end (real `load_config()`, not
-    `_complete_config()`), have nothing to do with auth, and don't set the
-    local-test bypass -- without a fake pair, `create_app` would now fail
-    closed (`AuthConfigurationError`). Kept deliberately independent of the
-    bypass (never set here) so a host override to a non-loopback address
+    Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58) and
+    a fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
+    pair (issue #144): these tests call `main()` end to end (real
+    `load_config()`, not `_complete_config()`), have nothing to do with auth
+    or RBAC bootstrap, and don't set the local-test bypass -- without fake
+    pairs, `create_app` would now fail closed (`AuthConfigurationError`, then
+    `AccessRoleBootstrapConfigurationError`). Kept deliberately independent of
+    the bypass (never set here) so a host override to a non-loopback address
     (see the parametrized test below) never collides with
     `_refuse_non_loopback_bypass_bind`'s bypass-active-only guard.
     """
@@ -507,6 +516,8 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PS_AUTH_ISSUER", "https://issuer.example.com")
     monkeypatch.setenv("PS_AUTH_AUDIENCE", "https://api.example.com")
+    monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT", "first-owner-subject")
+    monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER", "https://issuer.example.com")
 
 
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(

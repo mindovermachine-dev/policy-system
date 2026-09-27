@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
+    AccessRoleBootstrapConfigurationError,
     AccessRoleMigrationApplyError,
     AccessRolePostgresConnectionError,
     AccessRoleSystemOwnerFloorRaceError,
@@ -41,6 +42,7 @@ from ps_service.authz.service import (
     resolve_active_roles,
     revoke_role,
 )
+from ps_service.authz.startup import require_bootstrap_owner_configured
 from ps_service.authz.store import (
     AccessRoleStore,
     PsycopgAccessRoleStore,
@@ -52,6 +54,7 @@ __all__ = [
     "AccessRole",
     "AccessRoleAssignmentPersistenceError",
     "AccessRoleAssignmentRow",
+    "AccessRoleBootstrapConfigurationError",
     "AccessRoleGrantEvent",
     "AccessRoleMigrationApplyError",
     "AccessRolePostgresConnectionError",
@@ -70,6 +73,7 @@ __all__ = [
     "enforce_system_owner_floor",
     "grant_role",
     "list_assignments",
+    "require_bootstrap_owner_configured",
     "require_role",
     "resolve_active_roles",
     "revoke_role",

@@ -57,7 +57,7 @@ _ISSUER = "https://issuer.example.com/"
 
 def test_resolve_active_roles_bootstraps_the_first_ever_principal() -> None:
     """AC-BI-001: an empty store bootstraps the calling principal to both roles."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
 
     roles = resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -66,12 +66,43 @@ def test_resolve_active_roles_bootstraps_the_first_ever_principal() -> None:
 
 def test_resolve_active_roles_defaults_a_later_principal_to_authenticated_user() -> None:
     """AC-BI-002: once non-empty, a different principal defaults to AuthenticatedUser only."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     roles = resolve_active_roles(_SECOND_CALLER, store=store)
 
     assert roles == {AccessRole.AUTHENTICATED_USER}
+
+
+def test_resolve_active_roles_bootstraps_only_the_configured_owner_identity() -> None:
+    """AC-BI-003: the configured expected owner still bootstraps to both roles."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+
+    roles = resolve_active_roles(_FIRST_CALLER, store=store)
+
+    assert roles == {AccessRole.AUTHENTICATED_USER, AccessRole.SYSTEM_OWNER}
+
+
+def test_resolve_active_roles_rejects_a_non_matching_principal_in_an_empty_store() -> None:
+    """AC-BI-004: a non-matching caller in an empty store gets no grant; the table stays empty."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+
+    roles = resolve_active_roles(_SECOND_CALLER, store=store)
+
+    assert roles == {AccessRole.AUTHENTICATED_USER}
+    assert store.list_all_assignments() == ()
+
+
+def test_resolve_active_roles_still_lets_the_configured_owner_bootstrap_after_a_rejected_attempt() -> (  # noqa: E501 - name mirrors PLAN.md Slice 2 verbatim
+    None
+):
+    """A prior rejection doesn't poison the bootstrap window for the configured owner."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_SECOND_CALLER, store=store)  # rejected, no grant
+
+    roles = resolve_active_roles(_FIRST_CALLER, store=store)
+
+    assert roles == {AccessRole.AUTHENTICATED_USER, AccessRole.SYSTEM_OWNER}
 
 
 def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
@@ -81,7 +112,7 @@ def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
     permanent lockout (the sole SystemOwner could never self-grant
     SystemAdmin, so could never pass a literal SystemAdmin-only check).
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- SystemOwner only
 
     require_role(_FIRST_CALLER, minimum=AccessRole.SYSTEM_ADMIN, store=store)  # must not raise
@@ -89,7 +120,7 @@ def test_require_role_system_owner_satisfies_a_system_admin_minimum() -> None:
 
 def test_require_role_denies_a_principal_with_only_authenticated_user() -> None:
     """A principal holding only the AuthenticatedUser default is denied a SystemAdmin gate."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # first caller bootstraps
 
     with pytest.raises(AccessDeniedError) as exc_info:
@@ -108,7 +139,7 @@ def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_b
     granted PolicyManager) is still denied a PolicyManager gate even though
     nothing in this slice ever calls `require_role` with that minimum yet.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- SystemOwner, not PolicyManager
 
     with pytest.raises(AccessDeniedError):
@@ -117,7 +148,7 @@ def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_b
 
 def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
     """AC-BI-007's floor condition: with exactly one active SystemOwner, the warning is true."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     result = list_assignments(_FIRST_CALLER, store=store)
@@ -131,7 +162,7 @@ def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
 
 def test_list_assignments_denies_a_caller_without_system_admin_or_above() -> None:
     """§0.9's plan-original list-gate: a bare AuthenticatedUser caller is denied the roster."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # first caller bootstraps, store now non-empty
 
     with pytest.raises(AccessDeniedError):
@@ -162,7 +193,7 @@ def test_list_assignments_never_falls_open_on_a_store_outage_discovered_after_th
     """AC-BI-011: a store outage discovered only in the roster read (after the RBAC gate already
     passed) still fails closed, exercising `list_assignments`'s second, independent try/except.
     """
-    store = RaisingAfterGateAccessRoleStore()
+    store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
     store.bootstrap_first_owner(_FIRST_CALLER)  # succeeds -- FIRST_CALLER now holds SystemOwner
 
     with pytest.raises(AuthorizationStoreUnavailableError):
@@ -174,7 +205,7 @@ def test_list_assignments_never_falls_open_on_a_store_outage_discovered_after_th
 
 def test_grant_role_lets_the_bootstrapped_system_owner_grant_system_admin() -> None:
     """AC-BI-003/AC-BI-015: SystemOwner grants SystemAdmin; one audit event is recorded."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps FIRST_CALLER as SystemOwner
 
     result = grant_role(
@@ -198,7 +229,7 @@ def test_grant_role_lets_the_bootstrapped_system_owner_grant_system_admin() -> N
 
 def test_grant_role_lets_a_system_admin_grant_policy_manager() -> None:
     """AC-BI-004: a SystemAdmin (not just a SystemOwner) may grant PolicyManager."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps FIRST_CALLER as SystemOwner
     grant_role(
         actor=_FIRST_CALLER,
@@ -222,7 +253,7 @@ def test_grant_role_lets_a_system_admin_grant_policy_manager() -> None:
 
 def test_grant_role_lets_the_system_owner_grant_policy_manager_directly() -> None:
     """AC-BI-004: a SystemOwner may also grant PolicyManager directly."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     grant_role(
@@ -242,7 +273,7 @@ def test_grant_role_lets_the_system_owner_grant_a_peer_system_owner() -> None:
     Both principals show as SystemOwner afterwards -- this is the new flow
     that makes AC-BI-006/AC-BI-007 genuinely MCP-reachable (Appendix A).
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     assert store.count_active_system_owners() == 1
 
@@ -261,7 +292,7 @@ def test_grant_role_lets_the_system_owner_grant_a_peer_system_owner() -> None:
 
 def test_grant_role_rejects_a_non_owner_granting_system_owner() -> None:
     """CHANGES.md Appendix A: only a SystemOwner may grant SystemOwner -- a SystemAdmin cannot."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
     grant_role(
         actor=_FIRST_CALLER,
@@ -284,7 +315,7 @@ def test_grant_role_rejects_a_non_owner_granting_system_owner() -> None:
 
 def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
     """PLAN.md §0.7: granting SystemAdmin requires the actor hold SystemOwner, not merely exist."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps
     resolve_active_roles(_SECOND_CALLER, store=store)  # defaults to AuthenticatedUser only
 
@@ -301,7 +332,7 @@ def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
 
 def test_grant_role_blocks_a_system_owner_granting_system_admin_to_themselves() -> None:
     """AC-BI-005: the sole SystemOwner may not grant SystemAdmin to their own subject."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     with pytest.raises(SelfGrantOrRevokeBlockedError) as exc_info:
@@ -324,7 +355,7 @@ def test_grant_role_rejects_an_access_role_outside_the_closed_set() -> None:
     domain-specific `InvalidAccessRoleError`, exercised here via a direct
     call that bypasses the MCP tool's own `Literal[...]` schema entirely.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     with pytest.raises(InvalidAccessRoleError) as exc_info:
@@ -344,7 +375,7 @@ def test_grant_role_rejects_an_access_role_outside_the_closed_set() -> None:
 
 def test_grant_role_rejects_authenticated_user_as_a_grant_target() -> None:
     """AC-BI-013: `AuthenticatedUser` is a valid AccessRole but never grantable via this flow."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     with pytest.raises(InvalidAccessRoleError):
@@ -359,7 +390,7 @@ def test_grant_role_rejects_authenticated_user_as_a_grant_target() -> None:
 
 def test_grant_role_never_falls_open_on_a_store_connection_error() -> None:
     """AC-BI-011: a simulated store outage during the mutation itself fails closed."""
-    store = RaisingAfterGateAccessRoleStore()
+    store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
     store.bootstrap_first_owner(_FIRST_CALLER)
 
     with pytest.raises(AuthorizationStoreUnavailableError):
@@ -374,7 +405,7 @@ def test_grant_role_never_falls_open_on_a_store_connection_error() -> None:
 
 def test_revoke_role_round_trips_system_admin_with_its_own_audit_event() -> None:
     """AC-BI-015: revoking SystemAdmin deletes the row and records one 'revoke' audit event."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
         actor=_FIRST_CALLER,
@@ -404,7 +435,7 @@ def test_revoke_role_round_trips_system_admin_with_its_own_audit_event() -> None
 
 def test_revoke_role_round_trips_policy_manager() -> None:
     """AC-BI-004/015 symmetry: PolicyManager also revokes cleanly, with its own audit event."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
         actor=_FIRST_CALLER,
@@ -436,7 +467,7 @@ def test_revoke_role_blocks_self_revoke() -> None:
     is never RBAC-eligible to revoke `SystemAdmin` from anyone, self
     included.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- FIRST_CALLER: SystemOwner
 
     with pytest.raises(SelfGrantOrRevokeBlockedError) as exc_info:
@@ -458,7 +489,7 @@ def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all(
     order, PLAN.md §2.3), so an actor who could never revoke this role from
     *anyone* is turned away by RBAC first, self-target or not.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
         actor=_FIRST_CALLER,
@@ -481,7 +512,7 @@ def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all(
 
 def test_revoke_role_rejects_a_non_owner_non_admin_actor() -> None:
     """Revoke RBAC mirrors grant's own actor requirement (a documented judgment call)."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
         actor=_FIRST_CALLER,
@@ -504,7 +535,7 @@ def test_revoke_role_rejects_a_non_owner_non_admin_actor() -> None:
 
 def test_revoke_role_rejects_an_access_role_outside_the_closed_set() -> None:
     """AC-BI-013 (inner layer), revoke side: an unrecognized role name is rejected."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     with pytest.raises(InvalidAccessRoleError) as exc_info:
@@ -528,7 +559,7 @@ def test_revoke_role_lets_a_system_admin_revoke_system_owner_from_a_peer_owner()
     for the full, real MCP-level round trip this unit test's own service-layer
     slice mirrors.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
     grant_role(
         actor=_FIRST_CALLER,
@@ -564,7 +595,7 @@ def test_revoke_role_rejects_a_bare_policy_manager_revoking_system_owner() -> No
     """CHANGES.md Appendix A: the widened RBAC is still a closed set -- a PolicyManager
     (neither SystemOwner nor SystemAdmin) may never revoke SystemOwner from anyone.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
     grant_role(
         actor=_FIRST_CALLER,
@@ -603,7 +634,7 @@ def test_revoke_role_blocks_the_sole_owner_self_revoking_before_the_floor_check_
     strictly before `enforce_system_owner_floor` in `revoke_role`'s own
     check order.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- sole SystemOwner
 
     with pytest.raises(SelfGrantOrRevokeBlockedError) as exc_info:
@@ -630,7 +661,7 @@ def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
     brings the count down to exactly one via a genuine revoke, rather than
     seeding it directly).
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
     grant_role(
         actor=_FIRST_CALLER,
@@ -656,7 +687,7 @@ def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
 
 def test_revoke_role_rejects_super_owner_outside_the_closed_set() -> None:
     """AC-BI-013 (inner layer): `"SuperOwner"` is rejected the same two-layer way as Slice 2."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
     with pytest.raises(InvalidAccessRoleError) as exc_info:
@@ -672,7 +703,7 @@ def test_revoke_role_rejects_super_owner_outside_the_closed_set() -> None:
 
 def test_revoke_role_never_falls_open_on_a_store_connection_error() -> None:
     """AC-BI-011: a simulated store outage during the revoke mutation itself fails closed."""
-    store = RaisingAfterGateAccessRoleStore()
+    store = RaisingAfterGateAccessRoleStore(expected_owner=_FIRST_CALLER)
     store.bootstrap_first_owner(_FIRST_CALLER)
 
     with pytest.raises(AuthorizationStoreUnavailableError):

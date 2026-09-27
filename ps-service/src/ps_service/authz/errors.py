@@ -60,3 +60,16 @@ class AccessRoleMigrationApplyError(Exception):
     wraps the underlying `psycopg.Error`. The failing migration's filename is
     named in the message so an operator can find and fix it directly.
     """
+
+
+class AccessRoleBootstrapConfigurationError(Exception):
+    """`PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`_ISSUER` are missing and the bypass is inactive.
+
+    Raised by :func:`ps_service.authz.startup.require_bootstrap_owner_configured`
+    (issue #144, AC-BI-001) -- a distinct process-configuration boundary, same
+    category as `ps_service.auth.errors.AuthConfigurationError` but owned by
+    this component, not `ps_service.auth` (this module's own docstring: one
+    exception type per distinct failure boundary). The message names exactly
+    which variable(s) are unset and `PS_SERVICE_LOCAL_TEST_BYPASS` as the
+    local-only alternative -- never a generic "authz misconfigured" message.
+    """

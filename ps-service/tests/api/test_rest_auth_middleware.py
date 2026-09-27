@@ -81,6 +81,8 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
         "is_local_test_bypass_active": False,
         "auth_issuer": provider.issuer,
         "auth_audience": _AUDIENCE,
+        "authz_bootstrap_owner_subject": "first-owner-subject",
+        "authz_bootstrap_owner_issuer": provider.issuer,
     }
     defaults.update(overrides)
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs

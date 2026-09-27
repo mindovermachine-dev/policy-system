@@ -32,6 +32,7 @@ from ps_service.auth.protected_resource import protected_resource_metadata
 from ps_service.auth.startup import resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.migration_runner import apply_pending_migrations as apply_authz_migrations
+from ps_service.authz.startup import require_bootstrap_owner_configured
 from ps_service.authz.store import (
     check_connectivity_from_config as check_authz_postgres_connectivity,
 )
@@ -417,6 +418,17 @@ def create_app(config: ServiceConfig) -> FastAPI:
     check inside `passkey_signing.router`) now requires a verified bearer
     token.
 
+    Since issue #144, `require_bootstrap_owner_configured(config)` runs
+    unconditionally right after `resolve_auth_context(config)` (AC-BI-001/
+    AC-BI-002): if the local-test bypass is inactive and
+    `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER` are
+    not both set, this raises `AccessRoleBootstrapConfigurationError` and
+    `create_app` never returns an app -- mirroring `resolve_auth_context`'s
+    own fail-closed contract exactly, for the same reason: only a principal
+    whose `(sub, iss)` matches this configured identity is ever granted
+    `SYSTEM_OWNER` by `ps_service.authz.store.PsycopgAccessRoleStore.
+    bootstrap_first_owner`.
+
     Since Slice 8 (AC-BI-010), `GET /.well-known/oauth-protected-resource`
     is registered here too, alongside `/health`/`/ready` -- the exact URL
     `RestAuthMiddleware`'s `WWW-Authenticate` header already names. It is
@@ -526,6 +538,14 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # on `app.state` for a later slice's middleware/route wiring to consume.
     auth_context = resolve_auth_context(config)
     app.state.auth_context = auth_context
+    # AC-BI-001/AC-BI-002 (issue #144): resolved synchronously here too, right after
+    # `resolve_auth_context`, for the exact same reason -- a config-completeness fact
+    # that cannot change for the life of the process must fail before `create_app`
+    # ever returns an app, not asynchronously after `TestClient`/uvicorn have already
+    # started. Raises `AccessRoleBootstrapConfigurationError` (never returns a value)
+    # unless the local-test bypass is active or both
+    # `authz_bootstrap_owner_subject`/`_issuer` are set.
+    require_bootstrap_owner_configured(config)
     # One `PsTokenVerifier` instance per `create_app()` call, never module-level (the
     # import-time-hazard rule PLAN.md §0.1 documents) -- this exact instance is what
     # both `RestAuthMiddleware` below and, from Slice 5 onward, the MCP

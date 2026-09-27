@@ -128,6 +128,19 @@ class ServiceConfig:
     (raises `AccessRolePostgresConnectionError`) when unset, since every
     role-gated action must deny by default rather than silently fall open
     (PLAN.md §0.11).
+
+    `authz_bootstrap_owner_subject`/`_issuer` (from
+    `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`,
+    issue #144) are the operator-configured expected first-owner identity
+    (matching `Principal.sub`/`Principal.iss`): only a principal whose
+    `(sub, iss)` matches these two values is ever granted `SYSTEM_OWNER` by
+    `ps_service.authz.store.PsycopgAccessRoleStore.bootstrap_first_owner`.
+    Follows the exact same "record what the environment resolved to, absence
+    is not an error here" optional-at-load-time shape as `auth_issuer`/
+    `auth_audience` above -- whether both are *required* (fail-closed when
+    the local-test bypass is inactive) is enforced by
+    `ps_service.authz.startup.require_bootstrap_owner_configured`'s own call
+    site inside `create_app`, not by `load_config()`.
     """
 
     host: str
@@ -159,6 +172,8 @@ class ServiceConfig:
     authz_postgres_database: str | None = None
     authz_postgres_user: str | None = None
     authz_postgres_password: str | None = field(default=None, repr=False)
+    authz_bootstrap_owner_subject: str | None = None
+    authz_bootstrap_owner_issuer: str | None = None
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -506,6 +521,23 @@ def _parse_authz_postgres_string(raw: str, *, env_var_name: str) -> str:
     return raw
 
 
+def _parse_authz_bootstrap_owner_string(raw: str, *, env_var_name: str) -> str:
+    """Validate a `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`_ISSUER` value.
+
+    Mirrors `_parse_authz_postgres_string`'s exact shape: rejects an
+    explicitly-set empty/whitespace-only value rather than silently treating
+    it as unset -- never widens to a fallback. Only called when the env var
+    is actually set -- absence is not an error at this layer; whether both
+    are *required* is enforced by
+    `ps_service.authz.startup.require_bootstrap_owner_configured`, not here
+    (see `ServiceConfig`'s docstring).
+    """
+    if not raw.strip():
+        message = f"{env_var_name} must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
 def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
 
@@ -679,6 +711,23 @@ def load_config() -> ServiceConfig:
         else None
     )
 
+    authz_bootstrap_owner_subject_raw = os.environ.get("PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT")
+    authz_bootstrap_owner_subject = (
+        _parse_authz_bootstrap_owner_string(
+            authz_bootstrap_owner_subject_raw, env_var_name="PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT"
+        )
+        if authz_bootstrap_owner_subject_raw is not None
+        else None
+    )
+    authz_bootstrap_owner_issuer_raw = os.environ.get("PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER")
+    authz_bootstrap_owner_issuer = (
+        _parse_authz_bootstrap_owner_string(
+            authz_bootstrap_owner_issuer_raw, env_var_name="PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER"
+        )
+        if authz_bootstrap_owner_issuer_raw is not None
+        else None
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -709,4 +758,6 @@ def load_config() -> ServiceConfig:
         authz_postgres_database=authz_postgres_database,
         authz_postgres_user=authz_postgres_user,
         authz_postgres_password=authz_postgres_password,
+        authz_bootstrap_owner_subject=authz_bootstrap_owner_subject,
+        authz_bootstrap_owner_issuer=authz_bootstrap_owner_issuer,
     )

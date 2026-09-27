@@ -119,7 +119,7 @@ def test_first_ever_caller_is_bootstrapped_and_can_list_both_of_their_own_roles(
     succeeds, reporting both roles for that one subject.
     """
     configure()
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -149,7 +149,7 @@ def test_second_caller_defaults_to_authenticated_user_and_is_denied_the_roster(
     `SystemAdmin`-or-above gate -- one round trip proves both facts.
     """
     configure()
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -167,6 +167,57 @@ def test_second_caller_defaults_to_authenticated_user_and_is_denied_the_roster(
     assert {row.principal_subject for row in store.list_all_assignments()} == {
         _FIRST_CALLER_SUBJECT
     }
+
+
+def test_a_non_matching_first_caller_never_becomes_owner_and_sees_an_ordinary_access_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-004, empty-store case: the *configured* expected owner is
+    `_FIRST_CALLER_SUBJECT`, but `_SECOND_CALLER_SUBJECT` is the one who
+    actually calls first against a freshly-migrated, empty store. They must
+    never become owner -- `bootstrap_first_owner` grants nothing, the table
+    stays empty, and the response is byte-for-byte the same
+    `"error: You do not have the required access role for this action."`
+    string `test_second_caller_defaults_to_authenticated_user_and_is_denied_the_roster`
+    already asserts above for the *non-empty-store* case (PLAN.md D-4) --
+    proving "identical response" concretely for the empty-store rejection
+    path too, not just the already-bootstrapped path.
+    """
+    configure()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+
+    with _verified_actor(sub=_SECOND_CALLER_SUBJECT):
+        result = _call_list_access_roles()
+
+    assert result.is_error is False
+    assert _text(result) == "error: You do not have the required access role for this action."
+    # No bootstrap ever happened -- the table stays completely empty, not
+    # just missing SystemOwner.
+    assert store.list_all_assignments() == ()
+
+
+def test_rejected_bootstrap_attempt_is_recorded_as_a_distinct_audit_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: a rejected bootstrap attempt (AC-BI-004) is recorded as its
+    own distinct audit event, identifying the rejected principal's own
+    subject/issuer, reachable end-to-end from a real MCP tool call (not just
+    a unit-level store call).
+    """
+    configure()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+
+    with _verified_actor(sub=_SECOND_CALLER_SUBJECT):
+        result = _call_list_access_roles()
+    assert result.is_error is False
+
+    events = store._events  # pyright: ignore[reportPrivateUsage]  -- test-only fake, direct-field audit-trail assertion mirrors this file's own `grant_events`/`revoke_events` convention
+    rejection_events = [event for event in events if event.event_type == "bootstrap_rejected"]
+    assert len(rejection_events) == 1
+    assert rejection_events[0].target_subject == _SECOND_CALLER_SUBJECT
+    assert rejection_events[0].target_issuer == _ACTOR_ISSUER
 
 
 def test_authz_store_outage_fails_closed_instead_of_defaulting_or_bootstrapping(
@@ -232,7 +283,7 @@ def test_bootstrapped_owner_grants_system_admin_to_a_second_principal(
     """AC-BI-003/AC-BI-015: a real MCP round trip -- grant, roster row, one audit event."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -265,7 +316,7 @@ def test_new_system_admin_grants_policy_manager_to_a_third_principal(
     """AC-BI-004: the newly-granted SystemAdmin (not just SystemOwner) may grant PolicyManager."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -292,7 +343,7 @@ def test_system_owner_grants_a_peer_system_owner_and_both_show_as_owner(
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -326,7 +377,7 @@ def test_system_owner_cannot_grant_system_admin_to_themselves(
     """AC-BI-005: the bootstrapped SystemOwner may not grant SystemAdmin to their own subject."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -348,7 +399,7 @@ def test_grant_access_role_naming_a_role_outside_the_closed_set_is_rejected_by_t
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with (
@@ -395,7 +446,7 @@ def test_revoke_of_system_admin_and_policy_manager_round_trips_with_its_own_audi
     """AC-BI-015: revoke of SystemAdmin (non-owner) round-trips, its own 'revoke' audit event."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -433,7 +484,7 @@ def test_self_revoke_of_system_admin_is_blocked_the_same_way_as_self_grant(
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -523,7 +574,7 @@ def test_appendix_a_five_step_multi_owner_scenario_proves_ac_bi_006_and_007(
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     # Step 1: A is the first-ever caller -- bootstraps as the sole SystemOwner.
@@ -603,7 +654,7 @@ def test_sole_owner_self_revoking_their_own_system_owner_role_is_blocked_before_
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
@@ -625,7 +676,7 @@ def test_revoke_of_system_owner_by_a_non_owner_non_admin_actor_is_denied(
     """
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):

@@ -93,7 +93,7 @@ def test_no_verified_principal_is_denied(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_principal_without_the_required_role_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     """A verified principal holding no elevated role fails `require_access_role`'s gate."""
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_OTHER_SUBJECT, _ISSUER))
     store.bootstrap_first_owner((_OTHER_SUBJECT, _ISSUER))  # a distinct SystemOwner already exists
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _fake_store_factory(store))
     dependency = require_access_role(AccessRole.SYSTEM_ADMIN)
@@ -126,7 +126,7 @@ def test_sole_system_owner_also_satisfies_a_system_admin_minimum(
     `require_role` function `mcp_server.py`'s own gated tools call (AC-BI-012), not a
     parallel, potentially-divergent gating mechanism.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_SUBJECT, _ISSUER))
     store.bootstrap_first_owner((_SUBJECT, _ISSUER))
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _fake_store_factory(store))
     dependency = require_access_role(AccessRole.SYSTEM_ADMIN)

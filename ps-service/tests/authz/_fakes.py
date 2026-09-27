@@ -33,11 +33,40 @@ class FakeAccessRoleStore:
     _rows: list[AccessRoleAssignmentRow] = field(default_factory=list)
     _events: list[AccessRoleGrantEvent] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    expected_owner: tuple[str, str] | None = None
+    """The operator-configured expected first-owner identity (issue #144, D-6).
+
+    Mirrors `PsycopgAccessRoleStore`'s own `(config.authz_bootstrap_owner_subject,
+    config.authz_bootstrap_owner_issuer)` comparison (D-3). Defaults to `None`,
+    which matches no principal -- fail-closed by default, consistent with the
+    real store's own default-deny posture.
+    """
 
     def bootstrap_first_owner(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
         """Advisory-locked (via `self._lock`) check-empty-then-insert (PLAN.md §0.10)."""
         with self._lock:
             if self._rows:
+                return frozenset({AccessRole.AUTHENTICATED_USER})
+            if principal != self.expected_owner:
+                # AC-BI-004/AC-BI-005: the store is empty, but this principal
+                # is not the configured expected owner -- grant nothing,
+                # leave the table empty, and record a distinct rejection
+                # audit event naming the rejected principal (mirrors D-5's
+                # real-store `access_role_grant_events` row shape, since
+                # Slice 4's real-SQL insert doesn't exist yet).
+                subject, issuer = principal
+                self._events.append(
+                    AccessRoleGrantEvent(
+                        id=str(uuid.uuid4()),
+                        event_type="bootstrap_rejected",
+                        actor_subject=_BOOTSTRAP_SENTINEL,
+                        actor_issuer=_BOOTSTRAP_SENTINEL,
+                        target_subject=subject,
+                        target_issuer=issuer,
+                        access_role=AccessRole.SYSTEM_OWNER,
+                        occurred_at=datetime.now(UTC),
+                    )
+                )
                 return frozenset({AccessRole.AUTHENTICATED_USER})
             subject, issuer = principal
             now = datetime.now(UTC)

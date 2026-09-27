@@ -8,6 +8,9 @@ metadata:
 {{- if and (not .Values.psService.localTestBypass.enabled) (or (not .Values.psService.auth.issuer) (not .Values.psService.auth.audience)) }}
 {{- fail "psService.auth.issuer and psService.auth.audience must both be set when psService.localTestBypass.enabled=false: set both (production requires real OIDC auth against your IdP), or set psService.localTestBypass.enabled=true for local-only evaluation. See docs/artifacts/idp-configuration-contract.md." }}
 {{- end }}
+{{- if and (not .Values.psService.localTestBypass.enabled) (or (not .Values.psService.authzBootstrapOwner.subject) (not .Values.psService.authzBootstrapOwner.issuer)) }}
+{{- fail "psService.authzBootstrapOwner.subject and psService.authzBootstrapOwner.issuer must both be set when psService.localTestBypass.enabled=false: set both (the configured expected first-owner identity for RBAC bootstrap, issue #144), or set psService.localTestBypass.enabled=true for local-only evaluation. See docs/artifacts/idp-configuration-contract.md." }}
+{{- end }}
 spec:
   replicas: 1
   selector:
@@ -122,4 +125,12 @@ spec:
             {{- if .Values.psService.auth.scopes }}
             - name: PS_AUTH_SCOPES
               value: {{ .Values.psService.auth.scopes | quote }}
+            {{- end }}
+            {{- if .Values.psService.authzBootstrapOwner.subject }}
+            - name: PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT
+              value: {{ .Values.psService.authzBootstrapOwner.subject | quote }}
+            {{- end }}
+            {{- if .Values.psService.authzBootstrapOwner.issuer }}
+            - name: PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER
+              value: {{ .Values.psService.authzBootstrapOwner.issuer | quote }}
             {{- end }}

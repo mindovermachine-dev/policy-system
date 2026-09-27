@@ -437,3 +437,40 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_AUDIENCE")]
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTH_CLI_CLIENT_ID")]
+
+  # --- #144: psService.authzBootstrapOwner.* -> PS_AUTHZ_BOOTSTRAP_OWNER_* env vars + fail-closed guard (AC-BI-001, AC-BI-002) ---
+
+  - it: authzBootstrapOwner.subject/issuer set render both PS_AUTHZ_BOOTSTRAP_OWNER_* env vars
+    set:
+      llm.provider: ollama
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+      psService.authzBootstrapOwner.subject: first-owner-subject
+      psService.authzBootstrapOwner.issuer: https://example-issuer.test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT")].value
+          value: first-owner-subject
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER")].value
+          value: https://example-issuer.test
+
+  - it: default render (localTestBypass.enabled=false, no authzBootstrapOwner values) fails naming the missing values
+    set:
+      llm.provider: ollama
+      psService.localTestBypass.enabled: false
+      psService.auth.issuer: https://example-issuer.test
+      psService.auth.audience: ps-service
+    asserts:
+      - failedTemplate:
+          errorPattern: psService\.authzBootstrapOwner\.subject and psService\.authzBootstrapOwner\.issuer
+
+  - it: localTestBypass.enabled=true with no authzBootstrapOwner values renders cleanly (guard exempted)
+    set:
+      llm.provider: ollama
+      psService.localTestBypass.enabled: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER")]

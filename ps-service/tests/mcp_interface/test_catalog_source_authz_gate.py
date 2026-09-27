@@ -98,7 +98,7 @@ def _seeded_store() -> FakeAccessRoleStore:
     defaults to `AuthenticatedUser` alone (AC-BI-002) -- the precondition
     AC-BI-008's denial actually needs.
     """
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
     store.bootstrap_first_owner((_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
     return store
 
@@ -218,7 +218,7 @@ def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     could never manage the catalog source at all.
     """
     configure()
-    store = FakeAccessRoleStore()
+    store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
     graph = _FakeSingletonGraph()
     _install_graph(monkeypatch, graph)
