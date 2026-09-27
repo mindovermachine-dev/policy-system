@@ -10,6 +10,13 @@
 # force-push). Exit 0 when every header parses; exit 1 listing each offending `sha header`
 # and the expected form; exit 2 on a usage error. Structured logs go to stderr, a human
 # summary to $GITHUB_STEP_SUMMARY (lib/log.sh).
+#
+# Range mode skips merge commits (2+ parents, per `git log --format=%P`): git writes their
+# headers itself ("Merge branch '...'", "Merge pull request #N from ...") and they carry no
+# type, so linting them the same as an authored header only ever fails (run #117, a merge
+# commit pushed straight to `main` after a local `git pull` diverged from origin). `--header`
+# mode is unaffected -- it lints a single ready-branch HEAD, which should never be a merge
+# commit in the first place.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,25 +79,37 @@ is_known_commit() {
   git cat-file -e "$ref^{commit}" 2>/dev/null
 }
 
-# list_range_commits <before> <after>: prints `sha header` per commit, newest first.
+# is_merge_commit <parents>: true for 2+ space-separated parent SHAs (%P), i.e. a real merge
+# commit -- checked by parent count, not by pattern-matching the header text, so it cannot be
+# fooled by (or fail to match) whatever wording git or the platform used for that merge.
+is_merge_commit() {
+  local parents="$1"
+  [[ "$parents" == *' '* ]]
+}
+
+# list_range_commits <before> <after>: prints `sha<US>parents<US>header` per commit, newest first.
 list_range_commits() {
   local before="$1"
   local after="${2:-HEAD}"
   if [[ -z "$before" || "$before" == "$ZERO_SHA" ]] || ! is_known_commit "$before"; then
     release_log warn range_fallback_to_head before="$before" after="$after"
-    git log -1 --format='%H %s' "$after"
+    git log -1 --format=$'%H\x1f%P\x1f%s' "$after"
     return 0
   fi
-  git log --format='%H %s' "$before..$after"
+  git log --format=$'%H\x1f%P\x1f%s' "$before..$after"
 }
 
-# lint_range "<before>..<after>": lints every commit the range yields.
+# lint_range "<before>..<after>": lints every non-merge commit the range yields.
 lint_range() {
   local range="$1"
   local before="${range%%..*}"
   local after="${range#*..}"
-  local sha header
-  while IFS=' ' read -r sha header; do
+  local sha parents header
+  while IFS=$'\x1f' read -r sha parents header; do
+    if is_merge_commit "$parents"; then
+      release_log info header_skipped_merge sha="$sha" header="$header"
+      continue
+    fi
     lint_one_header "$sha" "$header"
   done < <(list_range_commits "$before" "$after")
 }

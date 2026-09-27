@@ -101,6 +101,44 @@ def test_range_mode_passes_when_every_commit_in_the_range_is_typed(
     assert EXPECTED_FORM not in run.stdout
 
 
+# --- merge commits (run #117: a merge landed on `main` via direct push, no PR) --------------
+
+
+def test_range_mode_skips_a_merge_commit(release_fixture: ReleaseFixture) -> None:
+    baseline_sha = release_fixture.work.head()
+    release_fixture.work.run("checkout", "-q", "-b", "side")
+    release_fixture.commit("feat(x): side change")
+    release_fixture.work.run("checkout", "-q", "main")
+    release_fixture.commit("fix(x): main change")
+    release_fixture.work.run("merge", "-q", "--no-ff", "-m", "Merge branch 'side'", "side")
+    merge_sha = release_fixture.work.head()
+
+    run = release_fixture.run_script(
+        LINT_SCRIPT, "--range", f"{baseline_sha}..{merge_sha}", expect=0
+    )
+
+    assert EXPECTED_FORM not in run.stdout
+
+
+def test_range_mode_skips_the_merge_commit_but_still_flags_a_real_offender(
+    release_fixture: ReleaseFixture,
+) -> None:
+    baseline_sha = release_fixture.work.head()
+    release_fixture.work.run("checkout", "-q", "-b", "side")
+    release_fixture.commit("feat(x): side change")
+    release_fixture.work.run("checkout", "-q", "main")
+    offender = release_fixture.commit("wip on main")
+    release_fixture.work.run("merge", "-q", "--no-ff", "-m", "Merge branch 'side'", "side")
+    merge_sha = release_fixture.work.head()
+
+    run = release_fixture.run_script(
+        LINT_SCRIPT, "--range", f"{baseline_sha}..{merge_sha}", expect=1
+    )
+
+    assert f"{offender} wip on main" in run.stdout
+    assert merge_sha not in run.stdout
+
+
 @pytest.mark.parametrize(
     "before",
     [
