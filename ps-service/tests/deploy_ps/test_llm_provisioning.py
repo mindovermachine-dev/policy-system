@@ -181,6 +181,11 @@ def test_rerun_with_everything_existing_makes_no_create_calls(
     deploy_ps_fixture.seed_existing_secret(
         vault, "AUTHENTIK-POSTGRES-PASSWORD", "existing-authentik-pg-password"
     )
+    # Issue #131 (Slice 1c): ensure_ps_service_signing_secrets reuses this same vault -- pre-seed
+    # its generate-once value too, for the same reason.
+    deploy_ps_fixture.seed_existing_secret(
+        vault, "PS-SERVICE-SIGNING-POSTGRES-PASSWORD", "existing-signing-postgres-password"
+    )
 
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 

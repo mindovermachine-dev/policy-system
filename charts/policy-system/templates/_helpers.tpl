@@ -110,3 +110,34 @@ later slice's deploy-ps.sh) computes the identical string.
 {{- define "policy-system.authentikCredentialsSecretName" -}}
 {{- printf "%s-authentik-credentials" (include "policy-system.fullname" .) -}}
 {{- end }}
+
+{{/*
+Name of the durable (Premium SSD, Retain) StorageClass for the Passkey
+Signing component's own hand-rolled Postgres PVC (AC-BI-006, issue #131
+Slice 1). Mirrors policy-system.authentikPostgresStorageClassName exactly,
+so signing-postgres-storageclass.yaml and signing-postgres-pvc.yaml never
+duplicate the literal name string.
+*/}}
+{{- define "policy-system.signingPostgresStorageClassName" -}}
+{{- printf "%s-signing-postgres-durable" (include "policy-system.fullname" .) -}}
+{{- end }}
+
+{{/*
+Name of the Secret carrying PS_PASSKEYSIGNING_POSTGRES_PASSWORD (AC-BI-007,
+issue #131 Slice 1) -- consumed both by the signing Postgres container's own
+POSTGRES_PASSWORD and by ps-service-deployment.yaml's
+PS_PASSKEYSIGNING_POSTGRES_PASSWORD env var, so the two are guaranteed to
+agree. Mirrors llm.existingSecret's own "operator-managed name, or the chart
+renders one from a plain value" convention (values.yaml llm.existingSecret /
+templates/secret.yaml) -- deliberately NOT authentik's own
+kubectl-apply-only, no-values-fallback shape, since (unlike the upstream
+`authentik` dependency's all-or-nothing existingSecret) nothing here forces
+every other value to be Secret-sourced too. In prod, values-prod.yaml points
+this at the deterministic name scripts/deploy-ps.sh's
+ensure_ps_service_signing_secrets provisions from Key Vault -- own Secret,
+never appended to policy-system.authentikCredentialsSecretName's Secret
+(AC-BI-006's isolation extended to credentials).
+*/}}
+{{- define "policy-system.signingPostgresCredentialsSecretName" -}}
+{{- .Values.psServiceSigning.postgres.existingSecret | default (printf "%s-signing-postgres-credentials" (include "policy-system.fullname" .)) -}}
+{{- end }}

@@ -11,10 +11,12 @@ dependencies = [
     "litellm==1.98.0",
     "mcp==2.0.0",
     "openai==2.54.0",
+    "psycopg[binary]==3.3.6",
     "pydantic==2.13.4",
     "pyjwt[crypto]==2.13.0",
     "structlog>=26.1.0",
     "uvicorn==0.52.4",
+    "webauthn==3.0.1",
 ]
 
 [dependency-groups]

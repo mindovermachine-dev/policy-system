@@ -77,6 +77,24 @@ spec:
               value: {{ printf "%s-falkordb" (include "policy-system.fullname" .) }}
             - name: PS_FALKORDB_PORT
               value: "6379"
+            # Passkey Signing's own, distinct Postgres (issue #131, AC-BI-006) --
+            # reached via its own Service DNS name, same "resolved by Service
+            # name, never a pod IP" shape as PS_FALKORDB_HOST above. Own
+            # instance/PVC/NetworkPolicy/Secret -- never shares FalkorDB's or
+            # Authentik's (templates/signing-postgres-*.yaml).
+            - name: PS_PASSKEYSIGNING_POSTGRES_HOST
+              value: {{ printf "%s-signing-postgres" (include "policy-system.fullname" .) }}
+            - name: PS_PASSKEYSIGNING_POSTGRES_PORT
+              value: "5432"
+            - name: PS_PASSKEYSIGNING_POSTGRES_DATABASE
+              value: {{ .Values.psServiceSigning.postgres.database | quote }}
+            - name: PS_PASSKEYSIGNING_POSTGRES_USER
+              value: {{ .Values.psServiceSigning.postgres.user | quote }}
+            - name: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "policy-system.signingPostgresCredentialsSecretName" . }}
+                  key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
             - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
               value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS

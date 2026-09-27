@@ -92,6 +92,45 @@ llm:
   ollama:
     apiBase: "http://host.containers.internal:11434"
 
+psServiceSigning:
+  # The Passkey Signing component's own hand-rolled Postgres (AC-BI-006,
+  # issue #131 Slice 1) -- a THIRD, fully independent Postgres instance,
+  # storing pending merge approvals and enrolled WebAuthn signing
+  # credentials. Mirrors authentik.postgres.* below in shape (image,
+  # persistence, durable StorageClass) but is always deployed (unlike
+  # Authentik, which is opt-in via authentik.enabled) since it backs a
+  # core near-miss-merge-approval code path, not an optional bundled
+  # broker -- same "always-on" posture as falkordb.* above. Never shares
+  # FalkorDB's or Authentik's PVC, NetworkPolicy selector, or credential
+  # Secret (AC-BI-006's "distinct" framing extended to infra isolation).
+  postgres:
+    image:
+      repository: postgres
+      tag: "16-alpine"
+    database: ps_service_signing
+    user: ps_service
+    # Local-test/kind default only -- a fixed, non-sensitive literal mirroring
+    # .devcontainer/docker-compose.yml's own dev-only postgres service
+    # password (issue #131 Slice 1a). Read only when existingSecret below is
+    # empty (signing-postgres-secret.yaml renders a Secret from it); never
+    # used once existingSecret is set (prod path).
+    password: "ps_service_signing_dev_password"
+    # Set to reuse an operator-managed Secret name instead of the plain
+    # password value above -- values-prod.yaml points this at the
+    # deterministic name scripts/deploy-ps.sh's ensure_ps_service_signing_secrets
+    # provisions from Key Vault (AC-BI-007). Mirrors llm.existingSecret's
+    # convention exactly.
+    existingSecret: ""
+    persistence:
+      size: 10Gi
+      storageClassName: ""
+      durableStorageClass:
+        # Off by default (local-test/kind), mirroring
+        # authentik.postgres.persistence.durableStorageClass below exactly.
+        # See values-prod.yaml — Premium SSD, Retain-reclaim StorageClass for
+        # this Postgres volume (AC-BI-006).
+        enabled: false
+
 authentik:
   # Off by default (local-test/kind). See values-prod.yaml — bundled as the
   # production auth broker (invite-only local-account signup), gated on this

@@ -25,12 +25,17 @@ from ps_service.api.dependencies import (
     provide_curated_catalog_dependencies,
     provide_export_dependencies,
     provide_near_miss_review_dependencies,
+    provide_pending_approval_store,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_restore_from_catalog_dependencies,
     provide_run_id,
 )
-from ps_service.api.errors import CuratedSourceUnavailableError
+from ps_service.api.errors import (
+    CuratedSourceUnavailableError,
+    MergeApprovalRequiresAuthenticatedCallerError,
+    PendingApprovalNotFoundError,
+)
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
@@ -49,6 +54,7 @@ from ps_service.api.models import (
     IngestionRequest,
     IngestionStatusResponse,
     InstrumentCheckOutcomeBody,
+    PendingApprovalStatusResponse,
     PendingReviewListResponse,
     ResolveReviewRequest,
     ResolveReviewResponse,
@@ -78,6 +84,10 @@ from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 from ps_service.curated_source.errors import CuratedSourceFetchError
+from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
+from ps_service.passkey_signing.store import (
+    PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
+)
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
@@ -410,41 +420,137 @@ async def list_near_misses(
     return run_list_near_misses(config=config, dependencies=dependencies)
 
 
+def _approval_base_url(request: Request) -> str:
+    """Derive `{scheme}://{host}` for a pending approval's link (CHANGES.md F2).
+
+    Mirrors `ps_service.auth.middleware._resource_metadata_url`'s own
+    "scheme + host off the live request, never hardcoded" pattern, so the
+    link works correctly under a local dev bind, a `kind` NodePort, and a
+    prod ClusterIP+Ingress alike.
+    """
+    return f"{request.url.scheme}://{request.url.netloc}"
+
+
 async def resolve_near_miss(
     review_id: str,
     request_body: ResolveReviewRequest,
+    http_request: Request,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[
         NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
     ],
+    store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
+    principal: Annotated[Principal | None, Depends(get_principal)],
 ) -> ResolveReviewResponse:
     """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
 
-    Thin route wiring over `near_miss_review_orchestration.run_resolve_near_miss`
-    -- `decision="keep-separate"` (AC-BI-004) deletes only the
-    `PendingReview` record; `decision="merge"` (AC-BI-005/006/007) re-points
-    every edge referencing the loser canonical node onto the
-    deterministically-chosen winner, deletes the loser, and deletes the
-    `PendingReview` record, atomically. A `review_id` that doesn't exist,
-    was already resolved, or (merge only) references a node a prior merge
-    already deleted, raises `PendingReviewNotFoundError` (-> HTTP 404,
-    AC-BI-008); no graph write happens on that path. Mirrors
-    `list_near_misses`'s "call the orchestration function directly, not
-    `run_in_threadpool`" pattern -- a fast, bounded Cypher operation, not a
-    multi-minute pipeline.
+    `decision="keep-separate"` (AC-BI-004) is unaffected by issue #131: it
+    deletes only the `PendingReview` record, exactly as before -- thin route
+    wiring over `near_miss_review_orchestration.run_resolve_near_miss`,
+    unchanged. A `review_id` that doesn't exist or was already resolved
+    raises `PendingReviewNotFoundError` (-> HTTP 404, AC-BI-008); no graph
+    write happens on that path.
+
+    `decision="merge"` (issue #131, CHANGES.md F1) no longer executes the
+    merge synchronously: it requires a real, verified `principal` (fails
+    closed with HTTP 401 -- `MergeApprovalRequiresAuthenticatedCallerError`
+    -- before any Postgres or FalkorDB write, for an unauthenticated caller
+    or one under the local-test bypass) and calls
+    `passkey_signing.service.create_merge_pending_approval` -- the exact same
+    function the MCP `near_misses_resolve` tool's own merge branch calls, so
+    there is never a second, parallel gating mechanism (F1's own fix). The
+    response carries `pending_approval_id`/`approval_url`/`expires_at`
+    instead of `winner_id`/`loser_id`, which stay `None` until that approval
+    is actually signed (a later slice).
 
     Args:
         review_id: The `PendingReview` id to resolve (path parameter).
         request_body: The resolve decision.
+        http_request: The raw request, for the approval link's `{base_url}`
+            (merge only).
         config: The resolved service configuration (injected).
         dependencies: The near-miss review dependency bundle (injected;
             overridden in tests).
+        store: The pending-approval store (injected; overridden in tests).
+        principal: The request's verified identity, or `None` under the
+            local-test bypass (injected).
 
     Returns:
-        A :class:`ResolveReviewResponse` naming the resolved review and decision.
+        A :class:`ResolveReviewResponse` naming the resolved review and
+        decision.
+
+    Raises:
+        MergeApprovalRequiresAuthenticatedCallerError: `decision="merge"`
+            with no real, verified `principal` (HTTP 401).
+        PendingReviewNotFoundError: `review_id` doesn't exist or was
+            already resolved (HTTP 404).
     """
-    return run_resolve_near_miss(
-        review_id, request_body.decision, config=config, dependencies=dependencies
+    if request_body.decision == "keep-separate":
+        return run_resolve_near_miss(
+            review_id, request_body.decision, config=config, dependencies=dependencies
+        )
+    if principal is None:
+        raise MergeApprovalRequiresAuthenticatedCallerError(
+            "a signed passkey approval requires a real authenticated caller"
+        )
+    approval = create_merge_pending_approval(
+        review_id=review_id,
+        actor=(principal.sub, principal.iss),
+        base_url=_approval_base_url(http_request),
+        config=config,
+        near_miss_dependencies=dependencies,
+        store=store,
+    )
+    return ResolveReviewResponse(
+        review_id=review_id,
+        decision="merge",
+        pending_approval_id=approval.pending_approval_id,
+        approval_url=approval.approval_url,
+        expires_at=approval.expires_at,
+    )
+
+
+async def check_merge_pending_approval(
+    pending_approval_id: str,
+    store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
+    principal: Annotated[Principal | None, Depends(get_principal)],
+) -> PendingApprovalStatusResponse:
+    """Resumable status check for a merge's pending approval (issue #131, CHANGES.md F1).
+
+    Uses the identical store-backed lookup-plus-ownership-check logic the
+    MCP `near_misses_check_approval` tool uses
+    (`passkey_signing.service.check_pending_approval`) -- an unknown id and
+    an id belonging to a different caller are never distinguished (both
+    raise the same `PendingApprovalNotFoundError`, AC-BI-015's leak-nothing
+    rule).
+
+    Args:
+        pending_approval_id: The pending approval id to look up (path parameter).
+        store: The pending-approval store (injected; overridden in tests).
+        principal: The request's verified identity, or `None` under the
+            local-test bypass (injected).
+
+    Returns:
+        A :class:`PendingApprovalStatusResponse` for the caller's own
+        pending approval.
+
+    Raises:
+        PendingApprovalNotFoundError: `pending_approval_id` is unknown, or
+            belongs to a different caller (HTTP 404).
+    """
+    actor = (principal.sub, principal.iss) if principal is not None else None
+    status = check_pending_approval(
+        pending_approval_id=pending_approval_id, actor=actor, store=store
+    )
+    if status is None:
+        raise PendingApprovalNotFoundError(f"no pending approval with id {pending_approval_id!r}")
+    return PendingApprovalStatusResponse(
+        pending_approval_id=status.pending_approval_id,
+        status=status.status,
+        review_id=status.review_id,
+        decision=status.decision,
+        winner_id=status.winner_id,
+        loser_id=status.loser_id,
     )
 
 
@@ -513,5 +619,10 @@ def build_api_router() -> APIRouter:
         resolve_near_miss,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+    )
+    router.add_api_route(
+        "/near-misses/approvals/{pending_approval_id}",
+        check_merge_pending_approval,
+        methods=["GET"],
     )
     return router

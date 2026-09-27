@@ -4,6 +4,16 @@ AC-BI-011: "WHEN any route not in the explicit open-route allow-list
 (``/health``, ``/ready``, ``/.well-known/*``) is registered THEN it requires
 a token -- a test enumerates the app's routes and asserts this."
 
+Issue #131 (PLAN.md §0.5) adds one more deliberate exemption, ``/approvals/*``
+-- the companion-browser signing-ceremony router. It is a bare capability
+URL by design (a plain browser tab carries no ``Authorization`` header), so
+it is excluded from the enumeration below the same way ``/health``/``/ready``/
+``/.well-known/*`` are; `test_approvals_routes_remain_reachable_without_a_token`
+proves the exemption is real and, separately, that the router's *own*
+per-request ``code`` check still rejects a wrong/missing code -- the same
+"hand-off to a second, still-enforcing gate, not a silent bypass" shape this
+file's `/mcp` test already establishes.
+
 This is the one test that proves default-deny holds for **every** registered
 route, present and future, rather than the single representative route
 (``GET /catalog``) `test_rest_auth_middleware.py` (Slice 3) exercises.
@@ -44,6 +54,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from ps_service.api.dependencies import provide_pending_approval_store
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
@@ -81,9 +92,11 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 # AC-BI-011's own verbatim allow-list -- deliberately re-declared here rather than
 # imported from `ps_service.auth.middleware`, so this test fails (rather than
 # silently passing) if a future edit to that module's private constants ever drifts
-# from the issue's own wording.
+# from the issue's own wording. `_APPROVALS_PREFIX` is issue #131's own deliberate
+# addition (PLAN.md §0.5) -- see this file's module docstring.
 _EXEMPT_PATHS = frozenset({"/health", "/ready"})
 _EXEMPT_PREFIX = "/.well-known/"
+_APPROVALS_PREFIX = "/approvals/"
 
 # Path parameters this audit substitutes into templated OpenAPI paths (e.g.
 # "/ingestions/{run_id}") to build a concrete, requestable URL. The values
@@ -138,7 +151,7 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
 
 def _is_exempt(path: str) -> bool:
     """Mirror `RestAuthMiddleware`'s own exemption check, verbatim against AC-BI-011's wording."""
-    return path in _EXEMPT_PATHS or path.startswith(_EXEMPT_PREFIX)
+    return path in _EXEMPT_PATHS or path.startswith((_EXEMPT_PREFIX, _APPROVALS_PREFIX))
 
 
 def _concretize(templated_path: str) -> str:
@@ -151,6 +164,26 @@ def _concretize(templated_path: str) -> str:
 
 def _request_body(templated_path: str) -> dict[str, object] | None:
     return _REQUEST_BODIES.get(templated_path)
+
+
+class _NoSuchApprovalStore:
+    """Minimal `PendingApprovalStore` double: every lookup reports "no such row".
+
+    Just enough to prove `/approvals/*` is unauthenticated-by-design *and*
+    still gated by its own generic not-found check -- this file otherwise has
+    nothing to do with `passkey_signing`'s real persistence, so a real/fake
+    store from that package would be more machinery than this one audit test
+    needs.
+    """
+
+    def create_pending_approval(self, **_kwargs: object) -> None:  # pragma: no cover - unused
+        raise AssertionError("not exercised by this audit")
+
+    def get_by_id(self, pending_approval_id: str) -> None:
+        del pending_approval_id
+
+    def get_by_code_hash(self, code_hash: bytes) -> None:
+        del code_hash
 
 
 def test_every_non_exempt_route_requires_a_token(mock_oidc_provider: MockOidcProvider) -> None:
@@ -198,6 +231,32 @@ def test_open_allowlist_routes_remain_reachable_without_a_token(
     assert client.get("/health").status_code != 401
     assert client.get("/ready").status_code != 401
     assert client.get("/.well-known/oauth-protected-resource").status_code != 401
+
+
+def test_approvals_routes_remain_reachable_without_a_token_but_still_reject_a_bad_code(
+    mock_oidc_provider: MockOidcProvider,
+) -> None:
+    """Issue #131, PLAN.md §0.5: `/approvals/*` is deliberately exempt from
+    `RestAuthMiddleware` (a plain browser tab carries no `Authorization`
+    header) -- but, mirroring this file's own `/mcp` proof, the exemption is
+    a hand-off to a second, still-enforcing gate (`passkey_signing.router`'s
+    own per-request `code` check against `code_hash`), not a silent bypass:
+    an unauthenticated request with an unknown id/wrong code is rejected
+    with a 404, never a 200.
+    """
+    app = create_app(_config(mock_oidc_provider))
+    app.dependency_overrides[provide_pending_approval_store] = _NoSuchApprovalStore
+    client = TestClient(app)
+
+    shell_response = client.get("/approvals/00000000-0000-0000-0000-000000000000")
+    assert shell_response.status_code != 401
+
+    summary_response = client.post(
+        "/approvals/00000000-0000-0000-0000-000000000000/summary",
+        json={"code": "not-a-real-code"},
+    )
+    assert summary_response.status_code != 401
+    assert summary_response.status_code == 404
 
 
 def test_mcp_mount_rejects_unauthenticated_request_via_its_own_sdk_gate(

@@ -13,6 +13,7 @@ that walkthrough, step 6 onward.
 - [Example: `helm upgrade`](#example-helm-upgrade)
 - [Ollama values](#ollama-values)
 - [Azure values](#azure-values)
+- [Passkey Signing Postgres values](#passkey-signing-postgres-values)
 
 ## Core values
 
@@ -184,3 +185,40 @@ curl -s http://127.0.0.1:8000/ready
 `ps-cli ingest regulation` / `ingest document` / `check regulations` run the same check
 as a pre-flight and stop with `LLM Interface is unavailable.` while `llm_interface` is
 listed.
+
+## Passkey Signing Postgres values
+
+The Passkey Signing component (issue #131) stores pending merge approvals and enrolled
+WebAuthn signing credentials in its own, hand-rolled PostgreSQL instance — **distinct
+from FalkorDB and from Authentik's own bundled Postgres** (AC-BI-006): its own
+Deployment/Service/PVC/NetworkPolicy/Secret, never a shared PVC, NetworkPolicy selector,
+or credential Secret with either. Unlike `authentik.*` (opt-in via `authentik.enabled`),
+this instance is always deployed — it backs a core near-miss-merge-approval code path,
+the same "always-on" posture as `falkordb.*`.
+
+| Key | Default (local-test) | Purpose |
+| --- | --- | --- |
+| `psServiceSigning.postgres.image.repository` / `psServiceSigning.postgres.image.tag` | `postgres` / `16-alpine` | Signing Postgres image — same version family as `.devcontainer/docker-compose.yml`'s local dev `postgres` service. |
+| `psServiceSigning.postgres.database` | `ps_service_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` — the database name, injected into `ps-service`'s own Deployment as a plain (non-secret) env var. |
+| `psServiceSigning.postgres.user` | `ps_service` | `PS_PASSKEYSIGNING_POSTGRES_USER` — same non-secret env-var wiring as `database` above. |
+| **`psServiceSigning.postgres.password`** | `"ps_service_signing_dev_password"` | **(AC-BI-007)** Local-test/kind default only — read solely when `existingSecret` below is empty, in which case the chart renders a `Secret` from it (`templates/signing-postgres-secret.yaml`). Never set a real value here in a committed file for a real deployment — use `existingSecret` instead. |
+| **`psServiceSigning.postgres.existingSecret`** | `""` | **(AC-BI-007)** Set to reuse an operator-managed Secret name instead of the plain `password` value above — same `existingSecret`-or-render convention as `llm.existingSecret`. In production, `scripts/deploy-ps.sh`'s `ensure_ps_service_signing_secrets` provisions this Secret from a Key-Vault-sourced, generate-once password (own Key Vault secret, own Kubernetes Secret — never appended to Authentik's), and `values-prod.yaml` points this key at that Secret's deterministic name. |
+| `psServiceSigning.postgres.persistence.size` | `10Gi` | PVC storage request for the signing Postgres data volume. |
+| `psServiceSigning.postgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
+| `psServiceSigning.postgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
+
+`ps-service`'s Deployment consumes this instance via five env vars —
+`PS_PASSKEYSIGNING_POSTGRES_HOST` (the chart's own rendered Service name, never a pod IP),
+`_PORT` (fixed `5432`), `_DATABASE`, `_USER` (both plain values above), and `_PASSWORD`
+(always sourced from the Secret named by `existingSecret`, or the chart-rendered one when
+that's empty — never a plain env value). These map directly onto `ServiceConfig`'s
+`passkey_signing_postgres_host`/`_port`/`_database`/`_user`/`_password` fields.
+
+```bash
+# Example: point the chart at an operator-managed Secret instead of the local-test default
+kubectl create secret generic my-signing-postgres-secret \
+  --from-literal=PS_PASSKEYSIGNING_POSTGRES_PASSWORD="$SIGNING_POSTGRES_PASSWORD"
+helm upgrade policy-system ./charts/policy-system \
+  --set psServiceSigning.postgres.existingSecret=my-signing-postgres-secret \
+  --wait
+```

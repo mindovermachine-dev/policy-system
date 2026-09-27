@@ -355,14 +355,42 @@ class ResolveReviewResponse(BaseModel):
     """Response body for `POST /near-misses/{review_id}/resolve` (AC-BI-004/005/008/009).
 
     `winner_id`/`loser_id` stay `None` for `decision="keep-separate"`
-    (Slice 3); populated with the deterministically-chosen winner/loser
-    canonical node ids for `decision="merge"` (Slice 4, AC-BI-005/006).
+    (Slice 3) and, since issue #131 (CHANGES.md F1), for `decision="merge"`
+    too -- `decision="merge"` no longer executes synchronously; it returns a
+    pending signed-passkey approval instead (`pending_approval_id`/
+    `approval_url`/`expires_at`), all three `None` for `decision="keep-separate"`,
+    which is otherwise unaffected by this issue. `winner_id`/`loser_id`
+    populate only once that approval is actually signed (a later slice) --
+    `POST /near-misses/{review_id}/resolve` itself never returns them
+    populated any more.
     """
 
     model_config = ConfigDict(frozen=True)
 
     review_id: str = Field(min_length=1)
     decision: str
+    winner_id: str | None = None
+    loser_id: str | None = None
+    pending_approval_id: str | None = None
+    approval_url: str | None = None
+    expires_at: str | None = None
+
+
+class PendingApprovalStatusResponse(BaseModel):
+    """Response body for `GET /near-misses/approvals/{pending_approval_id}` (issue #131).
+
+    Field-for-field mirror of the MCP `near_misses_check_approval` tool's own
+    response shape (CHANGES.md F1's "one implementation, two callers" rule
+    extended to this read side, PLAN.md §2.3) -- both surfaces call the same
+    `ps_service.passkey_signing.service.check_pending_approval`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pending_approval_id: str = Field(min_length=1)
+    status: Literal["pending", "expired", "signed"]
+    review_id: str | None = None
+    decision: str | None = None
     winner_id: str | None = None
     loser_id: str | None = None
 

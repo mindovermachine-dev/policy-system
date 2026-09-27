@@ -102,6 +102,7 @@ marimo/_lsp/
 __marimo__/
 .streamlit/secrets.toml
 .falkordb-data/
+.postgres-data/
 
 # Node and logs
 **/node_modules/
@@ -340,4 +341,6 @@ __marimo__/
 
 # FalkorDB local persistence volume (see CONTRIBUTING.md)
 .falkordb-data/
+# Passkey Signing's local Postgres persistence volume (issue #131)
+.postgres-data/
 .orchestrator/

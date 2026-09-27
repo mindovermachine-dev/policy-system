@@ -38,6 +38,7 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+    from typing import Self
 
     import httpx
     from fastapi.responses import JSONResponse
@@ -1163,6 +1164,115 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
         pass
 
     assert called == ["falkordb", "llm_interface", "cellar_eli"]
+
+
+# --- Passkey Signing Postgres readiness (issue #131, PLAN.md §0.8) ---------
+
+
+def test_passkey_signing_postgres_is_ready_but_not_gating_dependency() -> None:
+    """An outage of this optional, pilot-scope Postgres instance must never
+    block `/ready` for the rest of the system (PLAN.md §0.8) -- it is
+    tracked (`_READY_DEPENDENCIES`) but never gates (`_GATING_DEPENDENCIES`),
+    unlike FalkorDB.
+
+    Reads both private module constants via `getattr` by name (rather than
+    `main_module._READY_DEPENDENCIES` attribute-access syntax), mirroring
+    this file's own `monkeypatch.setattr(main_module, "_GATING_DEPENDENCIES",
+    ...)` precedent for touching these same private names without an
+    `reportPrivateUsage` suppression.
+    """
+    ready_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_READY_DEPENDENCIES"),  # noqa: B009 - see docstring
+    )
+    gating_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_GATING_DEPENDENCIES"),  # noqa: B009 - see docstring
+    )
+
+    assert dependency_health.PASSKEY_SIGNING_POSTGRES in ready_dependencies
+    assert dependency_health.PASSKEY_SIGNING_POSTGRES not in gating_dependencies
+
+
+def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """A failed connection is reflected as unhealthy without ever raising out
+    of `/ready`/crashing startup (PLAN.md §0.8): `_check_dependencies_at_startup`
+    catches the probe's own exception, records it via `dependency_health`, and
+    `status` stays `"ready"` since this dependency is deliberately excluded
+    from `_GATING_DEPENDENCIES` -- unlike an equivalent FalkorDB failure,
+    which does flip `status` to `"not_ready"` (see the FalkorDB-equivalent
+    test above).
+    """
+
+    def failing_passkey_signing_postgres_check(config: ServiceConfig) -> None:
+        error = ConnectionError("Passkey Signing Postgres connection failed")
+        dependency_health.mark_unhealthy(dependency_health.PASSKEY_SIGNING_POSTGRES, error=error)
+        raise error
+
+    monkeypatch.setattr(
+        main_module,
+        "check_passkey_signing_postgres_connectivity",
+        failing_passkey_signing_postgres_check,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.json() == {
+        "status": "ready",
+        "unhealthy_dependencies": ["passkey_signing_postgres"],
+    }
+
+
+def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """PLAN.md §0.6/§0.8: an environment that never configures Passkey Signing
+    Postgres must not even attempt a connection at startup -- `app`'s
+    `_complete_config()` leaves `passkey_signing_postgres_host` at its `None`
+    default.
+    """
+
+    def fail_if_called(config: ServiceConfig) -> object:
+        message = "connect_from_config must not be called when Postgres is unconfigured"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fail_if_called)
+
+    with TestClient(app):
+        pass
+
+
+def test_migration_runner_runs_at_startup_when_postgres_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLAN.md §0.6: startup applies pending migrations once via the injected connection."""
+    config = _complete_config(passkey_signing_postgres_host="postgres.internal")
+    applied_with: list[object] = []
+
+    class _FakeConnection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    def fake_connect(config: ServiceConfig) -> _FakeConnection:
+        return _FakeConnection()
+
+    def fake_apply_pending_migrations(conn: object) -> list[str]:
+        applied_with.append(conn)
+        return []
+
+    monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fake_connect)
+    monkeypatch.setattr(main_module, "apply_pending_migrations", fake_apply_pending_migrations)
+
+    with TestClient(create_app(config)):
+        pass
+
+    assert len(applied_with) == 1
 
 
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(

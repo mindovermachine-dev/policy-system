@@ -43,6 +43,13 @@ if TYPE_CHECKING:
 _EXEMPT_PATHS = frozenset({"/health", "/ready"})
 _EXEMPT_PREFIX = "/.well-known/"
 _MCP_MOUNT_PREFIX = "/mcp"
+_APPROVALS_PREFIX = "/approvals/"
+"""Issue #131, PLAN.md §0.5/CHANGES.md F2: the companion-browser signing
+ceremony is a bare, unauthenticated capability URL by design -- a plain
+browser tab carries no `Authorization` header, and the opaque per-approval
+`code` (never carried in this path, only in the URL fragment) is the sole
+per-request authorization, checked inside `passkey_signing.router` itself.
+"""
 
 _BEARER_PREFIX = "Bearer "
 
@@ -120,7 +127,9 @@ class RestAuthMiddleware:
             return
 
         path = scope["path"]
-        if path in _EXEMPT_PATHS or path.startswith((_EXEMPT_PREFIX, _MCP_MOUNT_PREFIX)):
+        if path in _EXEMPT_PATHS or path.startswith(
+            (_EXEMPT_PREFIX, _APPROVALS_PREFIX, _MCP_MOUNT_PREFIX)
+        ):
             await self._app(scope, receive, send)
             return
 

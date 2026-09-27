@@ -16,6 +16,15 @@ services:
       # and FalkorDB on one network and pass PS_FALKORDB_HOST explicitly.
       - PS_FALKORDB_HOST=falkordb
       - PS_FALKORDB_PORT=6379
+      # Passkey Signing's own, distinct Postgres instance (issue #131,
+      # PLAN.md §0.6) -- never shared with FalkorDB or (in a deployed
+      # topology) Authentik's own Postgres. Same "resolved by compose service
+      # name" shape as PS_FALKORDB_HOST above.
+      - PS_PASSKEYSIGNING_POSTGRES_HOST=postgres
+      - PS_PASSKEYSIGNING_POSTGRES_PORT=5432
+      - PS_PASSKEYSIGNING_POSTGRES_DATABASE=ps_service_signing
+      - PS_PASSKEYSIGNING_POSTGRES_USER=ps_service
+      - PS_PASSKEYSIGNING_POSTGRES_PASSWORD=ps_service_dev_password
 
   falkordb:
     image: falkordb/falkordb:latest
@@ -32,4 +41,22 @@ services:
       - "3000:3000"
     volumes:
       - ../.falkordb-data:/var/lib/falkordb/data
+    restart: unless-stopped
+
+  postgres:
+    # Passkey Signing's own PostgreSQL instance (issue #131, PLAN.md §0.6) --
+    # distinct from FalkorDB and from Authentik's own hand-rolled Postgres in
+    # a deployed topology (`charts/policy-system/values.yaml`). Image matches
+    # that same Helm chart's already-chosen `postgres:16-alpine`, so the
+    # local dev image and the deployed image are the same version family.
+    # Own network namespace, same rationale as `falkordb` above.
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../.postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=ps_service
+      - POSTGRES_PASSWORD=ps_service_dev_password
+      - POSTGRES_DB=ps_service_signing
     restart: unless-stopped

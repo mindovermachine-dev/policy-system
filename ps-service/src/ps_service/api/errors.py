@@ -109,6 +109,56 @@ class PendingReviewNotFoundError(ApiError):
     """
 
 
+class MergeApprovalRequiresAuthenticatedCallerError(ApiError):
+    """A `POST /near-misses/{review_id}/resolve` `decision="merge"` call has no real caller.
+
+    Issue #131, CHANGES.md F1/AC-BI-002: `decision="merge"` now creates a
+    signed-passkey pending approval rather than executing the merge
+    synchronously, and that approval must be bound to a real, verified
+    actor identity -- an unauthenticated request or one running under the
+    local-test bypass (issue #67, which never establishes a real `Principal`)
+    is refused before any Postgres or FalkorDB write, mirroring the MCP
+    tool's own `_resolve_signing_actor()` fail-closed check
+    (`mcp_interface.mcp_server`). Handled as HTTP 401, the same shape
+    `RestAuthMiddleware`'s own 401 already uses; `str(exc)` is a fixed,
+    domain-level message and safe to surface verbatim.
+    """
+
+
+class PendingApprovalNotFoundError(ApiError):
+    """A `GET /near-misses/approvals/{pending_approval_id}` id is unknown or not this caller's.
+
+    Issue #131, PLAN.md §2.3: deliberately raised for both "no such id" and
+    "this id belongs to a different actor" -- the two are never
+    distinguished in the response (AC-BI-015's leak-nothing rule, applied to
+    this read side too), mirroring `ps_service.passkey_signing.service.
+    check_pending_approval`'s own `None`-for-either-case return. Handled as
+    HTTP 404; `str(exc)` is domain-level and safe to surface verbatim.
+    """
+
+
+class PendingApprovalInvalidOrExpiredError(ApiError):
+    """A `/approvals/{id}/*` companion-browser call's code or state failed verification.
+
+    Issue #131, CHANGES.md F2/F3: raised for an unknown `pending_approval_id`,
+    a `code` whose `sha256` digest doesn't match the row's `code_hash`, and a
+    row that is no longer `'pending'` or has passed its `expires_at` --
+    deliberately never distinguished from one another in the response
+    (AC-BI-015's leak-nothing rule: a caller must never learn *which* of
+    these conditions applies). Raised by `ps_service.passkey_signing.router`'s
+    handlers (looking up/verifying the code) and by
+    `ps_service.passkey_signing.service._require_pending_and_unexpired`
+    (F3's shared guard) before any WebAuthn library call or Postgres write.
+    A fixed message baked into `__init__` (never a caller-supplied string) is
+    what guarantees every raise site produces byte-identical text. Handled as
+    HTTP 404; `str(exc)` is safe to surface verbatim.
+    """
+
+    def __init__(self) -> None:
+        """Fix the message so every raise site is byte-identical (AC-BI-015)."""
+        super().__init__("This approval link is no longer valid.")
+
+
 class ExportInstrumentNotFoundError(ApiError):
     """A ``POST /exports`` ``instrument_id`` names no actually-ingested instrument.
 

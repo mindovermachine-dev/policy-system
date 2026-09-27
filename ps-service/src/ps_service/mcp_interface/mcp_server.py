@@ -25,8 +25,10 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.mcpserver.resolve import Elicit, Resolve
-from pydantic import AfterValidator, BaseModel, Field
+from mcp.server.mcpserver import (
+    Context,  # noqa: TC002 -- the MCP SDK's own Context-injection resolves this annotation at runtime
+)
+from pydantic import AfterValidator, Field
 
 from ps_service import dependency_health
 from ps_service.api.catalog import find_by_celex
@@ -82,6 +84,8 @@ from ps_service.mcp_interface.errors import (
     McpGraphUnavailableError,
     McpResourceUnavailableError,
 )
+from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
+from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.query_engine import (
     GraphUnseededError,
     QueryEngineExecutionError,
@@ -154,17 +158,6 @@ def _reject_path_traversal_segment(value: str) -> str:
         msg = "instrument_id must not contain '..'"
         raise ValueError(msg)
     return value
-
-
-# CHANGES.md H2: the merge-decision confirmation gate's own warning text --
-# both the resolver's `Elicit(...)` message the client actually sees and the
-# secondary signal repeated in `near_misses_resolve`'s own docstring (same
-# sentence, per D-MERGE-WARN point 2), so the two channels never drift.
-_MERGE_WARNING = (
-    'WARNING: decision="merge" is IRREVERSIBLE -- it deletes the loser node and '
-    "re-points every edge that referenced it onto the winner, atomically, before "
-    'this call returns. Reply with confirm="merge" to proceed.'
-)
 
 
 @functools.cache
@@ -292,6 +285,61 @@ def _resolve_principal(config: ServiceConfig) -> str | None:
     if config.is_local_test_bypass_active:
         return LOCAL_TEST_PRINCIPAL_ID
     return None
+
+
+def _resolve_signing_actor() -> tuple[str, str] | None:
+    """Resolve `(sub, iss)` for the merge-gating flow's caller identity (issue #131, PLAN.md §2.1).
+
+    Narrower than `_resolve_principal`: a signed passkey approval must be
+    bound to both `sub` and `iss` (AC-BI-004/AC-BI-005), not `sub` alone --
+    mirrors `RestAuthMiddleware.__call__`'s own identical `sub`/`iss`
+    extraction from the same `AccessToken` shape (`auth/middleware.py`),
+    not a new pattern.
+
+    Deliberately does **not** fall back to `LOCAL_TEST_PRINCIPAL_ID` the way
+    `_resolve_principal` does: under the local-test bypass there is no real
+    actor identity a WebAuthn credential could ever meaningfully belong to,
+    so a pending approval must never be created for it (AC-BI-002 requires
+    "an already-authenticated caller under the existing OIDC session
+    contract" -- the bypass has no such contract). Returns `None` in that
+    case, which each caller (this module's `near_misses_resolve`/
+    `near_misses_check_approval`) treats as a fail-closed condition.
+
+    Returns:
+        The verified `(sub, iss)` pair, or `None` if no verified bearer
+        token is bound to this call.
+    """
+    access_token = get_access_token()
+    if access_token is None or access_token.subject is None:
+        return None
+    iss = (access_token.claims or {}).get("iss")
+    if not isinstance(iss, str):
+        return None
+    return access_token.subject, iss
+
+
+def _resolve_base_url(ctx: Context) -> str:
+    """Derive `{scheme}://{host}` from the live MCP request (PLAN.md §2.2 step 4).
+
+    Mirrors `ps_service.auth.middleware._resource_metadata_url`'s own
+    "scheme + host off the live request, never hardcoded" pattern, so the
+    approval link is correct under a `kind` NodePort, a ClusterIP+Ingress,
+    and local dev alike. Reads `ctx.request_context.request` directly (the
+    Streamable HTTP transport's own raw Starlette `Request`, confirmed
+    against `mcp.server._streamable_http_modern`) rather than `ctx.headers`
+    alone, since `Context` does not expose scheme separately. Falls back to
+    a fixed placeholder when no request is bound to this call at all --
+    never reachable via the real Streamable HTTP transport; only a bare,
+    context-less test-only tool invocation hits this branch.
+    """
+    try:
+        request = ctx.request_context.request
+    except ValueError:
+        request = None
+    scheme = getattr(getattr(request, "url", None), "scheme", None) or "http"
+    headers = getattr(request, "headers", None)
+    host = headers.get("host", "") if headers is not None else ""
+    return f"{scheme}://{host}" if host else f"{scheme}://unknown"
 
 
 def _run_mcp_action(
@@ -657,83 +705,92 @@ def near_misses_list() -> dict[str, object] | str:
     return _run_mcp_action("near_misses_list", principal, _body)
 
 
-class MergeConfirmation(BaseModel):
-    """CHANGES.md H2: the confirmation payload a client must supply to proceed with a merge."""
+_MERGE_APPROVAL_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: a signed passkey approval requires a real authenticated session"
+)
 
-    confirm: Literal["merge"]
 
+def _resolve_merge_pending_approval(
+    review_id: str, ctx: Context, config: ServiceConfig
+) -> dict[str, object] | str:
+    """`near_misses_resolve`'s `decision="merge"` branch (PLAN.md §2.2 steps 1-4).
 
-def _confirm_merge(decision: str) -> Elicit[MergeConfirmation] | bool:
-    """CHANGES.md H2: `near_misses_resolve`'s merge-confirmation resolver.
-
-    Runs before the tool body, given the tool's own already-validated
-    `decision` argument by name (the SDK's resolver-DAG wiring, not a
-    manual lookup). `decision="keep-separate"` resolves instantly with no
-    elicitation round trip -- Slice 3.2's existing single-round-trip
-    behavior for that branch is unchanged. `decision="merge"` returns an
-    `Elicit` marker instead: the SDK sends (or, on the >= 2026-07-28
-    protocol, batches into an `InputRequiredResult`) an `elicitation/create`
-    request carrying `_MERGE_WARNING`, and does not call this tool's body
-    until the client answers. A decline/cancel answer raises `ToolError`
-    automatically (the resolver's own consumer -- `near_misses_resolve`'s
-    `confirmed` parameter -- is annotated to receive the unwrapped value,
-    not the full outcome union), so no merge write ever happens on that
-    path either.
+    Split out of `near_misses_resolve`'s own body so that function's
+    `_body` closure stays within a sane branch/return count -- this is not
+    reused by any other tool.
     """
-    if decision != "merge":
-        return True
-    return Elicit(message=_MERGE_WARNING, schema=MergeConfirmation)
+    actor = _resolve_signing_actor()
+    if actor is None:
+        return _MERGE_APPROVAL_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    store = PsycopgPendingApprovalStore(config)
+    try:
+        approval = create_merge_pending_approval(
+            review_id=review_id,
+            actor=actor,
+            base_url=_resolve_base_url(ctx),
+            config=config,
+            near_miss_dependencies=_sanitize_near_miss_review_graph_opens(
+                build_default_near_miss_review_dependencies()
+            ),
+            store=store,
+        )
+    except PendingReviewNotFoundError as exc:
+        return f"error: {exc}"
+    except McpGraphUnavailableError:
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    return {
+        "pending_approval_id": approval.pending_approval_id,
+        "approval_url": approval.approval_url,
+        "expires_at": approval.expires_at,
+    }
 
 
 @server.tool()
 def near_misses_resolve(
     review_id: Annotated[str, Field(min_length=1)],
     decision: Literal["keep-separate", "merge"],
-    confirmed: Annotated[bool | MergeConfirmation, Resolve(_confirm_merge)],
+    ctx: Context,
 ) -> dict[str, object] | str:
     """ResolveNearMiss: resolve one near-miss pending review.
 
-    Runs in-process, exactly like `POST /near-misses/{review_id}/resolve`
-    does: `decision="keep-separate"` deletes only the `PendingReview`
-    record -- `winner_id`/`loser_id` stay `None` in the response (this
-    slice's own implemented happy path). `decision`'s `Literal` type is
-    itself the MCP-schema-level rejection of any other value, before this
-    tool's body ever runs.
+    `decision="keep-separate"` deletes only the `PendingReview` record --
+    `winner_id`/`loser_id` stay `None` in the response, unchanged since
+    issue #35. `decision`'s `Literal` type is itself the MCP-schema-level
+    rejection of any other value, before this tool's body ever runs.
 
-    WARNING: decision="merge" is IRREVERSIBLE -- it deletes the loser node
-    and re-points every edge that referenced it onto the winner,
-    atomically, before this call returns. Reply with confirm="merge" to
-    proceed. This is also the exact message a real elicitation round trip
-    sends before any merge write happens (CHANGES.md H2, reversing
-    D-MERGE-WARN's earlier rejection of this mechanism): calling with
-    decision="merge" pauses the call until the client answers with
-    `{"confirm": "merge"}`; a decline or cancel answer aborts the call
-    before any write; and a client that has not declared the elicitation
-    capability gets a clear protocol error instead of an unconfirmed merge.
-    `decision="keep-separate"` never pauses -- one round trip, exactly as
-    before.
+    `decision="merge"` is IRREVERSIBLE once it actually executes -- it
+    deletes the loser node and re-points every edge that referenced it onto
+    the winner, atomically -- so, since issue #131, this call never executes
+    a merge itself. Instead it requires an already-authenticated caller
+    (`ctx`'s bound `AccessToken`; a caller under the local-test bypass, which
+    has no real actor identity, is refused) and returns a pending,
+    signed-passkey approval immediately: `pending_approval_id`,
+    `approval_url` (a link a human opens in a browser to complete a WebAuthn
+    signing ceremony), and `expires_at`. No graph write happens on this
+    call at all -- `near_misses_check_approval` is the separate, resumable
+    way to learn whether that approval has since been signed. The REST
+    route `POST /near-misses/{review_id}/resolve` calls the exact same
+    underlying function for `decision="merge"`, so there is never a second,
+    parallel gating mechanism.
 
     Like `near_misses_list`, this tool has no LLM Interface dependency of
     its own and so runs no LLM-Interface pre-flight check.
 
-    On success, returns the same structured summary `POST
-    /near-misses/{review_id}/resolve` returns: `review_id`, `decision`, and
-    `winner_id`/`loser_id` (populated for `merge`, `None` for
-    `keep-separate`). Returns a string beginning `error: ` when `review_id`
-    doesn't exist or was already resolved, when (`merge` only) it references
-    a node a prior merge already deleted (a stale reference), when the
-    policy graph database cannot be reached, or (this tool's own residual
-    safety net) on any other unexpected failure.
+    On success, returns `{"review_id", "decision", "winner_id": None,
+    "loser_id": None}` for `decision="keep-separate"`, or
+    `{"pending_approval_id", "approval_url", "expires_at"}` for
+    `decision="merge"`. Returns a string beginning `error: ` when
+    `review_id` doesn't exist or was already resolved, when (`merge` only)
+    the caller has no real authenticated session, when the policy graph
+    database cannot be reached, or (this tool's own residual safety net) on
+    any other unexpected failure.
     """
-    # `confirmed` is a resolver-filled gate (CHANGES.md H2): its presence on
-    # the signature is what forces the elicitation round-trip for `merge`
-    # before this body ever runs; the value itself carries nothing further
-    # this body needs (the tool never reaches here on a decline/cancel).
-    _ = confirmed
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
+        if decision == "merge":
+            return _resolve_merge_pending_approval(review_id, ctx, config)
         try:
             result = run_resolve_near_miss(
                 review_id,
@@ -750,6 +807,53 @@ def near_misses_resolve(
         return result.model_dump()
 
     return _run_mcp_action("near_misses_resolve", principal, _body)
+
+
+@server.tool()
+def near_misses_check_approval(
+    pending_approval_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
+    """CheckApproval: resumable status check for a near-miss merge's pending approval (issue #131).
+
+    Companion to `near_misses_resolve`'s `decision="merge"` branch (PLAN.md
+    §2.3): that call never blocks waiting for a human to complete a WebAuthn
+    signing ceremony, so this is the separate, poll-again-later way to learn
+    whether it has been signed yet. **Ownership check**: only the same
+    caller who created the approval may check it -- a caller with no real
+    authenticated session, or one whose identity doesn't match the
+    approval's own, gets the identical generic not-found error a wrong id
+    gets (never distinguished, so a caller cannot learn whether an id
+    belongs to someone else).
+
+    On success, returns `{"pending_approval_id", "status", "review_id",
+    "decision", "winner_id", "loser_id"}`. `status` is one of `"pending"`,
+    `"expired"` (the 15-minute window elapsed unsigned -- derived live, never
+    a separately stored status), or `"signed"`; `winner_id`/`loser_id`
+    populate only once `status == "signed"`. Returns a string beginning
+    `error: ` when no such pending approval is visible to this caller, or
+    (this tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _resolve_signing_actor()
+        store = PsycopgPendingApprovalStore(config)
+        status = check_pending_approval(
+            pending_approval_id=pending_approval_id, actor=actor, store=store
+        )
+        if status is None:
+            return f"error: no pending approval with id {pending_approval_id!r}"
+        return {
+            "pending_approval_id": status.pending_approval_id,
+            "status": status.status,
+            "review_id": status.review_id,
+            "decision": status.decision,
+            "winner_id": status.winner_id,
+            "loser_id": status.loser_id,
+        }
+
+    return _run_mcp_action("near_misses_check_approval", principal, _body)
 
 
 @server.tool(name="set-catalog-source")

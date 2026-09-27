@@ -28,6 +28,9 @@ from ps_service.api.errors import (
     ExportStageFailedError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
+    MergeApprovalRequiresAuthenticatedCallerError,
+    PendingApprovalInvalidOrExpiredError,
+    PendingApprovalNotFoundError,
     PendingReviewNotFoundError,
     PipelineStageError,
     RequestBodyTooLargeError,
@@ -94,6 +97,9 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
     CuratedSourceUnavailableError,
+    MergeApprovalRequiresAuthenticatedCallerError,
+    PendingApprovalNotFoundError,
+    PendingApprovalInvalidOrExpiredError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -217,6 +223,21 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "curated_source_unavailable",
         status.HTTP_502_BAD_GATEWAY,
     ),
+    (
+        MergeApprovalRequiresAuthenticatedCallerError,
+        "merge_approval_requires_authenticated_caller",
+        status.HTTP_401_UNAUTHORIZED,
+    ),
+    (
+        PendingApprovalNotFoundError,
+        "pending_approval_not_found",
+        status.HTTP_404_NOT_FOUND,
+    ),
+    (
+        PendingApprovalInvalidOrExpiredError,
+        "pending_approval_invalid_or_expired",
+        status.HTTP_404_NOT_FOUND,
+    ),
 )
 
 
@@ -328,6 +349,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
     ``PendingReviewNotFoundError`` 404, ``ExportInstrumentNotFoundError`` 404,
     ``ExportConfigIncompleteError`` 503, ``CuratedSourceUnavailableError`` 502,
+    ``MergeApprovalRequiresAuthenticatedCallerError`` 401,
+    ``PendingApprovalNotFoundError`` 404,
+    ``PendingApprovalInvalidOrExpiredError`` 404,
     ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
     ``ExportStageFailedError`` 502, ``RequestValidationError`` 422,
     everything else 500.

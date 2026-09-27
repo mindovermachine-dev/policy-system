@@ -32,6 +32,49 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_COMPANYMERGE_SIMILARITY_THRESHOLD")].value
           value: "0.59"
 
+  # --- issue #131 Slice 1: Passkey Signing's own, distinct Postgres env wiring (AC-BI-006) ---
+
+  - it: PS_PASSKEYSIGNING_POSTGRES_HOST is the exact signing postgres Service name, never an IP, and distinct from FalkorDB's
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
+          pattern: "^[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*$"
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
+          value: RELEASE-NAME-policy-system-signing-postgres
+      - notEqual:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
+          value: RELEASE-NAME-policy-system-falkordb
+
+  - it: PS_PASSKEYSIGNING_POSTGRES_PORT is 5432
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PORT")].value
+          value: "5432"
+
+  - it: PS_PASSKEYSIGNING_POSTGRES_DATABASE/_USER come from values
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_DATABASE")].value
+          value: ps_service_signing
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_USER")].value
+          value: ps_service
+
+  - it: PS_PASSKEYSIGNING_POSTGRES_PASSWORD is sourced from its own Secret, never a plain value or Authentik's Secret
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].value
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-signing-postgres-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.key
+          value: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+      - notEqual:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-authentik-credentials
+
   - it: default (ollama) render has no envFrom
     set:
       llm.provider: ollama

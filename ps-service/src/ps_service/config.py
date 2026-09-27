@@ -9,7 +9,7 @@ rather than letting components independently read `os.environ`.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -23,6 +23,7 @@ _MIN_PORT = 1
 _MAX_PORT = 65535
 _DEFAULT_FALKORDB_HOST = "127.0.0.1"
 _DEFAULT_FALKORDB_PORT = 6379
+_DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
@@ -92,6 +93,23 @@ class ServiceConfig:
     guard at load time (AC-BI-008/010) -- the same function the runtime
     `set-catalog-source` MCP tool (Slice 3) validates a new override URL
     through, so both surfaces reject exactly the same inputs.
+
+    `passkey_signing_postgres_host`/`_port`/`_database`/`_user`/`_password`
+    (from `PS_PASSKEYSIGNING_POSTGRES_HOST`/`_PORT`/`_DATABASE`/`_USER`/
+    `_PASSWORD`, issue #131) configure `ps_service.passkey_signing.store.
+    connect_from_config`'s connection to PS Service's own, distinct
+    Postgres instance (PLAN.md §1.3) -- follows the exact same
+    "record what the environment resolved to, absence is not an error here"
+    optional shape as `falkordb_host`/`falkordb_port` and
+    `company_merge_similarity_threshold` above; whether these are *required*
+    is enforced at the Passkey Signing component's own call sites (its
+    migration runner / connection opener), not here. `_password` is the
+    first credential value `ServiceConfig` itself carries (every other
+    credential in this codebase -- LLM provider keys, FalkorDB access -- is
+    resolved independently, per `level2-python-instructions.md:48`); it is
+    excluded from this dataclass's `repr()` (`field(repr=False)` below) so
+    it is never accidentally logged via `repr(config)`/`%r`/an uncaught
+    exception's local-variable dump.
     """
 
     host: str
@@ -113,6 +131,11 @@ class ServiceConfig:
     auth_scopes: tuple[str, ...] = ()
     curated_source_base_url: str = _DEFAULT_CURATED_SOURCE_BASE_URL
     curated_source_allow_insecure_http: bool = False
+    passkey_signing_postgres_host: str | None = None
+    passkey_signing_postgres_port: int = _DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT
+    passkey_signing_postgres_database: str | None = None
+    passkey_signing_postgres_user: str | None = None
+    passkey_signing_postgres_password: str | None = field(default=None, repr=False)
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -388,6 +411,46 @@ def _parse_auth_string(raw: str, *, env_var_name: str) -> str:
     return raw
 
 
+def _parse_passkey_signing_postgres_port(raw: str) -> int:
+    """Parse and range-check `PS_PASSKEYSIGNING_POSTGRES_PORT`, failing closed on any bad value.
+
+    Mirrors `_parse_falkordb_port`'s exact validation shape (same integer
+    parse, same `_MIN_PORT`/`_MAX_PORT` range check) -- a separate function,
+    not a reused one, because the error message must name
+    `PS_PASSKEYSIGNING_POSTGRES_PORT`, not `PS_FALKORDB_PORT`.
+    """
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        message = f"PS_PASSKEYSIGNING_POSTGRES_PORT must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if not (_MIN_PORT <= port <= _MAX_PORT):
+        message = (
+            f"PS_PASSKEYSIGNING_POSTGRES_PORT must be between {_MIN_PORT} and {_MAX_PORT}, "
+            f"got {port}"
+        )
+        raise ServiceConfigurationError(message)
+    return port
+
+
+def _parse_passkey_signing_postgres_string(raw: str, *, env_var_name: str) -> str:
+    """Validate a `PS_PASSKEYSIGNING_POSTGRES_HOST`/`_DATABASE`/`_USER`/`_PASSWORD` value.
+
+    Mirrors `_parse_auth_string`'s exact shape (reused across
+    `auth_issuer`/`auth_audience`/`auth_cli_client_id`, the established
+    precedent for one validator shared by several string fields with
+    identical rules): rejects an explicitly-set empty/whitespace-only value
+    rather than silently treating it as unset. Never includes the raw value
+    in its error message -- safe to reuse for `_password` too, since a
+    validation failure here must not leak a partial credential into a raised
+    exception's message.
+    """
+    if not raw.strip():
+        message = f"{env_var_name} must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
 def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
     """Parse `PS_AUTH_SCOPES` into an informational-only tuple of scope names.
 
@@ -489,6 +552,46 @@ def load_config() -> ServiceConfig:
         allow_insecure_http=curated_source_allow_insecure_http,
     )
 
+    passkey_signing_postgres_host_raw = os.environ.get("PS_PASSKEYSIGNING_POSTGRES_HOST")
+    passkey_signing_postgres_host = (
+        _parse_passkey_signing_postgres_string(
+            passkey_signing_postgres_host_raw, env_var_name="PS_PASSKEYSIGNING_POSTGRES_HOST"
+        )
+        if passkey_signing_postgres_host_raw is not None
+        else None
+    )
+    passkey_signing_postgres_port = _parse_passkey_signing_postgres_port(
+        os.environ.get(
+            "PS_PASSKEYSIGNING_POSTGRES_PORT", str(_DEFAULT_PASSKEY_SIGNING_POSTGRES_PORT)
+        )
+    )
+    passkey_signing_postgres_database_raw = os.environ.get("PS_PASSKEYSIGNING_POSTGRES_DATABASE")
+    passkey_signing_postgres_database = (
+        _parse_passkey_signing_postgres_string(
+            passkey_signing_postgres_database_raw,
+            env_var_name="PS_PASSKEYSIGNING_POSTGRES_DATABASE",
+        )
+        if passkey_signing_postgres_database_raw is not None
+        else None
+    )
+    passkey_signing_postgres_user_raw = os.environ.get("PS_PASSKEYSIGNING_POSTGRES_USER")
+    passkey_signing_postgres_user = (
+        _parse_passkey_signing_postgres_string(
+            passkey_signing_postgres_user_raw, env_var_name="PS_PASSKEYSIGNING_POSTGRES_USER"
+        )
+        if passkey_signing_postgres_user_raw is not None
+        else None
+    )
+    passkey_signing_postgres_password_raw = os.environ.get("PS_PASSKEYSIGNING_POSTGRES_PASSWORD")
+    passkey_signing_postgres_password = (
+        _parse_passkey_signing_postgres_string(
+            passkey_signing_postgres_password_raw,
+            env_var_name="PS_PASSKEYSIGNING_POSTGRES_PASSWORD",
+        )
+        if passkey_signing_postgres_password_raw is not None
+        else None
+    )
+
     return ServiceConfig(
         host=host,
         port=port,
@@ -509,4 +612,9 @@ def load_config() -> ServiceConfig:
         auth_scopes=auth_scopes,
         curated_source_base_url=curated_source_base_url,
         curated_source_allow_insecure_http=curated_source_allow_insecure_http,
+        passkey_signing_postgres_host=passkey_signing_postgres_host,
+        passkey_signing_postgres_port=passkey_signing_postgres_port,
+        passkey_signing_postgres_database=passkey_signing_postgres_database,
+        passkey_signing_postgres_user=passkey_signing_postgres_user,
+        passkey_signing_postgres_password=passkey_signing_postgres_password,
     )

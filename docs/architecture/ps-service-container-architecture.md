@@ -189,6 +189,7 @@ graph TB
 | LLM Interface | `ps.service.llminterface` | Route chat/embedding requests to the configured LLM Provider via LiteLLM |
 | Logging | `ps.service.logging` | Provide structured, semantic logging for every component; write JSON entries to file; bind a correlation (run) ID at primary-use-case entry points |
 | Dependency Health | `ps.service.dependencyhealth` | Process-wide registry of whether FalkorDB, LLM Interface, and Cellar/ELI were reachable on their most recent real call; fed by those components' own exception handling, read by Process Harness for `/ready` |
+| Passkey Signing | `ps.service.passkeysigning` | Own WebAuthn relying party for transaction-signing (independent of the OIDC login IdP); PS-Service-owned PostgreSQL store for enrolled signing credentials and pending-approval records; dynamically-bound challenge construction/verification; companion-browser enrollment/signing ceremony pages |
 | Process Harness | `ps.service.main` | Expose `/health` (liveness) and `/ready` (readiness); probe FalkorDB, LLM Interface, and Cellar/ELI once at startup, and confirm every ingestion-required Configuration field resolved; the process composition root (`load_config()`, `uvicorn.run()`) |
 
 ### Domain Concepts to Component Mapping

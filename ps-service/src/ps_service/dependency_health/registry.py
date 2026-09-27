@@ -1,11 +1,13 @@
 """Process-wide registry of whether each real external dependency was reachable on its last call.
 
-Covers FalkorDB, the LLM Interface, and Cellar/ELI. Fed by the same call
-sites that already handle each dependency's exceptions for their own
-purposes (`falkordb_client.check_connectivity`, `graph_writer`'s
-`graph.query()` calls, `llm_interface.completion`/`embedding`,
-`cellar_eli.fetch_xhtml`) — this module adds no probing of its own, it only
-records outcomes those call sites already observe.
+Covers FalkorDB, the LLM Interface, Cellar/ELI, and (issue #131) Passkey
+Signing's own Postgres instance. Fed by the same call sites that already
+handle each dependency's exceptions for their own purposes
+(`falkordb_client.check_connectivity`, `graph_writer`'s `graph.query()`
+calls, `llm_interface.completion`/`embedding`, `cellar_eli.fetch_xhtml`,
+`passkey_signing.store.check_connectivity_from_config`) — this module adds
+no probing of its own, it only records outcomes those call sites already
+observe.
 
 Mirrors `ps_service.logging.facade`'s process-wide-singleton-plus-`reset_for_tests`
 shape rather than living on `app.state`: most callers here (graph_writer,
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 FALKORDB = "falkordb"
 LLM_INTERFACE = "llm_interface"
 CELLAR_ELI = "cellar_eli"
+PASSKEY_SIGNING_POSTGRES = "passkey_signing_postgres"
 
 _lock = threading.Lock()
 _unhealthy: dict[str, str] = {}  # dependency name -> last error message; absent means healthy

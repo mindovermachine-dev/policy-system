@@ -380,6 +380,23 @@ readonly AUTHENTIK_POSTGRES_PORT="5432"
 readonly AUTHENTIK_POSTGRES_USER="authentik"
 readonly AUTHENTIK_POSTGRES_DB="authentik"
 
+# Passkey Signing's own, distinct Postgres instance (issue #131, PLAN.md §4 Slice 1, AC-BI-006) --
+# NEVER shares Authentik's or FalkorDB's credential surface. Key Vault secret name for its own
+# generate-once Postgres password, mirroring AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME's naming
+# convention exactly. The Kubernetes Secret name below must exactly match
+# charts/policy-system/templates/_helpers.tpl's own policy-system.signingPostgresCredentialsSecretName
+# helper's resolved output, and values-prod.yaml's own hardcoded
+# psServiceSigning.postgres.existingSecret literal -- confirmed identical by reading both.
+#
+# Unlike AUTHENTIK_POSTGRES_HOST/PORT/USER/DB above, this script carries no equivalent
+# host/port/user/database constants: ps-service-deployment.yaml sources
+# PS_PASSKEYSIGNING_POSTGRES_HOST/_PORT/_DATABASE/_USER directly from plain, non-secret Helm
+# values (charts/policy-system/values-prod.yaml's psServiceSigning.postgres.database/user, and the
+# chart's own rendered Service name) rather than from this script's Secret -- only the password is
+# actually secret, so only the password needs a deploy-ps.sh-owned value at all.
+readonly SIGNING_POSTGRES_PASSWORD_VAULT_NAME="PS-SERVICE-SIGNING-POSTGRES-PASSWORD"
+readonly SIGNING_POSTGRES_SECRET_NAME="policy-system-signing-postgres-credentials"
+
 # Fixed AKS node shape (AC-BI-011, PLAN.md §0.6) -- not evaluator-tunable, matching the spike's
 # own resolved "testing one deployment shape" decision (scripts/ps-defaults.conf has no
 # conflicting AKS-size field -- confirmed by reading it before adding these). No spike-proven
@@ -1128,6 +1145,42 @@ ensure_authentik_secrets() {
   sync_authentik_secret_to_cluster "$secret_key" "$pg_password"
 }
 
+# ensure_ps_service_signing_secrets <vault_name>: generate-once (never regenerated once present),
+# write-if-changed into Key Vault, then sync the Passkey Signing component's own Postgres password
+# into the cluster as a single, dedicated Kubernetes Secret (issue #131, PLAN.md §4 Slice 1,
+# AC-BI-006/AC-BI-007) -- mirrors ensure_authentik_secrets above exactly (same
+# read-from-Key-Vault -> generate-if-absent -> write-if-changed -> kubectl apply idiom, same
+# reused Key Vault <vault_name>, no new vault), except this component has no equivalent of
+# Authentik's own Django AUTHENTIK_SECRET_KEY -- only one generate-once secret exists here.
+#
+# Deliberately its OWN Key Vault secret name and OWN Kubernetes Secret ($SIGNING_POSTGRES_SECRET_NAME)
+# -- never appended to $AUTHENTIK_SECRET_NAME. The two Postgres instances (Authentik's and Passkey
+# Signing's) must never share a credential surface, matching AC-BI-006's "distinct" framing
+# extended to secrets (see charts/policy-system/templates/signing-postgres-deployment.yaml's own
+# comment on the same point). Unlike Authentik's existingSecret (all-or-nothing: every
+# AUTHENTIK_* value must be baked in because the upstream chart sources 100% of its config via
+# envFrom), ps-service-deployment.yaml consumes PS_PASSKEYSIGNING_POSTGRES_* as discrete env vars,
+# so this Secret only ever needs to carry the one value that's actually secret (the password) --
+# host/port/database/user stay plain, non-secret Helm values (charts/policy-system/values-prod.yaml's
+# psServiceSigning.postgres.database/user).
+ensure_ps_service_signing_secrets() {
+  local vault_name="$1"
+  local pg_password apply_output
+
+  pg_password="$(read_secret_value "$vault_name" "$SIGNING_POSTGRES_PASSWORD_VAULT_NAME")"
+  if [[ -z "$pg_password" ]]; then
+    pg_password="$(generate_random_secret 32)"
+  fi
+
+  write_secret_if_changed "$vault_name" "$SIGNING_POSTGRES_PASSWORD_VAULT_NAME" "$pg_password"
+
+  apply_output="$(kubectl create secret generic "$SIGNING_POSTGRES_SECRET_NAME" \
+    --from-literal="PS_PASSKEYSIGNING_POSTGRES_PASSWORD=$pg_password" \
+    --dry-run=client -o yaml | kubectl apply -f -)"
+  apply_output_changed "$apply_output" && made_changes=true
+  return 0
+}
+
 # release_values_json <issuer> <audience> <cli_client_id> <scopes>: prints the JSON shape of the
 # --set values this script passes to `helm upgrade --install`, in the same structure
 # `helm get values -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly
@@ -1737,6 +1790,8 @@ main() {
   ensure_llm_secret "$vault_name"
   log_step "Syncing Authentik credentials into the cluster"
   ensure_authentik_secrets "$vault_name"
+  log_step "Syncing Passkey Signing Postgres credentials into the cluster"
+  ensure_ps_service_signing_secrets "$vault_name"
 
   # issue #129 (CHANGES.md row F3): the ingress/DNS-label/hostname-resolution steps below moved
   # here, ahead of "Reconciling the Helm release" -- Authentik's own issuer is now a path under PS

@@ -31,6 +31,29 @@ llm:
   # supplied at install time via --set/existingSecret, never committed here.
   provider: azure
 
+psServiceSigning:
+  # Prod-active path: points at the Key-Vault-sourced Secret
+  # scripts/deploy-ps.sh's ensure_ps_service_signing_secrets provisions
+  # (own Secret, never Authentik's) -- this is the *resolved literal* output
+  # of policy-system.signingPostgresCredentialsSecretName (_helpers.tpl) for
+  # this repo's one fixed Helm release name ("policy-system",
+  # scripts/deploy-ps.sh's HELM_RELEASE_NAME), matching
+  # authentik.authentik.existingSecret.secretName's own hardcoded-literal
+  # convention below (Helm never templates values files, so this cannot be a
+  # live `{{ include ... }}` call). Once set, signing-postgres-secret.yaml
+  # renders no Secret of its own — psServiceSigning.postgres.password above
+  # is then dead, local-test-only input.
+  postgres:
+    existingSecret: "policy-system-signing-postgres-credentials"
+    persistence:
+      durableStorageClass:
+        # Prod-active path: Premium SSD, Retain-reclaim StorageClass for this
+        # Postgres volume (AC-BI-006), matching falkordb's and Authentik's own
+        # prod override immediately below. Local-test/kind default
+        # (values.yaml) is false — falls back to the cluster's own default
+        # StorageClass.
+        enabled: true
+
 authentik:
   # Prod-active path: bundled as the production auth broker (invite-only
   # local-account signup), gating the `authentik` Chart.yaml dependency

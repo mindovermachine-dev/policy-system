@@ -15,9 +15,12 @@ Conventions (L2 -> API Patterns):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Request  # noqa: TC002 — FastAPI needs it at runtime (else a 422 body field)
+from fastapi import (
+    Depends,
+    Request,
+)
 
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
@@ -42,16 +45,18 @@ from ps_service.api.restore_orchestration import (
     build_default_restore_from_catalog_dependencies,
 )
 from ps_service.auth import Principal
+from ps_service.config import (
+    ServiceConfig,  # noqa: TC001 -- FastAPI resolves `provide_pending_approval_store`'s own annotation at runtime
+)
 from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,
     build_default_curated_catalog_dependencies,
 )
 from ps_service.logging import bind_run_context
+from ps_service.passkey_signing.store import PendingApprovalStore, PsycopgPendingApprovalStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-    from ps_service.config import ServiceConfig
 
 
 def get_service_config(request: Request) -> ServiceConfig:
@@ -213,6 +218,25 @@ def provide_curated_catalog_dependencies() -> CuratedCatalogDependencies:
         The production :class:`CuratedCatalogDependencies` bundle.
     """
     return build_default_curated_catalog_dependencies()
+
+
+def provide_pending_approval_store(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+) -> PendingApprovalStore:
+    """Return the production `PendingApprovalStore` for the merge-approval gate (issue #131).
+
+    A plain provider (not a generator), overridable in tests via
+    `app.dependency_overrides` with a fake store (`PendingApprovalStore` is a
+    `Protocol` -- see `ps_service.passkey_signing.store`). Unlike every other
+    provider in this module, this one takes `config` itself as a
+    FastAPI-injected sub-dependency: `PsycopgPendingApprovalStore` needs
+    `config` at construction (it opens no connection eagerly -- see that
+    class's own docstring -- so constructing one per request is cheap).
+
+    Returns:
+        A production `PsycopgPendingApprovalStore` bound to `config`.
+    """
+    return PsycopgPendingApprovalStore(config)
 
 
 def provide_change_check_dependencies() -> ChangeCheckDependencies:

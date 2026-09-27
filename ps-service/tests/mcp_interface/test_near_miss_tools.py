@@ -28,69 +28,73 @@ Delegates in-process to `run_resolve_near_miss` (D-DELEGATE) via the same
 documented shape). The `merge` decision and its own failure states are
 Slices 3.3/3.4's scope, not this one.
 
-Slice 3.3: `near_misses_resolve`'s `merge` path, plus AC-BI-006's
-irreversibility guarantee. CHANGES.md H2 reverses D-MERGE-WARN's earlier
-rejection of the MCP SDK's `Resolve`/`Elicit` mechanism: `near_misses_resolve`
-gains a `confirmed: Annotated[bool | MergeConfirmation, Resolve(_confirm_merge)]`
-parameter (`mcp_server._confirm_merge`) that resolves instantly (`True`, no
-round trip) for `decision="keep-separate"` -- Slice 3.2's own test above is
-unmodified and still passes, proving this -- and returns an `Elicit(...)`
-marker for `decision="merge"`, forcing a real elicitation round trip before
-the tool body ever runs. `test_merge_pauses_for_elicitation_then_executes_once_confirmed`
-is this issue's primary AC-BI-006 proof (CHANGES.md H2's own "supersedes the
-docstring test as sole evidence -- keep both"): round one (no prior answer)
-returns an `InputRequiredResult` and never calls the fake `resolve_review`;
-round two (an accepted `{"confirm": "merge"}` answer for the same wire key,
-replaying round one's own `request_state`) executes the merge exactly once
-with `winner_id`/`loser_id` populated. `test_keep_separate_never_elicits_single_round_trip`
-is H2's third, explicit proof that `keep-separate` never enters this
-transport at all. `test_docstring_states_merge_is_irreversible` is the
-still-valid, now-secondary docstring-content proof (PLAN.md's own Slice 3.3
-text) -- `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher` is
-this suite's only existing precedent for asserting on a tool's own listed
-metadata (there `input_schema`, here `description`); no test in this suite
-asserted on a tool's description text before this one.
+Slice 3.3 (issue #35): `near_misses_resolve`'s `merge` path originally gated
+`decision="merge"` behind a typed-confirm MCP elicitation round trip
+(`MergeConfirmation`/`_confirm_merge`, CHANGES.md H2). Issue #131 removes
+that mechanism entirely (AC-BI-009) and replaces it with a signed-passkey
+pending-approval flow: `decision="merge"` now returns a pending approval
+(`pending_approval_id`/`approval_url`/`expires_at`) immediately, with no
+graph write and no elicitation round trip at all -- see the "issue #131"
+section below for that flow's own tests.
+`test_docstring_states_merge_is_irreversible` is kept, updated for the new
+flow's own docstring text (the underlying merge write is still IRREVERSIBLE
+once it eventually executes, which is exactly why it is now gated behind a
+signed approval rather than a typed-confirm round trip).
+`test_domain_concepts_tool.py::test_tool_listed_alongside_cypher` is this
+suite's only other precedent for asserting on a tool's own listed metadata
+(there `input_schema`, here `description`).
 
-`_elicitation_context()` (this file, new) builds a `Context` that negotiates
-the `>= 2026-07-28` protocol revision with the elicitation form capability
-declared -- the shape `resolve_arguments`/`_fulfil`
-(`mcp/server/mcpserver/resolve.py`, read in full before writing this) needs
-to actually batch the merge's question into an `InputRequiredResult` on round
-one and resume from `request_state`/`input_responses` on round two, instead
-of trying (and failing, with no real session) to send a synchronous
-`elicitation/create` request the way a bare, context-less
-`server.call_tool(...)` call would for a resolver that returns a marker.
-Every other tool/decision in this suite keeps calling
-`server.call_tool(name, args)` with no context at all, exactly as before --
-that default bare `Context` has `protocol_version is None`, so
-`_confirm_merge`'s `True` (non-marker) return for `keep-separate` is accepted
-without ever touching `context.session`, confirmed by reading `_resolve`'s
-own `_is_marker(result)` branch.
+Issue #131 (signed passkey approval before near-miss merges): PLAN.md's
+`_resolve_signing_actor()`/`create_merge_pending_approval`/
+`check_pending_approval` design. `_verified_actor()` (this file, new) binds
+a real `AccessToken` directly onto the MCP SDK's own
+`mcp.server.auth.middleware.auth_context.auth_context_var` contextvar --
+the same one `get_access_token()` (`_resolve_principal`/
+`_resolve_signing_actor`) reads, normally populated by `AuthContextMiddleware`
+from a real HTTP request (`test_mcp_auth.py`'s own end-to-end proof of that
+wiring). Binding it directly here, rather than driving a full
+`initialize`/`notifications/initialized`/`tools/call` JSON-RPC handshake
+through a `TestClient`, is sufficient because `near_misses_resolve`'s merge
+branch and `near_misses_check_approval` never touch `ctx.session` at all
+(no elicitation, no server-initiated request) -- only `get_access_token()`
+and, for the merge branch, `ctx.request_context.request` for the approval
+link's `{base_url}` (falls back to a fixed placeholder when no context is
+bound at all, exercised by this file's own bare `server.call_tool(name,
+args)` calls with no context argument, which is every call in this file
+including the new ones below).
 
-Slice 3.4 (this issue's last slice for Group 3): failure-state completeness
-for both tools, per PLAN.md's D-SANITIZE-UNEXPECTED table and
-`near_miss_review_orchestration.py`'s own module docstring (lines 25-46).
-Read directly against `run_resolve_near_miss`'s own body (same file,
-lines 172-182): `dependencies.resolve_review` raising
-`StalePendingReviewError` is caught *inside* `run_resolve_near_miss` itself
-and re-raised as `PendingReviewNotFoundError` with a dedicated "stale"
-message -- `StalePendingReviewError` never escapes to this module's own
-`near_misses_resolve` tool body. So, unlike PLAN.md's slice text (written
-before this confirmation), the tool body needs exactly **one** except
-clause (`except PendingReviewNotFoundError`), not two -- it already covers
-both the not-found/already-resolved case (`resolve_review` returning `None`)
-and the merge-only stale-reference case (`resolve_review` raising
-`StalePendingReviewError`), distinguished only by `str(exc)`'s message text,
-never by exception type. Two tests are still written for this one except
-clause (`test_not_found_or_already_resolved_...`/
-`test_merge_stale_reference_...`) because they exercise two genuinely
-different fake-dependency behaviours (a `None` return vs. a raised
-`StalePendingReviewError`, the latter needing a full `merge`-decision
-elicitation round trip) and because the skill's own error-state table names
-them as two distinct user-facing conditions (ps-qna's "never collapse
-distinct error states" guardrail) -- not because the production code
-branches on them separately. Graph-unavailable reuses the existing generic
-`_sanitize_graph_open` helper via a new `_sanitize_near_miss_review_graph_opens`
+`test_merge_pauses_for_elicitation_then_executes_once_confirmed` (the old
+elicitation-round-trip test) and `test_keep_separate_never_elicits_single_round_trip`
+(its third-proof companion) are both removed outright, along with the
+`_elicitation_context()`/`_FakeSession` helpers and the `mcp.types`
+elicitation imports they used -- the mechanism they exercised
+(`MergeConfirmation`/`_confirm_merge`/`Elicit`/`Resolve`) no longer exists in
+`mcp_server.py` at all, so keeping either test around (even passing, by
+accident of dead code) would assert on a mechanism that is gone; deleting
+them, not weakening them, is this file's explicit proof that the old gate
+is really gone (AC-BI-009), alongside the new
+`test_merge_returns_pending_approval_without_executing_the_merge` below,
+which is this issue's own defining test (PLAN.md §4 Slice 1).
+`test_confirmed_gate_is_not_part_of_the_client_visible_schema` is renamed
+`test_ctx_parameter_is_not_part_of_the_client_visible_schema` and now
+proves the *new* auto-injected `ctx: Context` parameter (needed for the
+approval link's `{base_url}`) is excluded from the client-visible schema,
+the same way the old resolver-filled `confirmed` parameter was.
+
+Slice 3.4 (Group 3, issue #35/#126): failure-state completeness for both
+tools' `keep-separate` paths, per PLAN.md's D-SANITIZE-UNEXPECTED table and
+`near_miss_review_orchestration.py`'s own module docstring. Historical note:
+this slice originally also covered a merge-only "stale reference" case
+(`dependencies.resolve_review` raising `StalePendingReviewError`, re-raised
+as `PendingReviewNotFoundError` with a dedicated "stale" message) -- that
+test (`test_resolve_merge_stale_reference_returns_named_error`) is removed
+by issue #131, since `near_misses_resolve`'s merge branch no longer calls
+`resolve_review` at all (see the "issue #131" section above); the analogous
+early-existence check for merge now lives in
+`test_resolve_merge_unresolved_review_not_found_returns_named_error`
+above, and the exact stale-reference scenario becomes a later slice's
+execution-time concern. Graph-unavailable reuses the existing generic
+`_sanitize_graph_open` helper via `_sanitize_near_miss_review_graph_opens`
 (mirrors `_sanitize_pipeline_graph_opens`/`_sanitize_change_check_graph_opens`
 exactly). The residual unexpected-exception safety net is `_run_mcp_action`'s
 own existing catch-all (D-AUDIT-WRAPPER point 4) -- no new production code,
@@ -121,48 +125,148 @@ build_fake_change_check_dependencies` already does.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import hashlib
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+import secrets
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from api.test_routes_near_misses import (
     _fake_dependencies,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
     _record,  # pyright: ignore[reportPrivateUsage]  -- same reuse, mirrors `_fake_dependencies`' own justification immediately above
 )
-from mcp.server.context import ServerRequestContext
-from mcp.server.mcpserver.context import Context
-from mcp.types import (
-    CallToolResult,
-    ClientCapabilities,
-    ElicitationCapability,
-    ElicitRequest,
-    ElicitResult,
-    FormElicitationCapability,
-    InputRequiredResult,
-    InputResponseRequestParams,
-    TextContent,
-)
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+from mcp.types import CallToolResult, TextContent
 
-from ps_service.company_merge.errors import StalePendingReviewError
 from ps_service.company_merge.models import ResolveOutcome
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
+from ps_service.passkey_signing.models import PendingApprovalRow
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Generator
     from pathlib import Path
     from typing import Literal
 
     import pytest
-    from mcp.server.session import ServerSession
-    from mcp.types import InputResponses
 
     from ps_service.company_merge.falkordb_client import GraphHandle
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
+
+_ACTOR_SUBJECT = "actor-sub-1"
+_ACTOR_ISSUER = "https://issuer.example.com/"
+
+
+@contextlib.contextmanager
+def _verified_actor(*, sub: str = _ACTOR_SUBJECT, iss: str = _ACTOR_ISSUER) -> Generator[None]:
+    """Bind a real, verified `AccessToken` onto the MCP SDK's own auth contextvar.
+
+    `_resolve_signing_actor`/`_resolve_principal` both read `get_access_token()`
+    off this exact contextvar (`mcp.server.auth.middleware.auth_context`),
+    normally populated by `AuthContextMiddleware` from a real HTTP request
+    (`test_mcp_auth.py`'s own end-to-end proof of that wiring). Binding it
+    directly here -- rather than driving a full JSON-RPC handshake through a
+    `TestClient` -- is sufficient for every test in this file that uses it,
+    since none of them ever touch `ctx.session` (no elicitation, no
+    server-initiated request).
+    """
+    access_token = AccessToken(
+        token="test-token", client_id="test-client", scopes=[], subject=sub, claims={"iss": iss}
+    )
+    token = auth_context_var.set(AuthenticatedUser(access_token))
+    try:
+        yield
+    finally:
+        auth_context_var.reset(token)
+
+
+def _fake_store_factory(store: object) -> Callable[[object], object]:
+    """A `PsycopgPendingApprovalStore`-shaped factory returning the same fake store every call.
+
+    Monkeypatched onto `mcp_server.PsycopgPendingApprovalStore` -- the tool
+    bodies call it as `PsycopgPendingApprovalStore(config)`, so this must
+    accept (and ignore) one positional argument. Typed loosely (`object`,
+    not `PendingApprovalStore`) so it also accepts this file's own
+    deliberately-narrower-than-the-Protocol `_RaisingStore` fake below,
+    which only needs `create_pending_approval` to raise.
+    """
+    return lambda _config: store
+
+
+_CODE_TOKEN_BYTES = 32
+_NONCE_BYTES = 32
+_EXPIRY_WINDOW = timedelta(minutes=15)
+
+
+@dataclasses.dataclass
+class _FakePendingApprovalStore:
+    """In-memory `PendingApprovalStore` (structural `Protocol` match, no real Postgres).
+
+    A local, private copy of `tests/passkey_signing/_fakes.py`'s own
+    `FakePendingApprovalStore` (same code/nonce/expiry generation), not a
+    cross-package import of it: `ps-service/tests/passkey_signing/` sorts
+    alphabetically *after* `ps-service/tests/mcp_interface/`, and pytest's
+    `--import-mode=importlib` (`pyproject.toml`) only makes a package's
+    submodules resolvable as real imports once pytest has itself collected
+    something from that package first (confirmed empirically: a bare
+    `pytest ps-service/tests/mcp_interface/test_near_miss_tools.py` run,
+    with no other test file collected first, cannot resolve
+    `from passkey_signing._fakes import ...` at all) -- every existing
+    cross-package import in this test suite already only ever points at an
+    alphabetically-*earlier* package (`mcp_interface` -> `api`,
+    `ingestion` -> `change_monitor`) for exactly this reason. Duplicating
+    this ~20-line fake here keeps this file's collection independent of
+    collection order/scope.
+    """
+
+    _rows_by_id: dict[str, PendingApprovalRow] = dataclasses.field(default_factory=dict)
+
+    def create_pending_approval(
+        self,
+        *,
+        tool_name: str,
+        normalized_args: dict[str, object],
+        actor_subject: str,
+        actor_issuer: str,
+        display_summary: dict[str, object],
+    ) -> tuple[PendingApprovalRow, str]:
+        code = secrets.token_urlsafe(_CODE_TOKEN_BYTES)
+        code_hash = hashlib.sha256(code.encode()).digest()
+        nonce = secrets.token_bytes(_NONCE_BYTES)
+        created_at = datetime.now(UTC)
+        row = PendingApprovalRow(
+            id=str(uuid.uuid4()),
+            code_hash=code_hash,
+            tool_name=tool_name,
+            normalized_args=normalized_args,
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            nonce=nonce,
+            display_summary=display_summary,
+            status="pending",
+            outcome=None,
+            created_at=created_at,
+            expires_at=created_at + _EXPIRY_WINDOW,
+        )
+        self._rows_by_id[row.id] = row
+        return row, code
+
+    def get_by_id(self, pending_approval_id: str) -> PendingApprovalRow | None:
+        return self._rows_by_id.get(pending_approval_id)
+
+    def get_by_code_hash(self, code_hash: bytes) -> PendingApprovalRow | None:
+        for row in self._rows_by_id.values():
+            if row.code_hash == code_hash:
+                return row
+        return None
 
 
 def _call_near_misses_list() -> CallToolResult:
@@ -270,6 +374,9 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         "decision": "keep-separate",
         "winner_id": None,
         "loser_id": None,
+        "pending_approval_id": None,
+        "approval_url": None,
+        "expires_at": None,
     }
     assert recorded_calls == [("review_aaa", "keep-separate")]
 
@@ -291,13 +398,11 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
 
 
 def test_docstring_states_merge_is_irreversible() -> None:
-    """AC-BI-006, docstring-content half (PLAN.md's own Slice 3.3 text, kept
-    as a secondary signal per CHANGES.md H2 -- the elicitation round-trip
-    test below is the primary proof now). Mirrors
-    `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher`'s own
-    `list_tools()` precedent for asserting on a tool's listed metadata --
-    that test checks `input_schema`; no existing test in this suite asserts
-    on a tool's `description` text, so this is the first.
+    """The underlying merge write is still IRREVERSIBLE once it eventually
+    executes -- this is exactly why issue #131 gates it behind a signed
+    passkey approval rather than the old typed-confirm elicitation round
+    trip. Mirrors `test_domain_concepts_tool.py::test_tool_listed_alongside_cypher`'s
+    own `list_tools()` precedent for asserting on a tool's listed metadata.
     """
     tools = asyncio.run(mcp_server.server.list_tools())
     [tool] = [t for t in tools if t.name == "near_misses_resolve"]
@@ -305,14 +410,13 @@ def test_docstring_states_merge_is_irreversible() -> None:
     assert "IRREVERSIBLE" in tool.description
 
 
-def test_confirmed_gate_is_not_part_of_the_client_visible_schema() -> None:
-    """CHANGES.md H2's own claim, verified directly (not just cited): a
-    resolver-filled parameter (`confirmed`) is excluded from the tool's
-    client-visible JSON argument schema -- confirmed by reading
-    `Tool.from_function` (`mcp/server/mcpserver/tools/base.py`): resolved
-    parameter names are added to `skip_names` before `func_metadata(...)`
-    builds `arg_model`, so a calling model never has to (and cannot) supply
-    `confirmed` directly.
+def test_ctx_parameter_is_not_part_of_the_client_visible_schema() -> None:
+    """The SDK's auto-injected `ctx: Context` parameter (needed for the
+    approval link's `{base_url}`, PLAN.md §2.2 step 4) must never leak into
+    the tool's client-visible JSON argument schema -- mirrors the old,
+    now-removed `confirmed` resolver-parameter's own exclusion proof (the
+    mechanism differs -- Context injection, not `Resolve(...)` -- but the
+    client-visible contract this protects is the same).
     """
     tools = asyncio.run(mcp_server.server.list_tools())
     [tool] = [t for t in tools if t.name == "near_misses_resolve"]
@@ -320,78 +424,19 @@ def test_confirmed_gate_is_not_part_of_the_client_visible_schema() -> None:
     assert set(tool.input_schema.get("required", [])) == {"review_id", "decision"}
 
 
-@dataclass
-class _FakeSession:
-    """Minimal duck-typed stand-in for `ServerSession`.
-
-    `_confirm_merge`'s elicitation gate, on the `>= 2026-07-28` protocol path
-    `_elicitation_context()` always negotiates, only ever reads
-    `context.client_capabilities` (which routes through
-    `session.client_capabilities`) -- confirmed by reading
-    `mcp/server/mcpserver/resolve.py`'s `_fulfil`/`_require_capability` in
-    full before writing this fake. Nothing else on `ServerSession` is ever
-    touched by this code path, so nothing else needs faking here (mirrors
-    `test_routes_near_misses.py`'s own `_FakeGraphHandle` -- a fake as narrow
-    as the code path under test actually needs).
-    """
-
-    client_capabilities: ClientCapabilities
+# --- issue #131: signed passkey approval before near-miss merges -------------
 
 
-def _elicitation_context(
-    *, input_responses: InputResponses | None = None, request_state: str | None = None
-) -> Context[dict[str, object], object]:
-    """Build a `Context` that negotiates the `>= 2026-07-28` `InputRequiredResult`
-    transport, with the elicitation form capability declared.
-
-    This is the shape `resolve_arguments`/`_fulfil` need to actually batch
-    `_confirm_merge`'s question into an `InputRequiredResult` on round one and
-    resume it from `request_state`/`input_responses` on round two -- a bare,
-    context-less `server.call_tool(...)` call (every other test in this
-    suite) has `protocol_version is None`, which routes a resolver's `Elicit`
-    marker into the *synchronous* `ctx.elicit()` path instead
-    (`resolve.py::_fulfil`'s `if not res.input_required` branch) and fails
-    outright with no real session -- confirmed directly by running this
-    scenario against a bare `server.call_tool(...)` call before writing this
-    helper (it raises `ToolError` wrapping a `Context is not available
-    outside of a request` `ValueError`, exactly as `resolve.py`'s own code
-    predicts).
-    """
-    request_context: ServerRequestContext[dict[str, object], object] = ServerRequestContext(
-        session=cast(
-            "ServerSession",
-            _FakeSession(
-                client_capabilities=ClientCapabilities(
-                    elicitation=ElicitationCapability(form=FormElicitationCapability())
-                )
-            ),
-        ),
-        lifespan_context={},
-        protocol_version="2026-07-28",
-        method="tools/call",
-    )
-    input_params = (
-        InputResponseRequestParams(input_responses=input_responses, request_state=request_state)
-        if input_responses is not None or request_state is not None
-        else None
-    )
-    return Context(
-        request_context=request_context, mcp_server=mcp_server.server, input_params=input_params
-    )
-
-
-def test_merge_pauses_for_elicitation_then_executes_once_confirmed(
+def test_merge_returns_pending_approval_without_executing_the_merge(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """CHANGES.md H2's primary AC-BI-006 proof: a real elicitation round trip
-    gates `decision="merge"`, not just docstring text.
-
-    1. `decision="merge"` with no prior answer returns an `InputRequiredResult`
-       and never calls the fake `resolve_review` delegate.
-    2. Re-invoking with an accepted `{"confirm": "merge"}` answer for the
-       same wire key (replaying round one's own `request_state`) executes the
-       merge exactly once, with `winner_id`/`loser_id` populated (Slice 3.3's
-       own "merge happy path" requirement, PLAN.md).
+    """PLAN.md §4 Slice 1's own defining test: calling `near_misses_resolve`
+    with `decision="merge"` for a real, authenticated caller returns a
+    pending approval immediately -- no elicitation, no `confirmed` argument
+    -- and never calls the fake `resolve_review` delegate at all, proving
+    the graph is left completely unchanged (reusing the same
+    `_fake_dependencies`/`_record` merge-fixture setup the old, now-removed
+    elicitation test used).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
@@ -410,51 +455,28 @@ def test_merge_pauses_for_elicitation_then_executes_once_confirmed(
             loser_id="capability_incoming_a",
         )
 
-    dependencies, _ = _fake_dependencies((), resolve=_resolve)
+    record = _record("review_aaa")
+    dependencies, _ = _fake_dependencies((record,), resolve=_resolve)
     monkeypatch.setattr(
         mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
     )
-
-    round_one = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve",
-            {"review_id": "review_aaa", "decision": "merge"},
-            _elicitation_context(),
-        )
+    monkeypatch.setattr(
+        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
     )
 
-    assert isinstance(round_one, InputRequiredResult)
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "merge")
+
+    assert result.is_error is False
+    body = json.loads(_text(result))
+    assert set(body) == {"pending_approval_id", "approval_url", "expires_at"}
+    assert body["pending_approval_id"]
+    assert body["approval_url"]
+    assert body["expires_at"]
+    # The loser node is never touched and no edge is re-pointed: the fake
+    # `resolve_review` delegate above -- the only code path that would ever
+    # perform that write -- is never called.
     assert recorded_calls == []
-
-    requests = round_one.input_requests or {}
-    [wire_key] = list(requests)
-    elicit_request = requests[wire_key]
-    assert isinstance(elicit_request, ElicitRequest)
-    assert elicit_request.params.message == mcp_server._MERGE_WARNING  # pyright: ignore[reportPrivateUsage]  -- asserting the exact client-visible elicitation text, same convention as the docstring test above
-
-    input_responses: InputResponses = {
-        wire_key: ElicitResult(action="accept", content={"confirm": "merge"})
-    }
-    round_two = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve",
-            {"review_id": "review_aaa", "decision": "merge"},
-            _elicitation_context(
-                input_responses=input_responses, request_state=round_one.request_state
-            ),
-        )
-    )
-
-    assert isinstance(round_two, CallToolResult)
-    assert round_two.is_error is False
-    body = json.loads(_text(round_two))
-    assert body == {
-        "review_id": "review_aaa",
-        "decision": "merge",
-        "winner_id": "capability_existing_a",
-        "loser_id": "capability_incoming_a",
-    }
-    assert recorded_calls == [("review_aaa", "merge")]
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
@@ -463,56 +485,250 @@ def test_merge_pauses_for_elicitation_then_executes_once_confirmed(
         for line in all_lines
         if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
     ]
-    # Round one never reaches the tool body at all (the resolver alone
-    # answers `Tool.run`), so only round two's own started/succeeded pair is
-    # logged here -- one call, one audited action, matching the one real
-    # `resolve_review` invocation asserted above.
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert len({line["run_id"] for line in mcp_lines}) == 1
-    for line in mcp_lines:
-        assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-def test_keep_separate_never_elicits_single_round_trip(
+def test_merge_without_a_real_authenticated_caller_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CHANGES.md H2's third proof: `decision="keep-separate"` never enters
-    the elicitation transport at all -- one round trip, unchanged from Slice
-    3.2's own behavior, proven here explicitly (not just implied by the
-    unmodified passing of `test_keep_separate_resolves_with_winner_and_loser_left_none`
-    above). Uses the plain, context-less `server.call_tool(...)` call every
-    other tool in this suite uses -- no `>= 2026-07-28` transport negotiated
-    at all -- since `_confirm_merge` never returns a marker for this
-    decision, so `context.session` is never touched (confirmed by reading
-    `resolve.py::_resolve`'s `_is_marker(result)` branch).
+    """AC-BI-002: a caller with no real, verified actor identity -- here, the
+    local-test bypass alone, with no `AccessToken` ever bound -- gets a
+    clear error, never a pending approval. No dependencies/store faking is
+    needed: this check runs before either is ever touched.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
 
-    recorded_calls: list[tuple[str, str]] = []
+    result = _call_near_misses_resolve("review_aaa", "merge")
 
-    def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph
-        recorded_calls.append((review_id, decision))
-        return ResolveOutcome(review_id=review_id, decision=decision)
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "authenticat" in text.lower()
 
-    dependencies, _ = _fake_dependencies((), resolve=_resolve)
+
+def test_resolve_merge_unresolved_review_not_found_returns_named_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLAN.md §2.2 step 2's early existence check: a `review_id` absent from
+    the unresolved-reviews listing is rejected with the same
+    `PendingReviewNotFoundError` message `keep-separate` already uses,
+    before any Postgres row is created. Supersedes the old, now-removed
+    `test_resolve_merge_stale_reference_returns_named_error`: that test's
+    scenario -- a review whose referenced node a PRIOR merge already deleted
+    -- is a later slice's authoritative execution-time check now (this
+    Slice 1 create step never calls `resolve_review` at all).
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    dependencies, _ = _fake_dependencies(())  # no unresolved reviews at all
     monkeypatch.setattr(
         mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
     )
 
-    result = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve", {"review_id": "review_ccc", "decision": "keep-separate"}
-        )
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_missing", "merge")
+
+    assert result.is_error is False
+    assert _text(result) == "error: no unresolved PendingReview with id 'review_missing'"
+
+
+def test_resolve_merge_graph_unavailable_returns_named_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-SANITIZE-UNEXPECTED, merge branch: an unreachable graph during the
+    early existence check sanitises to the same fixed message every other
+    tool uses, via the same `_sanitize_near_miss_review_graph_opens` wrapper.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    dependencies, _ = _fake_dependencies(())
+
+    def _raising_open(config: object) -> object:
+        _ = config
+        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
+        raise ConnectionError(message)
+
+    broken_dependencies = dataclasses.replace(dependencies, open_single_tenant_graph=_raising_open)
+    monkeypatch.setattr(
+        mcp_server, "build_default_near_miss_review_dependencies", lambda: broken_dependencies
     )
 
-    assert not isinstance(result, InputRequiredResult)
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "merge")
+
+    assert result.is_error is False
+    assert _text(result) == "error: the policy graph database is not reachable"
+
+
+def test_resolve_merge_residual_unexpected_exception_returns_generic_error(
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+) -> None:
+    """D-AUDIT-WRAPPER point 4: an exception the merge branch does not itself
+    sanitise (here, the store's `create_pending_approval` raising something
+    unclassified) is caught by `_run_mcp_action`'s residual safety net --
+    the fixed, generic message, never the raw exception text.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    emitter = configure()
+    record = _record("review_aaa")
+    dependencies, _ = _fake_dependencies((record,))
+    monkeypatch.setattr(
+        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
+    )
+
+    class _RaisingStore:
+        def create_pending_approval(self, **kwargs: object) -> object:
+            _ = kwargs
+            message = "boom -- must never reach the caller"
+            raise RuntimeError(message)
+
+    monkeypatch.setattr(
+        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_RaisingStore())
+    )
+
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "merge")
+
+    assert result.is_error is False
+    assert _text(result) == "error: an unexpected error occurred"
+    emitter.flush()
+    all_lines = read_lines(resolve_default_log_path())
+    lines = [
+        line
+        for line in all_lines
+        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
+    ]
+    assert [line["outcome"] for line in lines] == ["started", "failed"]
+    assert "boom -- must never reach the caller" in str(lines[-1].get("detail"))
+
+
+def test_check_approval_reports_pending_for_a_freshly_created_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`near_misses_check_approval` reports `status="pending"` right after
+    `near_misses_resolve`'s merge branch creates the approval -- the same
+    store instance backs both calls, exactly as it would in production
+    (one Postgres instance, two tool calls).
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    record = _record("review_aaa")
+    dependencies, _ = _fake_dependencies((record,))
+    monkeypatch.setattr(
+        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
+    )
+    store = _FakePendingApprovalStore()
+    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+
+    with _verified_actor():
+        resolve_result = _call_near_misses_resolve("review_aaa", "merge")
+        pending_approval_id = json.loads(_text(resolve_result))["pending_approval_id"]
+
+        check_result = asyncio.run(
+            mcp_server.server.call_tool(
+                "near_misses_check_approval", {"pending_approval_id": pending_approval_id}
+            )
+        )
+
+    assert isinstance(check_result, CallToolResult)
+    assert check_result.is_error is False
+    body = json.loads(_text(check_result))
+    assert body["pending_approval_id"] == pending_approval_id
+    assert body["status"] == "pending"
+    assert body["review_id"] == "review_aaa"
+    assert body["decision"] == "merge"
+    assert body["winner_id"] is None
+    assert body["loser_id"] is None
+
+
+def test_check_approval_unknown_id_gets_generic_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    monkeypatch.setattr(
+        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
+    )
+
+    with _verified_actor():
+        result = asyncio.run(
+            mcp_server.server.call_tool(
+                "near_misses_check_approval", {"pending_approval_id": "does-not-exist"}
+            )
+        )
+
     assert isinstance(result, CallToolResult)
     assert result.is_error is False
-    assert recorded_calls == [("review_ccc", "keep-separate")]
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "no pending approval" in text
+
+
+def test_check_approval_unauthenticated_caller_gets_generic_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLAN.md §2.3's fail-closed rule applied to the read side: a caller
+    with no real actor identity can never poll any pending approval, not
+    even to learn that a real one exists -- the same generic message an
+    unknown id gets, never a distinct "unauthenticated" message here (that
+    distinction is `near_misses_resolve`'s own, on the write side).
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _FakePendingApprovalStore()
+    row, _code = store.create_pending_approval(
+        tool_name="near_misses_resolve",
+        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={},
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+
+    result = asyncio.run(
+        mcp_server.server.call_tool("near_misses_check_approval", {"pending_approval_id": row.id})
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "no pending approval" in text
+
+
+def test_check_approval_wrong_actor_gets_generic_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLAN.md §2.3's ownership check: a different, but still real,
+    authenticated caller gets the identical generic not-found error -- never
+    a distinct "not yours" message that would leak the row's existence.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _FakePendingApprovalStore()
+    row, _code = store.create_pending_approval(
+        tool_name="near_misses_resolve",
+        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={},
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+
+    with _verified_actor(sub="someone-else", iss=_ACTOR_ISSUER):
+        result = asyncio.run(
+            mcp_server.server.call_tool(
+                "near_misses_check_approval", {"pending_approval_id": row.id}
+            )
+        )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "no pending approval" in text
 
 
 # --- Slice 3.4: failure-state completeness for both tools --------------------
@@ -620,77 +836,6 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
 
     assert result.is_error is False
     assert _text(result) == "error: no unresolved PendingReview with id 'review_missing'"
-    emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "near_misses_resolve"
-    ]
-    assert [line["outcome"] for line in lines] == ["started", "failed"]
-    assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in lines)
-
-
-def test_resolve_merge_stale_reference_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
-) -> None:
-    """D-SANITIZE-UNEXPECTED (merge-only row): `dependencies.resolve_review`
-    raising `StalePendingReviewError` (the review's incoming/existing node
-    was already deleted by a prior merge) is caught *inside*
-    `run_resolve_near_miss` itself and re-raised as
-    `PendingReviewNotFoundError` with a dedicated "stale" message (confirmed
-    by reading `near_miss_review_orchestration.py`'s own body, lines
-    172-182) -- `near_misses_resolve`'s own body catches that same
-    `PendingReviewNotFoundError` type (one except clause covers both this
-    and the plain not-found case above) and returns `error: <str(exc)>`
-    verbatim. Exercises the full elicitation round trip since this is the
-    `merge` decision: round one pauses, round two (confirmed) runs the body
-    and hits the stale exception before any write.
-    """
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    emitter = configure()
-
-    def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph, decision
-        raise StalePendingReviewError(review_id)
-
-    dependencies, _ = _fake_dependencies((), resolve=_resolve)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
-
-    round_one = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve",
-            {"review_id": "review_stale", "decision": "merge"},
-            _elicitation_context(),
-        )
-    )
-    assert isinstance(round_one, InputRequiredResult)
-
-    requests = round_one.input_requests or {}
-    [wire_key] = list(requests)
-    input_responses: InputResponses = {
-        wire_key: ElicitResult(action="accept", content={"confirm": "merge"})
-    }
-    round_two = asyncio.run(
-        mcp_server.server.call_tool(
-            "near_misses_resolve",
-            {"review_id": "review_stale", "decision": "merge"},
-            _elicitation_context(
-                input_responses=input_responses, request_state=round_one.request_state
-            ),
-        )
-    )
-
-    assert isinstance(round_two, CallToolResult)
-    assert round_two.is_error is False
-    text = _text(round_two)
-    assert text.startswith("error: ")
-    assert "no longer exists" in text
-    assert "stale" in text
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
     lines = [

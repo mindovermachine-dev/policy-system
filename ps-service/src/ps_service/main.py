@@ -36,6 +36,7 @@ from ps_service.dependency_health import (
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
+    PASSKEY_SIGNING_POSTGRES,
     all_healthy,
     is_healthy,
 )
@@ -50,6 +51,14 @@ from ps_service.llm_interface import (
 )
 from ps_service.logging.facade import configure, emit_log_entry
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH, build_streamable_http_app
+from ps_service.passkey_signing.migration_runner import apply_pending_migrations
+from ps_service.passkey_signing.router import build_passkey_signing_router
+from ps_service.passkey_signing.store import (
+    check_connectivity_from_config as check_passkey_signing_postgres_connectivity,
+)
+from ps_service.passkey_signing.store import (
+    connect_from_config as connect_passkey_signing_postgres_from_config,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -112,14 +121,17 @@ class _MaxBodySizeMiddleware:
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
-_READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI)
+_READY_DEPENDENCIES = (FALKORDB, LLM_INTERFACE, CELLAR_ELI, PASSKEY_SIGNING_POSTGRES)
 
 # Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only
 # being named in `unhealthy_dependencies` (issue #75). A single-element tuple today
 # (FalkorDB only), but `_check_dependencies_at_startup`/`_retry_gating_dependencies`
 # below are written against this set, not against FalkorDB by name, so a future
 # gating dependency (e.g. an identity provider) is added here and inherits both
-# functions' behavior unchanged (issue #124).
+# functions' behavior unchanged (issue #124). Passkey Signing Postgres (issue #131)
+# is deliberately NOT added here (PLAN.md §0.8): an outage of this optional,
+# pilot-scope instance must never block `/ready` for the rest of the system --
+# only the one gated merge path degrades.
 _GATING_DEPENDENCIES = (FALKORDB,)
 
 
@@ -167,18 +179,55 @@ def _refuse_non_loopback_bypass_bind(config: ServiceConfig) -> None:
 def _all_dependency_probes(
     config: ServiceConfig,
 ) -> tuple[tuple[str, Callable[[], None]], ...]:
-    """The fixed (name, probe) pairs for FalkorDB, LLM Interface, and Cellar/ELI.
+    """The fixed (name, probe) pairs for the four tracked dependencies.
+
+    Covers FalkorDB, LLM Interface, Cellar/ELI, and Passkey Signing Postgres.
 
     The single source of truth both `_check_dependencies_at_startup` (probes
-    all three, unconditionally) and `_retry_gating_dependencies` (re-probes
+    all four, unconditionally) and `_retry_gating_dependencies` (re-probes
     only `_GATING_DEPENDENCIES`) build on, so the two never drift apart on
-    which callable answers for which dependency name.
+    which callable answers for which dependency name. Passkey Signing
+    Postgres's own probe (`check_passkey_signing_postgres_connectivity`) is a
+    no-op when `config.passkey_signing_postgres_host` is unset (issue #131,
+    PLAN.md §0.8) -- unconditionally listed here regardless, mirroring how
+    LLM Interface/Cellar/ELI are also always probed even though a deployment
+    may leave either unconfigured.
     """
     return (
         (FALKORDB, lambda: check_falkordb_connectivity(config)),
         (LLM_INTERFACE, lambda: check_llm_interface_connectivity(config)),
         (CELLAR_ELI, check_cellar_eli_connectivity),
+        (
+            PASSKEY_SIGNING_POSTGRES,
+            lambda: check_passkey_signing_postgres_connectivity(config),
+        ),
     )
+
+
+def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
+    """Apply any pending Passkey Signing Postgres migrations once at startup (issue #131).
+
+    Gated on `config.passkey_signing_postgres_host` being configured
+    (PLAN.md §0.6/§0.8): Passkey Signing Postgres is optional, pilot-scope
+    infrastructure, unlike FalkorDB -- an environment that never configures
+    it skips this step entirely rather than failing closed on an absent
+    host. Deliberately never raises (mirrors `_check_dependencies_at_startup`
+    below): a migration failure is logged as a warning and only degrades the
+    one gated merge path this component serves, never the whole process's
+    startup.
+    """
+    if config.passkey_signing_postgres_host is None:
+        return
+    try:
+        with connect_passkey_signing_postgres_from_config(config) as conn:
+            apply_pending_migrations(conn)
+    except Exception as exc:  # noqa: BLE001 - a migration failure must never crash the process (see docstring)
+        emit_log_entry(
+            component="entrypoint",
+            action="startup",
+            outcome="warning",
+            extra={"dependency": PASSKEY_SIGNING_POSTGRES, "error": str(exc)},
+        )
 
 
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
@@ -273,7 +322,11 @@ def create_app(config: ServiceConfig) -> FastAPI:
     leakage), and the `ps_service.api` REST router (`GET /catalog`, and, in
     later increments, `POST /ingestions`) is mounted via `app.include_router`.
     `/health` and `/ready` stay on `app.add_api_route` — they predate the
-    router and carry no request models.
+    router and carry no request models. Since issue #131, the companion-
+    browser signing-ceremony router (`ps_service.passkey_signing.router`,
+    `/approvals/*`) is mounted the same way, right after -- its own
+    unauthenticated-by-design exemption lives in `RestAuthMiddleware`'s
+    `_APPROVALS_PREFIX`, not here.
 
     Since issue #39, `build_streamable_http_app(host=config.host, verifier=...,
     auth_context=...)` builds MCP Interface's Streamable HTTP ASGI sub-app
@@ -303,9 +356,12 @@ def create_app(config: ServiceConfig) -> FastAPI:
     then added, wired to a `PsTokenVerifier` built from that same
     `AuthContext` (or `None`, when the bypass is active -- every request is
     let through unauthenticated, matching issue #67's existing contract):
-    every path other than `/health`, `/ready`, `/.well-known/*`, and `/mcp*`
-    (delegated to the MCP SDK's own `token_verifier=` gate, Slice 5) now
-    requires a verified bearer token.
+    every path other than `/health`, `/ready`, `/.well-known/*`, `/mcp*`
+    (delegated to the MCP SDK's own `token_verifier=` gate, Slice 5), and
+    `/approvals/*` (issue #131's bare-capability-URL companion-browser
+    ceremony, PLAN.md §0.5 -- gated instead by its own per-request `code`
+    check inside `passkey_signing.router`) now requires a verified bearer
+    token.
 
     Since Slice 8 (AC-BI-010), `GET /.well-known/oauth-protected-resource`
     is registered here too, alongside `/health`/`/ready` -- the exact URL
@@ -399,6 +455,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 extra={"missing_config": missing_config},
             )
         app.state.config_complete = not missing_config
+        _apply_passkey_signing_migrations_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
@@ -430,6 +487,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
     app.add_middleware(_MaxBodySizeMiddleware, max_bytes=config.max_request_body_bytes)
     register_exception_handlers(app)
     app.include_router(build_api_router())
+    app.include_router(build_passkey_signing_router())
 
     mcp_asgi_app = build_streamable_http_app(
         host=config.host, verifier=verifier, auth_context=auth_context
