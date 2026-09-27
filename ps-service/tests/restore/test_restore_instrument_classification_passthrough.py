@@ -104,7 +104,16 @@ class _FakeBaselineGraph:
         verified_by_rows: list[object] | None = None,
     ) -> None:
         self._regulatory_instrument_properties = regulatory_instrument_properties
-        self._capability_rows = capability_rows or []
+        # issue #31 -- `_CAPABILITY_QUERY` now also returns `n.embedding`; a
+        # 4-element row (this fixture's pre-#31 shape) is padded with a
+        # `None` embedding so existing fixtures don't need updating one by
+        # one. This module never exercises the write side
+        # (backfill_incoming_capability_embeddings), so a plain list -- not
+        # a mutable id-keyed table -- is still enough.
+        self._capability_rows: list[object] = [
+            [*cast("list[object]", row), None] if len(cast("list[object]", row)) == 4 else row
+            for row in (capability_rows or [])
+        ]
         self._policy_rows = policy_rows or []
         self._standard_rows = standard_rows or []
         self._control_rows = control_rows or []

@@ -114,6 +114,7 @@ graph TB
     DomainMapper -->|"write per-regulation baseline graph"| FalkorDB
     CompanyMerge -->|"read per-regulation baseline graph"| FalkorDB
     CompanyMerge -->|"write company graph"| FalkorDB
+    CompanyMerge -->|"backfill incoming Capability embeddings onto {short}_baseline"| FalkorDB
 
     Export -->|"read {short}_baseline / {short}_native"| FalkorDB
     Export -->|"backfill Capability/Policy embeddings onto {short}_baseline"| FalkorDB
@@ -504,6 +505,7 @@ The single-tenant graph's guaranteed contents are not limited to these four node
 - Convergence matching is two-tier: canonical-identity equality first, then a semantic-equivalence check (via LLM Interface's `RouteEmbedding` action — cosine similarity over embeddings) for content that doesn't hash-match but expresses the same capability (or, for internal sources, the same policy). Obligation is not in scope — it is Role-scoped and passed through. Unlike Domain Mapper's chat-driven decisions, the embedding computation itself is deterministic for a fixed model/input; the similarity-threshold decision is still a judgment call that can land wrong near the boundary, which is why a below-threshold near-miss is surfaced — recorded, not merged and not dropped — rather than silently resolved either way. This surfacing never blocks the run and is distinct from, and never triggers, the hard-failure abort described in Actions below.
 - On a confirmed match (exact identity, or a confident semantic match), the existing canonical node's properties are never overwritten — it wins on any disagreement (e.g. `confidence`, `description`); the incoming duplicate is dropped and only its edges are rewired onto the canonical node, consistent with add/merge-only.
 - A surfaced near-miss is recorded but not yet acted upon: no resolution workflow exists yet for a human (or downstream process) to review it and decide merge vs. keep-separate — tracked separately in #35. Until that workflow exists, a near-miss always resolves to keep-separate (mint a new canonical node); it never blocks ingestion and never aborts the run.
+- A freshly-computed Capability embedding is cached on BOTH sides of the comparison, mirroring the same `WHERE n.embedding IS NULL` idempotent-write shape: the existing side onto the single-tenant graph's canonical node (pre-#31), and the incoming side onto that Capability's own `{short}_baseline` node (issue #31) — so a re-ingested amended regulation (Regulatory Change Monitor, #19) re-running `MergeBaselineGraph` against a mostly-unchanged baseline reuses both cached embeddings instead of paying `RouteEmbedding` cost again. Obligation is out of scope for this caching — it is Role-scoped and re-minted with a fresh id on every amended version regardless (see [Domain Mapper → Obligation](#obligation)), so there is no prior node to cache onto.
 
 #### Implementation Registration
 
@@ -515,7 +517,7 @@ The single-tenant graph's guaranteed contents are not limited to these four node
 | `ps-service/src/ps_service/company_merge/similarity.py` | `cosine_similarity` — pure function scoring an incoming node's embedding against a candidate's embedding | — |
 | `ps-service/src/ps_service/company_merge/falkordb_client.py` | `connect`/`connect_from_config`, `check_connectivity`, `select_graph`, `single_tenant_graph_name`, `GraphHandle` Protocol | CheckConnectivity (FalkorDB) |
 | `ps-service/src/ps_service/company_merge/graph_reader.py` | `read_baseline_graph` — reads a complete `{short}_baseline` graph (RegulatoryInstrument/Role/Requirement/Obligation/Capability and their edges) back into a `BaselineGraph`, read-only | MergeBaselineGraph |
-| `ps-service/src/ps_service/company_merge/graph_writer.py` | `persist_role_and_requirement_passthrough`, `persist_canonical_nodes`, `backfill_canonical_embeddings`, `persist_rewired_edges` — writes to the single-tenant graph | MergeBaselineGraph, DedupeCanonicalNodes |
+| `ps-service/src/ps_service/company_merge/graph_writer.py` | `persist_role_and_requirement_passthrough`, `persist_canonical_nodes`, `backfill_canonical_embeddings`, `persist_rewired_edges` — writes to the single-tenant graph; `backfill_incoming_capability_embeddings` — writes back onto the INCOMING `{short}_baseline` graph instead (issue #31) | MergeBaselineGraph, DedupeCanonicalNodes |
 | `ps-service/src/ps_service/company_merge/dedup.py` | `read_existing_canonical_index`, `resolve_exact_match`, `find_best_semantic_match`, `dedupe_canonical_nodes` — exact-key and semantic-match convergence resolution for Capability (and Policy for internal sources) | DedupeCanonicalNodes |
 | `ps-service/src/ps_service/company_merge/merge.py` | `merge_baseline_graph` — top-level orchestration wiring `graph_reader`, `dedup` (both kinds), and `graph_writer` together | MergeBaselineGraph |
 

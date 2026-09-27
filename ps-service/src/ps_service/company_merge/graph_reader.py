@@ -88,7 +88,9 @@ _REGULATORY_INSTRUMENT_QUERY = (
 _ROLE_QUERY = "MATCH (n:Role) RETURN n.id, n.name, n.confidence"
 _REQUIREMENT_QUERY = "MATCH (n:Requirement) RETURN n.id, n.text, n.type, n.confidence, n.role_id"
 _OBLIGATION_QUERY = "MATCH (n:Obligation) RETURN n.id, n.text, n.confidence"
-_CAPABILITY_QUERY = "MATCH (n:Capability) RETURN n.id, n.name, n.confidence, n.description"
+_CAPABILITY_QUERY = (
+    "MATCH (n:Capability) RETURN n.id, n.name, n.confidence, n.description, n.embedding"
+)
 _DEFINES_QUERY = (
     "MATCH (r:RegulatoryInstrument {id: $regulatory_instrument_id})-[e:DEFINES]->(n:Role) "
     "RETURN n.id, e.source_ref"
@@ -319,18 +321,34 @@ def _read_obligation_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, .
 
 
 def _read_capability_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
+    """Read every Capability node, including its cached `embedding` if any (issue #31).
+
+    `embedding` (AC-BI-001) is `None` when this Capability has never had one
+    computed/backfilled -- `graph_writer.backfill_incoming_capability_embeddings`
+    is what eventually sets it, onto this same `{short}_baseline` graph, once
+    `dedup.dedupe_canonical_nodes` computes one for it. Mirrors
+    `dedup.read_existing_canonical_index`'s own "preserve `None`, never `()`
+    or a crash" contract for a cached embedding property.
+    """
     result = baseline_graph.query(_CAPABILITY_QUERY)
     rows = cast("list[list[object]]", result.result_set)
     nodes: list[BaselineNode] = []
     for row in rows:
-        node_id, name, confidence, description = row
+        node_id, name, confidence, description, embedding = row
         properties: dict[str, str | float] = {
             "name": cast("str", name),
             "confidence": cast("float", confidence),
         }
         if description is not None:
             properties["description"] = cast("str", description)
-        nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+        raw_embedding = cast("list[float] | None", embedding)
+        nodes.append(
+            BaselineNode(
+                id=cast("str", node_id),
+                properties=properties,
+                embedding=tuple(raw_embedding) if raw_embedding is not None else None,
+            )
+        )
     return tuple(nodes)
 
 

@@ -37,7 +37,11 @@ Flow (§7, extended by #54 S4's item 3a):
    canonical-id mapping (a `REQUIRES`/`COVERS`/`MITIGATED_BY` edge's
    Capability target and a `GOVERNED_BY`/`OWNS` edge's Policy target are
    rewritten -- see `graph_writer.persist_rewired_edges`); then backfill
-   Capability (and, if step 3a ran, Policy) embeddings.
+   Capability (and, if step 3a ran, Policy) embeddings onto the
+   single-tenant graph's canonical nodes, and (issue #31) any
+   freshly-computed INCOMING Capability embeddings back onto this
+   regulation's own `{short}_baseline` graph
+   (`graph_writer.backfill_incoming_capability_embeddings`).
 5. Emit one `outcome="succeeded"` entry for the whole call, carrying the
    PracticeArea/RiskPath/classification-edge write counts (AC-BI-011) via
    `extra=graph_writer.classification_write_counts(graph)`. No
@@ -325,6 +329,15 @@ def merge_baseline_graph(
         single_tenant_graph,
         kind="Capability",
         embeddings=capability_dedup.embedding_backfills,
+    )
+    # issue #31 -- the incoming side of the same cost problem: cache a
+    # freshly-computed incoming Capability embedding onto its OWN
+    # {short}_baseline node, so a later merge run against this same,
+    # unchanged baseline (e.g. a re-ingested amended regulation, #19) reuses
+    # it instead of paying another route_embedding call.
+    graph_writer.backfill_incoming_capability_embeddings(
+        baseline_graph,
+        embeddings=capability_dedup.incoming_embedding_backfills,
     )
     _finish_policy_pass(single_tenant_graph, policy_dedup, emitter=emitter)
 

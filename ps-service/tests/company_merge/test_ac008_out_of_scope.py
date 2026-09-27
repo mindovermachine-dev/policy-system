@@ -204,7 +204,7 @@ def _everything_new_baseline_graph() -> _FakeBaselineGraph:
             [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
         ],
         obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
-        capability_rows=[[capability_node_id, capability_name, 0.8, None]],
+        capability_rows=[[capability_node_id, capability_name, 0.8, None, None]],
         defines_rows=[[role_node_id, "Article 1(1)"]],
         expresses_rows=[[requirement_node_id, "Article 1(1)"]],
         has_rows=[[role_node_id, obligation_node_id]],
@@ -238,7 +238,7 @@ def _internal_baseline_with_governance() -> _FakeBaselineGraph:
             [requirement_node_id, "Must report incidents.", "requirement", 0.9, role_node_id]
         ],
         obligation_rows=[[obligation_node_id, obligation_text, 0.9]],
-        capability_rows=[[capability_node_id, capability_name, 0.8, None]],
+        capability_rows=[[capability_node_id, capability_name, 0.8, None, None]],
         defines_rows=[[role_node_id, "Article 1(1)"]],
         expresses_rows=[[requirement_node_id, "Article 1(1)"]],
         has_rows=[[role_node_id, obligation_node_id]],

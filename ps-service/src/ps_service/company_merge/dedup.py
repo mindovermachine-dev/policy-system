@@ -136,18 +136,24 @@ def find_best_semantic_match(
     call_embedding: EmbeddingCaller | None = None,
     emitter: LogEmitter | None = None,
     eligible_ids: frozenset[str] | None = None,
+    incoming_embedding: tuple[float, ...] | None = None,
 ) -> SemanticMatchResult | None:
     """Semantic match (PLAN_REVIEWED.md §5.3, B2's fix, Increment 8).
 
     Returns `None` when `existing_index` is empty -- nothing to compare
     against, so this incoming node is a first-time mint by construction, and
-    ZERO `route_embedding` calls are made (not even for `incoming_text`).
+    ZERO `route_embedding` calls are made (not even for `incoming_text`) --
+    regardless of whether a cached `incoming_embedding` was passed in.
 
-    Otherwise `incoming_text`'s embedding is computed once via
-    `route_embedding`. For every `existing_index` entry whose `embedding` is
-    `None`, its embedding is computed too via a further `route_embedding`
-    call for `entry.text`; every entry that already carries a non-`None`
-    `embedding` is reused as-is, with NO call made for it.
+    Otherwise, `incoming_text`'s embedding is either the caller-supplied
+    `incoming_embedding` (issue #31 -- e.g. a Capability's own cached
+    `BaselineNode.embedding`, reused as-is with NO `route_embedding` call for
+    it) or, when `incoming_embedding` is `None`, computed once via
+    `route_embedding`, exactly as before #31. For every `existing_index`
+    entry whose `embedding` is `None`, its embedding is computed too via a
+    further `route_embedding` call for `entry.text`; every entry that
+    already carries a non-`None` `embedding` is reused as-is, with NO call
+    made for it.
     `similarity.cosine_similarity` scores every entry (using either its
     cached or freshly-computed embedding) against the incoming embedding.
 
@@ -184,10 +190,11 @@ def find_best_semantic_match(
     if not existing_index:
         return None
 
-    incoming_result = route_embedding(
-        incoming_text, model=model, call_embedding=call_embedding, emitter=emitter
-    )
-    incoming_embedding = tuple(incoming_result.vector)
+    if incoming_embedding is None:
+        incoming_result = route_embedding(
+            incoming_text, model=model, call_embedding=call_embedding, emitter=emitter
+        )
+        incoming_embedding = tuple(incoming_result.vector)
 
     newly_computed_existing_embeddings: dict[str, tuple[float, ...]] = {}
     scored: list[tuple[str, float]] = []
@@ -276,6 +283,44 @@ def _record_excluded_same_run_mint_near_miss(
         )
 
 
+def _fold_semantic_match_result(
+    node: BaselineNode,
+    result: SemanticMatchResult,
+    *,
+    working_index: dict[str, ExistingCanonicalNode],
+    original_existing_ids: frozenset[str],
+    embedding_backfills: dict[str, tuple[float, ...]],
+    incoming_embedding_backfills: dict[str, tuple[float, ...]],
+) -> None:
+    """Fold one `find_best_semantic_match` result into the running dedup state.
+
+    Existing side (B2's within-run reuse fix): every freshly-computed
+    existing embedding (`result.newly_computed_existing_embeddings`) is
+    folded into `working_index` immediately, so a later incoming node
+    comparing against the same entry makes zero further embedding calls for
+    it, and, if the entry was present in the ORIGINAL pre-run index (i.e.
+    genuinely pre-existing, not minted this run), recorded into
+    `embedding_backfills` for `graph_writer.backfill_canonical_embeddings`
+    to persist later.
+
+    Incoming side (issue #31): `node`'s own embedding is recorded into
+    `incoming_embedding_backfills` only when it came in uncached
+    (`node.embedding is None`) -- when it was already cached going in,
+    `result.incoming_embedding` is that same cached value, reused, not
+    freshly computed, so there is nothing new to backfill.
+    """
+    for existing_id, embedding in result.newly_computed_existing_embeddings.items():
+        working_index[existing_id] = ExistingCanonicalNode(
+            id=existing_id,
+            text=working_index[existing_id].text,
+            embedding=embedding,
+        )
+        if existing_id in original_existing_ids:
+            embedding_backfills[existing_id] = embedding
+    if node.embedding is None:
+        incoming_embedding_backfills[node.id] = result.incoming_embedding
+
+
 def _incoming_text(node: BaselineNode, kind: Literal["Capability", "Policy"]) -> str:
     """Return an incoming node's own text, dispatched on `kind` (issue #54, S4).
 
@@ -337,6 +382,23 @@ def dedupe_canonical_nodes(
     canonical id, and may itself still record a second `NearMissPair` when
     an ineligible same-run mint scored even higher
     (`_record_excluded_same_run_mint_near_miss`).
+
+    Issue #31 -- the INCOMING side of the same cost problem: when an
+    incoming node's own `BaselineNode.embedding` is already cached (only
+    ever true for Capability, per `graph_reader._read_capability_nodes`),
+    it is passed straight to `find_best_semantic_match` as
+    `incoming_embedding`, costing zero `route_embedding` calls for it
+    (AC-BI-003). When it is `None` and a semantic-match scan actually ran
+    (`result is not None`), the freshly-computed incoming embedding is
+    recorded into `DedupResult.incoming_embedding_backfills` (AC-BI-004) for
+    `merge.py` to eventually persist onto this node's own `{short}_baseline`
+    entry via `graph_writer.backfill_incoming_capability_embeddings` --
+    regardless of whether this node goes on to mint or merge, since either
+    way a future re-run reading this same incoming node back will find the
+    cached value. Nothing is recorded when `result is None` (an empty
+    `existing_index` -- nothing was computed at all, see
+    `find_best_semantic_match`'s own docstring) or when the embedding was
+    already cached going in.
     """
     existing_index = read_existing_canonical_index(single_tenant_graph, kind)
     # Fixed at the start, never mutated -- distinguishes a genuinely
@@ -345,6 +407,7 @@ def dedupe_canonical_nodes(
     original_existing_ids = frozenset(n.id for n in existing_index)
     working_index: dict[str, ExistingCanonicalNode] = {n.id: n for n in existing_index}
     embedding_backfills: dict[str, tuple[float, ...]] = {}
+    incoming_embedding_backfills: dict[str, tuple[float, ...]] = {}
     resolutions: list[CanonicalResolution] = []
     near_misses: list[NearMissPair] = []
 
@@ -370,26 +433,23 @@ def dedupe_canonical_nodes(
             call_embedding=call_embedding,
             emitter=emitter,
             eligible_ids=original_existing_ids,
+            incoming_embedding=node.embedding,
         )
 
         if result is not None:
-            # B2's within-run reuse fix: fold every freshly-computed
-            # existing embedding into the working index immediately, so a
-            # later incoming node comparing against the same entry makes
-            # zero further embedding calls for it.
-            for existing_id, embedding in result.newly_computed_existing_embeddings.items():
-                working_index[existing_id] = ExistingCanonicalNode(
-                    id=existing_id,
-                    text=working_index[existing_id].text,
-                    embedding=embedding,
-                )
-                if existing_id in original_existing_ids:
-                    embedding_backfills[existing_id] = embedding
+            _fold_semantic_match_result(
+                node,
+                result,
+                working_index=working_index,
+                original_existing_ids=original_existing_ids,
+                embedding_backfills=embedding_backfills,
+                incoming_embedding_backfills=incoming_embedding_backfills,
+            )
 
         merge_target_id = _merge_target_id(result, threshold)
 
         if merge_target_id is None:
-            own_embedding = result.incoming_embedding if result is not None else None
+            own_embedding = result.incoming_embedding if result is not None else node.embedding
             resolutions.append(
                 CanonicalResolution(
                     incoming_id=node.id,
@@ -445,6 +505,7 @@ def dedupe_canonical_nodes(
         resolutions=tuple(resolutions),
         near_misses=tuple(near_misses),
         embedding_backfills=embedding_backfills,
+        incoming_embedding_backfills=incoming_embedding_backfills,
     )
 
 

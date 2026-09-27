@@ -2,13 +2,19 @@
 backfill_canonical_embeddings` (PLAN_REVIEWED.md §10 Increment 11, backfill
 half -- B2's fix): the `WHERE n.embedding IS NULL`-guarded embedding
 backfill writer for already-existing canonical nodes.
+
+Also `backfill_incoming_capability_embeddings` (issue #31) -- the
+incoming-side twin, same shape, targeting the baseline graph instead.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ps_service.company_merge.graph_writer import backfill_canonical_embeddings
+from ps_service.company_merge.graph_writer import (
+    backfill_canonical_embeddings,
+    backfill_incoming_capability_embeddings,
+)
 
 
 @dataclass
@@ -110,3 +116,48 @@ def test_backfill_called_twice_with_identical_input_issues_identical_calls() -> 
     assert len(graph.calls) == 4
     first_run, second_run = graph.calls[:2], graph.calls[2:]
     assert first_run == second_run
+
+
+_EXPECTED_INCOMING_QUERY = (
+    "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding"
+)
+
+
+def test_backfill_incoming_writes_exact_three_clause_query() -> None:
+    """Issue #31 (AC-BI-006/AC-BI-007): identical query shape to
+    `backfill_canonical_embeddings`, but this is the INCOMING side's own
+    writer -- no `kind` parameter, always Capability, and the caller passes
+    the regulation's own `{short}_baseline` `GraphHandle`, not the
+    single-tenant one (this fake stands in for either -- the writer itself
+    has no way to tell them apart, by design).
+    """
+    graph = _FakeGraph()
+
+    backfill_incoming_capability_embeddings(graph, embeddings={"capability_1": (0.1, 0.2)})
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert call.query == _EXPECTED_INCOMING_QUERY
+    assert call.query.index("MATCH") < call.query.index("WHERE") < call.query.index("SET")
+    assert call.params == {"id": "capability_1", "embedding": [0.1, 0.2]}
+
+
+def test_backfill_incoming_writes_one_call_per_id() -> None:
+    graph = _FakeGraph()
+    embeddings = {"capability_1": (0.1, 0.2), "capability_2": (0.3, 0.4)}
+
+    backfill_incoming_capability_embeddings(graph, embeddings=embeddings)
+
+    assert len(graph.calls) == 2
+    calls_by_id = {call.params["id"]: call for call in graph.calls if call.params is not None}
+    assert set(calls_by_id) == {"capability_1", "capability_2"}
+    for node_id, embedding in embeddings.items():
+        assert calls_by_id[node_id].params == {"id": node_id, "embedding": list(embedding)}
+
+
+def test_backfill_incoming_with_empty_embeddings_writes_nothing() -> None:
+    graph = _FakeGraph()
+
+    backfill_incoming_capability_embeddings(graph, embeddings={})
+
+    assert graph.calls == []

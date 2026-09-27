@@ -114,7 +114,21 @@ class _FakeBaselineGraph:
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
-        self._capability_rows = capability_rows
+        # issue #31 -- a mutable table keyed by id, not a plain row list:
+        # `MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET
+        # n.embedding` (backfill_incoming_capability_embeddings) needs
+        # somewhere to actually write a freshly-computed incoming embedding
+        # back onto its own row, mirroring `_FakeSingleTenantGraph`'s own
+        # `_backfill` mechanism. A 4-element row (the pre-#31 shape, still
+        # used by most of this file's fixtures) is padded with a `None`
+        # embedding -- callers that care about AC-BI-001/005 pass a 5th
+        # element explicitly instead.
+        self._capabilities: dict[str, list[object]] = {}
+        for row in capability_rows:
+            row_list = list(cast("list[object]", row))
+            if len(row_list) == 4:
+                row_list.append(None)
+            self._capabilities[cast("str", row_list[0])] = row_list
         self._defines_rows = defines_rows
         self._expresses_rows = expresses_rows
         self._has_rows = has_rows
@@ -173,7 +187,7 @@ class _FakeBaselineGraph:
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
-            return _FakeQueryResult(self._capability_rows)
+            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "n.name, n.confidence" in q:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
@@ -182,7 +196,29 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
+        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
+            # issue #31 -- backfill_incoming_capability_embeddings' write,
+            # targeting THIS (the incoming baseline) graph. Same `WHERE
+            # n.embedding IS NULL` no-op-when-already-set semantics as
+            # `_FakeSingleTenantGraph._backfill`, index 4 (embedding) rather
+            # than index 2, per this fake's own 5-element row shape.
+            assert params is not None
+            node_id = cast("str", params["id"])
+            row = self._capabilities.get(node_id)
+            if row is not None and row[4] is None:
+                row[4] = params["embedding"]
+            return _FakeQueryResult([])
         raise AssertionError(f"unexpected query issued: {q!r}")
+
+    def capability_embedding(self, node_id: str) -> tuple[float, ...] | None:
+        """Issue #31 test accessor: this baseline graph's own current cached
+        `embedding` for Capability `node_id`, or `None` if never backfilled.
+        """
+        row = self._capabilities.get(node_id)
+        if row is None:
+            return None
+        raw = cast("list[float] | None", row[4])
+        return tuple(raw) if raw is not None else None
 
 
 class _FakeSingleTenantGraph:

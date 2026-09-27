@@ -617,6 +617,39 @@ def backfill_canonical_embeddings(
         )
 
 
+def backfill_incoming_capability_embeddings(
+    baseline_graph: GraphHandle,
+    *,
+    embeddings: dict[str, tuple[float, ...]],
+) -> None:
+    """Write each `embeddings` entry onto its own INCOMING `{short}_baseline` Capability node.
+
+    Issue #31 -- the incoming-side twin of `backfill_canonical_embeddings`
+    above: same shape, same `WHERE n.embedding IS NULL` idempotent-write
+    guard (AC-BI-006), same "only `embedding` is ever touched, no other
+    property" contract (AC-BI-007), but targets `baseline_graph` (the
+    regulation's OWN `{short}_baseline` graph) rather than
+    `single_tenant_graph`, and is always `kind="Capability"` -- there is no
+    Policy-side incoming embedding to cache (see `DedupResult.
+    incoming_embedding_backfills`'s own docstring).
+
+    Every `(incoming_id, embedding)` pair comes from `DedupResult.
+    incoming_embedding_backfills` (`dedup.dedupe_canonical_nodes`, AC-BI-005)
+    -- the incoming node's own id, already known to exist in `baseline_graph`
+    since it was just read from there by `graph_reader.read_baseline_graph`.
+    A later `read_baseline_graph` call against this same, unchanged baseline
+    (e.g. a re-ingested amended regulation, #19) reads this cached value back
+    onto `BaselineNode.embedding`, letting `dedup.find_best_semantic_match`
+    skip the `route_embedding` call for it entirely (AC-BI-002/AC-BI-003).
+    """
+    for node_id, embedding in embeddings.items():
+        _execute_query(
+            baseline_graph,
+            "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL SET n.embedding = $embedding",
+            params={"id": node_id, "embedding": list(embedding)},
+        )
+
+
 def _dedupe_eligible_endpoint_ids(edge: BareEdge) -> tuple[str, ...]:
     """Return `edge`'s endpoints whose label (per `_EDGE_ENDPOINT_LABELS`) is canonically deduped.
 

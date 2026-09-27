@@ -176,8 +176,15 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
                 "Risk Assessment Capability",
                 0.8,
                 "Ability to assess cybersecurity risk",
+                None,
             ],
-            ["capability_no_description", "Vulnerability Handling Capability", 0.75, None],
+            [
+                "capability_no_description",
+                "Vulnerability Handling Capability",
+                0.75,
+                None,
+                None,
+            ],
         ],
         defines_rows=[["role_manufacturer_abc123", "Article 13(1)"]],
         expresses_rows=[["CRA-1.0_req_art_13.1", "Article 13(1)"]],
@@ -260,6 +267,29 @@ def test_read_baseline_graph_returns_exact_baseline_graph_for_full_data() -> Non
                 source_id="obligation_abc123",
                 target_id="capability_xyz789",
             ),
+        ),
+    )
+
+
+def test_read_capability_node_carries_cached_embedding_when_present() -> None:
+    """AC-BI-001 (issue #31): a Capability node's own `embedding` property,
+    once backfilled by `graph_writer.backfill_incoming_capability_embeddings`,
+    is read back onto `BaselineNode.embedding` -- not silently dropped like
+    every other Capability property this reader doesn't recognize.
+    """
+    graph = _empty_scripted_graph(
+        capability_rows=[
+            ["capability_cached", "Vulnerability Handling Capability", 0.75, None, [0.1, 0.2, 0.3]],
+        ]
+    )
+
+    result = read_baseline_graph(graph, "REG-1.0")
+
+    assert result.capability_nodes == (
+        BaselineNode(
+            id="capability_cached",
+            properties={"name": "Vulnerability Handling Capability", "confidence": 0.75},
+            embedding=(0.1, 0.2, 0.3),
         ),
     )
 
@@ -399,7 +429,7 @@ def test_reads_policy_standard_control_and_governance_edges() -> None:
     """
     graph = _empty_scripted_graph(
         capability_rows=[
-            ["cap_engineering_review_abc", "Engineering Review Capability", 0.8, None]
+            ["cap_engineering_review_abc", "Engineering Review Capability", 0.8, None, None]
         ],
         policy_rows=[
             ["pol_engineering_practices_xyz", "Engineering Practices Policy", "draft", 0.9]
@@ -496,7 +526,9 @@ def test_external_baseline_yields_empty_governance_tuples() -> None:
     """
     graph = _empty_scripted_graph(
         role_rows=[["role_manufacturer_abc123", "Manufacturer", 0.9]],
-        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+        capability_rows=[
+            ["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None, None]
+        ],
     )
 
     result = read_baseline_graph(graph, "REG-1.0")
@@ -627,7 +659,9 @@ def test_external_baseline_yields_empty_classification_edges_tuple() -> None:
     same tolerance as the existing empty-governance-edges path.
     """
     graph = _empty_scripted_graph(
-        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+        capability_rows=[
+            ["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None, None]
+        ],
     )
 
     result = read_baseline_graph(graph, "REG-1.0")
@@ -642,7 +676,9 @@ def test_external_baseline_yields_empty_practice_area_and_risk_path_tuples() -> 
     Control empty path.
     """
     graph = _empty_scripted_graph(
-        capability_rows=[["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None]],
+        capability_rows=[
+            ["cap_risk_assessment_xyz", "Risk Assessment Capability", 0.8, None, None]
+        ],
     )
 
     result = read_baseline_graph(graph, "REG-1.0")

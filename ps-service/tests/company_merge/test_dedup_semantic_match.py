@@ -355,6 +355,64 @@ def test_find_best_semantic_match_omitted_eligible_ids_defaults_to_overall_best(
     assert result.best_eligible_similarity == result.best_similarity
 
 
+def test_find_best_semantic_match_reuses_cached_incoming_embedding_with_zero_calls_for_it(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #31 (AC-BI-003): passing `incoming_embedding` (e.g. a
+    Capability's own cached `BaselineNode.embedding`) means the incoming
+    side costs ZERO `route_embedding` calls too -- not just the existing
+    side (B2's original fix, proven by the sibling test above). The
+    returned `SemanticMatchResult.incoming_embedding` is that same cached
+    value, unchanged.
+    """
+    emitter, _log_path = make_emitter()
+    incoming_text = "Conduct a cybersecurity risk assessment."
+    cached_incoming_embedding = (1.0, 0.0, 0.0)
+    existing_index = (
+        ExistingCanonicalNode(id="obligation_1", text="Report an incident.", embedding=None),
+    )
+    obligation_1_vector = [0.0, 1.0, 0.0]
+    call_embedding = _ScriptedCallEmbedding({"Report an incident.": obligation_1_vector})
+
+    result = find_best_semantic_match(
+        incoming_text,
+        existing_index,
+        model=_MODEL,
+        call_embedding=call_embedding,
+        emitter=emitter,
+        incoming_embedding=cached_incoming_embedding,
+    )
+
+    assert result is not None
+    assert result.incoming_embedding == cached_incoming_embedding
+    # Only the existing entry's (uncached) embedding was ever computed --
+    # the incoming text itself was never passed to call_embedding.
+    assert call_embedding.calls == ["Report an incident."]
+
+
+def test_find_best_semantic_match_incoming_embedding_ignored_when_existing_index_empty(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #31: even with a cached `incoming_embedding`, an empty
+    `existing_index` still returns `None` and makes ZERO calls -- unchanged
+    from the pre-#31 "nothing to compare against" contract (the caller's
+    own mint-time fallback to the cached value, not this function, is what
+    ends up carrying it forward -- see `dedup.dedupe_canonical_nodes`).
+    """
+    call_embedding = _ScriptedCallEmbedding({})
+
+    result = find_best_semantic_match(
+        "Conduct a cybersecurity risk assessment.",
+        (),
+        model=_MODEL,
+        call_embedding=call_embedding,
+        incoming_embedding=(1.0, 0.0, 0.0),
+    )
+
+    assert result is None
+    assert call_embedding.calls == []
+
+
 def test_find_best_semantic_match_second_call_folds_in_first_calls_computed_embedding(
     make_emitter: MakeEmitter,
 ) -> None:

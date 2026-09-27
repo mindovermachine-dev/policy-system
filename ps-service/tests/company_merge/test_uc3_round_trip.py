@@ -107,7 +107,15 @@ class _ScriptedBaselineGraph:
         self._role_rows = role_rows
         self._requirement_rows = requirement_rows
         self._obligation_rows = obligation_rows
-        self._capability_rows = capability_rows
+        # issue #31 -- mutable, keyed by id, so backfill_incoming_capability_
+        # embeddings' write has somewhere to land. A 4-element row (this
+        # fixture's pre-#31 shape) is padded with a `None` embedding.
+        self._capabilities: dict[str, list[object]] = {}
+        for row in capability_rows:
+            row_list = list(cast("list[object]", row))
+            if len(row_list) == 4:
+                row_list.append(None)
+            self._capabilities[cast("str", row_list[0])] = row_list
         self._defines_rows = defines_rows
         self._expresses_rows = expresses_rows
         self._has_rows = has_rows
@@ -155,7 +163,7 @@ class _ScriptedBaselineGraph:
         if "n.role_id" in q:
             return _FakeQueryResult(self._requirement_rows)
         if "n.description" in q:
-            return _FakeQueryResult(self._capability_rows)
+            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "n.name, n.confidence" in q:
             return _FakeQueryResult(self._role_rows)
         if "(n:Obligation) RETURN" in q:
@@ -164,6 +172,15 @@ class _ScriptedBaselineGraph:
             return _FakeQueryResult(
                 [[_FakeRegulatoryInstrumentNode(self._regulatory_instrument_properties)]]
             )
+        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
+            # issue #31 -- backfill_incoming_capability_embeddings' write
+            # against THIS (incoming) baseline graph.
+            assert params is not None
+            node_id = cast("str", params["id"])
+            row = self._capabilities.get(node_id)
+            if row is not None and row[4] is None:
+                row[4] = params["embedding"]
+            return _FakeQueryResult([])
         raise AssertionError(f"unexpected query issued: {q!r}")
 
 

@@ -11,7 +11,7 @@ boundary (nothing here is LLM-structured output, unlike
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -19,14 +19,24 @@ from typing import Literal
 class BaselineNode:
     """A Role, Requirement, Obligation, or Capability node read from a {short}_baseline graph.
 
-    Exactly as Domain Mapper wrote it. Used for Role/Requirement/Obligation,
-    which never carry an embedding -- this shape is deliberately NOT reused
-    for the properties dict Company Merge itself writes onto a canonical
-    Capability node (see CanonicalNodeProperties below, S1's fix).
+    Exactly as Domain Mapper wrote it. `properties` is used for Role/
+    Requirement/Obligation, which never carry an embedding -- this shape is
+    deliberately NOT reused for the properties dict Company Merge itself
+    writes onto a canonical Capability node (see CanonicalNodeProperties
+    below, S1's fix).
+
+    `embedding` (issue #31) is populated only by `_read_capability_nodes`,
+    from a Capability node's own cached `embedding` property in
+    `{short}_baseline` (`None` if absent) -- every other node kind's
+    `read_baseline_graph` reader leaves it at its `None` default, since Role/
+    Requirement/Obligation/Policy/Standard/Control never carry one (AC-BI-009).
+    Reused directly by `dedup.find_best_semantic_match` in place of a fresh
+    `route_embedding` call when present.
     """
 
     id: str
     properties: dict[str, str | float]
+    embedding: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +217,22 @@ class DedupResult:
     merge.py (§7) passes this straight to
     graph_writer.backfill_canonical_embeddings after both kinds' dedup
     passes and all node/edge writes complete."""
+
+    incoming_embedding_backfills: dict[str, tuple[float, ...]] = field(default_factory=dict)
+    """incoming_id -> embedding, for every incoming node whose OWN embedding
+    had to be freshly computed during this run because its `BaselineNode.
+    embedding` came in `None` (issue #31). Populated only by the Capability
+    pass in practice -- Policy's own `BaselineNode`s never carry a cached
+    embedding to begin with (no reader/backfill writes one), so this is
+    always empty for a Policy `DedupResult`, with no kind-specific branching
+    needed here to make that so. `merge.py` passes this straight to
+    `graph_writer.backfill_incoming_capability_embeddings`, targeting the
+    INCOMING `{short}_baseline` graph's own Capability nodes -- distinct from
+    `embedding_backfills` above, which targets the single-tenant graph's
+    canonical nodes. Defaults to `{}` so `resolve_capability_convergence_offline`
+    (which never calls `route_embedding`, so never has one to report) and
+    every pre-issue-#31 `DedupResult(...)` construction in this codebase's
+    tests stay valid unchanged."""
 
 
 @dataclass(frozen=True, slots=True)
