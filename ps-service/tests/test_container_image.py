@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -299,13 +301,6 @@ _AUTHZ_POSTGRES_DEPENDENCY = "authz_postgres"
 # control's unreachability is guaranteed rather than merely likely.
 _UNREACHABLE_FALKORDB_HOST = "falkordb-unreachable.invalid"
 
-# Issue #140: `require_authentik_credential_configured` fails closed, unconditionally, before
-# `create_app` returns -- unlike the OIDC and bootstrap-owner checks, it carries no
-# local-test-bypass carve-out (AC-BI-003). Every smoke-test container must therefore set both,
-# even though nothing here ever calls Authentik; the values just need to be non-empty.
-_SMOKE_AUTHENTIK_API_TOKEN = "ps-smoke-test-token"
-_SMOKE_AUTHENTIK_BASE_URL = "https://authentik.invalid"
-
 _HTTP_OK = 200
 _HTTP_SERVICE_UNAVAILABLE = 503
 _HTTP_TIMEOUT_SECONDS = 10.0
@@ -461,6 +456,14 @@ def _get_from_container(
     return httpx.Response(status_code=int(status_line), content=base64.b64decode(body_line))
 
 
+def _env_flags(env: dict[str, str]) -> list[str]:
+    """Expand an env dict into repeated `docker run --env KEY=VALUE` arguments."""
+    flags: list[str] = []
+    for key, value in env.items():
+        flags.extend(["--env", f"{key}={value}"])
+    return flags
+
+
 def _start_service(
     cli: str, image_ref: str, *, network: str, falkordb_host: str, name: str
 ) -> _RunningService:
@@ -478,9 +481,11 @@ def _start_service(
     -- neither a CI runner's nor the devcontainer's, which sets `PS_FALKORDB_HOST=falkordb`
     for exactly this reason.
 
-    `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL` are passed with dummy non-empty values
-    because `require_authentik_credential_configured` fails closed unconditionally (issue #140,
-    AC-BI-003) -- without them the container never reaches a listening `/health` at all.
+    `REQUIRED_STARTUP_ENV` (issue #148) supplies every env var `create_app` needs unconditionally,
+    regardless of the local-test bypass (currently `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`,
+    issue #140, AC-BI-003) -- without them the container never reaches a listening `/health` at
+    all. It is the same dict `test_startup_env_parity.py` proves is sufficient, hermetically and
+    without Docker, so a future addition to it can never again go unnoticed here.
     """
     result = _run_container_cli(
         cli,
@@ -497,10 +502,7 @@ def _start_service(
             "PS_SERVICE_HOST=127.0.0.1",
             "--env",
             "PS_SERVICE_LOCAL_TEST_BYPASS=true",
-            "--env",
-            f"PS_AUTHENTIK_API_TOKEN={_SMOKE_AUTHENTIK_API_TOKEN}",
-            "--env",
-            f"PS_AUTHENTIK_BASE_URL={_SMOKE_AUTHENTIK_BASE_URL}",
+            *_env_flags(REQUIRED_STARTUP_ENV),
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,
@@ -712,8 +714,8 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
     FalkorDB container) -- a bare, single-container start is the whole point
     of the proof: the route answers with real content with no dependency
     stack running at all. Bound to loopback with the local-test bypass, same
-    reasoning as `_start_service` (issue #58, AC-BI-002). Also needs the dummy Authentik
-    credential pair `_start_service` needs, for the same reason (issue #140, AC-BI-003).
+    reasoning as `_start_service` (issue #58, AC-BI-002). Also needs `REQUIRED_STARTUP_ENV`,
+    for the same reason `_start_service` does (issue #148).
     """
     name = _unique("ps-smoke-catalog")
     result = _run_container_cli(
@@ -727,10 +729,7 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
             "PS_SERVICE_HOST=127.0.0.1",
             "--env",
             "PS_SERVICE_LOCAL_TEST_BYPASS=true",
-            "--env",
-            f"PS_AUTHENTIK_API_TOKEN={_SMOKE_AUTHENTIK_API_TOKEN}",
-            "--env",
-            f"PS_AUTHENTIK_BASE_URL={_SMOKE_AUTHENTIK_BASE_URL}",
+            *_env_flags(REQUIRED_STARTUP_ENV),
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,

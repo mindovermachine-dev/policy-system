@@ -35,6 +35,7 @@ from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
+from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -511,9 +512,9 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Also sets a fake `PS_AUTH_ISSUER`/`PS_AUTH_AUDIENCE` pair (issue #58), a
     fake `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER`
-    pair (issue #144), and a fake `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`
-    pair (issue #140): these tests call `main()` end to end (real
-    `load_config()`, not `_complete_config()`), have nothing to do with auth,
+    pair (issue #144), and `REQUIRED_STARTUP_ENV` (currently
+    `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`, issue #140): these tests call `main()`
+    end to end (real `load_config()`, not `_complete_config()`), have nothing to do with auth,
     RBAC bootstrap, or Authentik, and don't set the local-test bypass --
     without fake values, `create_app` would now fail closed
     (`AuthConfigurationError`, then `AccessRoleBootstrapConfigurationError`,
@@ -529,8 +530,8 @@ def _delenv_all_ps_service_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_AUTH_AUDIENCE", "https://api.example.com")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT", "first-owner-subject")
     monkeypatch.setenv("PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER", "https://issuer.example.com")
-    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", "test-authentik-token")
-    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", "https://authentik.example.com")
+    for key, value in REQUIRED_STARTUP_ENV.items():
+        monkeypatch.setenv(key, value)
 
 
 def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
