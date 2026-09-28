@@ -2,7 +2,8 @@
 
 AC-BI-011 requires the classifier's unit tests to "pass in CI"; until slice S4b nothing in CI
 ran pytest at all (PLAN A-24). The default suite is hermetic (DECISIONS F-03), so the whole of
-`uv run pytest -q` -- not only `ps-service/tests/release` -- becomes a trunk-worthy check.
+`uv run pytest -q -n auto --dist=loadscope` -- not only `ps-service/tests/release` -- becomes a
+trunk-worthy check.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 INSITU_FILE = ".insitu.yml"
 PYTEST_CHECK_ID = "pytest"
-PYTEST_COMMAND = "uv run pytest -q"
+PYTEST_COMMAND = "uv run pytest -q -n auto --dist=loadscope"
 TRUNK_WORTHY_WAVE = "trunk-worthy"
 POST_CREATE_WAVE = "post-create"
 PREP_RUNNER_WAVE = "prep-runner"

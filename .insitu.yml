@@ -102,7 +102,7 @@ inventory:
 
   - id: pytest
     name: Run the default (hermetic) pytest suite
-    command: uv run pytest -q
+    command: uv run pytest -q -n auto --dist=loadscope
     timeout: 10m
 
   - id: pip-audit
