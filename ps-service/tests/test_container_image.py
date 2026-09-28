@@ -299,6 +299,13 @@ _AUTHZ_POSTGRES_DEPENDENCY = "authz_postgres"
 # control's unreachability is guaranteed rather than merely likely.
 _UNREACHABLE_FALKORDB_HOST = "falkordb-unreachable.invalid"
 
+# Issue #140: `require_authentik_credential_configured` fails closed, unconditionally, before
+# `create_app` returns -- unlike the OIDC and bootstrap-owner checks, it carries no
+# local-test-bypass carve-out (AC-BI-003). Every smoke-test container must therefore set both,
+# even though nothing here ever calls Authentik; the values just need to be non-empty.
+_SMOKE_AUTHENTIK_API_TOKEN = "ps-smoke-test-token"
+_SMOKE_AUTHENTIK_BASE_URL = "https://authentik.invalid"
+
 _HTTP_OK = 200
 _HTTP_SERVICE_UNAVAILABLE = 503
 _HTTP_TIMEOUT_SECONDS = 10.0
@@ -470,6 +477,10 @@ def _start_service(
     (`127.0.0.1`), which reaches FalkorDB from no container that has its own network namespace
     -- neither a CI runner's nor the devcontainer's, which sets `PS_FALKORDB_HOST=falkordb`
     for exactly this reason.
+
+    `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL` are passed with dummy non-empty values
+    because `require_authentik_credential_configured` fails closed unconditionally (issue #140,
+    AC-BI-003) -- without them the container never reaches a listening `/health` at all.
     """
     result = _run_container_cli(
         cli,
@@ -486,6 +497,10 @@ def _start_service(
             "PS_SERVICE_HOST=127.0.0.1",
             "--env",
             "PS_SERVICE_LOCAL_TEST_BYPASS=true",
+            "--env",
+            f"PS_AUTHENTIK_API_TOKEN={_SMOKE_AUTHENTIK_API_TOKEN}",
+            "--env",
+            f"PS_AUTHENTIK_BASE_URL={_SMOKE_AUTHENTIK_BASE_URL}",
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,
@@ -697,7 +712,8 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
     FalkorDB container) -- a bare, single-container start is the whole point
     of the proof: the route answers with real content with no dependency
     stack running at all. Bound to loopback with the local-test bypass, same
-    reasoning as `_start_service` (issue #58, AC-BI-002).
+    reasoning as `_start_service` (issue #58, AC-BI-002). Also needs the dummy Authentik
+    credential pair `_start_service` needs, for the same reason (issue #140, AC-BI-003).
     """
     name = _unique("ps-smoke-catalog")
     result = _run_container_cli(
@@ -711,6 +727,10 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
             "PS_SERVICE_HOST=127.0.0.1",
             "--env",
             "PS_SERVICE_LOCAL_TEST_BYPASS=true",
+            "--env",
+            f"PS_AUTHENTIK_API_TOKEN={_SMOKE_AUTHENTIK_API_TOKEN}",
+            "--env",
+            f"PS_AUTHENTIK_BASE_URL={_SMOKE_AUTHENTIK_BASE_URL}",
             image_ref,
         ],
         timeout=_RUN_TIMEOUT_SECONDS,
