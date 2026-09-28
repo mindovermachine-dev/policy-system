@@ -25,6 +25,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, Protocol, Self
 
+from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.ingestion_orchestration import (
     GraphOpeners,
@@ -32,6 +33,8 @@ from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     PipelineStages,
 )
+from ps_service.auth import Principal
+from ps_service.authz.models import AccessRole
 from ps_service.change_monitor.models import PollReport
 from ps_service.company_merge.models import MergeResult
 from ps_service.curated_source.catalog_client import (
@@ -48,6 +51,8 @@ if TYPE_CHECKING:
     import urllib.request
     from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
+
+    import pytest
 
     from ps_service.api.catalog import CatalogEntry, CuratedInstrumentEntry
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
@@ -896,3 +901,116 @@ def build_fake_curated_catalog_dependencies(
         fetch_catalog=_fetch_catalog,
         resolve_effective_source=resolve_effective_source or _default_fake_resolve_effective_source,
     )
+
+
+# --- compliance-officer access-role fakes (issue #145, PLAN.md §3.2) --------
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeComplianceAccessRoleStore:
+    """Minimal ``AccessRoleStore``-shaped fake for ``require_access_role(ComplianceOfficer)`` tests.
+
+    Deliberately self-contained rather than importing `tests/authz/_fakes.py`'s
+    own `FakeAccessRoleStore`: under `--import-mode=importlib`, a full-suite
+    run collects `tests/api/` before `tests/authz/` (alphabetical), so a
+    module-level `from authz._fakes import ...` here breaks full-suite
+    collection with `ModuleNotFoundError: No module named 'authz'` (the same
+    ordering hazard `tests/authz/test_require_access_role_dependency.py`'s own
+    docstring documents, and why *that* file lives under `tests/authz/`
+    instead of here). Implements only `active_roles_for` -- the one
+    `AccessRoleStore` method `require_role`'s `resolve_active_roles` reaches
+    when the caller's own roster is already non-empty, which every use below
+    always is (so `bootstrap_first_owner` is never reached).
+    """
+
+    roles: frozenset[AccessRole]
+
+    def active_roles_for(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
+        """Return the scripted role set, ignoring which principal was asked for."""
+        _ = principal
+        return self.roles
+
+
+def compliance_officer_principal() -> Principal:
+    """A verified `Principal` for `install_compliance_officer_grant`'s test doubles."""
+    return Principal(sub="test-compliance-officer", iss="https://issuer.example.com/")
+
+
+def install_compliance_officer_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    granted: bool,
+    roles: frozenset[AccessRole] | None = None,
+) -> None:
+    """Wire a real, verified principal through a route's ``require_access_role`` gate.
+
+    Monkeypatches ``ps_service.api.dependencies.get_principal``/
+    ``PsycopgAccessRoleStore`` -- the same module-global-patch idiom
+    ``tests/authz/test_require_access_role_dependency.py`` already proves
+    works for this exact dependency, extended here so it also flows through a
+    real ``TestClient`` HTTP round trip (that file only ever calls the
+    dependency callable directly against a bare ``Request``). Issue #145 gates
+    ``POST /restorations``, ``POST /restorations/from-catalog``,
+    ``POST /exports``, and ``POST /change-checks`` behind
+    ``require_access_role(AccessRole.COMPLIANCE_OFFICER)``, which has no
+    local-test-bypass carve-out (PLAN.md §3.2) -- it raises ``AccessDeniedError``
+    whenever ``get_principal`` returns ``None``, which is exactly what happens
+    under every existing test file's own ``is_local_test_bypass_active=True``
+    config absent this helper. So every route-level test exercising a
+    happy path (or any body-validation path that must reach the handler)
+    needs this to present a principal at all.
+
+    Args:
+        monkeypatch: The test's ``pytest.MonkeyPatch`` fixture.
+        granted: ``True`` wires a principal whose resolved roles include
+            ``ComplianceOfficer``. ``False`` wires an authenticated-but-denied
+            principal instead.
+        roles: Overrides the denied principal's own held roles (AC-BI-005's
+            no-hierarchy-override proof) -- e.g.
+            ``frozenset({AccessRole.SYSTEM_ADMIN})`` /
+            ``frozenset({AccessRole.SYSTEM_OWNER})``, proving neither
+            satisfies a ``ComplianceOfficer`` minimum on its own. Defaults to
+            ``frozenset({AccessRole.AUTHENTICATED_USER})`` when
+            ``granted=False`` and ``roles`` is omitted. Ignored when
+            ``granted=True``.
+    """
+    principal = compliance_officer_principal()
+    resolved_roles = (
+        frozenset({AccessRole.COMPLIANCE_OFFICER})
+        if granted
+        else (roles if roles is not None else frozenset({AccessRole.AUTHENTICATED_USER}))
+    )
+
+    def _get_principal(request: object) -> Principal:
+        _ = request
+        return principal
+
+    def _store_factory(config: object, **kwargs: object) -> _FakeComplianceAccessRoleStore:
+        _ = (config, kwargs)
+        return _FakeComplianceAccessRoleStore(resolved_roles)
+
+    monkeypatch.setattr(dependencies, "get_principal", _get_principal)
+    monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
+
+
+def _no_principal(request: object) -> None:
+    """Stand-in for `get_principal` returning `None` -- no verified caller at all."""
+    _ = request
+
+
+def install_no_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Monkeypatch `ps_service.api.dependencies.get_principal` to always return `None`.
+
+    Mirrors the real local-test-bypass default (`get_principal` already
+    returns `None` when no `RestAuthMiddleware` ever ran) -- provided as an
+    explicit, self-documenting call so a test can override a file's own
+    autouse `install_compliance_officer_grant(monkeypatch, granted=True)`
+    fixture and prove `require_access_role`'s "no verified principal at all"
+    denial path (issue #145, AC-BI-003/006) without relying on an untyped
+    inline lambda (which basedpyright cannot resolve the parameter type of
+    when passed through `monkeypatch.setattr`'s string-target overload).
+
+    Args:
+        monkeypatch: The test's `pytest.MonkeyPatch` fixture.
+    """
+    monkeypatch.setattr(dependencies, "get_principal", _no_principal)

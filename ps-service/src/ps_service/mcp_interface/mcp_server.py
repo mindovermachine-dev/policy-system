@@ -752,8 +752,20 @@ def ingest_regulation(
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor,
+                    minimum=AccessRole.COMPLIANCE_OFFICER,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         entry = find_by_celex(celex)
@@ -799,8 +811,20 @@ def check_regulations() -> dict[str, object] | str:
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor,
+                    minimum=AccessRole.COMPLIANCE_OFFICER,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
@@ -1343,8 +1367,20 @@ def restore_instrument(
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
+        if not config.is_local_test_bypass_active:
+            if actor is None:
+                return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+            try:
+                require_role(
+                    actor,
+                    minimum=AccessRole.COMPLIANCE_OFFICER,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+                )
+            except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+                return f"error: {exc}"
         request_body = CatalogRestorationRequest(instrument_id=instrument_id)
         dependencies: CatalogRestoreDependencies = _sanitize_restore_graph_opens(
             build_default_restore_from_catalog_dependencies()
@@ -1593,13 +1629,14 @@ _GRANT_REVOKE_ERRORS = (
 @server.tool(name="grant-access-role")
 def grant_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
-    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"],
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
     """GrantAccessRole: grant `access_role` to `principal_subject` (issue #133).
 
-    RBAC (PLAN.md §0.7, widened per CHANGES.md Appendix A): granting
-    `SystemAdmin` or `SystemOwner` requires the caller hold `SystemOwner`;
-    granting `PolicyManager` requires the caller hold `SystemOwner` or
+    RBAC (PLAN.md §0.7, widened per CHANGES.md Appendix A; issue #145 adds
+    `ComplianceOfficer`): granting `SystemAdmin` or `SystemOwner` requires
+    the caller hold `SystemOwner`; granting `PolicyManager` or
+    `ComplianceOfficer` requires the caller hold `SystemOwner` or
     `SystemAdmin`. A caller may never grant a role to themselves
     (AC-BI-005).
 
@@ -1607,7 +1644,7 @@ def grant_access_role(
     "granted_by_subject", "system_owner_floor_warning"}`. Returns a string
     beginning `error: ` when the caller has no real authenticated session
     (the local-test bypass included -- access-role management is never
-    available under it), when `access_role` is not one of the three
+    available under it), when `access_role` is not one of the four
     grantable roles, when the caller lacks the required role, when the
     target is the caller themselves, when the authorization store cannot be
     reached, or (this tool's own residual safety net) on any other
@@ -1645,7 +1682,7 @@ def grant_access_role(
 @server.tool(name="revoke-access-role")
 def revoke_access_role(
     principal_subject: Annotated[str, Field(min_length=1)],
-    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"],
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"],
 ) -> dict[str, object] | str:
     """RevokeAccessRole: revoke `access_role` from `principal_subject` (issue #133).
 
@@ -1654,17 +1691,17 @@ def revoke_access_role(
     `SystemAdmin` -- once a second `SystemOwner` exists (via
     `grant-access-role`), a `SystemAdmin` can revoke one without the
     self-revoke block ever intervening. Revoking `SystemAdmin`/
-    `PolicyManager` mirrors `grant-access-role`'s own actor requirement for
-    each role. A caller may never revoke a role from themselves
-    (AC-BI-005), checked before the `SystemOwner` floor check (AC-BI-006):
-    revoking the last remaining active `SystemOwner` is rejected regardless
-    of who the caller is.
+    `PolicyManager`/`ComplianceOfficer` (issue #145 adds the latter) mirrors
+    `grant-access-role`'s own actor requirement for each role. A caller may
+    never revoke a role from themselves (AC-BI-005), checked before the
+    `SystemOwner` floor check (AC-BI-006): revoking the last remaining
+    active `SystemOwner` is rejected regardless of who the caller is.
 
     On success, returns `{"principal_subject", "access_role",
     "revoked_by_subject", "system_owner_floor_warning"}`. Returns a string
     beginning `error: ` when the caller has no real authenticated session
     (the local-test bypass included), when `access_role` is not one of the
-    three roles this tool manages, when the caller lacks the required role,
+    four roles this tool manages, when the caller lacks the required role,
     when the target is the caller themselves, when revoking `SystemOwner`
     would leave zero active `SystemOwner`s, when the authorization store
     cannot be reached, or (this tool's own residual safety net) on any other

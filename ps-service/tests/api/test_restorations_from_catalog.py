@@ -21,9 +21,15 @@ from typing import TYPE_CHECKING, NoReturn, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import FakeCuratedArtifactTransport, FakeFailingCuratedSourceTransport
+from api._fakes import (
+    FakeCuratedArtifactTransport,
+    FakeFailingCuratedSourceTransport,
+    install_compliance_officer_grant,
+    install_no_principal,
+)
 from ps_service.api.dependencies import provide_restore_from_catalog_dependencies
 from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.curated_source.artifact_client import fetch_artifact
 from ps_service.curated_source.resolve import EffectiveCatalogSource
@@ -170,6 +176,21 @@ def _client_with_fake(
     return TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    `POST /restorations/from-catalog` (and, in one cross-route smoke test
+    below, `POST /restorations` too) is now gated behind `require_access_role`,
+    which has no local-test-bypass carve-out (PLAN.md §3.2). The dedicated
+    denial-proof tests below re-monkeypatch this away for their own scenario
+    (the same `monkeypatch` fixture instance, so the later call simply wins).
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
+
+
 def test_valid_instrument_id_returns_200_with_expected_shape() -> None:
     """(1) A valid request against a fake transport serving a valid fixture completes."""
     stage = _FakeCatalogRestoreStage()
@@ -271,13 +292,81 @@ def test_extra_field_in_request_body_returns_422() -> None:
     assert stage.calls == []
 
 
-def test_route_is_unauthenticated_never_401_or_403() -> None:
+def test_route_with_compliance_officer_grant_is_never_401_or_403() -> None:
+    """Issue #145: renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` --
+    the route now requires `ComplianceOfficer`; this proves a caller who holds it (the
+    file's own autouse `_grant_compliance_officer` fixture) is never turned away.
+    """
     stage = _FakeCatalogRestoreStage()
     client = _client_with_fake(_valid_transport(), stage)
 
     response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
 
     assert response.status_code not in (401, 403)
+
+
+def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #145, AC-BI-003/006: no verified principal -- 403, delegate never called."""
+    install_no_principal(monkeypatch)
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "access_denied"
+    assert body["error"]["message"] == "You do not have the required access role for this action."
+    assert stage.calls == []
+
+
+def test_authenticated_user_without_compliance_officer_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified caller holding no elevated role at all -- still 403, delegate never called."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.calls == []
+
+
+def test_system_admin_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.calls == []
+
+
+def test_system_owner_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
+    )
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.calls == []
 
 
 def test_restorations_upload_path_is_unaffected_by_this_route(configured_logging: Path) -> None:

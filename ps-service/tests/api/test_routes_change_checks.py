@@ -34,9 +34,15 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import FakeChangeCheckDependencies, build_fake_change_check_dependencies
+from api._fakes import (
+    FakeChangeCheckDependencies,
+    build_fake_change_check_dependencies,
+    install_compliance_officer_grant,
+    install_no_principal,
+)
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.dependencies import provide_change_check_dependencies
+from ps_service.authz.models import AccessRole
 from ps_service.change_monitor.models import (
     AmendmentFinding,
     PollReport,
@@ -90,6 +96,20 @@ def _client_with_fake(fake: FakeChangeCheckDependencies) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    `POST /change-checks` is now gated behind `require_access_role`, which has
+    no local-test-bypass carve-out (PLAN.md §3.2). The dedicated denial-proof
+    tests below re-monkeypatch this away for their own scenario (the same
+    `monkeypatch` fixture instance, so the later call simply wins).
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
+
+
 @pytest.mark.usefixtures("_stub_run_log")
 def test_post_change_checks_returns_200_with_run_id_and_empty_instruments() -> None:
     """A bare `POST /change-checks` (no body), no tracked instruments -> 200 with a
@@ -107,10 +127,12 @@ def test_post_change_checks_returns_200_with_run_id_and_empty_instruments() -> N
 
 
 @pytest.mark.usefixtures("_stub_run_log")
-def test_post_change_checks_has_no_auth_dependency() -> None:
-    """The same call, with no auth header of any kind set, still succeeds -- a
-    structural absence-of-check proof, not a rejected-without-token proof, since
-    no auth mechanism exists anywhere in the process (AC-BI-001, PLAN.md §0.4).
+def test_post_change_checks_succeeds_with_compliance_officer_grant() -> None:
+    """Issue #145: renamed from the pre-#145 `..._has_no_auth_dependency` -- the route is
+    now gated behind `require_access_role(AccessRole.COMPLIANCE_OFFICER)`, so "no auth
+    header of any kind set" alone no longer implies success; it succeeds here because
+    the file's own autouse `_grant_compliance_officer` fixture presents a principal
+    holding the role, not because no gate exists.
     """
     client = _client_with_fake(build_fake_change_check_dependencies(tracked=()))
 
@@ -298,3 +320,67 @@ def test_post_change_checks_response_run_id_matches_the_provide_run_id_binding(
     sweep_lines = [line for line in lines if line.get("action") == "change_check_sweep"]
     assert sweep_lines, "run_change_check_sweep emitted no change_check_sweep lines"
     assert all(line.get("run_id") == returned_run_id for line in sweep_lines)
+
+
+def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #145, AC-BI-003/006: no verified principal -- 403, sweep never starts."""
+    install_no_principal(monkeypatch)
+    fake = build_fake_change_check_dependencies(tracked=())
+    client = _client_with_fake(fake)
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "access_denied"
+    assert body["error"]["message"] == "You do not have the required access role for this action."
+    assert fake.read_tracked_instruments_graphs == []
+
+
+def test_authenticated_user_without_compliance_officer_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified caller holding no elevated role at all -- still 403, sweep never starts."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    fake = build_fake_change_check_dependencies(tracked=())
+    client = _client_with_fake(fake)
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.read_tracked_instruments_graphs == []
+
+
+def test_system_admin_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    fake = build_fake_change_check_dependencies(tracked=())
+    client = _client_with_fake(fake)
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.read_tracked_instruments_graphs == []
+
+
+def test_system_owner_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
+    )
+    fake = build_fake_change_check_dependencies(tracked=())
+    client = _client_with_fake(fake)
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.read_tracked_instruments_graphs == []

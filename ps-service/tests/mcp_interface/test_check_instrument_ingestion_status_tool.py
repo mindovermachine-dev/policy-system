@@ -21,11 +21,21 @@ trips `_run_mcp_action`'s `outcome="failed"` branch instead.
 
 S6 (PLAN.md D6, AC-BI-010) adds no new production authz code -- this tool
 intentionally carries no `require_role` gate, matching `cypher`/
-`check_regulations`/`near_misses_list` (all plain graph reads). The tests
-below prove that placement structurally (AST, mirroring
-`test_scope_guard.py`'s own convention) and prove the resolved principal
-under the local-test bypass matches `check_regulations`'s own audit-log
-parity (`test_check_regulations_tool.py:91-101, 244-245`).
+`near_misses_list` (both plain graph reads). The tests below prove that
+placement structurally (AST, mirroring `test_scope_guard.py`'s own
+convention) and prove the resolved principal under the local-test bypass
+matches `check_regulations`'s own audit-log parity
+(`test_check_regulations_tool.py:91-101, 244-245`).
+
+Issue #145 later gave `check_regulations` itself a `ComplianceOfficer`
+`require_role` gate (it stopped being a plain, ungated graph read -- a
+sweep now automatically re-ingests detected amendments, D-DELEGATE), so it
+is no longer used below as an *ungated*-peer comparison for AST test (a) --
+it moved into that same test's "gated" contrast alongside
+`set_catalog_source`. Tests (b)/(c) are unaffected: both are about
+registration mechanics and bypass-principal parity, neither of which this
+gate changed (the gate is itself skipped entirely under the local-test
+bypass, per `mcp_server.py`'s own inline pattern).
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_cypher_tool.py:47-99`'s own `_FakeQueryResult`/`_FakeGraphHandle`/
@@ -384,40 +394,49 @@ def test_tool_body_has_no_require_role_gate_matching_plain_graph_read_peers() ->
     `test_scope_guard.py`'s own convention (F-03: a bare scan false-fails
     on docstring text) -- that `check_instrument_ingestion_status`'s own
     function body contains no call to `require_role`, exactly like its
-    plain-graph-read peers `cypher`/`check_regulations`/`near_misses_list`,
-    and unlike an administrative tool such as `set_catalog_source`, which
-    does call `require_role`. Per PLAN.md D6, this cohort placement -- not
-    new gating code -- is what satisfies AC-BI-010's "same authorization
-    checks as other graph-read operations exposed via the MCP interface":
-    no elevated `AccessRole` is ever checked for this tool, matching its
-    peers exactly.
+    plain-graph-read peers `cypher`/`near_misses_list`, and unlike an
+    administrative/gated tool such as `set_catalog_source`, which does call
+    `require_role`. Per PLAN.md D6, this cohort placement -- not new gating
+    code -- is what satisfies AC-BI-010's "same authorization checks as
+    other graph-read operations exposed via the MCP interface": no elevated
+    `AccessRole` is ever checked for this tool, matching its peers exactly.
+
+    `check_regulations` moved out of `ungated_peers` and into the gated
+    contrast below under issue #145 (PLAN.md/CHANGES.md), which gave it its
+    own `ComplianceOfficer` `require_role` gate -- it is no longer a plain,
+    ungated graph read, unlike this tool.
     """
     ungated_peers = (
         mcp_server.check_instrument_ingestion_status,
         mcp_server.cypher,
-        mcp_server.check_regulations,
         mcp_server.near_misses_list,
     )
     for peer in ungated_peers:
         names = {_call_func_name(c) for c in _calls_in(peer)}
         assert "require_role" not in names, peer
 
-    # Contrast: an administrative tool in the same module DOES gate via
-    # `require_role`, proving this AST technique actually discriminates
-    # rather than trivially passing for everything.
-    gated_names = {_call_func_name(c) for c in _calls_in(mcp_server.set_catalog_source)}
-    assert "require_role" in gated_names
+    # Contrast: administrative/gated tools in the same module DO gate via
+    # `require_role` (`check_regulations`, since issue #145), proving this
+    # AST technique actually discriminates rather than trivially passing
+    # for everything.
+    for gated_peer in (mcp_server.set_catalog_source, mcp_server.check_regulations):
+        gated_names = {_call_func_name(c) for c in _calls_in(gated_peer)}
+        assert "require_role" in gated_names, gated_peer
 
 
 def test_tool_registered_on_server_the_same_ungated_way_as_check_regulations() -> None:
     """(b): `check_instrument_ingestion_status` is registered on the single
-    `server` singleton the same un-gated way as `check_regulations` -- a
-    bare `@server.tool()` with no `name=` kebab-case override (PLAN.md §1:
-    the explicit `name=` override is reserved for admin/write tools like
+    `server` singleton the same way as `check_regulations` -- a bare
+    `@server.tool()` with no `name=` kebab-case override (PLAN.md §1: the
+    explicit `name=` override is reserved for admin/write tools like
     `set-catalog-source`/`invite-user`/`grant-access-role`) and no
     additional wrapping: both remain plain functions after decoration
     (`server.tool()` returns the original callable), and both are present
-    in the same `server` tool registry.
+    in the same `server` tool registry. This is purely about registration
+    mechanics -- unaffected by issue #145 giving `check_regulations`'s own
+    function *body* a `require_role` gate (see test (a) above); the
+    docstring's original "ungated" framing described both tools' shared
+    registration shape, not their current authorization status.
     """
     assert callable(mcp_server.check_instrument_ingestion_status)
     assert callable(mcp_server.check_regulations)

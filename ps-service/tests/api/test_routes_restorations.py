@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._fakes import install_compliance_officer_grant, install_no_principal
 from ps_service.api.dependencies import provide_restore_dependencies
 from ps_service.api.restore_orchestration import RestoreDependencies
+from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
 from ps_service.restore.errors import ArtifactContentRejectedError, ArtifactIntegrityError
@@ -110,6 +112,23 @@ def _client_with_fake(stage: _FakeRestoreStage) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    `POST /restorations` is now gated behind `require_access_role`, which has
+    no local-test-bypass carve-out (`AccessDeniedError` whenever
+    `get_principal` returns `None` -- true for every test's own
+    `is_local_test_bypass_active=True` config absent this fixture, PLAN.md
+    §3.2). The dedicated denial-proof tests below re-monkeypatch this away
+    for their own scenario (the same `monkeypatch` fixture instance, so the
+    later call simply wins).
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
+
+
 def test_valid_restoration_body_returns_200_with_expected_shape() -> None:
     stage = _FakeRestoreStage()
     client = _client_with_fake(stage)
@@ -186,10 +205,88 @@ def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:
 
 
 @pytest.mark.parametrize("path", ["/restorations"])
-def test_restorations_route_is_unauthenticated_never_401_or_403(path: str) -> None:
+def test_restorations_route_with_compliance_officer_grant_is_never_401_or_403(path: str) -> None:
+    """Issue #145: a caller holding `ComplianceOfficer` is never turned away by the gate.
+
+    Renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` -- the
+    route is no longer unauthenticated-by-design (it now requires
+    `ComplianceOfficer`); this proves the gate itself introduces no *spurious*
+    401/403 for a caller who does hold the role, relying on the file's own
+    autouse `_grant_compliance_officer` fixture exactly like every other
+    happy-path test here.
+    """
     stage = _FakeRestoreStage()
     client = _client_with_fake(stage)
 
     response = client.post(path, json=_valid_body())
 
     assert response.status_code not in (401, 403)
+
+
+def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #145, AC-BI-003/006: no verified principal (the file's own bypass default,
+    undoing the autouse grant) -- 403, matching the existing `AccessDeniedError` contract,
+    and the restore delegate is never called.
+    """
+    install_no_principal(monkeypatch)
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "access_denied"
+    assert body["error"]["message"] == "You do not have the required access role for this action."
+    assert stage.call_count == 0
+
+
+def test_authenticated_user_without_compliance_officer_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified caller holding no elevated role at all -- still 403, delegate never called."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0
+
+
+def test_system_admin_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0
+
+
+def test_system_owner_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either --
+    no hierarchy override, mirroring `PolicyManager`'s own existing non-hierarchical contract.
+    """
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
+    )
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0

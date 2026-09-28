@@ -50,14 +50,14 @@ class AccessRoleGrantDetails(AuditDetails):
     grant succeeded or was denied.
     """
 
-    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"]
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"]
     reason_code: Literal["access_denied", "self_grant_blocked"] | None = None
 
 
 class AccessRoleRevokeDetails(AuditDetails):
     """`access_role.revoke` -- same shape as grant, plus the SystemOwner-floor reason code."""
 
-    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager"]
+    access_role: Literal["SystemOwner", "SystemAdmin", "PolicyManager", "ComplianceOfficer"]
     reason_code: (
         Literal["access_denied", "self_revoke_blocked", "system_owner_floor_violation"] | None
     ) = None

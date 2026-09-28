@@ -45,6 +45,9 @@ from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
 from api._fakes import FakeCuratedArtifactTransport, FakeFailingCuratedSourceTransport
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
+    FakeAccessRoleStore,
+)
 from fastapi.testclient import TestClient
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
@@ -53,6 +56,7 @@ from starlette.applications import Starlette
 from ps_service.api.restore_orchestration import CatalogRestoreDependencies
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.curated_source.artifact_client import fetch_artifact
 from ps_service.curated_source.resolve import EffectiveCatalogSource
@@ -448,6 +452,31 @@ def _call_restore_instrument_over_http(client: TestClient, *, token: str) -> str
     return _sse_result_text(call_response.text)
 
 
+def _grant_compliance_officer(
+    monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
+) -> None:
+    """Issue #145: seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
+    monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
+
+    The real-verified-token test below predates issue #145's authz gate (it
+    was written to prove principal/actor threading, not authorization) --
+    without this, the newly-added gate now denies it, since the token's own
+    subject holds no grant on the real store, which itself is unreachable in
+    this test environment (`PS_AUTHZ_POSTGRES_HOST` unset) and would
+    otherwise fail closed. Mirrors `test_catalog_source_authz_gate.py`'s own
+    `_fake_store_factory` pattern.
+    """
+    store = FakeAccessRoleStore()
+    store.grant(
+        actor=(subject, issuer), target=(subject, issuer), access_role=AccessRole.COMPLIANCE_OFFICER
+    )
+
+    def _factory(_config: object, **_kwargs: object) -> object:
+        return store
+
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+
+
 def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate_actor(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
@@ -458,12 +487,17 @@ def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate
     `LOCAL_TEST_PRINCIPAL_ID`) reaches both the `mcp_interface` log entries'
     `principal` AND `run_restoration_from_catalog_source`'s own delegate
     `actor` kwarg.
+
+    Issue #145: the caller must also hold `ComplianceOfficer` now that this
+    tool is gated, so `_grant_compliance_officer` seeds that grant for this
+    token's own `(sub, iss)` -- orthogonal to what this test itself proves.
     """
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-restore-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)
+    _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
     stage = _FakeCatalogRestoreStage()
     fake_dependencies = _fake_dependencies(_valid_transport(), stage)
     monkeypatch.setattr(

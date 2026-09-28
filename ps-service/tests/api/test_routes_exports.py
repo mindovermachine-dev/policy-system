@@ -18,9 +18,11 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._fakes import install_compliance_officer_grant, install_no_principal
 from ps_service.api import export_orchestration
 from ps_service.api.dependencies import provide_export_dependencies
 from ps_service.api.export_orchestration import ExportDependencies, ExportStage
+from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import InstrumentManifest
@@ -220,6 +222,20 @@ def _client_with_fake(
     return TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    `POST /exports` is now gated behind `require_access_role`, which has no
+    local-test-bypass carve-out (PLAN.md §3.2). The dedicated denial-proof
+    tests below re-monkeypatch this away for their own scenario (the same
+    `monkeypatch` fixture instance, so the later call simply wins).
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
+
+
 @pytest.mark.usefixtures("_stub_export_log")
 def test_valid_export_body_returns_200_with_expected_shape() -> None:
     stage = _FakeExportStage()
@@ -377,13 +393,81 @@ def test_malformed_body_returns_422_and_never_calls_the_delegate() -> None:
 
 
 @pytest.mark.parametrize("path", ["/exports"])
-def test_exports_route_is_unauthenticated_never_401_or_403(path: str) -> None:
+def test_exports_route_with_compliance_officer_grant_is_never_401_or_403(path: str) -> None:
+    """Issue #145: renamed from the pre-#145 `..._is_unauthenticated_never_401_or_403` --
+    the route now requires `ComplianceOfficer`; this proves a caller who holds it (the
+    file's own autouse `_grant_compliance_officer` fixture) is never turned away.
+    """
     stage = _FakeExportStage()
     client = _client_with_fake(stage)
 
     response = client.post(path, json=_valid_body())
 
     assert response.status_code not in (401, 403)
+
+
+def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #145, AC-BI-003/006: no verified principal -- 403, export delegate never called."""
+    install_no_principal(monkeypatch)
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "access_denied"
+    assert body["error"]["message"] == "You do not have the required access role for this action."
+    assert stage.call_count == 0
+
+
+def test_authenticated_user_without_compliance_officer_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified caller holding no elevated role at all -- still 403, delegate never called."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0
+
+
+def test_system_admin_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0
+
+
+def test_system_owner_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
+    )
+    stage = _FakeExportStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/exports", json=_valid_body())
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert stage.call_count == 0
 
 
 def test_actor_is_threaded_from_caller_host(

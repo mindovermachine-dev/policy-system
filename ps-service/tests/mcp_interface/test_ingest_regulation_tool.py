@@ -59,6 +59,9 @@ import json
 from typing import TYPE_CHECKING, cast
 
 from api._fakes import build_fake_pipeline_dependencies
+from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
+    FakeAccessRoleStore,
+)
 from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
@@ -67,6 +70,7 @@ from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
+from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.ingestion.adapters.errors import CellarNotFoundError
 from ps_service.logging import configure
@@ -384,8 +388,15 @@ def test_curated_celex_mismatched_short_name_is_rejected_before_the_pipeline_run
     """D-SHORTNAME-CURATED-MISMATCH: a caller-supplied `short_name` that does
     not match the curated entry's own value is rejected with the named error
     string, and no stage ever runs.
+
+    Issue #145: this test predates the tool's authz gate and never set the
+    local-test bypass (harmless before the gate existed, since nothing else
+    in the un-gated body needed it) -- now required, like every sibling
+    body-logic test in this file, so the call reaches D-SHORTNAME-CURATED-MISMATCH
+    at all rather than being denied first by the new gate.
     """
     _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
     monkeypatch.setattr(
@@ -660,6 +671,32 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
 # --- Slice 1.4: auth/audit completeness under a real verified bearer token --
 
 
+def _grant_compliance_officer(
+    monkeypatch: pytest.MonkeyPatch, *, subject: str, issuer: str
+) -> None:
+    """Issue #145: seed a `ComplianceOfficer` grant for `(subject, issuer)` on a fake store,
+    monkeypatched onto `mcp_server.PsycopgAccessRoleStore`.
+
+    The two real-verified-token tests below predate issue #145's authz gate
+    (they were written to prove principal/caller threading, not
+    authorization) -- without this, the newly-added gate now denies them
+    (or, in the LLM-unhealthy case, denies with the wrong error string)
+    since the token's own subject holds no grant on the real store, which
+    itself is unreachable in this test environment (`PS_AUTHZ_POSTGRES_HOST`
+    unset) and would otherwise fail closed. Mirrors
+    `test_catalog_source_authz_gate.py`'s own `_fake_store_factory` pattern.
+    """
+    store = FakeAccessRoleStore()
+    store.grant(
+        actor=(subject, issuer), target=(subject, issuer), access_role=AccessRole.COMPLIANCE_OFFICER
+    )
+
+    def _factory(_config: object, **_kwargs: object) -> object:
+        return store
+
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _factory)
+
+
 def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pipeline_caller(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
@@ -674,12 +711,17 @@ def test_real_verified_token_principal_threads_through_to_both_audit_log_and_pip
     this is the first test to prove it under a real verified token rather
     than the local-test-bypass principal every other test in this module
     exercises.
+
+    Issue #145: the caller must also hold `ComplianceOfficer` now that this
+    tool is gated, so `_grant_compliance_officer` seeds that grant for this
+    token's own `(sub, iss)` -- orthogonal to what this test itself proves.
     """
     _configure_complete_llm_env(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-ingest-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)
+    _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
     monkeypatch.setattr(
         mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
@@ -763,12 +805,16 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
     its `outcome="failed"` `mcp_interface` log entry, not only the
     succeeded-call case proven above. No `ingestion_run` entry is emitted at
     all here, since D-PREFLIGHT fails before the pipeline is ever called.
+
+    Issue #145: the caller must hold `ComplianceOfficer` for this call to
+    reach the D-PREFLIGHT branch at all -- see `_grant_compliance_officer`.
     """
     _configure_complete_llm_env(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-ingest-failed-7"
     token = mock_oidc_provider.mint_token(sub=token_sub)
+    _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
     fake = build_fake_pipeline_dependencies(rid="cra-1.0")
     monkeypatch.setattr(
         mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies

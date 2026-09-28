@@ -87,6 +87,7 @@ _GRANT_RBAC: dict[AccessRole, frozenset[AccessRole]] = {
     AccessRole.SYSTEM_ADMIN: frozenset({AccessRole.SYSTEM_OWNER}),
     AccessRole.POLICY_MANAGER: frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN}),
     AccessRole.SYSTEM_OWNER: frozenset({AccessRole.SYSTEM_OWNER}),
+    AccessRole.COMPLIANCE_OFFICER: frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN}),
 }
 
 # Revoke RBAC for `SYSTEM_ADMIN`/`POLICY_MANAGER` mirrors grant's own actor
@@ -102,6 +103,7 @@ _REVOKE_RBAC: dict[AccessRole, frozenset[AccessRole]] = {
     AccessRole.SYSTEM_ADMIN: frozenset({AccessRole.SYSTEM_OWNER}),
     AccessRole.POLICY_MANAGER: frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN}),
     AccessRole.SYSTEM_OWNER: frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN}),
+    AccessRole.COMPLIANCE_OFFICER: frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN}),
 }
 
 # PLAN.md §0.8's hierarchy fix: a `SYSTEM_ADMIN` minimum is also satisfied by
@@ -370,12 +372,13 @@ def grant_role(
     """Grant `access_role` to `target_subject` (AC-BI-003/004/005/013).
 
     Order of checks (PLAN.md §2.3): (1) `access_role` resolves to one of the
-    three grantable roles (else `InvalidAccessRoleError`); (2) `actor`'s own
-    RBAC per the widened 3-row table (CHANGES.md Appendix A) -- granting
-    `SystemAdmin` or `SystemOwner` requires `actor` hold `SystemOwner`;
-    granting `PolicyManager` requires `SystemOwner` or `SystemAdmin` (else
-    `AccessDeniedError`); (3) `rules.block_self_target` (else
-    `SelfGrantOrRevokeBlockedError`); (4) the store mutation.
+    four grantable roles (else `InvalidAccessRoleError`); (2) `actor`'s own
+    RBAC per the widened 4-row table (CHANGES.md Appendix A, issue #145) --
+    granting `SystemAdmin` or `SystemOwner` requires `actor` hold
+    `SystemOwner`; granting `PolicyManager` or `ComplianceOfficer` requires
+    `SystemOwner` or `SystemAdmin` (else `AccessDeniedError`); (3)
+    `rules.block_self_target` (else `SelfGrantOrRevokeBlockedError`); (4)
+    the store mutation.
 
     Args:
         actor: The granting caller's verified `(sub, iss)` identity.
@@ -383,7 +386,7 @@ def grant_role(
             implied -- PLAN.md §0.12, always this process's own configured
             issuer).
         access_role: The caller-supplied role name -- `"SystemOwner"`,
-            `"SystemAdmin"`, or `"PolicyManager"`.
+            `"SystemAdmin"`, `"PolicyManager"`, or `"ComplianceOfficer"`.
         store: The `AccessRoleStore` to mutate.
         issuer: This process's configured issuer, filled in as the target's
             `principal_issuer` (PLAN.md §0.12).
@@ -394,7 +397,7 @@ def grant_role(
         regardless of which role was just granted.
 
     Raises:
-        InvalidAccessRoleError: `access_role` is not one of the three
+        InvalidAccessRoleError: `access_role` is not one of the four
             grantable roles (AC-BI-013).
         AccessDeniedError: `actor` does not hold the role this grant
             requires -- one `outcome='rejected'` `access_role.grant` audit
@@ -476,7 +479,7 @@ def revoke_role(
         target_subject: The principal to revoke the role from (`iss` implied,
             PLAN.md §0.12).
         access_role: The caller-supplied role name -- `"SystemOwner"`,
-            `"SystemAdmin"`, or `"PolicyManager"`.
+            `"SystemAdmin"`, `"PolicyManager"`, or `"ComplianceOfficer"`.
         store: The `AccessRoleStore` to mutate.
         issuer: This process's configured issuer, filled in as the target's
             `principal_issuer`.
@@ -486,7 +489,7 @@ def revoke_role(
         one active `SystemOwner` exists after this revoke (AC-BI-007).
 
     Raises:
-        InvalidAccessRoleError: `access_role` is not one of the three roles
+        InvalidAccessRoleError: `access_role` is not one of the four roles
             `revoke_role` manages (AC-BI-013).
         AccessDeniedError: `actor` does not hold the role this revoke
             requires -- one `outcome='rejected'` `access_role.revoke` audit

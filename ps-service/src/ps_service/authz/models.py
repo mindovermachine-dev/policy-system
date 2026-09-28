@@ -37,6 +37,7 @@ class AccessRole(StrEnum):
     SYSTEM_OWNER = "SystemOwner"
     SYSTEM_ADMIN = "SystemAdmin"
     POLICY_MANAGER = "PolicyManager"
+    COMPLIANCE_OFFICER = "ComplianceOfficer"
 
 
 @dataclass(frozen=True, slots=True)

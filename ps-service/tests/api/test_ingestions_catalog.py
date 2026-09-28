@@ -21,11 +21,16 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import build_fake_pipeline_dependencies
+from api._fakes import (
+    build_fake_pipeline_dependencies,
+    install_compliance_officer_grant,
+    install_no_principal,
+)
 from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import (
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
 )
+from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarNotFoundError
@@ -119,6 +124,23 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    The ``source: "catalog"`` path of `POST /ingestions` is now gated behind
+    `require_access_role` (inline, only on this non-internal branch --
+    `test_ingestions_internal.py` needs no such fixture and is entirely
+    untouched by this change). `require_access_role` has no local-test-bypass
+    carve-out (PLAN.md §3.2). The dedicated denial-proof tests below
+    re-monkeypatch this away for their own scenario (the same `monkeypatch`
+    fixture instance, so the later call simply wins).
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
 
 
 def test_valid_celex_runs_pipeline_and_returns_run_id_and_stages() -> None:
@@ -407,3 +429,70 @@ def test_curated_celex_unaffected_by_cellar_fallback_path(monkeypatch: pytest.Mo
     body = response.json()
     assert body["regulatory_instrument_id"] == "CRA-1.0"
     assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
+
+
+# --- ComplianceOfficer gate, catalog path only (issue #145) -----------------
+
+
+def test_no_principal_at_all_is_denied_with_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #145, AC-BI-003/006: no verified principal -- 403, catalog pipeline never starts."""
+    install_no_principal(monkeypatch)
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+
+    assert response.status_code == 403
+    body = response.json()
+    assert body["error"]["code"] == "access_denied"
+    assert body["error"]["message"] == "You do not have the required access role for this action."
+    assert fake.recorder.order == []
+
+
+def test_authenticated_user_without_compliance_officer_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified caller holding no elevated role at all -- still 403, pipeline never starts."""
+    install_compliance_officer_grant(monkeypatch, granted=False)
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.recorder.order == []
+
+
+def test_system_admin_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemAdmin` alone does not implicitly satisfy `ComplianceOfficer`."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_ADMIN})
+    )
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.recorder.order == []
+
+
+def test_system_owner_without_explicit_grant_is_denied_with_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: `SystemOwner` alone does not implicitly satisfy `ComplianceOfficer` either."""
+    install_compliance_officer_grant(
+        monkeypatch, granted=False, roles=frozenset({AccessRole.SYSTEM_OWNER})
+    )
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "access_denied"
+    assert fake.recorder.order == []

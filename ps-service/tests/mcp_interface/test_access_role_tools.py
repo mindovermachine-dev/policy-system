@@ -341,6 +341,46 @@ def test_new_system_admin_grants_policy_manager_to_a_third_principal(
     )
 
 
+def test_new_system_admin_grants_compliance_officer_and_it_round_trips_via_list_and_revoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #145 Slice 1: ComplianceOfficer grant/list/revoke via the real MCP tool call path.
+
+    Mirrors `test_new_system_admin_grants_policy_manager_to_a_third_principal` above (a
+    SystemAdmin, not just a SystemOwner, may grant it) and additionally proves the granted
+    role shows up in `list-access-roles`'s roster and cleanly revokes.
+    """
+    configure()
+    monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
+    store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
+        _call_grant_access_role(_SECOND_CALLER_SUBJECT, "SystemAdmin")
+
+    with _verified_actor(sub=_SECOND_CALLER_SUBJECT):
+        grant_result = _call_grant_access_role(_THIRD_CALLER_SUBJECT, "ComplianceOfficer")
+
+    assert grant_result.is_error is False
+    target = (_THIRD_CALLER_SUBJECT, _ACTOR_ISSUER)
+    assert AccessRole.COMPLIANCE_OFFICER in store.active_roles_for(target)
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        roster_result = _call_list_access_roles()
+    roster_body = json.loads(_text(roster_result))
+    subjects_and_roles = {
+        (entry["principal_subject"], entry["access_role"]) for entry in roster_body["assignments"]
+    }
+    assert (_THIRD_CALLER_SUBJECT, "ComplianceOfficer") in subjects_and_roles
+
+    with _verified_actor(sub=_SECOND_CALLER_SUBJECT):
+        revoke_result = _call_revoke_access_role(_THIRD_CALLER_SUBJECT, "ComplianceOfficer")
+
+    assert revoke_result.is_error is False
+    assert AccessRole.COMPLIANCE_OFFICER not in store.active_roles_for(target)
+
+
 def test_system_owner_grants_a_peer_system_owner_and_both_show_as_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

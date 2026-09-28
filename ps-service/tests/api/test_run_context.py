@@ -29,6 +29,7 @@ from api._fakes import (
     FakeCuratedSourceTransport,
     build_fake_curated_catalog_dependencies,
     build_fake_pipeline_dependencies,
+    install_compliance_officer_grant,
 )
 from ps_service.api.dependencies import (
     provide_curated_catalog_dependencies,
@@ -76,6 +77,22 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def _grant_compliance_officer(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every test below drives a caller holding `ComplianceOfficer` by default (issue #145).
+
+    The `source: "catalog"` path of `POST /ingestions` is now gated behind
+    `require_access_role`, which has no local-test-bypass carve-out
+    (PLAN.md §3.2) -- so every pre-existing happy-path test in this file that
+    posts a `source: "catalog"` body needs a principal holding the role.
+    `source: "internal"` requests and `GET /catalog` are unaffected by the
+    gate, but installing this grant unconditionally is harmless for them too.
+    """
+    install_compliance_officer_grant(monkeypatch, granted=True)
 
 
 def test_log_lines_emitted_during_a_request_carry_the_returned_run_id(

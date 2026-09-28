@@ -30,6 +30,7 @@ from ps_service.api.dependencies import (
     provide_restore_dependencies,
     provide_restore_from_catalog_dependencies,
     provide_run_id,
+    require_access_role,
 )
 from ps_service.api.errors import (
     CuratedSourceUnavailableError,
@@ -77,6 +78,7 @@ from ps_service.api.run_status import get_stage
 from ps_service.auth import (
     Principal,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
+from ps_service.authz.models import AccessRole
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
@@ -130,15 +132,24 @@ async def create_ingestion(
     same pipeline a curated one would (AC-BI-003/004), fetching the document at
     most once for the whole request (AC-BI-006). A stage failure -- including a
     Cellar/ELI outage during resolution -- surfaces as a 502 naming the failing
-    stage (AC-BI-007/008). A ``source: "internal"`` request carries the intake
-    document's content directly in the body (issue #91 -- no server-side path
-    resolution) and runs the internal-seed pipeline (issue #54, S2): today,
-    one ``internal_ingestion`` stage that parses, validates, mints, and
-    persists the submission into ``{short}_baseline``/``{short}_native``.
+    stage (AC-BI-007/008). This ``source: "catalog"`` path is gated behind
+    ``require_access_role(AccessRole.COMPLIANCE_OFFICER)`` (issue #145), checked
+    inline -- off the event loop, via ``run_in_threadpool`` -- immediately after
+    the ``source == "internal"`` branch has already returned, before any
+    Cellar/catalog pipeline dispatch begins; an unprivileged or unauthenticated
+    caller gets a 403 (``AccessDeniedError``) with no pipeline call made.
+    A ``source: "internal"`` request carries the intake document's content
+    directly in the body (issue #91 -- no server-side path resolution) and runs
+    the internal-seed pipeline (issue #54, S2): today, one ``internal_ingestion``
+    stage that parses, validates, mints, and persists the submission into
+    ``{short}_baseline``/``{short}_native``. The internal path stays entirely
+    ungated (AC-BI-011) -- it is ``ps-cli ingest document``'s existing
+    internal-authoring flow, out of scope for issue #145.
 
     Args:
         request_body: The ``source``-discriminated request body.
-        http_request: The raw request, for the caller host (M4).
+        http_request: The raw request, for the caller host (M4) and for the
+            ``ComplianceOfficer`` gate on the catalog path (issue #145).
         run_id: The request-scoped, server-minted run id (injected); used as
             the effective correlation id only when the request body doesn't
             supply its own (catalog requests only -- see ``effective_run_id``).
@@ -149,6 +160,8 @@ async def create_ingestion(
         An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
 
     Raises:
+        AccessDeniedError: The caller (catalog path only) lacks
+            ``ComplianceOfficer`` (403; issue #145).
         CatalogIdentifierNotFoundError: The CELEX is absent from the curated
             catalog and does not exist on Cellar/ELI either (404).
         InternalSeedValidationError: The internal request's document fails
@@ -166,6 +179,7 @@ async def create_ingestion(
             dependencies=dependencies,
         )
         return _to_accepted_response(run_id, outcome)
+    await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)
     effective_run_id = request_body.run_id or run_id
     entry = find_by_celex(request_body.celex)
     ingestion_adapter: IngestionAdapter | None = None
@@ -263,7 +277,11 @@ async def create_restoration(
 ) -> RestorationAcceptedResponse:
     """Restore one curated instrument's artifact (D5, ``POST /restorations``).
 
-    Thin route wiring over ``restore_orchestration.run_restoration`` -- a
+    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
+    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
+    ``SystemOwner`` with no explicit grant, is denied before this function ever
+    runs -- no change to this function's own body). Thin route wiring over
+    ``restore_orchestration.run_restoration`` -- a
     checksum/schema_version rejection surfaces as 422
     (``RestoreArtifactRejectedError``), any other restore failure as 502
     naming the failing stage (``RestoreStageFailedError``).
@@ -294,7 +312,11 @@ async def create_restoration_from_catalog(
 
     Issue #125, ``POST /restorations/from-catalog`` -- an additive sibling to
     ``POST /restorations`` (D-NEW-ROUTE): the upload path
-    (``create_restoration``) is entirely unaffected by this route. Thin route
+    (``create_restoration``) is entirely unaffected by this route. Issue #145:
+    gated at the route level behind ``require_access_role(AccessRole.
+    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
+    ``SystemOwner`` with no explicit grant, is denied before this function ever
+    runs -- no change to this function's own body). Thin route
     wiring over ``restore_orchestration.run_restoration_from_catalog_source``:
     an unreachable source or a missing/malformed fetched artifact surfaces as
     502 (``CuratedSourceUnavailableError``, AC-BI-004/006); a checksum/
@@ -329,7 +351,11 @@ async def create_export(
 ) -> ExportAcceptedResponse:
     """Export one already-ingested curated instrument (issue #71, ``POST /exports``).
 
-    Thin route wiring over ``export_orchestration.run_export`` -- an unknown
+    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
+    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
+    ``SystemOwner`` with no explicit grant, is denied before this function ever
+    runs -- no change to this function's own body). Thin route wiring over
+    ``export_orchestration.run_export`` -- an unknown
     or malformed ``instrument_id`` surfaces as 404
     (``ExportInstrumentNotFoundError``), a missing embedding model config as
     503 (``ExportConfigIncompleteError``), and any other export failure as
@@ -373,8 +399,11 @@ async def create_change_check(
 ) -> ChangeCheckResponse:
     """Sweep every tracked instrument for amendments and re-ingest any found.
 
-    No auth dependency, matching ``POST /ingestions``'s posture (AC-BI-001).
-    Delegates to ``change_check_orchestration.run_change_check_sweep`` (D2's
+    Issue #145: gated at the route level behind ``require_access_role(AccessRole.
+    COMPLIANCE_OFFICER)`` (a caller lacking that role, including a ``SystemAdmin``/
+    ``SystemOwner`` with no explicit grant, is denied before this function ever
+    runs -- no change to this function's own body). Delegates to
+    ``change_check_orchestration.run_change_check_sweep`` (D2's
     algorithm, PLAN.md §4): opens the merged ``policy_system`` graph, reads
     the tracked-instrument set once, polls for amendments, and reports one
     outcome per tracked instrument -- ``current``/``poll_failed``/
@@ -599,24 +628,28 @@ def build_api_router() -> APIRouter:
         create_restoration,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
     )
     router.add_api_route(
         "/restorations/from-catalog",
         create_restoration_from_catalog,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
     )
     router.add_api_route(
         "/exports",
         create_export,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
     )
     router.add_api_route(
         "/change-checks",
         create_change_check,
         methods=["POST"],
         status_code=status.HTTP_200_OK,
+        dependencies=[Depends(require_access_role(AccessRole.COMPLIANCE_OFFICER))],
     )
     router.add_api_route("/near-misses", list_near_misses, methods=["GET"])
     router.add_api_route(

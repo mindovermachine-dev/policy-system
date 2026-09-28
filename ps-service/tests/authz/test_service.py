@@ -156,6 +156,24 @@ def test_require_role_never_lets_system_owner_satisfy_a_policy_manager_minimum_b
         require_role(_FIRST_CALLER, minimum=AccessRole.POLICY_MANAGER, store=store)
 
 
+def test_require_role_never_lets_system_owner_satisfy_compliance_officer_minimum_by_accident() -> (
+    None
+):
+    """Issue #145 Slice 1, mirroring the PolicyManager non-hierarchy proof above.
+
+    Confirms the SystemAdmin-only hierarchy fix does not accidentally extend
+    to ComplianceOfficer either -- a bare AuthenticatedUser-only principal
+    (never granted ComplianceOfficer) is still denied a ComplianceOfficer
+    gate even though nothing in this slice ever calls `require_role` with
+    that minimum yet.
+    """
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps SystemOwner only
+
+    with pytest.raises(AccessDeniedError):
+        require_role(_FIRST_CALLER, minimum=AccessRole.COMPLIANCE_OFFICER, store=store)
+
+
 def test_list_assignments_returns_every_row_and_the_floor_warning() -> None:
     """AC-BI-007's floor condition: with exactly one active SystemOwner, the warning is true."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
@@ -275,6 +293,48 @@ def test_grant_role_lets_the_system_owner_grant_policy_manager_directly() -> Non
     )
 
     assert AccessRole.POLICY_MANAGER in store.active_roles_for(_SECOND_CALLER)
+
+
+def test_grant_role_lets_a_system_admin_grant_compliance_officer() -> None:
+    """Issue #145 Slice 1: ComplianceOfficer's grant RBAC mirrors PolicyManager's own row --
+    a SystemAdmin (not just a SystemOwner) may grant it.
+    """
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps FIRST_CALLER as SystemOwner
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_SECOND_CALLER[0],
+        access_role="SystemAdmin",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    result = grant_role(
+        actor=_SECOND_CALLER,
+        target_subject=_THIRD_CALLER[0],
+        access_role="ComplianceOfficer",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    assert AccessRole.COMPLIANCE_OFFICER in store.active_roles_for(_THIRD_CALLER)
+    assert result.system_owner_floor_warning is True
+
+
+def test_grant_role_lets_the_system_owner_grant_compliance_officer_directly() -> None:
+    """Issue #145 Slice 1: a SystemOwner may also grant ComplianceOfficer directly."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)
+
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_SECOND_CALLER[0],
+        access_role="ComplianceOfficer",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    assert AccessRole.COMPLIANCE_OFFICER in store.active_roles_for(_SECOND_CALLER)
 
 
 def test_grant_role_lets_the_system_owner_grant_a_peer_system_owner() -> None:
@@ -521,6 +581,29 @@ def test_revoke_role_round_trips_policy_manager() -> None:
     )
 
     assert AccessRole.POLICY_MANAGER not in store.active_roles_for(_SECOND_CALLER)
+
+
+def test_revoke_role_round_trips_compliance_officer() -> None:
+    """Issue #145 Slice 1: ComplianceOfficer revokes cleanly, mirroring PolicyManager's own test."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_SECOND_CALLER[0],
+        access_role="ComplianceOfficer",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    revoke_role(
+        actor=_FIRST_CALLER,
+        target_subject=_SECOND_CALLER[0],
+        access_role="ComplianceOfficer",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    assert AccessRole.COMPLIANCE_OFFICER not in store.active_roles_for(_SECOND_CALLER)
 
 
 def test_revoke_role_blocks_self_revoke() -> None:

@@ -114,7 +114,8 @@ the artifact and restores it, given just the `instrument_id`: _"Use the
 ps-restore-instrument skill to restore CRA-1.0."_ This loads whichever curated
 instrument — external or internal, e.g. an Engineering Practices standard — is
 registered under that id. A freshly deployed instance has an empty graph and
-answers nothing until something is restored or ingested.
+answers nothing until something is restored or ingested. Requires
+`ComplianceOfficer`; see [Role System](#role-system).
 
 ### Find and ingest a regulation from EUR-Lex
 
@@ -141,7 +142,10 @@ instance's FalkorDB and LLM interface configured. It reports the resolved
 `regulatory_instrument_id` and each pipeline stage's outcome; if this exact
 identifier was already fully ingested, it instead reports that immediately
 with no pipeline stages run; or, it reports a specific named error if
-something fails.
+something fails. Requires `ComplianceOfficer`; see [Role
+System](#role-system). This applies to catalog/CELEX ingestion only —
+`ps-cli ingest document` (internal-document ingestion, below) has no such
+requirement.
 
 ---
 
@@ -240,13 +244,14 @@ ps-assess-instrument-applicability skill."_
 
 Every authenticated caller is automatically a member of `AuthenticatedUser`
 — there is no explicit grant for it, and it can't be individually revoked.
-Beyond that baseline, PS Service enforces three additional roles:
+Beyond that baseline, PS Service enforces four additional roles:
 
 | Role | How it's granted | What it currently gates |
 | --- | --- | --- |
 | `SystemOwner` | Automatically, once — the very first authenticated caller ever to reach the instance. Never grantable afterward; exactly one exists for the life of a real deployment. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
+| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `restore_instrument`, `check_regulations`. No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
 Two safety rules apply to every grant or revoke, regardless of role:
