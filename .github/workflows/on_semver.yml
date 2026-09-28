@@ -147,10 +147,19 @@ jobs:
           path: /tmp/images
       - name: Push each architecture under its build tag
         run: |
-          for arch in amd64 arm64; do
+          push_one() {
+            local arch="$1"
             docker image load -i "/tmp/images/ps-service-$arch.tar"
             docker image tag "ps-service:smoke-$arch" "$IMAGE:build-$arch"
             docker image push "$IMAGE:build-$arch"
+          }
+          pids=()
+          for arch in amd64 arm64; do
+            push_one "$arch" &
+            pids+=("$!")
+          done
+          for pid in "${pids[@]}"; do
+            wait "$pid"
           done
       - name: Create the manifest list for the release tag and latest
         run: |

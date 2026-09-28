@@ -858,10 +858,17 @@ def test_publish_job_downloads_both_uploaded_image_artifacts() -> None:
 def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() -> None:
     """AC-BI-002/AC-BI-007: what is pushed is what was smoke-tested, byte for byte.
 
-    One fully-expanded token vector pins the whole hop: load the downloaded tarball, tag
-    **that loaded image** — `ps-service:smoke-$arch`, the tag the smoke test ran against — as
-    the per-arch build tag, and push that. Tagging any other local reference (a base image, a
-    freshly built one) or sourcing the tarball from anywhere else breaks this vector.
+    A contiguous token subsequence pins the load-tag-push hop: load the downloaded
+    tarball, tag **that loaded image** — `ps-service:smoke-$arch`, the tag the smoke
+    test ran against — as the per-arch build tag, and push that. Tagging any other
+    local reference (a base image, a freshly built one) or sourcing the tarball from
+    anywhere else breaks this subsequence.
+
+    Deliberately a subsequence match, not a full-body equality: the two arches are
+    pushed concurrently (each backgrounded, then `wait`ed on) to cut publish wallclock,
+    so the surrounding control flow (a helper function plus PID bookkeeping) differs
+    from a plain serial loop. The provenance chain this test protects is unaffected by
+    that — each arch still loads, tags and pushes only its own tarball.
     """
     publish = _job(_PUBLISH_JOB)
     pushes = [
@@ -871,13 +878,7 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     ]
     assert len(pushes) == 1, f"expected exactly one image-push step, found {len(pushes)}"
 
-    assert _effective_tokens(publish, pushes[0]) == [
-        "for",
-        "arch",
-        "in",
-        "amd64",
-        "arm64;",
-        "do",
+    expected_hop = [
         "docker",
         "image",
         "load",
@@ -892,8 +893,21 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
         "image",
         "push",
         _BUILD_TAG_IN_SHELL,
-        "done",
-    ], "the pushed image must be the loaded, smoke-tested one and nothing else"
+    ]
+    tokens = _effective_tokens(publish, pushes[0])
+    hop_positions = [
+        index
+        for index in range(len(tokens) - len(expected_hop) + 1)
+        if tokens[index : index + len(expected_hop)] == expected_hop
+    ]
+    assert len(hop_positions) == 1, (
+        "expected the load-tag-push hop to appear exactly once (defined once, applied to "
+        f"both arches by substitution), found {len(hop_positions)} occurrences in {tokens}"
+    )
+
+    assert any(token.startswith("amd64") for token in tokens) and any(
+        token.startswith("arm64") for token in tokens
+    ), f"both matrix arches must actually drive the load-tag-push hop, got tokens {tokens}"
 
 
 def _invokes_docker_build(body: str) -> bool:

@@ -52,9 +52,22 @@ runs:
       # Fallback if repo action policy ever forbids astral-sh/setup-uv:
       #   curl -LsSf https://astral.sh/uv/install.sh | sh   (in a `shell: bash` step)
 
-    - name: Sync Python dev dependencies
-      shell: bash
-      run: uv sync --group dev
+    - name: Cache CI tool binaries (actionlint, Helm, helm-unittest)
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/local/bin/actionlint
+          /usr/local/bin/helm
+          ~/.local/share/helm/plugins
+        key: tools-actionlint1.7.12-helm3.18.4-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Cache Helm chart dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          charts/policy-system/charts
+          charts/policy-system/Chart.lock
+        key: helm-deps-${{ hashFiles('charts/policy-system/Chart.yaml') }}
 
     - name: Prepare runner environment
       shell: bash

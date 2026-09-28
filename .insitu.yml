@@ -114,11 +114,15 @@ inventory:
 
   - id: helm-dependency-build
     name: Fetch the Helm chart's dependencies (e.g. Authentik)
-    # `helm dependency build` requires each dependency's repo to already be
-    # registered via `helm repo add`, which a fresh CI runner never has. `helm
-    # dependency update` resolves unmanaged repository URLs directly, so it
-    # works on a clean runner without an extra `helm repo add` step.
-    command: helm dependency update charts/policy-system
+    # `helm dependency build` trusts Chart.lock and skips re-fetching a
+    # dependency archive that's already present under charts/policy-system/charts
+    # and matches the locked digest - unlike `helm dependency update`, which
+    # always re-resolves from the repo URL regardless of what's on disk. `build`
+    # requires the repo to be registered first, so add it in the same command
+    # rather than as a separate (possibly unordered) check.
+    command: |
+      helm repo add authentik https://charts.goauthentik.io
+      helm dependency build charts/policy-system
 
   - id: helm-lint
     name: Lint the Helm chart
@@ -203,7 +207,6 @@ waves:
     parallel: true
     checks:
       - gh-auth
-      - install-gh-insitu
       - repo-gitconfig
       - install-lint-tools
       - install-actionlint
