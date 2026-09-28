@@ -28,11 +28,18 @@ class PolicyCreateDraftDetails(AuditDetails):
 
     `outcome='applied'`: `reason_code` is absent. `outcome='rejected'`
     (AC-BI-022's title-collision rejection): `reason_code` is populated.
+
+    `supersedes_policy_id` (issue #136, Slice 6, TASK.md's own
+    Implementation-decisions paragraph): added directly to this existing
+    model rather than a new/separate details model. Present-but-`None` on an
+    ordinary (non-fork) draft; populated with the superseded Policy's id when
+    `create-policy-draft` was called with `supersedes_policy_id` set.
     """
 
     affected_node_ids: tuple[str, ...]
     to_status: Literal["draft"] = "draft"
     reason_code: Literal["title_already_exists"] | None = None
+    supersedes_policy_id: str | None = None
 
 
 class PolicyTransitionDetails(AuditDetails):

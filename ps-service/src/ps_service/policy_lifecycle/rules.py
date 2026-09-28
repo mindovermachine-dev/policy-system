@@ -15,6 +15,15 @@ it includes `"read"` alongside PLAN.md's original
 Neither `require_status` nor `block_self_approval` is ever called with
 `action="read"` -- `require_status`'s per-action status lookup only ever
 receives one of the four transition actions.
+
+Issue #136 (Slice 1, PLAN.md §1.2) widens `action` a second time, adding
+`"edit"` -- the six draft-content PATCH/add tools' own status-gate action,
+paired with `_REQUIRED_STATUS_BY_ACTION["edit"] = "draft"` below. Every one
+of those six tools builds a `PolicyLifecycleRuleContext` with
+`action="edit"` for both `require_owner` (owner-or-elevated-role gate) and
+`require_status` (must currently be `"draft"`) -- `require_owner` needed no
+change at all (it is already action-agnostic); `require_status` picks up
+the new action for free via `_REQUIRED_STATUS_BY_ACTION`'s own dict lookup.
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ _REQUIRED_STATUS_BY_ACTION = {
     "approve": "proposed",
     "reject": "proposed",
     "revert": "proposed",
+    "edit": "draft",
 }
 
 
@@ -47,7 +57,7 @@ class PolicyLifecycleRuleContext:
 
     actor: tuple[str, str]
     owner: tuple[str, str]
-    action: Literal["propose", "approve", "reject", "revert", "read"]
+    action: Literal["propose", "approve", "reject", "revert", "read", "edit"]
     current_status: Literal["draft", "proposed", "approved", "deprecated"]
 
 

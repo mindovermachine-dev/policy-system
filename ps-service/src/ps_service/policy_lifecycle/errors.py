@@ -73,6 +73,49 @@ class PolicyTitleAlreadyExistsError(Exception):
         self.existing_policy_id = existing_policy_id
 
 
+class PolicyStandardNotFoundError(Exception):
+    """No `Standard` node exists with the given id (issue #136, Slice 3).
+
+    `Policy`-prefixed to match every other error in this module (7/7,
+    CHANGES.md finding #7) despite naming a Standard, not a Policy -- this
+    component's own error-naming convention groups every exception it raises
+    under one prefix rather than one per node type.
+
+    `standard_id` is supplied by the caller in the very request that raises
+    this, so echoing it back leaks nothing new.
+    """
+
+    def __init__(self, standard_id: str) -> None:
+        """Build the message from the already-caller-known `standard_id`.
+
+        Args:
+            standard_id: The id the caller looked up; not found.
+        """
+        super().__init__(f"no Standard exists with id {standard_id!r}")
+        self.standard_id = standard_id
+
+
+class PolicyControlNotFoundError(Exception):
+    """No `Control` node exists with the given id (issue #136, Slice 5).
+
+    `Policy`-prefixed to match every other error in this module (CHANGES.md
+    finding #7), despite naming a Control -- same rationale as
+    `PolicyStandardNotFoundError`.
+
+    `control_id` is supplied by the caller in the very request that raises
+    this, so echoing it back leaks nothing new.
+    """
+
+    def __init__(self, control_id: str) -> None:
+        """Build the message from the already-caller-known `control_id`.
+
+        Args:
+            control_id: The id the caller looked up; not found.
+        """
+        super().__init__(f"no Control exists with id {control_id!r}")
+        self.control_id = control_id
+
+
 class PolicyIncompleteForProposalError(Exception):
     """A `Policy` was proposed with zero `Standard`s attached (AC-BI-013)."""
 
@@ -112,6 +155,29 @@ class PolicySelfApprovalBlockedError(Exception):
     def __init__(self) -> None:
         """Fix the message so every raise site is byte-identical (AC-BI-015)."""
         super().__init__("you cannot approve or reject a Policy you own")
+
+
+class PolicySupersedePriorNotApprovedError(Exception):
+    """`supersedes_policy_id` names a Policy that is not `approved` (issue #136, AC-BI-011).
+
+    `policy_id` and `actual_status` are both already known to the caller (the
+    id they just supplied, and the Policy's real current state) -- naming
+    them is actionable, not a leak.
+    """
+
+    def __init__(self, policy_id: str, actual_status: str) -> None:
+        """Build the message from the caller-supplied `policy_id` and its actual status.
+
+        Args:
+            policy_id: The `supersedes_policy_id` the caller attempted to fork.
+            actual_status: That Policy's actual current status.
+        """
+        super().__init__(
+            f"Policy {policy_id!r} cannot be superseded: current status is "
+            f"{actual_status!r}, requires 'approved'"
+        )
+        self.policy_id = policy_id
+        self.actual_status = actual_status
 
 
 class PolicyLifecycleGraphUnavailableError(Exception):

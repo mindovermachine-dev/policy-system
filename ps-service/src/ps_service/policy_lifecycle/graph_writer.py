@@ -60,24 +60,39 @@ gate/cascade failure is translated (D-9).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import redis.exceptions
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 __all__ = [
     "ControlDraft",
     "ControlRecord",
+    "ControlWithParent",
+    "ForkedControlRecord",
+    "ForkedStandardRecord",
     "PolicyRecord",
     "StandardDraft",
     "StandardRecord",
+    "StandardWithParent",
+    "add_control_to_standard",
+    "add_standard_to_policy",
     "backfill_governance_status",
     "cascade_status",
     "create_policy_draft",
     "find_approved_prior",
+    "find_control_with_parent",
     "find_existing_policy",
+    "find_standard_with_parent",
     "read_policy_tree",
+    "read_policy_tree_for_fork",
+    "update_control_fields",
+    "update_policy_fields",
+    "update_standard_fields",
 ]
 
 
@@ -254,11 +269,19 @@ class ControlDraft:
 
     `id` is already computed by the caller (`domain_mapper.identity.control_id`)
     -- this module issues Cypher only, it never derives identity itself.
+
+    `extra_properties` (issue #136, Slice 6): additional content fields to
+    write alongside `title`/`type`/`status`, used by the supersede fork to
+    carry a forked Control's full content across (`description`,
+    `implementation_status`, etc.) -- every existing non-fork call site
+    passes nothing, so `extra_properties` defaults to `{}` and this dataclass
+    stays byte-for-byte backward compatible.
     """
 
     id: str
     title: str
     control_type: str
+    extra_properties: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,11 +290,16 @@ class StandardDraft:
 
     `id` is already computed by the caller (`domain_mapper.identity.standard_id`),
     same convention as `ControlDraft.id`.
+
+    `extra_properties` (issue #136, Slice 6): same purpose as
+    `ControlDraft.extra_properties`, one level up -- defaults to `{}`,
+    preserving every existing non-fork call site unchanged.
     """
 
     id: str
     title: str
     controls: tuple[ControlDraft, ...] = field(default_factory=tuple)
+    extra_properties: Mapping[str, object] = field(default_factory=dict[str, object])
 
 
 def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] | None:
@@ -309,18 +337,34 @@ def create_policy_draft(
     owner_subject: str,
     owner_issuer: str,
     standards: tuple[StandardDraft, ...] = (),
+    supersedes_policy_id: str | None = None,
+    version: str = "1",
 ) -> None:
     """Mint a new draft Policy, plus any optional Standard/Control children (S11).
 
-    The Policy node is written with `status="draft"`, `version="1"`, and the
-    owner pair -- every optional Standard/Control child is written with
-    `status="draft"` unconditionally (D-6), regardless of any status the
-    caller might otherwise have implied. Each node is its own `MERGE`
-    statement (mirrors `ingestion.adapters.internal_seed.persist`'s own
-    per-node `MERGE (n:Label {id: $id}) SET n += $properties` shape) --
-    this call site is only ever reached after `find_existing_policy` has
-    already confirmed `policy_id` is unused, so `MERGE` here can never
-    collide with a pre-existing node.
+    The Policy node is written with `status="draft"`, `version=version`
+    (defaults to `"1"`, the pre-#136 literal -- every existing non-fork call
+    site keeps working byte-for-byte unchanged), and the owner pair -- every
+    optional Standard/Control child is written with `status="draft"`
+    unconditionally (D-6), regardless of any status the caller might
+    otherwise have implied. Each node is its own `MERGE` statement (mirrors
+    `ingestion.adapters.internal_seed.persist`'s own per-node
+    `MERGE (n:Label {id: $id}) SET n += $properties` shape) -- this call site
+    is only ever reached after `find_existing_policy` has already confirmed
+    `policy_id` is unused, so `MERGE` here can never collide with a
+    pre-existing node.
+
+    `supersedes_policy_id` (issue #136, Slice 6): when not `None`, one
+    additional statement links the superseded prior Policy to this new one
+    via a single Policy-level `(prior)-[:SUPERSEDED_BY]->(new)` edge --
+    AC-BI-005's "no per-Standard/Control lineage edges" requirement, so no
+    other edge is ever written for the fork. Each Standard/Control child's
+    own `extra_properties` (when the caller is forking, the source tree's
+    full content minus `id`/`title`/`status`) is spread into that node's
+    `SET` properties BEFORE `title`/`type`/`status` are set, so a stray
+    copied `title`/`status`/`type` in `extra_properties` can never win --
+    every non-fork call site passes `extra_properties={}` (the dataclass
+    default), so this is a strict no-op there.
 
     Args:
         graph: The single-tenant policy graph handle.
@@ -330,6 +374,12 @@ def create_policy_draft(
         owner_issuer: The creating actor's `iss`.
         standards: Optional Standard children (each with its own optional
             Control children), ids already computed by the caller.
+        supersedes_policy_id: The prior Policy id this new draft amends via
+            `SUPERSEDED_BY`, or `None` for an ordinary (non-fork) draft.
+        version: The new Policy's own `version` (string-typed, per
+            `docs/artifacts`'s "version stays a string" decision) --
+            `"1"` for an ordinary draft, or `str(int(prior_version) + 1)`
+            for a fork (computed by the caller, `service.create_policy_draft`).
     """
     _execute_query(
         graph,
@@ -339,13 +389,23 @@ def create_policy_draft(
             "properties": {
                 "title": title,
                 "status": "draft",
-                "version": "1",
+                "version": version,
                 "owner_subject": owner_subject,
                 "owner_issuer": owner_issuer,
             },
         },
     )
+    if supersedes_policy_id is not None:
+        _execute_query(
+            graph,
+            "MATCH (prior:Policy {id: $prior_id}), (new:Policy {id: $new_id}) "
+            "MERGE (prior)-[:SUPERSEDED_BY]->(new)",
+            params={"prior_id": supersedes_policy_id, "new_id": policy_id},
+        )
     for standard in standards:
+        standard_properties: dict[str, object] = dict(standard.extra_properties)
+        standard_properties["title"] = standard.title
+        standard_properties["status"] = "draft"
         _execute_query(
             graph,
             "MATCH (p:Policy {id: $policy_id}) "
@@ -354,10 +414,14 @@ def create_policy_draft(
             params={
                 "policy_id": policy_id,
                 "standard_id": standard.id,
-                "properties": {"title": standard.title, "status": "draft"},
+                "properties": standard_properties,
             },
         )
         for control in standard.controls:
+            control_properties: dict[str, object] = dict(control.extra_properties)
+            control_properties["title"] = control.title
+            control_properties["type"] = control.control_type
+            control_properties["status"] = "draft"
             _execute_query(
                 graph,
                 "MATCH (s:Standard {id: $standard_id}) "
@@ -366,11 +430,7 @@ def create_policy_draft(
                 params={
                     "standard_id": standard.id,
                     "control_id": control.id,
-                    "properties": {
-                        "title": control.title,
-                        "type": control.control_type,
-                        "status": "draft",
-                    },
+                    "properties": control_properties,
                 },
             )
 
@@ -510,3 +570,545 @@ def read_policy_tree(graph: GraphHandle, policy_id: str) -> PolicyRecord | None:
         owner_issuer=owner_issuer,
         standards=standards,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ForkedControlRecord:
+    """One Control's full content, read for a supersede fork (issue #136, Slice 6).
+
+    Deliberately **not** `ControlRecord` (id/title/status/control_type only,
+    G7) -- forking needs every content field (`description`,
+    `implementation_status`, `execution_frequency`, ...), not just the
+    narrow set `read_policy_tree` returns for `get-policy`'s own view.
+    `properties` is the Control node's full property map as FalkorDB's own
+    `properties()` function returns it, including `id`/`title`/`status`/
+    `type` -- the caller (`service._build_forked_standard_drafts`) strips
+    those four keys back out before reusing the rest as a new Control's
+    `extra_properties`, since a forked node always gets its own freshly
+    computed id/status and `title`/`type` are set from this record's own
+    dedicated `title` field / the caller's own `control_type`.
+    """
+
+    title: str
+    properties: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ForkedStandardRecord:
+    """One Standard's full content (plus its Control children), read for a supersede fork.
+
+    Same rationale as `ForkedControlRecord`, one level up.
+    """
+
+    title: str
+    properties: Mapping[str, object]
+    controls: tuple[ForkedControlRecord, ...]
+
+
+@dataclass
+class _ForkedStandardAccumulator:
+    """Mutable, per-Standard accumulator for grouping `read_policy_tree_for_fork`'s own rows."""
+
+    title: str
+    properties: Mapping[str, object]
+    controls: list[ForkedControlRecord] = field(default_factory=list)
+
+
+def read_policy_tree_for_fork(
+    graph: GraphHandle, policy_id: str
+) -> tuple[ForkedStandardRecord, ...]:
+    """Full-content read of `policy_id`'s Standard/Control tree, for a supersede fork (Slice 6).
+
+    A pure read, issued through the same `_execute_query` health-tracking
+    wrapper as every other call in this module. Deliberately separate from
+    `read_policy_tree` (G7): that function's `StandardRecord`/`ControlRecord`
+    only carry `id`/`title`/`status`(+`control_type`) -- enough for
+    `get-policy`'s own view, not enough to fork real content (`description`,
+    `procedure`, `execution_frequency`, etc.) into a new draft. This
+    function's single Cypher statement walks the same
+    `Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control` path
+    with `OPTIONAL MATCH` (mirrors `read_policy_tree`'s own shape), but
+    returns each node's full `properties()` map instead of a handful of
+    named columns -- `s.id`/`c.id` are returned alongside each map purely to
+    key the Python-side grouping-by-Standard accumulator on a stable scalar
+    (FalkorDB's own `properties()` map already includes `id` as an ordinary
+    property, per this schema's `MERGE (n:Label {id: $id})` convention, so
+    the separate `s.id`/`c.id` columns are redundant with the map's own `id`
+    key -- kept anyway for an unambiguous, never-`None`-when-a-node-matched
+    grouping key, matching `read_policy_tree`'s own `standard_id`/
+    `control_id`-column convention).
+
+    Callers are expected to have already confirmed `policy_id` is
+    `"approved"` (AC-BI-011) before calling this -- this function itself
+    does not gate on status, it only reads.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: The Policy id whose current Standard/Control tree is
+            being forked.
+
+    Returns:
+        Every Standard under `policy_id` (each with its own Control
+        children), in the order FalkorDB returned them. A Policy with zero
+        Standards returns `()`.
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (p:Policy {id: $policy_id})-[:SUPPORTED_BY]->(s:Standard) "
+        "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c:Control) "
+        "RETURN s.id, properties(s), c.id, properties(c)",
+        params={"policy_id": policy_id},
+    )
+    rows = cast("list[list[object]]", result.result_set)
+
+    standards_by_id: dict[str, _ForkedStandardAccumulator] = {}
+    standard_order: list[str] = []
+    for row in rows:
+        standard_id_value, standard_properties, control_id_value, control_properties = row
+        if standard_id_value is None:
+            continue
+        standard_id_value = cast("str", standard_id_value)
+        standard_properties = cast("Mapping[str, object]", standard_properties)
+        if standard_id_value not in standards_by_id:
+            standards_by_id[standard_id_value] = _ForkedStandardAccumulator(
+                title=cast("str", standard_properties.get("title", "")),
+                properties=standard_properties,
+            )
+            standard_order.append(standard_id_value)
+        if control_id_value is not None:
+            control_properties = cast("Mapping[str, object]", control_properties)
+            standards_by_id[standard_id_value].controls.append(
+                ForkedControlRecord(
+                    title=cast("str", control_properties.get("title", "")),
+                    properties=control_properties,
+                )
+            )
+
+    return tuple(
+        ForkedStandardRecord(
+            title=standards_by_id[standard_id_value].title,
+            properties=standards_by_id[standard_id_value].properties,
+            controls=tuple(standards_by_id[standard_id_value].controls),
+        )
+        for standard_id_value in standard_order
+    )
+
+
+def update_policy_fields(
+    graph: GraphHandle, *, policy_id: str, properties: Mapping[str, object]
+) -> None:
+    """PATCH a subset of an existing Policy's own content fields (issue #136, Slice 1, AC-BI-008).
+
+    An explicit `None` value in `properties` means "clear this field to
+    null" (a legitimate PATCH semantic, distinct from the key being absent
+    entirely, which leaves the existing value untouched -- the caller
+    already only includes keys it means to change). No call site anywhere
+    in this codebase's `graph_writer.py`-shaped modules relies on FalkorDB's
+    `SET n += $map` map-merge operator clearing a property via an explicit
+    `null` value in the map (CHANGES.md finding #6) -- that behavior is not
+    documented as delete-on-null by the underlying Cypher/openCypher
+    semantics this operator follows, unlike a plain `SET n.prop = null`,
+    which unambiguously clears one property. This function therefore splits
+    `properties` into two groups and issues one statement per group: a
+    single `SET p += $set_properties` for every non-`None` value, then one
+    separate `SET p.<key> = null` per explicitly-`None` key.
+
+    Property KEY NAMES are never caller-controlled strings here: `properties`
+    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
+    validated output, whose keys are drawn exclusively from a fixed,
+    code-defined allow-list (`service._POLICY_PATCHABLE_FIELDS`) -- so
+    f-string-interpolating a key into the null-clearing Cypher text below
+    (required because FalkorDB/openCypher does not support parameterized
+    property names) is exactly as safe as `ingestion.adapters.internal_seed
+    .persist`'s own `f"MERGE (n:{node.label} ...)"` dynamic-label
+    precedent, never raw user input. This module issues Cypher only, it
+    does not re-validate `properties`' keys itself (the MCP-boundary parser
+    already did) -- matching this module's own established division of
+    labor.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: The existing Policy id to patch.
+        properties: Field name -> new value (or `None` to clear), already
+            restricted to the allowed patchable-field set by the caller.
+    """
+    set_properties = {key: value for key, value in properties.items() if value is not None}
+    null_keys = [key for key, value in properties.items() if value is None]
+    if set_properties:
+        _execute_query(
+            graph,
+            "MATCH (p:Policy {id: $policy_id}) SET p += $set_properties",
+            params={"policy_id": policy_id, "set_properties": set_properties},
+        )
+    for key in null_keys:
+        _execute_query(
+            graph,
+            f"MATCH (p:Policy {{id: $policy_id}}) SET p.{key} = null",
+            params={"policy_id": policy_id},
+        )
+
+
+def add_standard_to_policy(
+    graph: GraphHandle,
+    *,
+    policy_id: str,
+    standard_id: str,
+    title: str,
+    extra_properties: Mapping[str, object],
+) -> None:
+    """Mint a new Standard under an existing draft Policy (issue #136, Slice 2, AC-BI-007).
+
+    Unlike `update_policy_fields` (Slice 1), a newly-minted node has no prior
+    value to clear -- an explicit `None` in `extra_properties` (a caller
+    passing `fields={"description": None}` to `add-standard-to-draft`, say)
+    simply means "don't set this field at all", never a `SET s.<key> = null`
+    statement (CHANGES.md finding #6's own carve-out for add/create
+    functions, distinct from every PATCH function's own null-clearing
+    split). `None`-valued keys are filtered out before the merge.
+
+    `status` (governance status) is always forced to `"draft"`,
+    unconditionally, regardless of anything in `extra_properties` --
+    mirrors `create_policy_draft`'s own D-6 discipline. `implementation_status`
+    defaults to `"draft"` (AC-BI-007) unless the caller already supplied it
+    in `extra_properties` (already validated against
+    `service._STANDARD_IMPLEMENTATION_STATUS_VALUES` by the MCP-boundary
+    parser). Both `title` and `status` are set AFTER `extra_properties`'s own
+    values, so neither key -- already excluded from the MCP-boundary
+    allow-list anyway -- could ever be overridden by a caller-supplied value;
+    defence in depth, matching this module's own established convention.
+
+    Property KEY NAMES are never caller-controlled strings here -- this
+    function issues one fully-parameterized statement, no f-string
+    key-interpolation is needed (unlike `update_policy_fields`'s own
+    null-clearing branch).
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: The existing draft Policy id to attach this Standard to.
+        standard_id: The already-computed new Standard id
+            (`domain_mapper.identity.standard_id(policy_id, title)`).
+        title: The new Standard's title.
+        extra_properties: Any additional patchable content fields the
+            caller supplied at creation time (already restricted to
+            `service._STANDARD_PATCHABLE_FIELDS` by the MCP-boundary
+            parser) -- `None`-valued keys are dropped, never written.
+    """
+    properties: dict[str, object] = {
+        key: value for key, value in extra_properties.items() if value is not None
+    }
+    properties.setdefault("implementation_status", "draft")
+    properties["title"] = title
+    properties["status"] = "draft"
+    _execute_query(
+        graph,
+        "MATCH (p:Policy {id: $policy_id}) "
+        "MERGE (p)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id}) "
+        "SET s += $properties",
+        params={"policy_id": policy_id, "standard_id": standard_id, "properties": properties},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StandardWithParent:
+    """A Standard's own status/title plus its parent Policy's owner/status (issue #136, Slice 3).
+
+    TASK.md's Implementation-decisions paragraph: Standard has no
+    `owner_subject`/`owner_issuer` property of its own -- ownership is
+    derived by a one-hop query-time graph traversal to the parent Policy,
+    never a stored/denormalized field on Standard itself. This row is that
+    traversal's full result, letting the service layer build a
+    `PolicyLifecycleRuleContext` (owner pair + the STANDARD's own status,
+    the node directly being mutated -- never the parent Policy's status)
+    without a second read.
+    """
+
+    policy_id: str
+    policy_owner_subject: str
+    policy_owner_issuer: str
+    policy_status: str
+    standard_status: str
+    standard_title: str
+
+
+def find_standard_with_parent(graph: GraphHandle, standard_id: str) -> StandardWithParent | None:
+    """One-hop transitive-ownership read for an existing Standard (issue #136, Slice 3).
+
+    A pure read, issued through the same `_execute_query` health-tracking
+    wrapper as every other call in this module. Callers are expected to
+    backfill the parent Policy's tree first (D-7) so `standard_status` is
+    never spuriously `NULL` by the time a draft-status gate inspects it --
+    this function itself does not backfill (mirrors `read_policy_tree`'s own
+    division of labor: `graph_writer` issues Cypher only, backfill-then-read
+    ordering is the service layer's job).
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        standard_id: The Standard id to read, plus its parent Policy's
+            owner/status.
+
+    Returns:
+        A `StandardWithParent` row, or `None` if no `Policy
+        -[:SUPPORTED_BY]-> Standard {id: standard_id}` path exists (either
+        the Standard id is unknown, or it exists but has no parent Policy --
+        both are treated as "not found" by this function's own single
+        `MATCH`, since every real Standard always has exactly one parent).
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id}) "
+        "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title",
+        params={"standard_id": standard_id},
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return None
+    policy_id, owner_subject, owner_issuer, policy_status, standard_status, standard_title = rows[0]
+    return StandardWithParent(
+        policy_id=cast("str", policy_id),
+        policy_owner_subject=cast("str", owner_subject),
+        policy_owner_issuer=cast("str", owner_issuer),
+        policy_status=cast("str", policy_status),
+        standard_status=cast("str", standard_status),
+        standard_title=cast("str", standard_title),
+    )
+
+
+def update_standard_fields(
+    graph: GraphHandle, *, standard_id: str, properties: Mapping[str, object]
+) -> None:
+    """PATCH a subset of an existing Standard's own content fields (issue #136, Slice 3, AC-BI-008).
+
+    Identical null-clearing split to `update_policy_fields` (CHANGES.md
+    finding #6): a single `SET s += $set_properties` for every non-`None`
+    value, then one separate `SET s.<key> = null` per explicitly-`None` key
+    -- no in-repo precedent exists for FalkorDB's `+=` map-merge clearing a
+    property via an explicit `null` value in the map, so this does not rely
+    on that.
+
+    Property KEY NAMES are never caller-controlled strings here: `properties`
+    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
+    validated output, whose keys are drawn exclusively from a fixed,
+    code-defined allow-list (`service._STANDARD_PATCHABLE_FIELDS`) -- same
+    f-string-interpolation safety argument as `update_policy_fields`'s own
+    docstring.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        standard_id: The existing Standard id to patch.
+        properties: Field name -> new value (or `None` to clear), already
+            restricted to the allowed patchable-field set by the caller.
+    """
+    set_properties = {key: value for key, value in properties.items() if value is not None}
+    null_keys = [key for key, value in properties.items() if value is None]
+    if set_properties:
+        _execute_query(
+            graph,
+            "MATCH (s:Standard {id: $standard_id}) SET s += $set_properties",
+            params={"standard_id": standard_id, "set_properties": set_properties},
+        )
+    for key in null_keys:
+        _execute_query(
+            graph,
+            f"MATCH (s:Standard {{id: $standard_id}}) SET s.{key} = null",
+            params={"standard_id": standard_id},
+        )
+
+
+def add_control_to_standard(
+    graph: GraphHandle,
+    *,
+    standard_id: str,
+    control_id: str,
+    title: str,
+    control_type: str,
+    extra_properties: Mapping[str, object],
+) -> None:
+    """Mint a new Control under an existing draft Standard (issue #136, Slice 4, AC-BI-007).
+
+    Mirrors `add_standard_to_policy` (Slice 2) exactly, one level deeper:
+    ownership/status gating for this call is Slice 3's own **one-hop**
+    `find_standard_with_parent` traversal (the caller supplies a
+    `standard_id`, just like `update-standard-draft` does -- PLAN.md §1.4's
+    own correction: this is NOT the two-hop case, that's `update-control-
+    draft` alone, reached via a `control_id`). This function itself issues
+    no read, only the write.
+
+    Like `add_standard_to_policy`, a newly-minted node has no prior value to
+    clear -- an explicit `None` in `extra_properties` simply means "don't set
+    this field at all", never a `SET c.<key> = null` statement (CHANGES.md
+    finding #6's own carve-out for add/create functions). `None`-valued keys
+    are filtered out before the merge.
+
+    `status` (governance status) is always forced to `"draft"`,
+    unconditionally (D-6 parity, same as every other node-minting path in
+    this module). `implementation_status` defaults to `"planned"` -- NOT
+    `"draft"` like `add_standard_to_policy`'s own default -- matching
+    `ps-domain-concepts.md`'s own "earliest state in status workflow"
+    convention for Control (AC-BI-007's own implementation-decisions text)
+    -- unless the caller already supplied one in `extra_properties` (already
+    validated against `service._CONTROL_IMPLEMENTATION_STATUS_VALUES` by the
+    MCP-boundary parser). `type` is always set from the caller's own
+    `control_type` argument, never from `extra_properties` (CHANGES.md
+    finding #8 -- the MCP-boundary parser already excludes `"type"` from
+    `add-control-to-draft`'s own patchable-field allow-list, so this is
+    belt-and-braces, not the only enforcement). Both `title`/`status`/`type`
+    are set AFTER `extra_properties`'s own values, so none could ever be
+    overridden by a caller-supplied value even if the allow-list exclusion
+    were ever bypassed -- defence in depth, matching this module's own
+    established convention.
+
+    Property KEY NAMES are never caller-controlled strings here -- this
+    function issues one fully-parameterized statement, no f-string
+    key-interpolation is needed.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        standard_id: The existing draft Standard id to attach this Control to.
+        control_id: The already-computed new Control id
+            (`domain_mapper.identity.control_id(standard_id, title)`).
+        title: The new Control's title.
+        control_type: The new Control's `type` (`"automated"` or `"manual"`),
+            already validated against `mcp_interface.mcp_server.
+            _CREATE_POLICY_DRAFT_CONTROL_TYPES` at the MCP boundary.
+        extra_properties: Any additional patchable content fields the
+            caller supplied at creation time (already restricted to
+            `service._CONTROL_PATCHABLE_FIELDS - {"type"}` by the
+            MCP-boundary parser) -- `None`-valued keys are dropped, never
+            written.
+    """
+    properties: dict[str, object] = {
+        key: value for key, value in extra_properties.items() if value is not None
+    }
+    properties.setdefault("implementation_status", "planned")
+    properties["title"] = title
+    properties["type"] = control_type
+    properties["status"] = "draft"
+    _execute_query(
+        graph,
+        "MATCH (s:Standard {id: $standard_id}) "
+        "MERGE (s)-[:IMPLEMENTED_BY]->(c:Control {id: $control_id}) "
+        "SET c += $properties",
+        params={"standard_id": standard_id, "control_id": control_id, "properties": properties},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlWithParent:
+    """A Control's own status/title plus its root Policy's owner/status (issue #136, Slice 5).
+
+    TASK.md's Implementation-decisions paragraph: `update-control-draft` is
+    the one genuinely **two-hop** transitive-ownership tool in this issue
+    (`Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control`) --
+    unlike `update-standard-draft`/`add-control-to-draft` (Slices 3/4), which
+    both take a `standard_id` and only need the one-hop
+    `find_standard_with_parent` traversal. Control has no
+    `owner_subject`/`owner_issuer` property of its own, nor does its parent
+    Standard -- ownership is derived by walking all the way to the root
+    Policy. `standard_id` is carried too, even though this issue's tools
+    never need it directly, mirroring `StandardWithParent`'s own
+    "full traversal result, no second read" shape.
+    """
+
+    standard_id: str
+    policy_id: str
+    policy_owner_subject: str
+    policy_owner_issuer: str
+    policy_status: str
+    control_status: str
+    control_title: str
+
+
+def find_control_with_parent(graph: GraphHandle, control_id: str) -> ControlWithParent | None:
+    """Two-hop transitive-ownership read for an existing Control (issue #136, Slice 5).
+
+    A pure read, issued through the same `_execute_query` health-tracking
+    wrapper as every other call in this module. Callers are expected to
+    backfill the root Policy's tree first (D-7) so `control_status` is
+    never spuriously `NULL` by the time a draft-status gate inspects it --
+    this function itself does not backfill (mirrors
+    `find_standard_with_parent`'s own division of labor: `graph_writer`
+    issues Cypher only, backfill-then-read ordering is the service layer's
+    job).
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        control_id: The Control id to read, plus its parent Standard id and
+            root Policy's owner/status.
+
+    Returns:
+        A `ControlWithParent` row, or `None` if no `Policy
+        -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]-> Control {id:
+        control_id}` path exists (either the Control id is unknown, or it
+        exists but its parent chain is broken -- both are treated as "not
+        found" by this function's own single `MATCH`, since every real
+        Control always has exactly one parent Standard and one root Policy).
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (p:Policy)-[:SUPPORTED_BY]->(s:Standard)-[:IMPLEMENTED_BY]->"
+        "(c:Control {id: $control_id}) "
+        "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title",
+        params={"control_id": control_id},
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return None
+    (
+        standard_id,
+        policy_id,
+        owner_subject,
+        owner_issuer,
+        policy_status,
+        control_status,
+        control_title,
+    ) = rows[0]
+    return ControlWithParent(
+        standard_id=cast("str", standard_id),
+        policy_id=cast("str", policy_id),
+        policy_owner_subject=cast("str", owner_subject),
+        policy_owner_issuer=cast("str", owner_issuer),
+        policy_status=cast("str", policy_status),
+        control_status=cast("str", control_status),
+        control_title=cast("str", control_title),
+    )
+
+
+def update_control_fields(
+    graph: GraphHandle, *, control_id: str, properties: Mapping[str, object]
+) -> None:
+    """PATCH a subset of an existing Control's own content fields (issue #136, Slice 5, AC-BI-008).
+
+    Identical null-clearing split to `update_policy_fields`/
+    `update_standard_fields` (CHANGES.md finding #6): a single
+    `SET c += $set_properties` for every non-`None` value, then one separate
+    `SET c.<key> = null` per explicitly-`None` key -- no in-repo precedent
+    exists for FalkorDB's `+=` map-merge clearing a property via an explicit
+    `null` value in the map, so this does not rely on that.
+
+    Property KEY NAMES are never caller-controlled strings here: `properties`
+    is only ever `mcp_interface.mcp_server._parse_patch_fields`'s already-
+    validated output, whose keys are drawn exclusively from a fixed,
+    code-defined allow-list (`service._CONTROL_PATCHABLE_FIELDS`) -- same
+    f-string-interpolation safety argument as `update_policy_fields`'s own
+    docstring.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        control_id: The existing Control id to patch.
+        properties: Field name -> new value (or `None` to clear), already
+            restricted to the allowed patchable-field set by the caller.
+    """
+    set_properties = {key: value for key, value in properties.items() if value is not None}
+    null_keys = [key for key, value in properties.items() if value is None]
+    if set_properties:
+        _execute_query(
+            graph,
+            "MATCH (c:Control {id: $control_id}) SET c += $set_properties",
+            params={"control_id": control_id, "set_properties": set_properties},
+        )
+    for key in null_keys:
+        _execute_query(
+            graph,
+            f"MATCH (c:Control {{id: $control_id}}) SET c.{key} = null",
+            params={"control_id": control_id},
+        )

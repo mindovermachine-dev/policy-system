@@ -17,8 +17,25 @@ Cypher engine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
-from ps_service.policy_lifecycle.graph_writer import backfill_governance_status, find_approved_prior
+from ps_service.policy_lifecycle.graph_writer import (
+    ControlDraft,
+    ControlWithParent,
+    StandardDraft,
+    StandardWithParent,
+    add_control_to_standard,
+    add_standard_to_policy,
+    backfill_governance_status,
+    create_policy_draft,
+    find_approved_prior,
+    find_control_with_parent,
+    find_standard_with_parent,
+    read_policy_tree_for_fork,
+    update_control_fields,
+    update_policy_fields,
+    update_standard_fields,
+)
 
 
 @dataclass
@@ -236,3 +253,597 @@ def test_no_superseded_by_edge_returns_none() -> None:
     graph = _SupersededByFakeGraph()
 
     assert find_approved_prior(graph, "pol-new") is None
+
+
+# --- `update_policy_fields` (issue #136, Slice 1) ---------------------------
+
+
+class _RecordingFakeGraph:
+    """A `GraphHandle` double that only records every `query()` call verbatim."""
+
+    def __init__(self) -> None:
+        self.calls: list[_RecordedCall] = []
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        self.calls.append(_RecordedCall(q, params))
+        return _FakeQueryResult()
+
+
+def test_update_policy_fields_issues_partial_set_merge() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_policy_fields(graph, policy_id="pol-1", properties={"description": "new text"})
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert "SET p += $set_properties" in call.query
+    assert call.params == {
+        "policy_id": "pol-1",
+        "set_properties": {"description": "new text"},
+    }
+
+
+def test_update_policy_fields_clears_a_field_to_null_via_explicit_set() -> None:
+    """CHANGES.md finding #6: an explicit `None` value clears the field via
+    its own `SET p.<field> = null` statement, never via `+=` map-merge.
+    """
+    graph = _RecordingFakeGraph()
+
+    update_policy_fields(
+        graph, policy_id="pol-1", properties={"description": "new text", "scope_out": None}
+    )
+
+    assert len(graph.calls) == 2
+    merge_call, null_call = graph.calls
+    assert "SET p += $set_properties" in merge_call.query
+    assert merge_call.params == {
+        "policy_id": "pol-1",
+        "set_properties": {"description": "new text"},
+    }
+    assert "SET p.scope_out = null" in null_call.query
+    assert null_call.params == {"policy_id": "pol-1"}
+
+
+def test_update_policy_fields_with_only_null_values_issues_no_set_merge_call() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_policy_fields(graph, policy_id="pol-1", properties={"scope_out": None})
+
+    assert len(graph.calls) == 1
+    assert "SET p.scope_out = null" in graph.calls[0].query
+
+
+# --- `add_standard_to_policy` (issue #136, Slice 2) -------------------------
+
+
+def test_add_standard_to_policy_issues_one_merge_with_draft_and_default_impl_status() -> None:
+    graph = _RecordingFakeGraph()
+
+    add_standard_to_policy(
+        graph,
+        policy_id="pol-1",
+        standard_id="std-1",
+        title="Encryption Standard",
+        extra_properties={},
+    )
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert "MERGE (p)-[:SUPPORTED_BY]->(s:Standard {id: $standard_id})" in call.query
+    assert "SET s += $properties" in call.query
+    assert call.params == {
+        "policy_id": "pol-1",
+        "standard_id": "std-1",
+        "properties": {
+            "implementation_status": "draft",
+            "title": "Encryption Standard",
+            "status": "draft",
+        },
+    }
+
+
+def test_add_standard_to_policy_uses_caller_supplied_implementation_status_when_given() -> None:
+    graph = _RecordingFakeGraph()
+
+    add_standard_to_policy(
+        graph,
+        policy_id="pol-1",
+        standard_id="std-1",
+        title="Encryption Standard",
+        extra_properties={"implementation_status": "implemented", "description": "text"},
+    )
+
+    assert len(graph.calls) == 1
+    params = cast("dict[str, object]", graph.calls[0].params)
+    props = cast("dict[str, object]", params["properties"])
+    assert props["implementation_status"] == "implemented"
+    assert props["description"] == "text"
+    assert props["status"] == "draft"
+
+
+def test_add_standard_to_policy_drops_explicit_none_values_rather_than_writing_them() -> None:
+    """No prior value exists to clear on a newly-minted node (CHANGES.md finding #6's
+    carve-out for add/create functions) -- an explicit `None` in `extra_properties`
+    simply means "don't set this field", not a `SET s.<key> = null` statement.
+    """
+    graph = _RecordingFakeGraph()
+
+    add_standard_to_policy(
+        graph,
+        policy_id="pol-1",
+        standard_id="std-1",
+        title="Encryption Standard",
+        extra_properties={"description": None},
+    )
+
+    assert len(graph.calls) == 1
+    params = cast("dict[str, object]", graph.calls[0].params)
+    props = cast("dict[str, object]", params["properties"])
+    assert "description" not in props
+    assert " = null" not in graph.calls[0].query
+
+
+# --- `find_standard_with_parent` / `update_standard_fields` (issue #136, Slice 3) --
+
+
+@dataclass
+class _RowQueryResult:
+    """A `GraphQueryResult` double with a settable `result_set`.
+
+    Mirrors `_SupersededByQueryResult` above.
+    """
+
+    result_set: list[object]
+
+
+class _FindStandardWithParentFakeGraph:
+    """A `GraphHandle` double answering `find_standard_with_parent`'s one-hop query."""
+
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self._row = row
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _RowQueryResult:
+        del params
+        assert "RETURN p.id, p.owner_subject, p.owner_issuer, p.status, s.status, s.title" in q
+        return _RowQueryResult(result_set=[list(self._row)] if self._row is not None else [])
+
+
+def test_find_standard_with_parent_returns_policy_and_standard_fields() -> None:
+    graph = _FindStandardWithParentFakeGraph(
+        ("pol-1", "alice", "https://issuer.example", "draft", "draft", "Encryption Standard")
+    )
+
+    row = find_standard_with_parent(graph, "std-1")
+
+    assert row == StandardWithParent(
+        policy_id="pol-1",
+        policy_owner_subject="alice",
+        policy_owner_issuer="https://issuer.example",
+        policy_status="draft",
+        standard_status="draft",
+        standard_title="Encryption Standard",
+    )
+
+
+def test_find_standard_with_parent_returns_none_when_no_match() -> None:
+    graph = _FindStandardWithParentFakeGraph(None)
+
+    assert find_standard_with_parent(graph, "std-missing") is None
+
+
+def test_update_standard_fields_issues_partial_set_merge() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_standard_fields(graph, standard_id="std-1", properties={"description": "new text"})
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert "SET s += $set_properties" in call.query
+    assert call.params == {
+        "standard_id": "std-1",
+        "set_properties": {"description": "new text"},
+    }
+
+
+def test_update_standard_fields_clears_a_field_to_null_via_explicit_set() -> None:
+    """CHANGES.md finding #6: an explicit `None` value clears the field via
+    its own `SET s.<field> = null` statement, never via `+=` map-merge.
+    """
+    graph = _RecordingFakeGraph()
+
+    update_standard_fields(
+        graph, standard_id="std-1", properties={"description": "new text", "procedure": None}
+    )
+
+    assert len(graph.calls) == 2
+    merge_call, null_call = graph.calls
+    assert "SET s += $set_properties" in merge_call.query
+    assert merge_call.params == {
+        "standard_id": "std-1",
+        "set_properties": {"description": "new text"},
+    }
+    assert "SET s.procedure = null" in null_call.query
+    assert null_call.params == {"standard_id": "std-1"}
+
+
+def test_update_standard_fields_with_only_null_values_issues_no_set_merge_call() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_standard_fields(graph, standard_id="std-1", properties={"procedure": None})
+
+    assert len(graph.calls) == 1
+    assert "SET s.procedure = null" in graph.calls[0].query
+
+
+# --- `add_control_to_standard` (issue #136, Slice 4) -------------------------
+
+
+def test_add_control_to_standard_issues_one_merge_with_draft_and_default_impl_status() -> None:
+    graph = _RecordingFakeGraph()
+
+    add_control_to_standard(
+        graph,
+        standard_id="std-1",
+        control_id="ctrl-1",
+        title="Key Rotation Check",
+        control_type="manual",
+        extra_properties={},
+    )
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert "MERGE (s)-[:IMPLEMENTED_BY]->(c:Control {id: $control_id})" in call.query
+    assert "SET c += $properties" in call.query
+    assert call.params == {
+        "standard_id": "std-1",
+        "control_id": "ctrl-1",
+        "properties": {
+            "implementation_status": "planned",
+            "title": "Key Rotation Check",
+            "type": "manual",
+            "status": "draft",
+        },
+    }
+
+
+def test_add_control_to_standard_uses_caller_supplied_implementation_status_when_given() -> None:
+    graph = _RecordingFakeGraph()
+
+    add_control_to_standard(
+        graph,
+        standard_id="std-1",
+        control_id="ctrl-1",
+        title="Key Rotation Check",
+        control_type="automated",
+        extra_properties={"implementation_status": "implemented", "description": "text"},
+    )
+
+    assert len(graph.calls) == 1
+    params = cast("dict[str, object]", graph.calls[0].params)
+    props = cast("dict[str, object]", params["properties"])
+    assert props["implementation_status"] == "implemented"
+    assert props["description"] == "text"
+    assert props["status"] == "draft"
+    assert props["type"] == "automated"
+
+
+def test_add_control_to_standard_drops_explicit_none_values_rather_than_writing_them() -> None:
+    """No prior value exists to clear on a newly-minted node (CHANGES.md finding #6's
+    carve-out for add/create functions) -- an explicit `None` in `extra_properties`
+    simply means "don't set this field", not a `SET c.<key> = null` statement.
+    """
+    graph = _RecordingFakeGraph()
+
+    add_control_to_standard(
+        graph,
+        standard_id="std-1",
+        control_id="ctrl-1",
+        title="Key Rotation Check",
+        control_type="manual",
+        extra_properties={"description": None},
+    )
+
+    assert len(graph.calls) == 1
+    params = cast("dict[str, object]", graph.calls[0].params)
+    props = cast("dict[str, object]", params["properties"])
+    assert "description" not in props
+    assert " = null" not in graph.calls[0].query
+
+
+# --- `find_control_with_parent` / `update_control_fields` (issue #136, Slice 5) --
+
+
+class _FindControlWithParentFakeGraph:
+    """A `GraphHandle` double answering `find_control_with_parent`'s two-hop query."""
+
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self._row = row
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _RowQueryResult:
+        del params
+        # Both hops must be present in the query text -- proves this is
+        # genuinely `Policy -[:SUPPORTED_BY]-> Standard -[:IMPLEMENTED_BY]->
+        # Control`, not a one-hop stand-in.
+        assert "SUPPORTED_BY" in q
+        assert "IMPLEMENTED_BY" in q
+        assert (
+            "RETURN s.id, p.id, p.owner_subject, p.owner_issuer, p.status, c.status, c.title" in q
+        )
+        return _RowQueryResult(result_set=[list(self._row)] if self._row is not None else [])
+
+
+def test_find_control_with_parent_returns_standard_policy_and_control_fields() -> None:
+    graph = _FindControlWithParentFakeGraph(
+        (
+            "std-1",
+            "pol-1",
+            "alice",
+            "https://issuer.example",
+            "draft",
+            "draft",
+            "Key Rotation Check",
+        )
+    )
+
+    row = find_control_with_parent(graph, "ctrl-1")
+
+    assert row == ControlWithParent(
+        standard_id="std-1",
+        policy_id="pol-1",
+        policy_owner_subject="alice",
+        policy_owner_issuer="https://issuer.example",
+        policy_status="draft",
+        control_status="draft",
+        control_title="Key Rotation Check",
+    )
+
+
+def test_find_control_with_parent_returns_none_when_no_match() -> None:
+    graph = _FindControlWithParentFakeGraph(None)
+
+    assert find_control_with_parent(graph, "ctrl-missing") is None
+
+
+def test_update_control_fields_issues_partial_set_merge() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_control_fields(graph, control_id="ctrl-1", properties={"description": "new text"})
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert "SET c += $set_properties" in call.query
+    assert call.params == {
+        "control_id": "ctrl-1",
+        "set_properties": {"description": "new text"},
+    }
+
+
+def test_update_control_fields_clears_a_field_to_null_via_explicit_set() -> None:
+    """CHANGES.md finding #6: an explicit `None` value clears the field via
+    its own `SET c.<field> = null` statement, never via `+=` map-merge.
+    """
+    graph = _RecordingFakeGraph()
+
+    update_control_fields(
+        graph, control_id="ctrl-1", properties={"description": "new text", "evidence_ref": None}
+    )
+
+    assert len(graph.calls) == 2
+    merge_call, null_call = graph.calls
+    assert "SET c += $set_properties" in merge_call.query
+    assert merge_call.params == {
+        "control_id": "ctrl-1",
+        "set_properties": {"description": "new text"},
+    }
+    assert "SET c.evidence_ref = null" in null_call.query
+    assert null_call.params == {"control_id": "ctrl-1"}
+
+
+def test_update_control_fields_with_only_null_values_issues_no_set_merge_call() -> None:
+    graph = _RecordingFakeGraph()
+
+    update_control_fields(graph, control_id="ctrl-1", properties={"evidence_ref": None})
+
+    assert len(graph.calls) == 1
+    assert "SET c.evidence_ref = null" in graph.calls[0].query
+
+
+# --- `read_policy_tree_for_fork` / `create_policy_draft`'s `version`/
+# `supersedes_policy_id` params (issue #136, Slice 6) -----------------------
+
+
+class _ReadPolicyTreeForForkFakeGraph:
+    """A `GraphHandle` double answering `read_policy_tree_for_fork`'s single query."""
+
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _RowQueryResult:
+        del params
+        assert "RETURN s.id, properties(s), c.id, properties(c)" in q
+        return _RowQueryResult(result_set=self._rows)
+
+
+def test_read_policy_tree_for_fork_returns_full_properties_not_narrow_record() -> None:
+    """G7: unlike `read_policy_tree`'s own `StandardRecord`/`ControlRecord`
+    (id/title/status only), this carries every content field.
+    """
+    graph = _ReadPolicyTreeForForkFakeGraph(
+        [
+            [
+                "std-1",
+                {
+                    "id": "std-1",
+                    "title": "Encryption Standard",
+                    "status": "approved",
+                    "procedure": "rotate keys quarterly",
+                },
+                "ctrl-1",
+                {
+                    "id": "ctrl-1",
+                    "title": "Key Rotation",
+                    "status": "approved",
+                    "type": "automated",
+                    "evidence_ref": "https://example.com/evidence",
+                },
+            ]
+        ]
+    )
+
+    records = read_policy_tree_for_fork(graph, "pol-1")
+
+    assert len(records) == 1
+    standard = records[0]
+    assert standard.title == "Encryption Standard"
+    assert standard.properties["procedure"] == "rotate keys quarterly"
+    assert len(standard.controls) == 1
+    control = standard.controls[0]
+    assert control.title == "Key Rotation"
+    assert control.properties["evidence_ref"] == "https://example.com/evidence"
+
+
+def test_read_policy_tree_for_fork_handles_standard_with_zero_controls() -> None:
+    graph = _ReadPolicyTreeForForkFakeGraph(
+        [["std-1", {"id": "std-1", "title": "Logging Standard", "status": "approved"}, None, None]]
+    )
+
+    records = read_policy_tree_for_fork(graph, "pol-1")
+
+    assert len(records) == 1
+    assert records[0].controls == ()
+
+
+def test_read_policy_tree_for_fork_returns_empty_tuple_for_zero_standards() -> None:
+    graph = _ReadPolicyTreeForForkFakeGraph([])
+
+    assert read_policy_tree_for_fork(graph, "pol-1") == ()
+
+
+def test_create_policy_draft_writes_given_version_not_hardcoded_one() -> None:
+    """CHANGES.md finding #1 (High): `version` is a real kwarg, threaded into
+    the Policy write -- not the pre-#136 hardcoded literal `"1"`.
+    """
+    graph = _RecordingFakeGraph()
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner_subject="alice",
+        owner_issuer="https://issuer.example",
+        version="4",
+    )
+
+    policy_write = graph.calls[0]
+    assert "MERGE (p:Policy {id: $policy_id}) SET p += $properties" in policy_write.query
+    params = cast("dict[str, object]", policy_write.params)
+    properties = cast("dict[str, object]", params["properties"])
+    assert properties["version"] == "4"
+
+
+def test_create_policy_draft_defaults_version_to_one_when_omitted() -> None:
+    """Every existing non-fork call site keeps working byte-for-byte."""
+    graph = _RecordingFakeGraph()
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner_subject="alice",
+        owner_issuer="https://issuer.example",
+    )
+
+    params = cast("dict[str, object]", graph.calls[0].params)
+    properties = cast("dict[str, object]", params["properties"])
+    assert properties["version"] == "1"
+
+
+def test_create_policy_draft_with_supersedes_policy_id_writes_superseded_by_edge() -> None:
+    graph = _RecordingFakeGraph()
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner_subject="alice",
+        owner_issuer="https://issuer.example",
+        supersedes_policy_id="pol-1",
+        version="2",
+    )
+
+    edge_calls = [call for call in graph.calls if "SUPERSEDED_BY" in call.query]
+    assert len(edge_calls) == 1
+    assert edge_calls[0].params == {"prior_id": "pol-1", "new_id": "pol-2"}
+
+
+def test_create_policy_draft_without_supersedes_policy_id_writes_no_superseded_by_edge() -> None:
+    graph = _RecordingFakeGraph()
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner_subject="alice",
+        owner_issuer="https://issuer.example",
+    )
+
+    assert not any("SUPERSEDED_BY" in call.query for call in graph.calls)
+
+
+def test_create_policy_draft_forked_standard_and_control_extra_properties_survive_into_write() -> (
+    None
+):
+    """A forked Standard/Control's `extra_properties` (real content, not just
+    title) is spread into the write, with `title`/`type`/`status` always
+    set AFTER the spread so they can never be overridden by a stray copied
+    value.
+    """
+    graph = _RecordingFakeGraph()
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner_subject="alice",
+        owner_issuer="https://issuer.example",
+        standards=(
+            StandardDraft(
+                id="std-2",
+                title="Encryption Standard",
+                controls=(
+                    ControlDraft(
+                        id="ctrl-2",
+                        title="Key Rotation",
+                        control_type="automated",
+                        extra_properties={
+                            "evidence_ref": "https://example.com/evidence",
+                            # stray copied value -- must lose to the forced "draft" below
+                            "status": "approved",
+                        },
+                    ),
+                ),
+                extra_properties={
+                    "procedure": "rotate keys quarterly",
+                    # stray copied value -- must lose to the forced "draft" below
+                    "status": "approved",
+                },
+            ),
+        ),
+        supersedes_policy_id="pol-1",
+        version="2",
+    )
+
+    standard_call = next(call for call in graph.calls if "SUPPORTED_BY" in call.query)
+    standard_params = cast("dict[str, object]", standard_call.params)
+    standard_properties = cast("dict[str, object]", standard_params["properties"])
+    assert standard_properties["procedure"] == "rotate keys quarterly"
+    assert standard_properties["title"] == "Encryption Standard"
+    assert standard_properties["status"] == "draft"
+
+    control_call = next(call for call in graph.calls if "IMPLEMENTED_BY" in call.query)
+    control_params = cast("dict[str, object]", control_call.params)
+    control_properties = cast("dict[str, object]", control_params["properties"])
+    assert control_properties["evidence_ref"] == "https://example.com/evidence"
+    assert control_properties["title"] == "Key Rotation"
+    assert control_properties["type"] == "automated"
+    assert control_properties["status"] == "draft"

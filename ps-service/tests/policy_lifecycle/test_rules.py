@@ -47,6 +47,22 @@ def test_require_status_rejects_every_action_on_deprecated() -> None:
         assert not require_status(ctx).allowed
 
 
+def test_require_status_allows_edit_on_draft() -> None:
+    """Issue #136, Slice 1 (PLAN.md §1.2): `edit` requires `draft`."""
+    ctx = PolicyLifecycleRuleContext(
+        actor=_ACTOR, owner=_ACTOR, action="edit", current_status="draft"
+    )
+    assert require_status(ctx).allowed
+
+
+def test_require_status_rejects_edit_on_non_draft_statuses() -> None:
+    for status in ("proposed", "approved", "deprecated"):
+        ctx = PolicyLifecycleRuleContext(
+            actor=_ACTOR, owner=_ACTOR, action="edit", current_status=status
+        )
+        assert not require_status(ctx).allowed
+
+
 # --- require_owner ----------------------------------------------------------
 
 

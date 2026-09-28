@@ -59,6 +59,31 @@ def test_create_draft_details_accepts_a_well_formed_rejected_payload() -> None:
     assert details.reason_code == "title_already_exists"
 
 
+def test_create_draft_details_accepts_a_supersedes_policy_id_payload() -> None:
+    """Issue #136, TASK.md's Implementation-decisions paragraph:
+    `supersedes_policy_id` was added directly to this existing model rather
+    than a new/separate one -- this proves a fork's real payload shape
+    validates through the SAME registered model the ordinary create-draft
+    path uses, and that `policy.create_draft` still resolves to
+    `PolicyCreateDraftDetails` -- a regression guard against someone
+    accidentally registering a different model for this action name, or the
+    field getting dropped from the model, either of which would make the
+    fork's real `AuditStore.record`/`record_standalone` call raise
+    `AuditInvalidDetailsError` in production.
+    """
+    assert resolve_details_model("policy.create_draft") is PolicyCreateDraftDetails
+
+    details = PolicyCreateDraftDetails.model_validate(
+        {
+            "affected_node_ids": ("policy-2", "std-1"),
+            "to_status": "draft",
+            "supersedes_policy_id": "policy-1",
+        }
+    )
+
+    assert details.supersedes_policy_id == "policy-1"
+
+
 def test_create_draft_details_rejects_an_unregistered_reason_code() -> None:
     with pytest.raises(ValidationError):
         PolicyCreateDraftDetails.model_validate(

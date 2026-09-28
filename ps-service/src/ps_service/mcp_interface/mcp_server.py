@@ -25,6 +25,7 @@ from datetime import (
     datetime,  # noqa: TC003 -- `list-audit-events`'s own tool params carry this type at runtime; the MCP SDK's `func_metadata` resolves `from __future__ import annotations`-deferred string annotations via `get_type_hints`, which needs `datetime` in this module's real globals, not TYPE_CHECKING-only
 )
 from importlib import resources
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 from mcp.server import MCPServer
@@ -117,17 +118,31 @@ from ps_service.mcp_interface.errors import (
 from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.policy_lifecycle.errors import (
+    PolicyControlNotFoundError,
     PolicyDraftAccessDeniedError,
     PolicyIncompleteForProposalError,
     PolicyInvalidStatusTransitionError,
     PolicyLifecycleGraphUnavailableError,
     PolicyNotFoundError,
     PolicySelfApprovalBlockedError,
+    PolicyStandardNotFoundError,
+    PolicySupersedePriorNotApprovedError,
     PolicyTitleAlreadyExistsError,
 )
 from ps_service.policy_lifecycle.service import (
+    _CONTROL_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _CONTROL_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 4: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _POLICY_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 PLAN.md §1.7: declared once in service.py, imported here to avoid drift between the two layers
+    _STANDARD_IMPLEMENTATION_STATUS_VALUES,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 2: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
+    _STANDARD_PATCHABLE_FIELDS,  # pyright: ignore[reportPrivateUsage] -- issue #136 Slice 2: same drift-avoidance reuse as `_POLICY_PATCHABLE_FIELDS`
     ControlDraftInput,
     StandardDraftInput,
+)
+from ps_service.policy_lifecycle.service import (
+    add_control_to_draft as run_add_control_to_draft,
+)
+from ps_service.policy_lifecycle.service import (
+    add_standard_to_draft as run_add_standard_to_draft,
 )
 from ps_service.policy_lifecycle.service import (
     approve_policy as run_approve_policy,
@@ -147,6 +162,15 @@ from ps_service.policy_lifecycle.service import (
 from ps_service.policy_lifecycle.service import (
     revert_policy_to_draft as run_revert_policy_to_draft,
 )
+from ps_service.policy_lifecycle.service import (
+    update_control_draft as run_update_control_draft,
+)
+from ps_service.policy_lifecycle.service import (
+    update_policy_draft as run_update_policy_draft,
+)
+from ps_service.policy_lifecycle.service import (
+    update_standard_draft as run_update_standard_draft,
+)
 from ps_service.query_engine import (
     GraphUnseededError,
     QueryEngineExecutionError,
@@ -161,7 +185,7 @@ from ps_service.query_engine.falkordb_client import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from importlib.resources.abc import Traversable
 
     from ps_service.api.catalog import CatalogEntry
@@ -506,6 +530,8 @@ def _run_mcp_action(
     action: str,
     principal: str | None,
     body: Callable[[], dict[str, object] | str],
+    *,
+    entity_id: str | None = None,
 ) -> dict[str, object] | str:
     """Run one MCP tool body inside a fresh run context, with a uniform audit triad.
 
@@ -536,6 +562,13 @@ def _run_mcp_action(
         body: A zero-arg callable running the tool's actual work inside the
             bound run context (its own `run_id` is read via
             `current_run_id()`, since binding happens here, not in `body`).
+        entity_id: The node id this call acts on (or, for a not-yet-created
+            node, its parent), carried on every one of this call's three
+            log entries (issue #136, CHANGES.md finding #9). Optional and
+            defaults to `None` -- every pre-#136 caller omits it, so
+            `LogEntry.entity_id` stays unset exactly as it did before this
+            parameter existed; zero behavior change for any tool that
+            doesn't pass it.
 
     Returns:
         `body`'s return value unchanged on success or a handled `error:`
@@ -548,6 +581,7 @@ def _run_mcp_action(
             action=action,
             outcome="started",
             run_id=run_id,
+            entity_id=entity_id,
             extra={"principal": principal_extra},
         )
         try:
@@ -558,6 +592,7 @@ def _run_mcp_action(
                 action=action,
                 outcome="failed",
                 run_id=run_id,
+                entity_id=entity_id,
                 extra={"principal": principal_extra, "detail": repr(exc)},
             )
             return _UNEXPECTED_ERROR_MESSAGE
@@ -567,6 +602,7 @@ def _run_mcp_action(
                 action=action,
                 outcome="failed",
                 run_id=run_id,
+                entity_id=entity_id,
                 extra={"principal": principal_extra, "reason": result[:_STAGE_REASON_MAX_LEN]},
             )
             return result
@@ -575,6 +611,7 @@ def _run_mcp_action(
             action=action,
             outcome="succeeded",
             run_id=run_id,
+            entity_id=entity_id,
             extra={"principal": principal_extra},
         )
         return result
@@ -1837,7 +1874,70 @@ _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
     "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
 )
 
+
+class _MalformedPatchFieldsError(Exception):
+    """A `fields` argument to one of issue #136's draft-content tools is shaped wrong.
+
+    Raised only by `_parse_patch_fields` -- caught once, at each PATCH/add
+    tool's own call site, and turned into an `error: ` string (mirrors
+    `_MalformedPolicyDraftStandardsError`'s own convention immediately
+    below).
+    """
+
+
+def _parse_patch_fields(
+    fields: dict[str, object] | None,
+    *,
+    allowed: frozenset[str],
+    enum_checks: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+) -> dict[str, object]:
+    """Validate `fields` against a tool's own patchable-field allow-list (issue #136, PLAN.md §1.7).
+
+    `fields=None` (the parameter omitted entirely) returns `{}` (a no-op
+    update) -- mirrors `_parse_policy_draft_standards`'s own `None`-means-
+    nothing convention. Every key must be in `allowed`; every value must be
+    `str | None` (`None` means "explicitly clear this field to null" --
+    AC-BI-008's PATCH semantic, distinct from the key being absent, which
+    leaves the existing value untouched). A key present in `enum_checks`
+    must have a value from its own allowed tuple, when the value is not
+    `None`.
+
+    Args:
+        fields: The tool's own raw `fields` argument, as the MCP caller
+            supplied it.
+        allowed: The fixed, code-defined set of patchable field names this
+            tool accepts.
+        enum_checks: Field name -> the tuple of values it is restricted to
+            (checked only when that field is present and non-`None`).
+
+    Returns:
+        `fields` unchanged (as a plain `dict`), once every key/value has
+        been validated.
+
+    Raises:
+        _MalformedPatchFieldsError: `fields` is not a dict, a key is not in
+            `allowed`, a value is neither `str` nor `None`, or an
+            `enum_checks`-restricted field's non-`None` value is not one of
+            its own allowed values.
+    """
+    if fields is None:
+        return {}
+    for key, value in fields.items():
+        if key not in allowed:
+            raise _MalformedPatchFieldsError(f"fields.{key} is not a patchable field")
+        if value is not None and not isinstance(value, str):
+            raise _MalformedPatchFieldsError(f"fields.{key} must be a string or null")
+        allowed_values = enum_checks.get(key)
+        if allowed_values is not None and value is not None and value not in allowed_values:
+            raise _MalformedPatchFieldsError(
+                f"fields.{key} must be one of {allowed_values} or null"
+            )
+    return fields
+
+
 _CREATE_POLICY_DRAFT_ERRORS = (
+    PolicyNotFoundError,
+    PolicySupersedePriorNotApprovedError,
     PolicyTitleAlreadyExistsError,
     PolicyLifecycleGraphUnavailableError,
 )
@@ -1923,40 +2023,58 @@ def _parse_policy_draft_standards(
 def create_policy_draft(
     title: Annotated[str, Field(min_length=1)],
     standards: list[dict[str, object]] | None = None,
+    supersedes_policy_id: Annotated[str, Field(min_length=1)] | None = None,
 ) -> dict[str, object] | str:
-    """CreatePolicyDraft: mint a new draft Policy owned by the calling caller (issue #134).
+    """CreatePolicyDraft: mint a new draft Policy owned by the calling caller (issue #134/#136).
 
     Delegates to `ps_service.policy_lifecycle.service.create_policy_draft`
     (L2 "delegate, don't reimplement") -- this tool resolves the caller's
     identity and the policy graph handle, parses `standards`, then does
-    nothing else. The new Policy is minted with `status="draft"`,
-    `version="1"`, owned by the calling caller; its id is derived
+    nothing else. The new Policy is minted with `status="draft"`, owned by
+    the calling caller.
+
+    `standards` is optional (omit it, or pass `null`, for a title-only,
+    zero-Standard draft -- fully backward compatible). When given, it is a
+    list of objects, each `{"title": <str>, "controls": [...]}` (`controls`
+    itself optional, defaulting to `[]`); each control is `{"title": <str>,
+    "control_type": "automated" | "manual"}` (`control_type` optional,
+    defaulting to `"manual"`). Every Standard/Control minted this way is
+    unconditionally `status="draft"` (D-6), regardless of anything else in
+    the request.
+
+    `supersedes_policy_id` (issue #136, the amendment fork) is optional. When
+    omitted, this mints an ordinary v1 Policy: its id is derived
     deterministically from `title` alone (`pol_{slug}_{hash}`), so calling
     this again with the same title returns an error rather than a second
-    Policy.
-
-    `standards` is optional (omit it, or pass `null`, for the original
-    title-only, zero-Standard draft -- fully backward compatible). When
-    given, it is a list of objects, each `{"title": <str>, "controls":
-    [...]}` (`controls` itself optional, defaulting to `[]`); each control
-    is `{"title": <str>, "control_type": "automated" | "manual"}`
-    (`control_type` optional, defaulting to `"manual"`). Every Standard/
-    Control minted this way is unconditionally `status="draft"` (D-6),
-    regardless of anything else in the request -- this is the only way to
-    attach Standards/Controls to a Policy at creation time through the tool
-    surface; there is no separate "add standard" tool. Attaching at least
-    one Standard here is what lets the resulting Policy actually pass
-    `propose-policy`'s completeness gate (AC-BI-013) later.
+    Policy, and `version` is `"1"`. When set to an existing `"approved"`
+    Policy's id, this instead mints a SUCCESSOR draft: the new id is derived
+    from BOTH `title` and `supersedes_policy_id`, `version` is
+    `str(int(prior_version) + 1)` (still string-typed), a single Policy-
+    level `SUPERSEDED_BY` edge links the prior Policy to the new one (no
+    per-Standard/Control lineage edges), and the new draft's Standard/
+    Control children are the prior Policy's OWN CURRENT children, forked as
+    brand-new, independently-editable nodes -- never the prior's own nodes,
+    which are never mutated by this call. **`standards` is silently ignored
+    when `supersedes_policy_id` is set** -- the fork's content always comes
+    from the prior tree, never a caller-supplied list. `supersedes_policy_id`
+    naming a Policy that does not exist, or that exists but is not currently
+    `"approved"`, is rejected with a named error; no fork is attempted.
 
     On success, returns `{"policy_id", "title", "status", "version",
-    "owner_subject"}`. Returns a string beginning `error: ` when the caller
-    has no real authenticated session (the local-test bypass DOES count as
-    one here -- unlike access-role management or signing-ceremony approval),
-    when `standards` (or a nested `controls` entry) is shaped wrong (not a
-    list of objects, or missing/empty a required `title`, or an invalid
-    `control_type`), when `title`'s derived id already collides with an
-    existing Policy, when the policy graph cannot be reached, or (this
-    tool's own residual safety net) on any other unexpected failure.
+    "owner_subject", "standard_ids", "control_ids", "superseded_policy_id"}`
+    -- `standard_ids`/`control_ids` are `[]` on a title-only draft, or every
+    minted/forked child's id otherwise, immediately usable in a following
+    `update-standard-draft`/`add-control-to-draft`/`update-control-draft`
+    call; `superseded_policy_id` is `null` unless this was a fork. Returns a
+    string beginning `error: ` when the caller has no real authenticated
+    session (the local-test bypass DOES count as one here -- unlike
+    access-role management or signing-ceremony approval), when `standards`
+    (or a nested `controls` entry) is shaped wrong (not a list of objects, or
+    missing/empty a required `title`, or an invalid `control_type`), when
+    `supersedes_policy_id` names a Policy that does not exist or is not
+    `"approved"`, when the computed id already collides with an existing
+    Policy, when the policy graph cannot be reached, or (this tool's own
+    residual safety net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1979,6 +2097,7 @@ def create_policy_draft(
                 actor=actor,
                 title=title,
                 standards=parsed_standards,
+                supersedes_policy_id=supersedes_policy_id,
                 graph=graph,
                 audit_store=audit_store,
             )
@@ -1990,9 +2109,486 @@ def create_policy_draft(
             "status": result.status,
             "version": result.version,
             "owner_subject": result.owner_subject,
+            "standard_ids": list(result.standard_ids),
+            "control_ids": list(result.control_ids),
+            "superseded_policy_id": result.superseded_policy_id,
         }
 
-    return _run_mcp_action("create_policy_draft", principal, _body)
+    return _run_mcp_action("create_policy_draft", principal, _body, entity_id=supersedes_policy_id)
+
+
+_UPDATE_POLICY_DRAFT_ERRORS = (
+    PolicyNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="update-policy-draft")
+def update_policy_draft(
+    policy_id: Annotated[str, Field(min_length=1)],
+    fields: dict[str, object] | None = None,
+) -> dict[str, object] | str:
+    """UpdatePolicyDraft: PATCH a subset of a draft Policy's own content fields (issue #136).
+
+    Delegates to `ps_service.policy_lifecycle.service.update_policy_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, parses
+    `fields`, then does nothing else. Uses the exact same
+    `_resolve_policy_lifecycle_actor` identity resolution as
+    `create-policy-draft`/`get-policy` (D-11): the local-test bypass DOES
+    count as a real authenticated caller here.
+
+    Only usable while `policy_id`'s own governance status is `"draft"`, and
+    only by its owner or a caller holding `SystemOwner`/`SystemAdmin`
+    (AC-BI-002/004) -- the same visibility/override rule `get-policy`
+    already applies to a Draft Policy.
+
+    `fields` is a partial-update map: only the keys supplied are changed,
+    every omitted field keeps its existing value (AC-BI-008). Each value is
+    either a non-null string, or JSON `null` to explicitly clear that field.
+    Allowed keys: `description`, `scope_in`, `scope_out`,
+    `normative_commitments`, `review_cadence`, `exception_pathway`,
+    `measurable_outcomes`, `capability_grouping_rationale`. `title`,
+    `status`, `owner_subject`, `owner_issuer`, and `version` can never be
+    patched through this tool.
+
+    On success, returns `{"policy_id", "updated_fields"}` (`updated_fields`
+    is every key `fields` supplied, sorted). Returns a string beginning
+    `error: ` when the caller has no real authenticated session, when
+    `fields` names an unknown key or a non-string/non-null value, when no
+    Policy exists with `policy_id`, when the caller is neither the owner nor
+    a `SystemOwner`/`SystemAdmin`, when `policy_id`'s Policy is not currently
+    `"draft"`, when the policy graph cannot be reached, or (this tool's own
+    residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            parsed_fields = _parse_patch_fields(fields, allowed=_POLICY_PATCHABLE_FIELDS)
+        except _MalformedPatchFieldsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_update_policy_draft(
+                actor=actor,
+                policy_id=policy_id,
+                fields=parsed_fields,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _UPDATE_POLICY_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "updated_fields": list(result.updated_fields),
+        }
+
+    return _run_mcp_action("update_policy_draft", principal, _body, entity_id=policy_id)
+
+
+_ADD_STANDARD_TO_DRAFT_ERRORS = (
+    PolicyNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="add-standard-to-draft")
+def add_standard_to_draft(
+    policy_id: Annotated[str, Field(min_length=1)],
+    title: Annotated[str, Field(min_length=1)],
+    fields: dict[str, object] | None = None,
+) -> dict[str, object] | str:
+    """AddStandardToDraft: create a new Standard under a draft Policy (issue #136).
+
+    Delegates to `ps_service.policy_lifecycle.service.add_standard_to_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, parses
+    `fields`, then does nothing else. Uses the exact same
+    `_resolve_policy_lifecycle_actor` identity resolution as
+    `create-policy-draft`/`update-policy-draft` (D-11): the local-test
+    bypass DOES count as a real authenticated caller here.
+
+    Only usable while `policy_id`'s own governance status is `"draft"`, and
+    only by its owner or a caller holding `SystemOwner`/`SystemAdmin`
+    (AC-BI-003/004) -- the same visibility/override rule `update-policy-draft`
+    already applies to the parent Policy. The new Standard is linked to
+    `policy_id` via `SUPPORTED_BY`, and is always minted with governance
+    status `"draft"`, independent of its own `implementation_status` field
+    (AC-BI-007) -- `implementation_status` defaults to `"draft"` unless
+    supplied in `fields`.
+
+    `fields` is optional extra content to set at creation time (same partial-
+    update value shape as `update-policy-draft`'s own `fields`): each value
+    is either a non-null string, or JSON `null` (meaning "leave this field
+    unset" -- a newly-minted node has no prior value to clear, unlike a PATCH
+    tool). Allowed keys: `description`, `implementation_status`, `procedure`,
+    `implementer_role`, `reviewer_role`, `applicability_boundary`,
+    `verification_notes`, `change_rationale`. `implementation_status`, when
+    supplied, must be one of `draft`, `implemented`, `reviewed`, `deprecated`.
+    `title` and `status` can never be set through `fields`.
+
+    On success, returns `{"standard_id", "policy_id", "title", "status"}` --
+    `standard_id` is usable immediately in a following call (AC-BI-009).
+    Returns a string beginning `error: ` when the caller has no real
+    authenticated session, when `fields` names an unknown key, a non-string/
+    non-null value, or an invalid `implementation_status`, when no Policy
+    exists with `policy_id`, when the caller is neither the owner nor a
+    `SystemOwner`/`SystemAdmin`, when `policy_id`'s Policy is not currently
+    `"draft"`, when the policy graph cannot be reached, or (this tool's own
+    residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            parsed_fields = _parse_patch_fields(
+                fields,
+                allowed=_STANDARD_PATCHABLE_FIELDS,
+                enum_checks={"implementation_status": _STANDARD_IMPLEMENTATION_STATUS_VALUES},
+            )
+        except _MalformedPatchFieldsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_add_standard_to_draft(
+                actor=actor,
+                policy_id=policy_id,
+                title=title,
+                fields=parsed_fields,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _ADD_STANDARD_TO_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "standard_id": result.standard_id,
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+        }
+
+    return _run_mcp_action("add_standard_to_draft", principal, _body, entity_id=policy_id)
+
+
+_UPDATE_STANDARD_DRAFT_ERRORS = (
+    PolicyStandardNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="update-standard-draft")
+def update_standard_draft(
+    standard_id: Annotated[str, Field(min_length=1)],
+    fields: dict[str, object] | None = None,
+) -> dict[str, object] | str:
+    """UpdateStandardDraft: PATCH a subset of a draft Standard's own content fields (issue #136).
+
+    Delegates to `ps_service.policy_lifecycle.service.update_standard_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, parses
+    `fields`, then does nothing else. Uses the exact same
+    `_resolve_policy_lifecycle_actor` identity resolution as
+    `update-policy-draft`/`add-standard-to-draft` (D-11): the local-test
+    bypass DOES count as a real authenticated caller here.
+
+    Ownership is derived TRANSITIVELY from `standard_id`'s parent Policy
+    (AC-BI-003) -- a Standard has no ownership field of its own; only its
+    owner or a caller holding `SystemOwner`/`SystemAdmin` may patch it, the
+    same visibility/override rule every other draft-content tool in this
+    issue applies. Only usable while `standard_id`'s own governance status
+    (not the parent Policy's) is currently `"draft"` (AC-BI-004).
+
+    `fields` is a partial-update map: only the keys supplied are changed,
+    every omitted field keeps its existing value (AC-BI-008). Each value is
+    either a non-null string, or JSON `null` to explicitly clear that field.
+    Allowed keys: `description`, `implementation_status`, `procedure`,
+    `implementer_role`, `reviewer_role`, `applicability_boundary`,
+    `verification_notes`, `change_rationale`. `implementation_status`, when
+    supplied, must be one of `draft`, `implemented`, `reviewed`, `deprecated`.
+    `title` and `status` can never be patched through this tool.
+
+    On success, returns `{"standard_id", "policy_id", "title", "status"}`.
+    Returns a string beginning `error: ` when the caller has no real
+    authenticated session, when `fields` names an unknown key, a non-string/
+    non-null value, or an invalid `implementation_status`, when no Standard
+    exists with `standard_id`, when the caller is neither the parent Policy's
+    owner nor a `SystemOwner`/`SystemAdmin`, when `standard_id`'s Standard is
+    not currently `"draft"`, when the policy graph cannot be reached, or
+    (this tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            parsed_fields = _parse_patch_fields(
+                fields,
+                allowed=_STANDARD_PATCHABLE_FIELDS,
+                enum_checks={"implementation_status": _STANDARD_IMPLEMENTATION_STATUS_VALUES},
+            )
+        except _MalformedPatchFieldsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_update_standard_draft(
+                actor=actor,
+                standard_id=standard_id,
+                fields=parsed_fields,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _UPDATE_STANDARD_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "standard_id": result.standard_id,
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+        }
+
+    return _run_mcp_action("update_standard_draft", principal, _body, entity_id=standard_id)
+
+
+_ADD_CONTROL_TO_DRAFT_ERRORS = (
+    PolicyStandardNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+# CHANGES.md finding #8: `add-control-to-draft` excludes `"type"` from its
+# own `fields` allow-list -- the top-level `control_type` param is the only
+# way to set a Control's type at creation. `update-control-draft` (Slice 5)
+# keeps the full, unmodified `_CONTROL_PATCHABLE_FIELDS` (including `"type"`)
+# as the only post-creation path to change it.
+_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS = _CONTROL_PATCHABLE_FIELDS - {"type"}
+
+
+@server.tool(name="add-control-to-draft")
+def add_control_to_draft(
+    standard_id: Annotated[str, Field(min_length=1)],
+    title: Annotated[str, Field(min_length=1)],
+    control_type: Annotated[str, Field(min_length=1)] = "manual",
+    fields: dict[str, object] | None = None,
+) -> dict[str, object] | str:
+    """AddControlToDraft: create a new Control under a draft Standard (issue #136).
+
+    Delegates to `ps_service.policy_lifecycle.service.add_control_to_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, validates
+    `control_type`, parses `fields`, then does nothing else. Uses the exact
+    same `_resolve_policy_lifecycle_actor` identity resolution as every other
+    tool in this issue (D-11): the local-test bypass DOES count as a real
+    authenticated caller here.
+
+    Ownership is derived from `standard_id`'s parent Policy via the SAME
+    one-hop traversal `update-standard-draft` uses (PLAN.md §1.4 -- both
+    tools take a `standard_id`; only `update-control-draft`, keyed on an
+    existing `control_id`, needs a genuine two-hop traversal) -- only usable
+    while `standard_id`'s own governance status (not the parent Policy's) is
+    currently `"draft"` (AC-BI-004), and only by the parent Policy's owner or
+    a caller holding `SystemOwner`/`SystemAdmin` (AC-BI-003). The new Control
+    is linked to `standard_id` via `IMPLEMENTED_BY`, and is always minted
+    with governance status `"draft"`, independent of its own
+    `implementation_status` field (AC-BI-007) -- `implementation_status`
+    defaults to `"planned"` (NOT `"draft"` -- Control's own workflow starts
+    one step later than Standard's) unless supplied in `fields`.
+
+    `control_type` must be `"automated"` or `"manual"`. `fields` is optional
+    extra content to set at creation time (same partial-update value shape as
+    `add-standard-to-draft`'s own `fields`): each value is either a non-null
+    string, or JSON `null` (meaning "leave this field unset" -- a newly-
+    minted node has no prior value to clear). Allowed keys: `description`,
+    `implementation_status`, `execution_frequency`, `last_test_date`,
+    `next_review_date`, `evidence_ref`, `pass_fail_criteria`,
+    `execution_method`, `evidence_plan`, `executor_role`, `reviewer_role`,
+    `risk_alignment_rationale`. `implementation_status`, when supplied, must
+    be one of `planned`, `implemented`, `reviewed`, `deprecated`. `title`,
+    `status`, and `type` can never be set through `fields` -- `fields.type`
+    is rejected; use `control_type` to set the Control's type at creation.
+
+    On success, returns `{"control_id", "standard_id", "policy_id", "title",
+    "status"}` -- `control_id` is usable immediately in a following call.
+    Returns a string beginning `error: ` when the caller has no real
+    authenticated session, when `control_type` is not `"automated"` or
+    `"manual"`, when `fields` names an unknown key (including `"type"`), a
+    non-string/non-null value, or an invalid `implementation_status`, when no
+    Standard exists with `standard_id`, when the caller is neither the parent
+    Policy's owner nor a `SystemOwner`/`SystemAdmin`, when `standard_id`'s
+    Standard is not currently `"draft"`, when the policy graph cannot be
+    reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        if control_type not in _CREATE_POLICY_DRAFT_CONTROL_TYPES:
+            return "error: control_type must be 'automated' or 'manual'"
+        try:
+            parsed_fields = _parse_patch_fields(
+                fields,
+                allowed=_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS,
+                enum_checks={"implementation_status": _CONTROL_IMPLEMENTATION_STATUS_VALUES},
+            )
+        except _MalformedPatchFieldsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_add_control_to_draft(
+                actor=actor,
+                standard_id=standard_id,
+                title=title,
+                control_type=control_type,
+                fields=parsed_fields,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _ADD_CONTROL_TO_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "control_id": result.control_id,
+            "standard_id": result.standard_id,
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+        }
+
+    return _run_mcp_action("add_control_to_draft", principal, _body, entity_id=standard_id)
+
+
+_UPDATE_CONTROL_DRAFT_ERRORS = (
+    PolicyControlNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="update-control-draft")
+def update_control_draft(
+    control_id: Annotated[str, Field(min_length=1)],
+    fields: dict[str, object] | None = None,
+) -> dict[str, object] | str:
+    """UpdateControlDraft: PATCH a subset of a draft Control's own content fields (issue #136).
+
+    Delegates to `ps_service.policy_lifecycle.service.update_control_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, parses
+    `fields`, then does nothing else. Uses the exact same
+    `_resolve_policy_lifecycle_actor` identity resolution as every other tool
+    in this issue (D-11): the local-test bypass DOES count as a real
+    authenticated caller here.
+
+    Ownership is derived TRANSITIVELY from `control_id`'s root Policy, via
+    the genuinely TWO-hop `Policy -[:SUPPORTED_BY]-> Standard
+    -[:IMPLEMENTED_BY]-> Control` traversal (AC-BI-003) -- neither Control
+    nor its parent Standard has an ownership field of its own; unlike
+    `update-standard-draft`/`add-control-to-draft`, which both take a
+    `standard_id` and only need a one-hop traversal to their parent Policy.
+    Only usable while `control_id`'s own governance status (not its parent
+    Standard's or root Policy's) is currently `"draft"` (AC-BI-004).
+
+    `fields` is a partial-update map: only the keys supplied are changed,
+    every omitted field keeps its existing value (AC-BI-008). Each value is
+    either a non-null string, or JSON `null` to explicitly clear that field.
+    Allowed keys: `description`, `implementation_status`, `type`,
+    `execution_frequency`, `last_test_date`, `next_review_date`,
+    `evidence_ref`, `pass_fail_criteria`, `execution_method`,
+    `evidence_plan`, `executor_role`, `reviewer_role`,
+    `risk_alignment_rationale` -- unlike `add-control-to-draft`, `type` IS
+    patchable here: this is the only post-creation path to change a
+    Control's type (CHANGES.md finding #8). `implementation_status`, when
+    supplied, must be one of `planned`, `implemented`, `reviewed`,
+    `deprecated`. `title` and `status` can never be patched through this
+    tool.
+
+    On success, returns `{"control_id", "standard_id", "policy_id", "title",
+    "status"}`. Returns a string beginning `error: ` when the caller has no
+    real authenticated session, when `fields` names an unknown key, a
+    non-string/non-null value, or an invalid `implementation_status`, when no
+    Control exists with `control_id`, when the caller is neither the root
+    Policy's owner nor a `SystemOwner`/`SystemAdmin`, when `control_id`'s
+    Control is not currently `"draft"`, when the policy graph cannot be
+    reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            parsed_fields = _parse_patch_fields(
+                fields,
+                allowed=_CONTROL_PATCHABLE_FIELDS,
+                enum_checks={"implementation_status": _CONTROL_IMPLEMENTATION_STATUS_VALUES},
+            )
+        except _MalformedPatchFieldsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_update_control_draft(
+                actor=actor,
+                control_id=control_id,
+                fields=parsed_fields,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _UPDATE_CONTROL_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "control_id": result.control_id,
+            "standard_id": result.standard_id,
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+        }
+
+    return _run_mcp_action("update_control_draft", principal, _body, entity_id=control_id)
 
 
 _GET_POLICY_ERRORS = (PolicyNotFoundError, PolicyDraftAccessDeniedError)
