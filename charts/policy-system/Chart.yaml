@@ -2,8 +2,8 @@ apiVersion: v2
 name: policy-system
 description: PS Service + FalkorDB Helm chart for local kind (Podman) and prod Kubernetes deployment.
 type: application
-version: 3.1.0
-appVersion: "3.1.0"
+version: 3.1.1
+appVersion: "3.1.1"
 dependencies:
   - name: authentik
     version: 2026.8.3
