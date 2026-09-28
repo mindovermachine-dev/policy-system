@@ -1299,6 +1299,101 @@ def restore_instrument(
     return _run_mcp_action("restore_instrument", principal, _body)
 
 
+# D2 (issue #139): `celex` is a plain node PROPERTY on `RegulatoryInstrument`,
+# never its node id (`{SHORT}-{VERSION}`) -- confirmed against
+# `ingestion/graph_writer.py`'s `register_regulatory_instrument_version`.
+# Fixed, code-owned, never string-interpolated -- `celex_ids` always flows in
+# via `params` (L2 Query Safety).
+_INGESTION_STATUS_QUERY = (
+    "UNWIND $celex_ids AS c "
+    "MATCH (n:RegulatoryInstrument {celex: c}) "
+    "RETURN DISTINCT n.celex AS celex"
+)
+
+
+@server.tool()
+def check_instrument_ingestion_status(
+    celex_ids: Annotated[
+        list[Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)]],
+        Field(min_length=1, max_length=25),
+    ],
+) -> dict[str, object] | str:
+    """CheckInstrumentIngestionStatus: report whether each given EU instrument is already ingested.
+
+    For every CELEX id in `celex_ids` (1-25 items, each a well-formed EU
+    CELEX identifier -- same pattern `ingest_regulation`'s own `celex`
+    parameter uses, rejected at the MCP schema layer before this tool's body
+    ever runs if malformed or if the list is empty or too long), checks the
+    policy graph for a `RegulatoryInstrument` node carrying that CELEX as its
+    `celex` property (a plain property, distinct from that node's own
+    `{SHORT}-{VERSION}` id) and reports whether it has already been
+    ingested.
+
+    On success, returns `{"statuses": {<celex>: "ingested" | "not_yet_ingested"
+    | "unknown", ...}}`, one entry per requested `celex_ids` element
+    (duplicate ids collapse via dict semantics). Intended for a Compliance
+    Officer's applicability assessment: batch every candidate instrument's
+    CELEX into one call to learn which ones the graph already tracks,
+    rather than calling `cypher` once per candidate.
+
+    Issue #139, D5/S5 (AC-BI-009): a graph-availability problem never fails
+    the whole call -- unlike `cypher`/`check_regulations`/`near_misses_list`,
+    which all return a bare `error: ...` string and abort on
+    `McpGraphUnavailableError`/`QueryEngineExecutionError`. Here, every one
+    of those (plus `GraphUnseededError` and the practically-unreachable
+    `WriteClauseRejectedError`, caught for completeness since this query is
+    fixed and code-owned) instead folds every requested `celex_ids` entry to
+    `"unknown"`, per AC-BI-009's literal wording ("the artifact still
+    returns the candidate list ... rather than the whole assessment
+    failing"). This deliberately includes a totally unseeded graph
+    (`GraphUnseededError`): PLAN.md D5 reads a fresh/unseeded graph as
+    `"unknown"` rather than confidently `"not_yet_ingested"`, reasoning that
+    an unseeded graph is at least as likely to signal a real
+    provisioning/connectivity problem as a genuinely fresh company graph.
+    The call itself still completes successfully (`_run_mcp_action` logs
+    `outcome="succeeded"`, never `"failed"`) -- this degraded response is a
+    dict, never a top-level `error:` string, so it never trips
+    `_run_mcp_action`'s failed-outcome branch.
+
+    This tool requires no elevated access role, matching `cypher`/
+    `check_regulations`/`near_misses_list` -- it is architecturally a plain
+    graph read, not an administrative write, so it sits on the same
+    un-gated `server` singleton every other tool does; per-caller bearer-
+    token authentication is still enforced uniformly by the HTTP transport
+    for every registered tool (issue #139, D6).
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object]:
+        try:
+            graph = _resolve_graph(config)
+            result = execute_cypher_query(
+                _INGESTION_STATUS_QUERY,
+                graph=graph,
+                principal=principal,
+                timeout_ms=config.query_timeout_ms,
+                row_cap=config.query_row_cap,
+                params={"celex_ids": celex_ids},
+            )
+        except (
+            McpGraphUnavailableError,
+            GraphUnseededError,
+            QueryEngineExecutionError,
+            WriteClauseRejectedError,
+        ):
+            return {"statuses": dict.fromkeys(celex_ids, "unknown")}
+        ingested = {row[0] for row in result.rows}
+        return {
+            "statuses": {
+                celex: "ingested" if celex in ingested else "not_yet_ingested"
+                for celex in celex_ids
+            }
+        }
+
+    return _run_mcp_action("check_instrument_ingestion_status", principal, _body)
+
+
 @server.tool()
 def cypher(query: str) -> dict[str, object] | str:
     """Run a read-only, MATCH/RETURN-shaped Cypher query against the policy_system graph.

@@ -181,6 +181,7 @@ def execute_cypher_query(
     principal: str | None = None,
     timeout_ms: int,
     row_cap: int,
+    params: dict[str, object] | None = None,
 ) -> QueryResult:
     """ExecuteCypherQuery: execute a read-only Cypher query against `graph`.
 
@@ -223,6 +224,15 @@ def execute_cypher_query(
     `LIMIT` clause or FalkorDB's global `RESULTSET_SIZE` config -- and
     `QueryResult.truncated` reports whether that slice actually shortened
     the result.
+
+    `params` (issue #139, D2/D3) threads straight through to `graph.query`'s
+    own native `params=` kwarg -- the single parameterization channel every
+    caller with client-supplied values (e.g. `check_instrument_ingestion_status`'s
+    `celex_ids`) must use instead of string-interpolating into `query`
+    (L2 Query Safety: "Parameterize Cypher queries: pass values via
+    `params={...}`"). Omitted entirely (`None`, the default) for a caller
+    with no values to bind, e.g. `cypher`'s own freehand queries --
+    unaffected, fully backward compatible with every existing call site.
     """
     started = time.perf_counter()
     if is_write_clause(query):
@@ -240,7 +250,7 @@ def execute_cypher_query(
         raise GraphUnseededError(_GRAPH_UNSEEDED_DETAIL)
 
     try:
-        result = graph.query(query, timeout=timeout_ms)
+        result = graph.query(query, params=params, timeout=timeout_ms)
     except Exception as exc:
         outcome = _classify_execution_failure(exc)
         _log(outcome=outcome, started=started, emitter=emitter, principal=principal)

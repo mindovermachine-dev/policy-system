@@ -216,6 +216,24 @@ read (no confirmation needed) but requires `SystemAdmin` or above; see
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-list-audit-events skill."_
 
+### Assess EU-instrument applicability
+
+```text
+Assess which EU regulations might apply to [company].
+```
+
+The `ps-assess-instrument-applicability` skill interviews you for a
+company's markets/geographies and products/services, echoes them back for
+confirmation, then produces a tiered (likely/possible/excluded) candidate
+list of EU regulatory instruments from general regulatory knowledge — never
+the graph or a curated catalog — cross-checking each candidate's CELEX
+against the same MCP connector for whether it's already ingested. The
+result always carries a prominent disclaimer: it is non-authoritative, may
+be incomplete, and is not a substitute for legal or compliance review.
+
+If the skill does not engage on its own, ask for it by name: _"Use the
+ps-assess-instrument-applicability skill."_
+
 ---
 
 ## Role System
