@@ -227,6 +227,33 @@ def test_control_id_slug_is_title_only() -> None:
     )
 
 
+def test_policy_id_v1_is_byte_for_byte_unchanged_by_prior_policy_id_extension() -> None:
+    """Issue #134 D-4: `prior_policy_id=None` reproduces today's formula
+    byte-for-byte -- AC-BI-012's "returns exactly today's id for every
+    existing Policy." Pinned to the literal value computed before this
+    slice's change, not merely self-consistency, so a future regression in
+    the `prior_policy_id is None` branch would actually be caught.
+    """
+    assert policy_id("Data Protection Policy") == "pol_data_protection_policy_a0acad"
+
+
+def test_policy_id_with_prior_policy_id_differs_from_v1_and_is_prior_scoped() -> None:
+    """A given `prior_policy_id` folds into the opaque hash only, mirroring
+    `standard_id`/`control_id`'s existing "parent enters the hash, never the
+    visible slug" pattern -- two different priors, same title, three
+    distinct ids.
+    """
+    title = "Data Protection Policy"
+    v1 = policy_id(title)
+    with_prior_x = policy_id(title, prior_policy_id="pol_x")
+    with_prior_y = policy_id(title, prior_policy_id="pol_y")
+
+    assert with_prior_x != v1
+    assert with_prior_y != v1
+    assert with_prior_x != with_prior_y
+    assert with_prior_x.startswith("pol_data_protection_policy_")
+
+
 def test_control_id_differs_for_different_titles_under_same_standard_even_same_type() -> None:
     """AC-BI-003's literal proof: two different titles under the same Standard yield
     two different ids, even when both would-be Controls share the same `type` --

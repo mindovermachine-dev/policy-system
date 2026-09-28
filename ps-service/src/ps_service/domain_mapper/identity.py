@@ -76,16 +76,29 @@ def capability_id(name: str) -> str:
     return f"cap_{_slug(name)}_{_hash(name.lower())}"
 
 
-def policy_id(title: str) -> str:
-    """`pol_{slug}_{hash}` — content-derived from the Policy's own `title` alone.
+def policy_id(title: str, prior_policy_id: str | None = None) -> str:
+    """`pol_{slug}_{hash}` — content-derived from the Policy's own `title`.
 
     Deliberately NOT derived from any governing Capability (`ps-domain-
     concepts.md`'s Policy identity note: a single Policy commonly governs
     several Capabilities at once, so deriving from any one of them would be
     incoherent). Mirrors `capability_id`'s own "identity comes from what the
-    node itself is" shape.
+    node itself is" shape when `prior_policy_id` is `None` (v1 of a Policy) —
+    `prior_policy_id=None` reproduces the pre-#134 formula byte-for-byte.
+
+    `prior_policy_id` (issue #134 D-4) is the fork/version successor case: a
+    given prior folds into the opaque `{hash}` only, never the visible
+    `{slug}`, mirroring `standard_id`/`control_id`'s existing "parent enters
+    the hash, never the slug" weak-entity pattern. This makes a Policy's
+    identity formula conditionally weak-entity-shaped for a version N+1
+    while staying canonical/name-only for v1 — a deliberate, documented
+    exception, not a wholesale identity-model change. `#136`'s fork tool
+    (out of this issue's scope) is the intended caller of the
+    `prior_policy_id`-set branch.
     """
-    return f"pol_{_slug(title)}_{_hash(title.lower())}"
+    if prior_policy_id is None:
+        return f"pol_{_slug(title)}_{_hash(title.lower())}"
+    return f"pol_{_slug(title)}_{_hash(f'{prior_policy_id}:{title.lower()}')}"
 
 
 def practice_area_id(name: str) -> str:

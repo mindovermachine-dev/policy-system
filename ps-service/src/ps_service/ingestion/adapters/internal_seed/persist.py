@@ -346,6 +346,20 @@ def _index_control_implementers(seed: InternalRegulationSeed) -> dict[str, str]:
     return implementer_by_control
 
 
+def _policy_status_by_local_id(seed: InternalRegulationSeed) -> dict[str, str]:
+    """Policy local id -> its own `status` property.
+
+    The mint-time source of truth for `_standard_properties`/`_control_properties`'s
+    `status` field (GH #134 D-6/S7): a Standard/Control's governance `status`
+    mirrors its root Policy's `status`, never a hardcoded default.
+    """
+    return {
+        node.id: _require_str_property(node, "status")
+        for node in seed.nodes
+        if node.label == "Policy"
+    }
+
+
 def _index_requirement_obligations(seed: InternalRegulationSeed) -> dict[str, tuple[str, ...]]:
     """Requirement local id -> the local ids of every Obligation it SATISFIED_BY-links to."""
     obligations_by_requirement: dict[str, list[str]] = {}
@@ -671,13 +685,18 @@ def _risk_path_properties(node: SeedNode) -> dict[str, object]:
     return properties
 
 
-def _standard_properties(node: SeedNode) -> dict[str, object]:
-    """Required `title`/`implementation_status`, plus optional and structured properties.
+def _standard_properties(node: SeedNode, policy_status: str) -> dict[str, object]:
+    """Required `title`/`implementation_status`/`status`, plus optional/structured properties.
 
     Optional: `description`/`version`. Structured authoring-rubric fields:
     `procedure`, `implementer_role`, `reviewer_role`, `applicability_boundary`,
     `verification_notes`, `change_rationale` -- see
     `ps-skills/policy-system/rubrics/standard-rubric.md`.
+
+    `status` (governance status, independent of `implementation_status`) is
+    never read off the seed node itself -- it mirrors the root Policy's own
+    `status` at mint time (GH #134 D-6/S7), passed in by the caller, which
+    has already resolved the Standard's supporting Policy via `_SeedIndex`.
 
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Standard carries no LLM-derivation uncertainty.
@@ -686,6 +705,7 @@ def _standard_properties(node: SeedNode) -> dict[str, object]:
     properties: dict[str, object] = {
         "title": _require_str_property(node, "title"),
         "implementation_status": _require_str_property(node, "implementation_status"),
+        "status": policy_status,
     }
     for optional_key in (
         "description",
@@ -703,8 +723,8 @@ def _standard_properties(node: SeedNode) -> dict[str, object]:
     return properties
 
 
-def _control_properties(node: SeedNode) -> dict[str, object]:
-    """Required `type`/`title`/`implementation_status`, plus optional and structured properties.
+def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]:
+    """Required `type`/`title`/`implementation_status`/`status`, plus optional/structured props.
 
     Optional: the operational fields (`execution_frequency`, `last_test_date`,
     `next_review_date`, `evidence_ref`). Structured authoring-rubric fields:
@@ -714,6 +734,11 @@ def _control_properties(node: SeedNode) -> dict[str, object]:
     the authoring-time prose describing intended evidence; `evidence_ref`
     stays the operational pointer populated once real evidence exists.
 
+    `status` (governance status, independent of `implementation_status`) is
+    never read off the seed node itself -- it mirrors the root Policy's own
+    `status` at mint time (GH #134 D-6/S7), resolved transitively through the
+    Control's implemented Standard, passed in by the caller.
+
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Control carries no LLM-derivation uncertainty.
     Mirrors `_standard_properties`'s shape.
@@ -722,6 +747,7 @@ def _control_properties(node: SeedNode) -> dict[str, object]:
         "type": _require_str_property(node, "type"),
         "title": _require_str_property(node, "title"),
         "implementation_status": _require_str_property(node, "implementation_status"),
+        "status": policy_status,
     }
     for optional_key in (
         "description",
@@ -857,6 +883,7 @@ def _persist_baseline_reference_nodes(
             "properties": _regulatory_instrument_properties(index.regulatory_instrument),
         },
     )
+    policy_status_by_local_id = _policy_status_by_local_id(seed)
     for node in seed.nodes:
         if node.label == "Role":
             _execute_query(
@@ -883,21 +910,28 @@ def _persist_baseline_reference_nodes(
                 },
             )
         elif node.label == "Standard":
+            supporting_policy_local_id = index.standard_supporter[node.id]
             _execute_query(
                 graph,
                 "MERGE (n:Standard {id: $id}) SET n += $properties",
                 params={
                     "id": canonical.standard[node.id],
-                    "properties": _standard_properties(node),
+                    "properties": _standard_properties(
+                        node, policy_status_by_local_id[supporting_policy_local_id]
+                    ),
                 },
             )
         elif node.label == "Control":
+            implemented_standard_local_id = index.control_implementer[node.id]
+            supporting_policy_local_id = index.standard_supporter[implemented_standard_local_id]
             _execute_query(
                 graph,
                 "MERGE (n:Control {id: $id}) SET n += $properties",
                 params={
                     "id": canonical.control[node.id],
-                    "properties": _control_properties(node),
+                    "properties": _control_properties(
+                        node, policy_status_by_local_id[supporting_policy_local_id]
+                    ),
                 },
             )
 

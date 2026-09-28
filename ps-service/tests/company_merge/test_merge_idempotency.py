@@ -146,9 +146,9 @@ class _FakeBaselineGraph:
         if "[:REQUIRES]" in q:
             return _FakeQueryResult(self._requires_rows)
         if (
-            "(n:Policy) RETURN" in q
-            or "(n:Standard) RETURN" in q
-            or "(n:Control) RETURN" in q
+            "(n:Policy)" in q
+            or "(n:Standard)" in q
+            or "(n:Control)" in q
             or "(n:PracticeArea) RETURN" in q
             or "(n:RiskPath) RETURN" in q
             or "[:GOVERNED_BY]" in q

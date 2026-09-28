@@ -439,6 +439,7 @@ These structured fields pair with `ps-skills/policy-system/rubrics/policy-rubric
 | `OWNS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → OWNS](#practicearea). A Policy may be owned by any number of PracticeAreas — no artificial one-owner cap, matching COVERS/MITIGATED_BY/VERIFIED_BY (see AC-BI-011). |
 | `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
+| `SUPERSEDED_BY` (outbound) | Policy | 0..1 : 0..1 | — | A Policy may be superseded by exactly one successor version (or none); Policy-level only — no per-Standard/Control links. Linking a new version to its prior approved version is #136's fork tool; this issue delivers the edge's schema and the auto-deprecation cascade it triggers on the successor's approval (see Policy's Lifecycle note above). |
 
 ---
 
@@ -460,6 +461,7 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `title` | string | Yes | |
 | `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `implementation_status` | enum: `draft` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
+| `status` | enum: `draft` \| `proposed` \| `approved` \| `deprecated` | Yes | Governance status, independent of implementation_status; cascades from the parent Policy (see Policy Lifecycle, issue #134). |
 | `version` | string | No | |
 | `procedure` | string | No | Steps explicit enough that two implementers would execute them the same way. |
 | `implementer_role` | string | No | Who implements. Standard has no `owner_id`; this is the only place this lives. |
@@ -498,6 +500,7 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `title` | string | Yes | |
 | `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `implementation_status` | enum: `planned` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
+| `status` | enum: `draft` \| `proposed` \| `approved` \| `deprecated` | Yes | Governance status, independent of implementation_status; cascades from the parent Policy (see Policy Lifecycle, issue #134). |
 | `execution_frequency` | string | No | |
 | `last_test_date` | date (ISO 8601) | No | |
 | `next_review_date` | date (ISO 8601) | No | |

@@ -25,7 +25,7 @@ from datetime import (
     datetime,  # noqa: TC003 -- `list-audit-events`'s own tool params carry this type at runtime; the MCP SDK's `func_metadata` resolves `from __future__ import annotations`-deferred string annotations via `get_type_hints`, which needs `datetime` in this module's real globals, not TYPE_CHECKING-only
 )
 from importlib import resources
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -116,6 +116,37 @@ from ps_service.mcp_interface.errors import (
 )
 from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
+from ps_service.policy_lifecycle.errors import (
+    PolicyDraftAccessDeniedError,
+    PolicyIncompleteForProposalError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+    PolicyNotFoundError,
+    PolicySelfApprovalBlockedError,
+    PolicyTitleAlreadyExistsError,
+)
+from ps_service.policy_lifecycle.service import (
+    ControlDraftInput,
+    StandardDraftInput,
+)
+from ps_service.policy_lifecycle.service import (
+    approve_policy as run_approve_policy,
+)
+from ps_service.policy_lifecycle.service import (
+    create_policy_draft as run_create_policy_draft,
+)
+from ps_service.policy_lifecycle.service import (
+    get_policy as run_get_policy,
+)
+from ps_service.policy_lifecycle.service import (
+    propose_policy as run_propose_policy,
+)
+from ps_service.policy_lifecycle.service import (
+    reject_policy as run_reject_policy,
+)
+from ps_service.policy_lifecycle.service import (
+    revert_policy_to_draft as run_revert_policy_to_draft,
+)
 from ps_service.query_engine import (
     GraphUnseededError,
     QueryEngineExecutionError,
@@ -406,6 +437,45 @@ def _resolve_authz_actor(config: ServiceConfig) -> tuple[str, str] | None:
     if not isinstance(iss, str):
         return None
     return access_token.subject, iss
+
+
+def _resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | None:
+    """Resolve `(sub, iss)` for the policy-lifecycle tools' caller identity (issue #134, D-11).
+
+    Same verified-bearer-token branch as `_resolve_signing_actor`/
+    `_resolve_authz_actor` immediately above -- but, unlike either of them,
+    DOES fall back to `(LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)`
+    when `config.is_local_test_bypass_active` and no verified bearer token
+    is bound to this call at all, mirroring `_resolve_principal`'s own
+    bypass-honoring branch instead (AC-BI-018). Unlike access-role
+    management or signing-ceremony approval identity, a Policy draft
+    created under the local-test bypass is exactly the kind of thing local,
+    unauthenticated end-to-end testing needs to be able to do -- there is no
+    real, permanent, identity-keyed store record this would corrupt the way
+    `_resolve_authz_actor`'s own docstring warns about.
+
+    The bypass fallback is reached ONLY when no bearer token is present at
+    all (mirrors `_resolve_principal`'s own outer branching exactly) -- a
+    *present but malformed* token (missing `sub`, or `iss` not a string)
+    still resolves to `None`, never silently falling through to the bypass
+    identity.
+
+    Returns:
+        The verified `(sub, iss)` pair; `(LOCAL_TEST_PRINCIPAL_ID,
+        LOCAL_TEST_PRINCIPAL_ID)` if no verified bearer token is bound to
+        this call AND the local-test bypass is active; else `None`.
+    """
+    access_token = get_access_token()
+    if access_token is not None:
+        if access_token.subject is None:
+            return None
+        iss = (access_token.claims or {}).get("iss")
+        if not isinstance(iss, str):
+            return None
+        return access_token.subject, iss
+    if config.is_local_test_bypass_active:
+        return LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID
+    return None
 
 
 def _resolve_base_url(ctx: Context) -> str:
@@ -1724,3 +1794,517 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
         }
 
     return _run_mcp_action("list_audit_events", principal, _body)
+
+
+_POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: this action requires a real authenticated caller (the local-test bypass counts as one)"
+)
+
+_CREATE_POLICY_DRAFT_ERRORS = (
+    PolicyTitleAlreadyExistsError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+_CREATE_POLICY_DRAFT_CONTROL_TYPES = ("automated", "manual")
+
+
+class _MalformedPolicyDraftStandardsError(Exception):
+    """The `create-policy-draft` `standards` argument is shaped wrong.
+
+    Raised only by `_parse_policy_draft_standards`/its own helpers below --
+    caught once, at `create_policy_draft`'s own call site, and turned into
+    an `error: ` string (mirrors every other named-error tuple in this
+    module) rather than ever crashing the tool call. The message always
+    names the offending `standards[i]`/`standards[i].controls[j]` position
+    so a caller can locate the bad entry in a multi-item list.
+    """
+
+
+def _require_standards_str_field(body: dict[str, object], field: str, *, where: str) -> str:
+    """Return `body[field]` if it is a non-empty string; raise otherwise.
+
+    Mirrors `curated_source.catalog_client._require_str`'s own convention.
+    """
+    value = body.get(field)
+    if not isinstance(value, str) or not value:
+        raise _MalformedPolicyDraftStandardsError(f"{where}.{field} must be a non-empty string")
+    return value
+
+
+def _parse_control_draft_input(raw: object, *, where: str) -> ControlDraftInput:
+    """Parse one `standards[i].controls[j]` entry into a `ControlDraftInput`."""
+    if not isinstance(raw, dict):
+        raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
+    body = cast("dict[str, object]", raw)
+    title = _require_standards_str_field(body, "title", where=where)
+    control_type = body.get("control_type", "manual")
+    if control_type not in _CREATE_POLICY_DRAFT_CONTROL_TYPES:
+        raise _MalformedPolicyDraftStandardsError(
+            f"{where}.control_type must be 'automated' or 'manual'"
+        )
+    return ControlDraftInput(title=title, control_type=control_type)
+
+
+def _parse_standard_draft_input(raw: object, *, where: str) -> StandardDraftInput:
+    """Parse one `standards[i]` entry (with its own optional `controls`).
+
+    Each `controls[j]` entry is parsed by `_parse_control_draft_input` in
+    turn.
+    """
+    if not isinstance(raw, dict):
+        raise _MalformedPolicyDraftStandardsError(f"{where} must be an object")
+    body = cast("dict[str, object]", raw)
+    title = _require_standards_str_field(body, "title", where=where)
+    raw_controls = body.get("controls", [])
+    if not isinstance(raw_controls, list):
+        raise _MalformedPolicyDraftStandardsError(f"{where}.controls must be a list")
+    controls = tuple(
+        _parse_control_draft_input(item, where=f"{where}.controls[{index}]")
+        for index, item in enumerate(cast("list[object]", raw_controls))
+    )
+    return StandardDraftInput(title=title, controls=controls)
+
+
+def _parse_policy_draft_standards(
+    standards: list[dict[str, object]] | None,
+) -> tuple[StandardDraftInput, ...]:
+    """Parse `create-policy-draft`'s optional `standards` argument top to bottom.
+
+    `None` (the parameter omitted entirely) means "no Standards" -- the
+    exact same zero-Standard draft `create-policy-draft` always produced
+    before this argument existed (backward-compatible).
+    """
+    if standards is None:
+        return ()
+    return tuple(
+        _parse_standard_draft_input(item, where=f"standards[{index}]")
+        for index, item in enumerate(standards)
+    )
+
+
+@server.tool(name="create-policy-draft")
+def create_policy_draft(
+    title: Annotated[str, Field(min_length=1)],
+    standards: list[dict[str, object]] | None = None,
+) -> dict[str, object] | str:
+    """CreatePolicyDraft: mint a new draft Policy owned by the calling caller (issue #134).
+
+    Delegates to `ps_service.policy_lifecycle.service.create_policy_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity and the policy graph handle, parses `standards`, then does
+    nothing else. The new Policy is minted with `status="draft"`,
+    `version="1"`, owned by the calling caller; its id is derived
+    deterministically from `title` alone (`pol_{slug}_{hash}`), so calling
+    this again with the same title returns an error rather than a second
+    Policy.
+
+    `standards` is optional (omit it, or pass `null`, for the original
+    title-only, zero-Standard draft -- fully backward compatible). When
+    given, it is a list of objects, each `{"title": <str>, "controls":
+    [...]}` (`controls` itself optional, defaulting to `[]`); each control
+    is `{"title": <str>, "control_type": "automated" | "manual"}`
+    (`control_type` optional, defaulting to `"manual"`). Every Standard/
+    Control minted this way is unconditionally `status="draft"` (D-6),
+    regardless of anything else in the request -- this is the only way to
+    attach Standards/Controls to a Policy at creation time through the tool
+    surface; there is no separate "add standard" tool. Attaching at least
+    one Standard here is what lets the resulting Policy actually pass
+    `propose-policy`'s completeness gate (AC-BI-013) later.
+
+    On success, returns `{"policy_id", "title", "status", "version",
+    "owner_subject"}`. Returns a string beginning `error: ` when the caller
+    has no real authenticated session (the local-test bypass DOES count as
+    one here -- unlike access-role management or signing-ceremony approval),
+    when `standards` (or a nested `controls` entry) is shaped wrong (not a
+    list of objects, or missing/empty a required `title`, or an invalid
+    `control_type`), when `title`'s derived id already collides with an
+    existing Policy, when the policy graph cannot be reached, or (this
+    tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            parsed_standards = _parse_policy_draft_standards(standards)
+        except _MalformedPolicyDraftStandardsError as exc:
+            return f"error: {exc}"
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        audit_store = PsycopgAuditStore(config)
+        try:
+            result = run_create_policy_draft(
+                actor=actor,
+                title=title,
+                standards=parsed_standards,
+                graph=graph,
+                audit_store=audit_store,
+            )
+        except _CREATE_POLICY_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+            "version": result.version,
+            "owner_subject": result.owner_subject,
+        }
+
+    return _run_mcp_action("create_policy_draft", principal, _body)
+
+
+_GET_POLICY_ERRORS = (PolicyNotFoundError, PolicyDraftAccessDeniedError)
+
+
+@server.tool(name="get-policy")
+def get_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+    """GetPolicy: read one Policy plus its full Standard/Control tree (issue #134, S14).
+
+    Delegates to `ps_service.policy_lifecycle.service.get_policy` (L2
+    "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, then does
+    nothing else. Uses the exact same `_resolve_policy_lifecycle_actor`
+    identity resolution as `create-policy-draft` (D-11): the local-test
+    bypass DOES count as a real authenticated caller here.
+
+    A Draft Policy is visible only to its own owner or to a caller holding
+    `SystemOwner`/`SystemAdmin` (AC-BI-002) -- a non-owner `PolicyManager` is
+    rejected the same as any other non-owner, non-elevated caller. A
+    Proposed/Approved/Deprecated Policy is visible to any authenticated
+    caller, no further check.
+
+    On success, returns `{"policy_id", "title", "status", "version",
+    "owner_subject", "owner_issuer", "standards"}`, where `standards` is a
+    list of `{"standard_id", "title", "status", "controls"}` (each
+    `controls` a list of `{"control_id", "title", "control_type",
+    "status"}`). Returns a string beginning `error: ` when the caller has no
+    real authenticated session, when no Policy exists with `policy_id`, when
+    the caller lacks visibility into a Draft Policy it does not own, when
+    the policy graph cannot be reached, or (this tool's own residual safety
+    net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_get_policy(
+                actor=actor,
+                policy_id=policy_id,
+                graph=graph,
+                access_role_store=access_role_store,
+            )
+        except _GET_POLICY_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "title": result.title,
+            "status": result.status,
+            "version": result.version,
+            "owner_subject": result.owner_subject,
+            "owner_issuer": result.owner_issuer,
+            "standards": [
+                {
+                    "standard_id": standard.standard_id,
+                    "title": standard.title,
+                    "status": standard.status,
+                    "controls": [
+                        {
+                            "control_id": control.control_id,
+                            "title": control.title,
+                            "control_type": control.control_type,
+                            "status": control.status,
+                        }
+                        for control in standard.controls
+                    ],
+                }
+                for standard in result.standards
+            ],
+        }
+
+    return _run_mcp_action("get_policy", principal, _body)
+
+
+_PROPOSE_POLICY_ERRORS = (
+    PolicyNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyIncompleteForProposalError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="propose-policy")
+def propose_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+    """ProposePolicy: move a Draft Policy (and its whole tree) to Proposed (issue #134, S16).
+
+    Delegates to `ps_service.policy_lifecycle.service.propose_policy` (L2
+    "delegate, don't reimplement") -- this tool resolves the caller's
+    identity and the policy graph handle, then does nothing else. Uses the
+    exact same `_resolve_policy_lifecycle_actor` identity resolution as
+    `create-policy-draft`/`get-policy` (D-11): the local-test bypass DOES
+    count as a real authenticated caller here.
+
+    Only the Policy's own owner may propose it, and only while it is still
+    `"draft"` with at least one Standard attached -- on success, the Policy
+    and every Standard/Control in its tree move to `"proposed"` in one
+    cascading graph write.
+
+    On success, returns `{"policy_id", "status", "standard_ids",
+    "control_ids"}`. Returns a string beginning `error: ` when the caller
+    has no real authenticated session, when no Policy exists with
+    `policy_id`, when the caller does not own it, when it is not currently
+    `"draft"`, when it has zero Standards, when the policy graph cannot be
+    reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        audit_store = PsycopgAuditStore(config)
+        try:
+            result = run_propose_policy(
+                actor=actor, policy_id=policy_id, graph=graph, audit_store=audit_store
+            )
+        except _PROPOSE_POLICY_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "status": result.status,
+            "standard_ids": list(result.standard_ids),
+            "control_ids": list(result.control_ids),
+        }
+
+    return _run_mcp_action("propose_policy", principal, _body)
+
+
+_APPROVE_POLICY_ERRORS = (
+    PolicyNotFoundError,
+    AccessDeniedError,
+    PolicySelfApprovalBlockedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+    AuthorizationStoreUnavailableError,
+)
+
+
+@server.tool(name="approve-policy")
+def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+    """ApprovePolicy: move a Proposed Policy (and its whole tree) to Approved (issue #134, S18).
+
+    Delegates to `ps_service.policy_lifecycle.service.approve_policy` (L2
+    "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, then does
+    nothing else. Uses the exact same `_resolve_policy_lifecycle_actor`
+    identity resolution as `create-policy-draft`/`get-policy`/
+    `propose-policy` (D-11): the local-test bypass DOES count as a real
+    authenticated caller here.
+
+    Requires the caller hold `PolicyManager` (`ps_service.authz.service.
+    require_role`) and never the Policy's own owner (self-approval is always
+    blocked, even for a `PolicyManager` who also happens to own it) -- only
+    while the Policy is currently `"proposed"`. On success, the Policy and
+    every Standard/Control in its tree move to `"approved"` in one cascading
+    graph write; if the Policy has an approved prior linked via a
+    `SUPERSEDED_BY` edge (created by a separate, out-of-scope mechanism --
+    issue #136's own fork tool), that prior's whole tree is automatically
+    cascaded to `"deprecated"` in the same call, as its own separate audit
+    event.
+
+    On success, returns `{"policy_id", "status", "standard_ids",
+    "control_ids", "auto_deprecated_policy_id"}` -- the last field is `None`
+    unless an auto-deprecation cascade also ran. Returns a string beginning
+    `error: ` when the caller has no real authenticated session, when no
+    Policy exists with `policy_id`, when the caller does not hold
+    `PolicyManager`, when the caller is the Policy's own owner, when it is
+    not currently `"proposed"`, when the policy graph or the authorization
+    store cannot be reached, or (this tool's own residual safety net) on any
+    other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        audit_store = PsycopgAuditStore(config)
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_approve_policy(
+                actor=actor,
+                policy_id=policy_id,
+                graph=graph,
+                audit_store=audit_store,
+                access_role_store=access_role_store,
+            )
+        except _APPROVE_POLICY_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "status": result.status,
+            "standard_ids": list(result.standard_ids),
+            "control_ids": list(result.control_ids),
+            "auto_deprecated_policy_id": result.auto_deprecated_policy_id,
+        }
+
+    return _run_mcp_action("approve_policy", principal, _body)
+
+
+_REJECT_POLICY_ERRORS = (
+    PolicyNotFoundError,
+    AccessDeniedError,
+    PolicySelfApprovalBlockedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+    AuthorizationStoreUnavailableError,
+)
+
+
+@server.tool(name="reject-policy")
+def reject_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
+    """RejectPolicy: move a Proposed Policy (and its whole tree) back to Draft (issue #134, S20).
+
+    Delegates to `ps_service.policy_lifecycle.service.reject_policy` (L2
+    "delegate, don't reimplement") -- this tool resolves the caller's
+    identity, the policy graph handle, and the access-role store, then does
+    nothing else. Mirrors `approve-policy`'s exact wrapper pattern (D-11):
+    the local-test bypass DOES count as a real authenticated caller here.
+
+    Requires the caller hold `PolicyManager` (`ps_service.authz.service.
+    require_role`) and never the Policy's own owner (self-rejection is
+    always blocked, even for a `PolicyManager` who also happens to own it)
+    -- only while the Policy is currently `"proposed"`. On success, the
+    Policy and every Standard/Control in its tree move back to `"draft"` in
+    one cascading graph write (AC-BI-005). Unlike `approve-policy`, no
+    auto-deprecation cascade ever runs here (D-10 is approve-only).
+
+    On success, returns `{"policy_id", "status", "standard_ids",
+    "control_ids"}`. Returns a string beginning `error: ` when the caller
+    has no real authenticated session, when no Policy exists with
+    `policy_id`, when the caller does not hold `PolicyManager`, when the
+    caller is the Policy's own owner, when it is not currently `"proposed"`,
+    when the policy graph or the authorization store cannot be reached, or
+    (this tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        audit_store = PsycopgAuditStore(config)
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            result = run_reject_policy(
+                actor=actor,
+                policy_id=policy_id,
+                graph=graph,
+                audit_store=audit_store,
+                access_role_store=access_role_store,
+            )
+        except _REJECT_POLICY_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "status": result.status,
+            "standard_ids": list(result.standard_ids),
+            "control_ids": list(result.control_ids),
+        }
+
+    return _run_mcp_action("reject_policy", principal, _body)
+
+
+_REVERT_POLICY_TO_DRAFT_ERRORS = (
+    PolicyNotFoundError,
+    PolicyDraftAccessDeniedError,
+    PolicyInvalidStatusTransitionError,
+    PolicyLifecycleGraphUnavailableError,
+)
+
+
+@server.tool(name="revert-policy-to-draft")
+def revert_policy_to_draft(
+    policy_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
+    """RevertPolicyToDraft: move a Proposed Policy (and its whole tree) back to Draft (S22).
+
+    Delegates to `ps_service.policy_lifecycle.service.revert_policy_to_draft`
+    (L2 "delegate, don't reimplement") -- this tool resolves the caller's
+    identity and the policy graph handle, then does nothing else. Uses the
+    exact same `_resolve_policy_lifecycle_actor` identity resolution as
+    `create-policy-draft`/`get-policy`/`propose-policy`/`approve-policy`/
+    `reject-policy` (D-11): the local-test bypass DOES count as a real
+    authenticated caller here.
+
+    Owner-only (AC-BI-002/007): unlike `reject-policy`, this action has NO
+    `PolicyManager` RBAC gate at all -- only the Policy's own owner may
+    revert it, and only while it is currently `"proposed"`. A `PolicyManager`
+    who is not the owner is rejected exactly like any other non-owner; no
+    `access_role_store` is even constructed for this tool, mirroring
+    `propose-policy`'s own owner-only wrapper shape rather than
+    `approve-policy`/`reject-policy`'s `PolicyManager`-gated shape.
+
+    On success, returns `{"policy_id", "status", "standard_ids",
+    "control_ids"}`. Returns a string beginning `error: ` when the caller
+    has no real authenticated session, when no Policy exists with
+    `policy_id`, when the caller does not own it, when it is not currently
+    `"proposed"`, when the policy graph cannot be reached, or (this tool's
+    own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_policy_lifecycle_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _POLICY_LIFECYCLE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
+            graph = _resolve_graph(config)
+        except McpGraphUnavailableError as exc:
+            return f"error: {exc}"
+        audit_store = PsycopgAuditStore(config)
+        try:
+            result = run_revert_policy_to_draft(
+                actor=actor, policy_id=policy_id, graph=graph, audit_store=audit_store
+            )
+        except _REVERT_POLICY_TO_DRAFT_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "policy_id": result.policy_id,
+            "status": result.status,
+            "standard_ids": list(result.standard_ids),
+            "control_ids": list(result.control_ids),
+        }
+
+    return _run_mcp_action("revert_policy_to_draft", principal, _body)

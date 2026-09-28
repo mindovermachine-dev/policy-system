@@ -51,8 +51,16 @@ class AccessRuleResult:
     reason: str | None
 
 
-type AccessRule = Callable[[AccessRuleContext], AccessRuleResult]
-"""One ABAC rule function: given the call's facts, decide whether it may proceed."""
+type AccessRule[CtxT] = Callable[[CtxT], AccessRuleResult]
+"""One ABAC rule function: given the call's facts, decide whether it may proceed.
+
+Generic over the context type (issue #134 deliverable #7) so components other
+than `ps_service.authz` can define their own rule-context shape (e.g.
+`ps_service.policy_lifecycle.rules.PolicyLifecycleRuleContext`) and still get
+`AccessRule[TheirContext]` typing -- a non-breaking widening: every existing
+`AccessRule` value here still satisfies `AccessRule[AccessRuleContext]`
+unchanged.
+"""
 
 
 def block_self_target(ctx: AccessRuleContext) -> AccessRuleResult:

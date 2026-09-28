@@ -174,11 +174,16 @@ class _FakeBaselineGraph:
             return _FakeQueryResult(self._mitigated_by_rows)
         if "[:VERIFIED_BY]" in q:
             return _FakeQueryResult(self._verified_by_rows)
-        if "(n:Policy) RETURN" in q:
+        if "(n:Policy)" in q:
+            # issue #134, S29: `_POLICY_QUERY` gained `WHERE n.status =
+            # 'approved'` (AC-BI-021, D-8) -- this fake does not model that
+            # filter (out of scope for the tests in this file; the filter
+            # itself is proven in test_graph_reader.py), so dispatch matches
+            # on the label alone and returns every scripted row unfiltered.
             return _FakeQueryResult(self._policy_rows)
-        if "(n:Standard) RETURN" in q:
+        if "(n:Standard)" in q:
             return _FakeQueryResult(self._standard_rows)
-        if "(n:Control) RETURN" in q:
+        if "(n:Control)" in q:
             return _FakeQueryResult(self._control_rows)
         if "(n:PracticeArea) RETURN" in q:
             return _FakeQueryResult(self._practice_area_rows)

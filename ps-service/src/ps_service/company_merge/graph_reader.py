@@ -105,13 +105,19 @@ _REQUIRES_QUERY = "MATCH (s:Obligation)-[:REQUIRES]->(t:Capability) RETURN s.id,
 
 # issue #54, S4 -- Policy/Standard/Control + governance edges. Empty result
 # sets for an external-sourced baseline (DeriveGovernanceArtifacts never ran).
-_POLICY_QUERY = "MATCH (n:Policy) RETURN n.id, n.title, n.status, n.confidence"
+# issue #134, S29 (AC-BI-021, D-8) -- approved-only filter applied at the read,
+# not at merge-orchestration time: a draft/proposed/deprecated tree is silently
+# excluded from `company_merge` until its `status` reaches `"approved"`.
+_POLICY_QUERY = (
+    "MATCH (n:Policy) WHERE n.status = 'approved' RETURN n.id, n.title, n.status, n.confidence"
+)
 _STANDARD_QUERY = (
-    "MATCH (n:Standard) RETURN n.id, n.title, n.implementation_status, n.confidence, n.description"
+    "MATCH (n:Standard) WHERE n.status = 'approved' RETURN n.id, n.title, "
+    "n.implementation_status, n.confidence, n.description"
 )
 _CONTROL_QUERY = (
-    "MATCH (n:Control) RETURN n.id, n.type, n.title, n.implementation_status, "
-    "n.confidence, n.description"
+    "MATCH (n:Control) WHERE n.status = 'approved' RETURN n.id, n.type, n.title, "
+    "n.implementation_status, n.confidence, n.description"
 )
 _GOVERNED_BY_QUERY = "MATCH (s:Capability)-[:GOVERNED_BY]->(t:Policy) RETURN s.id, t.id"
 _SUPPORTED_BY_QUERY = "MATCH (s:Policy)-[:SUPPORTED_BY]->(t:Standard) RETURN s.id, t.id"
@@ -444,11 +450,15 @@ def _read_bare_edges(baseline_graph: GraphHandle) -> tuple[BareEdge, ...]:
 
 
 def _read_policy_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every Policy node (issue #54, S4). Empty for an external-sourced baseline.
+    """Read every `approved` Policy node (issue #54, S4; issue #134, S29).
 
-    Properties are `title`/`status`/`confidence` -- never optional, mirroring
+    Empty for an external-sourced baseline. Properties are
+    `title`/`status`/`confidence` -- never optional, mirroring
     `_read_role_nodes`'s own "no optional fields" shape (`DeriveGovernanceArtifacts`
-    always sets all three at mint time).
+    always sets all three at mint time). `_POLICY_QUERY`'s `WHERE n.status =
+    'approved'` (AC-BI-021, D-8) excludes `draft`/`proposed`/`deprecated`
+    Policy nodes from every read -- `status` here is therefore always
+    `"approved"`.
     """
     result = baseline_graph.query(_POLICY_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -469,11 +479,14 @@ def _read_policy_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
 
 
 def _read_standard_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every Standard node (issue #54, S4). Empty for an external-sourced baseline.
+    """Read every `approved` Standard node (issue #54, S4; issue #134, S29).
 
-    Properties are `title`/`implementation_status`/`confidence` and, when
-    set, `description` -- mirroring `_read_capability_nodes`'s own
-    "optional description" shape.
+    Empty for an external-sourced baseline. Properties are
+    `title`/`implementation_status`/`confidence` and, when set, `description`
+    -- mirroring `_read_capability_nodes`'s own "optional description" shape.
+    `_STANDARD_QUERY`'s `WHERE n.status = 'approved'` (AC-BI-021, D-8) filters
+    on the Standard's own lifecycle `status` property (distinct from
+    `implementation_status`, which is never filtered on).
     """
     result = baseline_graph.query(_STANDARD_QUERY)
     rows = cast("list[list[object]]", result.result_set)
@@ -492,14 +505,18 @@ def _read_standard_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...
 
 
 def _read_control_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]:
-    """Read every Control node (issue #54, S4). Empty for an external-sourced baseline.
+    """Read every `approved` Control node (issue #54, S4; issue #134, S29).
 
-    Properties are `type`/`title`/`implementation_status`/`confidence` and,
-    when set, `description` -- mirroring `_read_capability_nodes`'s own
-    "optional description" shape. The four AC-BI-017 operational fields
+    Empty for an external-sourced baseline. Properties are
+    `type`/`title`/`implementation_status`/`confidence` and, when set,
+    `description` -- mirroring `_read_capability_nodes`'s own "optional
+    description" shape. The four AC-BI-017 operational fields
     (`execution_frequency`/`last_test_date`/`next_review_date`/
     `evidence_ref`) are never written at mint time, so they are never present
     to read back here either -- no special handling needed.
+    `_CONTROL_QUERY`'s `WHERE n.status = 'approved'` (AC-BI-021, D-8) filters
+    on the Control's own lifecycle `status` property (distinct from
+    `implementation_status`, which is never filtered on).
     """
     result = baseline_graph.query(_CONTROL_QUERY)
     rows = cast("list[list[object]]", result.result_set)

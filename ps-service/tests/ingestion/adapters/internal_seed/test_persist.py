@@ -780,6 +780,7 @@ def test_persists_authored_standard_node_and_supported_by_edge_verbatim() -> Non
         expected_standard_id: {
             "title": "Access Control Standard",
             "implementation_status": "draft",
+            "status": "draft",
         }
     }
 
@@ -933,8 +934,42 @@ def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> No
             "last_test_date": "2026-08-01",
             "next_review_date": "2026-11-01",
             "evidence_ref": "evidence://access-review/2026-08-01",
+            "status": "draft",
         }
     }
+
+
+def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time() -> None:
+    """GH #134 S7: a minted Standard/Control's `status` mirrors its root Policy's
+    `status` -- not hardcoded to `"draft"` -- proven with a Policy whose own
+    `status` is `"approved"`. The Control reaches its root Policy transitively
+    (Control -> IMPLEMENTED_BY -> Standard -> SUPPORTED_BY -> Policy).
+    """
+    seed = _build_seed()
+    nodes = (
+        *seed.nodes,
+        _policy("pol-1", "Access Control Policy", status="approved"),
+        _standard("std-1", "Access Control Standard"),
+        _control("ctrl-1", "Automated Access Review Check"),
+    )
+    edges = (
+        *seed.edges,
+        _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
+        _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
+        _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
+    )
+    seed = InternalRegulationSeed(nodes=nodes, edges=edges)
+    baseline_graph = _FakeGraph()
+    native_graph = _FakeGraph()
+
+    ingest_internal_regulatory_instrument(
+        seed, baseline_graph=baseline_graph, native_graph=native_graph
+    )
+
+    standard_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Standard")
+    control_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Control")
+    assert all(properties["status"] == "approved" for properties in standard_writes.values())
+    assert all(properties["status"] == "approved" for properties in control_writes.values())
 
 
 @pytest.mark.parametrize("implemented_by_count", [0, 2])
