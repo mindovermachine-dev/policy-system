@@ -12,11 +12,37 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
+from ps_service.audit.errors import AuditPostgresUnavailableError
+from ps_service.audit.models import AuditQueryPage
 from ps_service.authz.errors import AccessRolePostgresConnectionError
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow, AccessRoleGrantEvent
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from ps_service.audit.models import AuditQueryFilters
+
 _BOOTSTRAP_SENTINEL = "system:bootstrap"  # mirrors `store.py`'s own sentinel
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedAuditRecord:
+    """One `record_grant_rejected`/`record_revoke_rejected` call `FakeAccessRoleStore` observed.
+
+    Lets `tests/authz/test_service.py` assert AC-BI-012's "attempting actor,
+    target, and reason code" directly, without a real Postgres/`audit_events`
+    row (issue #147, Slice 3).
+    """
+
+    action: str
+    """`"grant"` or `"revoke"` -- which of the two store methods was called."""
+
+    actor: tuple[str, str]
+    target: tuple[str, str]
+    access_role: AccessRole
+    reason_code: str
 
 
 @dataclass
@@ -33,6 +59,8 @@ class FakeAccessRoleStore:
     _rows: list[AccessRoleAssignmentRow] = field(default_factory=list)
     _events: list[AccessRoleGrantEvent] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    rejected_records: list[RejectedAuditRecord] = field(default_factory=list)
+    """Every `record_grant_rejected`/`record_revoke_rejected` call observed so far (issue #147)."""
     expected_owner: tuple[str, str] | None = None
     """The operator-configured expected first-owner identity (issue #144, D-6).
 
@@ -188,6 +216,46 @@ class FakeAccessRoleStore:
         """Return every row currently held by this fake, in insertion order."""
         return tuple(self._rows)
 
+    def record_grant_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Append one `RejectedAuditRecord` -- an observable spy call, no real Postgres write."""
+        with self._lock:
+            self.rejected_records.append(
+                RejectedAuditRecord(
+                    action="grant",
+                    actor=actor,
+                    target=target,
+                    access_role=access_role,
+                    reason_code=reason_code,
+                )
+            )
+
+    def record_revoke_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Append one `RejectedAuditRecord` -- an observable spy call, no real Postgres write."""
+        with self._lock:
+            self.rejected_records.append(
+                RejectedAuditRecord(
+                    action="revoke",
+                    actor=actor,
+                    target=target,
+                    access_role=access_role,
+                    reason_code=reason_code,
+                )
+            )
+
 
 @dataclass
 class RaisingAfterGateAccessRoleStore(FakeAccessRoleStore):
@@ -207,6 +275,43 @@ class RaisingAfterGateAccessRoleStore(FakeAccessRoleStore):
     def count_active_system_owners(self) -> int:
         """Always raise, simulating an outage discovered only after the RBAC gate passed."""
         raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+
+
+@dataclass
+class RaisingAuditOnRejectAccessRoleStore(FakeAccessRoleStore):
+    """A `FakeAccessRoleStore` whose denial-audit recording always raises (issue #147, Slice 3).
+
+    Isolates the "the denial-audit write itself fails" branch of
+    `ps_service.authz.service._record_rejected_or_raise_unavailable`
+    hermetically: `grant_role`/`revoke_role` must convert
+    `AuditPostgresUnavailableError` into `AuthorizationStoreUnavailableError`
+    and never let the original `AccessDeniedError`/etc. through unaudited
+    (AC-BI-011's fail-closed contract applied to the denial-recording path).
+    """
+
+    def record_grant_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Always raise, simulating the denial-audit write itself failing."""
+        del actor, target, access_role, reason_code
+        raise AuditPostgresUnavailableError("simulated audit store outage")
+
+    def record_revoke_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Always raise, simulating the denial-audit write itself failing."""
+        del actor, target, access_role, reason_code
+        raise AuditPostgresUnavailableError("simulated audit store outage")
 
 
 @dataclass
@@ -247,6 +352,94 @@ class RaisingAccessRoleStore:
         """Always raise, simulating an unreachable store."""
         raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
 
+    def record_grant_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
+        del actor, target, access_role, reason_code
+        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+
+    def record_revoke_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
+        del actor, target, access_role, reason_code
+        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+
     def count_active_system_owners(self) -> int:
         """Always raise, simulating an unreachable store."""
         raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+
+
+@dataclass
+class FakeAuditStore:
+    """In-memory `AuditStore` stub for `ps_service.authz.service.list_audit_events` tests
+    (issue #147, Slice 4).
+
+    `record`/`record_standalone` are present only for `Protocol` conformance
+    (mirrors `RaisingAccessRoleStore`'s own "narrower than the full
+    `Protocol`, only what this fake's own call sites reach" convention) --
+    `list_audit_events`'s own tests never call either. `query` is a spy:
+    every call is appended to `query_calls` (the exact `filters`/`cursor`/
+    `page_size` it was called with), so AC-BI-002/AC-BI-008's "query was
+    never called" assertions can check `query_calls == []`. Returns
+    `query_result` (an empty page by default) unless `raise_on_query` is
+    set, in which case it raises that instead -- simulates a Postgres outage
+    discovered only once `query` itself runs (AC-BI-011).
+    """
+
+    query_result: AuditQueryPage = field(
+        default_factory=lambda: AuditQueryPage(events=(), next_cursor=None)
+    )
+    raise_on_query: Exception | None = None
+    query_calls: list[tuple[AuditQueryFilters, str | None, int]] = field(default_factory=list)
+
+    def record(
+        self,
+        cur: object,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: str,
+        details: Mapping[str, object],
+    ) -> None:
+        """Not exercised here -- present only for `Protocol` conformance."""
+        del cur, actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
+        raise NotImplementedError
+
+    def record_standalone(
+        self,
+        *,
+        actor_subject: str,
+        actor_issuer: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        outcome: str,
+        details: Mapping[str, object],
+    ) -> None:
+        """Not exercised here -- present only for `Protocol` conformance."""
+        del actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
+        raise NotImplementedError
+
+    def query(
+        self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
+    ) -> AuditQueryPage:
+        """Record the call, then return `query_result` or raise `raise_on_query`."""
+        self.query_calls.append((filters, cursor, page_size))
+        if self.raise_on_query is not None:
+            raise self.raise_on_query
+        return self.query_result

@@ -81,14 +81,19 @@ def _verified_actor(*, sub: str, iss: str = _CALLER_ISSUER) -> Generator[None]:
         auth_context_var.reset(token)
 
 
-def _fake_store_factory(store: object) -> Callable[[object], object]:
+def _fake_store_factory(store: object) -> Callable[..., object]:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
     Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- each gated
-    tool body calls it as `PsycopgAccessRoleStore(config)`, so this must
-    accept (and ignore) one positional argument.
+    tool body calls it as `PsycopgAccessRoleStore(config,
+    audit_store=PsycopgAuditStore(config))` (issue #147), so this must accept (and
+    ignore) both the positional `config` and the `audit_store` keyword.
     """
-    return lambda _config: store
+
+    def _factory(_config: object, **_kwargs: object) -> object:
+        return store
+
+    return _factory
 
 
 def _seeded_store() -> FakeAccessRoleStore:

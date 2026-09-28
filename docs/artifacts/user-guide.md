@@ -11,6 +11,7 @@
   - [Ask a question](#ask-a-question)
   - [Manage access roles](#manage-access-roles)
   - [Invite a new user](#invite-a-new-user)
+  - [Review the audit trail](#review-the-audit-trail)
 - [Role System](#role-system)
 - [Glossary](#glossary)
 - [Appendix: ps-cli reference](#appendix-ps-cli-reference)
@@ -39,6 +40,7 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop](#using-claude-desktop) |
 | Grant, revoke, or list access roles | [Role System](#role-system) |
 | Invite a new user | [Invite a new user](#invite-a-new-user) |
+| Review who did what, to what, and when | [Review the audit trail](#review-the-audit-trail) |
 
 ---
 
@@ -198,6 +200,22 @@ System](#role-system).
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-invite-user skill."_
 
+### Review the audit trail
+
+```text
+Show me the most recent access-role changes.
+```
+
+The `ps-list-audit-events` skill reads PS Service's shared `audit_events`
+trail through the same MCP connector — every access-role bootstrap, grant,
+and revoke (applied or denied) recorded so far, filterable by actor,
+resource, action, or time range, and paginated newest-first. It is a plain
+read (no confirmation needed) but requires `SystemAdmin` or above; see
+[Role System](#role-system).
+
+If the skill does not engage on its own, ask for it by name: _"Use the
+ps-list-audit-events skill."_
+
 ---
 
 ## Role System
@@ -209,7 +227,7 @@ Beyond that baseline, PS Service enforces three additional roles:
 | Role | How it's granted | What it currently gates |
 | --- | --- | --- |
 | `SystemOwner` | Automatically, once — the very first authenticated caller ever to reach the instance. Never grantable afterward; exactly one exists for the life of a real deployment. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
-| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, and `invite-user`. |
+| `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
@@ -223,9 +241,10 @@ Two safety rules apply to every grant or revoke, regardless of role:
   blocks that first, before the floor check is even reached).
 
 Every grant, revoke, and the initial bootstrap is permanently recorded —
-who did what, to whom, and when — in an audit trail separate from the
-current-state roster. Manage roles through Claude Desktop's
-[Manage access roles](#manage-access-roles) skill.
+who did what, to whom, and when, including denied attempts — in an audit
+trail (`audit_events`) separate from the current-state roster. Manage roles
+through Claude Desktop's [Manage access roles](#manage-access-roles) skill;
+read that trail through [Review the audit trail](#review-the-audit-trail).
 
 ---
 

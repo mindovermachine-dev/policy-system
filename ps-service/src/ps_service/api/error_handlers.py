@@ -31,6 +31,7 @@ from ps_service.api.errors import (
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     InvalidAccessRoleError,
+    InvalidAuditQueryFilterError,
     MergeApprovalRequiresAuthenticatedCallerError,
     PendingApprovalInvalidOrExpiredError,
     PendingApprovalNotFoundError,
@@ -268,6 +269,11 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         SystemOwnerFloorViolationError,
         "system_owner_floor_violation",
         status.HTTP_403_FORBIDDEN,
+    ),
+    (
+        InvalidAuditQueryFilterError,
+        "invalid_audit_query_filter",
+        status.HTTP_400_BAD_REQUEST,
     ),
 )
 

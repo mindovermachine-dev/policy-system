@@ -45,6 +45,7 @@ from ps_service.api.restore_orchestration import (
     build_default_restore_dependencies,
     build_default_restore_from_catalog_dependencies,
 )
+from ps_service.audit.store import PsycopgAuditStore
 from ps_service.auth import Principal
 from ps_service.authz.service import require_role
 from ps_service.authz.store import PsycopgAccessRoleStore
@@ -153,7 +154,7 @@ def require_access_role(role: AccessRole) -> Callable[[Request], None]:
         require_role(
             (principal.sub, principal.iss),
             minimum=role,
-            store=PsycopgAccessRoleStore(config),
+            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
         )
 
     return _require_access_role

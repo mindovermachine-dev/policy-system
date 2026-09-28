@@ -42,11 +42,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); this cross-package import mirrors `test_near_miss_tools.py`'s own `from api.test_routes_near_misses import ...` convention
     FakeAccessRoleStore,
+    FakeAuditStore,
     RaisingAccessRoleStore,
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var
@@ -55,6 +57,8 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
+from ps_service.audit.errors import AuditPostgresUnavailableError
+from ps_service.audit.models import AuditEventRow, AuditQueryPage
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure, reset_for_tests, resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -88,14 +92,19 @@ def _verified_actor(*, sub: str, iss: str = _ACTOR_ISSUER) -> Generator[None]:
         auth_context_var.reset(token)
 
 
-def _fake_store_factory(store: object) -> Callable[[object], object]:
+def _fake_store_factory(store: object) -> Callable[..., object]:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
     Monkeypatched onto `mcp_server.PsycopgAccessRoleStore` -- the tool body
-    calls it as `PsycopgAccessRoleStore(config)`, so this must accept (and
-    ignore) one positional argument.
+    calls it as `PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))`
+    (issue #147), so this must accept (and ignore) both the positional
+    `config` and the `audit_store` keyword.
     """
-    return lambda _config: store
+
+    def _factory(_config: object, **_kwargs: object) -> object:
+        return store
+
+    return _factory
 
 
 def _call_list_access_roles() -> CallToolResult:
@@ -690,3 +699,150 @@ def test_revoke_of_system_owner_by_a_non_owner_non_admin_actor_is_denied(
     assert result.is_error is False
     assert _text(result) == "error: You do not have the required access role for this action."
     assert AccessRole.SYSTEM_OWNER in store.active_roles_for((_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+
+
+# --- list-audit-events (issue #147, Slice 4) --------------------------------
+
+
+def _call_list_audit_events(**kwargs: object) -> CallToolResult:
+    result = asyncio.run(mcp_server.server.call_tool("list-audit-events", kwargs))
+    assert isinstance(result, CallToolResult)
+    return result
+
+
+def test_list_audit_events_without_a_real_authenticated_caller_is_refused() -> None:
+    """AC-BI-001: under the local-test bypass (no `AccessToken` ever bound), audit-trail
+    access is refused outright -- the exact same message `list-access-roles`'s own
+    bypass-refusal test asserts, matching #133's grant/revoke/list tools exactly.
+    """
+    configure()
+    result = _call_list_audit_events()
+
+    assert result.is_error is False
+    assert _text(result) == "error: access-role management requires a real authenticated caller"
+
+
+def test_list_audit_events_denies_a_caller_without_system_admin_or_above(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-002: a bare AuthenticatedUser caller (never bootstrapped/granted) is denied,
+    and the underlying `AuditStore.query` is never called.
+    """
+    configure()
+    access_role_store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    audit_store = FakeAuditStore()
+    monkeypatch.setattr(
+        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access_role_store)
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _fake_store_factory(audit_store))
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner, store now non-empty
+
+    with _verified_actor(sub=_SECOND_CALLER_SUBJECT):
+        result = _call_list_audit_events()
+
+    assert result.is_error is False
+    assert _text(result) == "error: You do not have the required access role for this action."
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_returns_events_to_a_system_owner_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The slice's real end-to-end proof: a SystemOwner caller's MCP call reaches
+    `AuditStore.query` with the right filters/pagination and the response round-trips.
+    """
+    configure()
+    access_role_store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    sample_event = AuditEventRow(
+        id="11111111-1111-1111-1111-111111111111",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        actor_subject=_FIRST_CALLER_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        action="access_role.grant",
+        resource_type="principal",
+        resource_id=_SECOND_CALLER_SUBJECT,
+        outcome="applied",
+        details={"access_role": "SystemAdmin"},
+    )
+    audit_store = FakeAuditStore(
+        query_result=AuditQueryPage(events=(sample_event,), next_cursor="opaque-next-cursor")
+    )
+    monkeypatch.setattr(
+        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access_role_store)
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _fake_store_factory(audit_store))
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
+        result = _call_list_audit_events(action="access_role.grant", page_size=10)
+
+    assert result.is_error is False
+    body = json.loads(_text(result))
+    assert body["next_cursor"] == "opaque-next-cursor"
+    assert body["events"] == [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "occurred_at": "2026-01-01T00:00:00+00:00",
+            "actor_subject": _FIRST_CALLER_SUBJECT,
+            "actor_issuer": _ACTOR_ISSUER,
+            "action": "access_role.grant",
+            "resource_type": "principal",
+            "resource_id": _SECOND_CALLER_SUBJECT,
+            "outcome": "applied",
+            "details": {"access_role": "SystemAdmin"},
+        }
+    ]
+    assert len(audit_store.query_calls) == 1
+    filters, cursor, page_size = audit_store.query_calls[0]
+    assert filters.action == "access_role.grant"
+    assert cursor is None
+    assert page_size == 10
+
+
+def test_list_audit_events_rejects_an_invalid_filter_before_any_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-008: an unknown `action` filter is rejected by the real MCP tool call too,
+    naming the invalid filter, and `AuditStore.query` is never called.
+    """
+    configure()
+    access_role_store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    audit_store = FakeAuditStore()
+    monkeypatch.setattr(
+        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access_role_store)
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _fake_store_factory(audit_store))
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
+        result = _call_list_audit_events(action="nonexistent.action.never_registered")
+
+    assert result.is_error is False
+    assert _text(result).startswith("error: ")
+    assert "action" in _text(result)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-BI-011: a simulated audit-store outage surfaces the same distinct
+    `authorization_store_unavailable` message every other role-gated tool uses,
+    never a silent default/success.
+    """
+    configure()
+    access_role_store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
+    audit_store = FakeAuditStore(
+        raise_on_query=AuditPostgresUnavailableError("simulated audit store outage")
+    )
+    monkeypatch.setattr(
+        mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(access_role_store)
+    )
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _fake_store_factory(audit_store))
+
+    with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
+        _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
+        result = _call_list_audit_events()
+
+    assert result.is_error is False
+    assert _text(result) == "error: The authorization store is temporarily unavailable."

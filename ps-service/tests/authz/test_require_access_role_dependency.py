@@ -51,15 +51,20 @@ _OTHER_SUBJECT = "rest-owner"
 _ISSUER = "https://issuer.example.com/"
 
 
-def _fake_store_factory(store: object) -> Callable[[object], object]:
+def _fake_store_factory(store: object) -> Callable[..., object]:
     """An `AccessRoleStore`-shaped factory returning the same fake store every call.
 
     Monkeypatched onto `dependencies.PsycopgAccessRoleStore` -- `require_access_role`'s
-    returned dependency calls it as `PsycopgAccessRoleStore(config)`, so this must accept
-    (and ignore) one positional argument. Mirrors `test_access_role_tools.py`'s own
-    `_fake_store_factory` exactly.
+    returned dependency calls it as `PsycopgAccessRoleStore(config,
+    audit_store=PsycopgAuditStore(config))` (issue #147), so this must accept (and
+    ignore) both the positional `config` and the `audit_store` keyword.
+    Mirrors `test_access_role_tools.py`'s own `_fake_store_factory` exactly.
     """
-    return lambda _config: store
+
+    def _factory(_config: object, **_kwargs: object) -> object:
+        return store
+
+    return _factory
 
 
 def _fake_request(*, principal: Principal | None) -> Request:

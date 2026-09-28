@@ -21,6 +21,9 @@ import contextlib
 import dataclasses
 import functools
 import os
+from datetime import (
+    datetime,  # noqa: TC003 -- `list-audit-events`'s own tool params carry this type at runtime; the MCP SDK's `func_metadata` resolves `from __future__ import annotations`-deferred string annotations via `get_type_hints`, which needs `datetime` in this module's real globals, not TYPE_CHECKING-only
+)
 from importlib import resources
 from typing import TYPE_CHECKING, Annotated, Literal
 
@@ -44,6 +47,7 @@ from ps_service.api.errors import (
     CuratedSourceUnavailableError,
     IngestionConfigIncompleteError,
     InvalidAccessRoleError,
+    InvalidAuditQueryFilterError,
     PendingReviewNotFoundError,
     PipelineStageError,
     RestoreArtifactRejectedError,
@@ -76,8 +80,18 @@ from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
+from ps_service.audit.models import AuditQueryFilters
+from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
-from ps_service.authz.service import grant_role, list_assignments, require_role, revoke_role
+from ps_service.authz.service import (
+    grant_role,
+    list_assignments,
+    require_role,
+    revoke_role,
+)
+from ps_service.authz.service import (
+    list_audit_events as run_list_audit_events,
+)
 from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.curated_source import store as catalog_source_store
@@ -124,6 +138,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
     from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+    from ps_service.audit.models import AuditEventRow
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
@@ -967,7 +982,9 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
                 return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
             try:
                 require_role(
-                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                    actor,
+                    minimum=AccessRole.SYSTEM_ADMIN,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
@@ -1016,7 +1033,9 @@ def reset_catalog_source() -> dict[str, object] | str:
                 return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
             try:
                 require_role(
-                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                    actor,
+                    minimum=AccessRole.SYSTEM_ADMIN,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
@@ -1062,7 +1081,9 @@ def get_catalog_source() -> dict[str, object] | str:
                 return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
             try:
                 require_role(
-                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                    actor,
+                    minimum=AccessRole.SYSTEM_ADMIN,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
@@ -1151,7 +1172,9 @@ def invite_user(
                 return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
             try:
                 require_role(
-                    actor, minimum=AccessRole.SYSTEM_ADMIN, store=PsycopgAccessRoleStore(config)
+                    actor,
+                    minimum=AccessRole.SYSTEM_ADMIN,
+                    store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
@@ -1380,7 +1403,7 @@ def list_access_roles() -> dict[str, object] | str:
     def _body() -> dict[str, object] | str:
         if actor is None:
             return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        store = PsycopgAccessRoleStore(config)
+        store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             result = list_assignments(actor, store=store)
         except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
@@ -1433,7 +1456,7 @@ def grant_access_role(
     def _body() -> dict[str, object] | str:
         if actor is None or issuer is None:
             return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        store = PsycopgAccessRoleStore(config)
+        store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             result = grant_role(
                 actor=actor,
@@ -1490,7 +1513,7 @@ def revoke_access_role(
     def _body() -> dict[str, object] | str:
         if actor is None or issuer is None:
             return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
-        store = PsycopgAccessRoleStore(config)
+        store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
         try:
             result = revoke_role(
                 actor=actor,
@@ -1509,3 +1532,100 @@ def revoke_access_role(
         }
 
     return _run_mcp_action("revoke_access_role", principal, _body)
+
+
+def _audit_event_to_dict(row: AuditEventRow) -> dict[str, object]:
+    """Shape one `AuditEventRow` for `list-audit-events`'s wire response."""
+    return {
+        "id": row.id,
+        "occurred_at": row.occurred_at.isoformat(),
+        "actor_subject": row.actor_subject,
+        "actor_issuer": row.actor_issuer,
+        "action": row.action,
+        "resource_type": row.resource_type,
+        "resource_id": row.resource_id,
+        "outcome": row.outcome,
+        "details": row.details,
+    }
+
+
+_LIST_AUDIT_EVENTS_ERRORS = (
+    AccessDeniedError,
+    InvalidAuditQueryFilterError,
+    AuthorizationStoreUnavailableError,
+)
+
+
+@server.tool(name="list-audit-events")
+def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an independent, optional query filter (AC-BI-007); collapsing them into one payload object would just move the same count behind a wrapper
+    actor_subject: Annotated[str, Field(min_length=1)] | None = None,
+    actor_issuer: Annotated[str, Field(min_length=1)] | None = None,
+    resource_type: Annotated[str, Field(min_length=1)] | None = None,
+    resource_id: Annotated[str, Field(min_length=1)] | None = None,
+    action: Annotated[str, Field(min_length=1)] | None = None,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
+    cursor: Annotated[str, Field(min_length=1)] | None = None,
+    page_size: Annotated[int, Field(gt=0, le=100)] = 25,
+) -> dict[str, object] | str:
+    """ListAuditEvents: read the shared `audit_events` audit trail, filtered and paginated.
+
+    Issue #147.
+
+    `SystemOwner`/`SystemAdmin`-gated, mirroring `list-access-roles`'s own
+    gate exactly -- the audit trail is at least as sensitive as the roster
+    it partly documents. Every parameter is optional and independently
+    combinable: `actor_subject`/`actor_issuer` narrow by who acted,
+    `resource_type`/`resource_id` by what was acted on, `action` by the
+    namespaced action string (e.g. `"access_role.grant"`), `occurred_from`/
+    `occurred_to` (ISO 8601) by a time range. Results are always newest
+    first. `cursor` (from a prior call's own `next_cursor`) advances to the
+    next page; `page_size` bounds how many events one call returns (default
+    25, maximum 100).
+
+    On success, returns `{"events": [{"id", "occurred_at", "actor_subject",
+    "actor_issuer", "action", "resource_type", "resource_id", "outcome",
+    "details"}, ...], "next_cursor": str | None}` -- `next_cursor` is
+    `None` once no further events remain. Returns a string beginning
+    `error: ` when the caller has no real authenticated session (the
+    local-test bypass included -- audit-trail access is never available
+    under it), when the caller lacks the required role, when a filter,
+    `page_size`, or `cursor` is invalid, when the authorization store
+    cannot be reached, or (this tool's own residual safety net) on any
+    other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        if actor is None:
+            return _ACCESS_ROLE_MANAGEMENT_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        access_role_store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
+        audit_store = PsycopgAuditStore(config)
+        filters = AuditQueryFilters(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=action,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        try:
+            page = run_list_audit_events(
+                actor,
+                filters=filters,
+                cursor=cursor,
+                page_size=page_size,
+                access_role_store=access_role_store,
+                audit_store=audit_store,
+            )
+        except _LIST_AUDIT_EVENTS_ERRORS as exc:
+            return f"error: {exc}"
+        return {
+            "events": [_audit_event_to_dict(row) for row in page.events],
+            "next_cursor": page.next_cursor,
+        }
+
+    return _run_mcp_action("list_audit_events", principal, _body)

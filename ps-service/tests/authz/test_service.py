@@ -26,24 +26,34 @@ itself collected something from that package first -- the same constraint
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
+import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers access_role.* actions/`"principal"` resource type before this file's own filter-validation tests run in isolation
 from authz._fakes import (
     FakeAccessRoleStore,
+    FakeAuditStore,
     RaisingAccessRoleStore,
     RaisingAfterGateAccessRoleStore,
+    RaisingAuditOnRejectAccessRoleStore,
+    RejectedAuditRecord,
 )
 from ps_service.api.errors import (
     AccessDeniedError,
     AuthorizationStoreUnavailableError,
     InvalidAccessRoleError,
+    InvalidAuditQueryFilterError,
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
 )
+from ps_service.audit.errors import AuditInvalidCursorError, AuditPostgresUnavailableError
+from ps_service.audit.models import AuditEventRow, AuditQueryFilters, AuditQueryPage
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import (
     grant_role,
     list_assignments,
+    list_audit_events,
     require_role,
     resolve_active_roles,
     revoke_role,
@@ -314,7 +324,12 @@ def test_grant_role_rejects_a_non_owner_granting_system_owner() -> None:
 
 
 def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
-    """PLAN.md §0.7: granting SystemAdmin requires the actor hold SystemOwner, not merely exist."""
+    """PLAN.md §0.7: granting SystemAdmin requires the actor hold SystemOwner, not merely exist.
+
+    AC-BI-012: this denial also records one `outcome='rejected'`
+    `access_role.grant` audit event naming the attempting actor, the
+    target, and `reason_code="access_denied"`.
+    """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps
     resolve_active_roles(_SECOND_CALLER, store=store)  # defaults to AuthenticatedUser only
@@ -328,10 +343,23 @@ def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
             issuer=_ISSUER,
         )
     assert str(exc_info.value) == "You do not have the required access role for this action."
+    assert store.rejected_records == [
+        RejectedAuditRecord(
+            action="grant",
+            actor=_SECOND_CALLER,
+            target=(_THIRD_CALLER[0], _ISSUER),
+            access_role=AccessRole.SYSTEM_ADMIN,
+            reason_code="access_denied",
+        )
+    ]
 
 
 def test_grant_role_blocks_a_system_owner_granting_system_admin_to_themselves() -> None:
-    """AC-BI-005: the sole SystemOwner may not grant SystemAdmin to their own subject."""
+    """AC-BI-005: the sole SystemOwner may not grant SystemAdmin to their own subject.
+
+    AC-BI-012: this denial also records one `outcome='rejected'`
+    `access_role.grant` audit event with `reason_code="self_grant_blocked"`.
+    """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
 
@@ -345,6 +373,45 @@ def test_grant_role_blocks_a_system_owner_granting_system_admin_to_themselves() 
         )
     assert str(exc_info.value) == "You cannot grant or revoke your own access roles."
     assert AccessRole.SYSTEM_ADMIN not in store.active_roles_for(_FIRST_CALLER)
+    assert store.rejected_records == [
+        RejectedAuditRecord(
+            action="grant",
+            actor=_FIRST_CALLER,
+            target=(_FIRST_CALLER[0], _ISSUER),
+            access_role=AccessRole.SYSTEM_ADMIN,
+            reason_code="self_grant_blocked",
+        )
+    ]
+
+
+def test_grant_role_converts_a_failed_denial_audit_write_into_authorization_store_unavailable() -> (
+    None
+):
+    """AC-BI-011 applied to the denial-recording path (CHANGES.md item 3, PLAN.md §4 Slice 3).
+
+    When the audit write for a denial itself fails (Postgres unreachable),
+    the caller must not see the original `AccessDeniedError` -- a denial
+    that cannot be proven to have been durably logged is not a safe
+    "denied" response; `AuthorizationStoreUnavailableError` is raised
+    instead, and its message leaks no host/port/driver detail.
+    """
+    store = RaisingAuditOnRejectAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps
+    resolve_active_roles(_SECOND_CALLER, store=store)  # defaults to AuthenticatedUser only
+
+    with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
+        grant_role(
+            actor=_SECOND_CALLER,
+            target_subject=_THIRD_CALLER[0],
+            access_role="SystemAdmin",
+            store=store,
+            issuer=_ISSUER,
+        )
+    message = str(exc_info.value)
+    assert message == "The authorization store is temporarily unavailable."
+    assert "host" not in message.lower()
+    assert "port" not in message.lower()
+    assert "psycopg" not in message.lower()
 
 
 def test_grant_role_rejects_an_access_role_outside_the_closed_set() -> None:
@@ -466,6 +533,9 @@ def test_revoke_role_blocks_self_revoke() -> None:
     `SystemOwner` targeting their own subject, not a bare `SystemAdmin` who
     is never RBAC-eligible to revoke `SystemAdmin` from anyone, self
     included.
+
+    AC-BI-012: this denial also records one `outcome='rejected'`
+    `access_role.revoke` audit event with `reason_code="self_revoke_blocked"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- FIRST_CALLER: SystemOwner
@@ -479,6 +549,15 @@ def test_revoke_role_blocks_self_revoke() -> None:
             issuer=_ISSUER,
         )
     assert str(exc_info.value) == "You cannot grant or revoke your own access roles."
+    assert store.rejected_records == [
+        RejectedAuditRecord(
+            action="revoke",
+            actor=_FIRST_CALLER,
+            target=(_FIRST_CALLER[0], _ISSUER),
+            access_role=AccessRole.SYSTEM_ADMIN,
+            reason_code="self_revoke_blocked",
+        )
+    ]
 
 
 def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all() -> None:
@@ -488,6 +567,9 @@ def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all(
     is checked before the self-target rule (mirroring `grant_role`'s own
     order, PLAN.md §2.3), so an actor who could never revoke this role from
     *anyone* is turned away by RBAC first, self-target or not.
+
+    AC-BI-012: this denial also records one `outcome='rejected'`
+    `access_role.revoke` audit event with `reason_code="access_denied"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
@@ -508,6 +590,15 @@ def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all(
             issuer=_ISSUER,
         )
     assert AccessRole.SYSTEM_ADMIN in store.active_roles_for(_SECOND_CALLER)
+    assert store.rejected_records == [
+        RejectedAuditRecord(
+            action="revoke",
+            actor=_SECOND_CALLER,
+            target=(_SECOND_CALLER[0], _ISSUER),
+            access_role=AccessRole.SYSTEM_ADMIN,
+            reason_code="access_denied",
+        )
+    ]
 
 
 def test_revoke_role_rejects_a_non_owner_non_admin_actor() -> None:
@@ -660,6 +751,10 @@ def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
     the MCP-level Appendix A test for the full real round trip that first
     brings the count down to exactly one via a genuine revoke, rather than
     seeding it directly).
+
+    AC-BI-012: this denial also records one `outcome='rejected'`
+    `access_role.revoke` audit event with
+    `reason_code="system_owner_floor_violation"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
@@ -682,6 +777,48 @@ def test_revoke_role_rejects_revoking_the_last_remaining_system_owner() -> None:
         )
     assert str(exc_info.value) == "This action would leave zero active SystemOwners."
     assert store.count_active_system_owners() == 1
+    assert store.rejected_records == [
+        RejectedAuditRecord(
+            action="revoke",
+            actor=_THIRD_CALLER,
+            target=(_FIRST_CALLER[0], _ISSUER),
+            access_role=AccessRole.SYSTEM_OWNER,
+            reason_code="system_owner_floor_violation",
+        )
+    ]
+
+
+def test_revoke_role_converts_a_failed_denial_audit_write_into_unavailable_error() -> None:
+    """AC-BI-011 applied to the denial-recording path (CHANGES.md item 3, PLAN.md §4 Slice 3).
+
+    Mirrors the grant-side test of the same name: when the audit write for
+    a revoke denial itself fails, `AuthorizationStoreUnavailableError`
+    replaces the original `SystemOwnerFloorViolationError`, with a message
+    that leaks no host/port/driver detail.
+    """
+    store = RaisingAuditOnRejectAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)  # FIRST_CALLER: SystemOwner
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_THIRD_CALLER[0],
+        access_role="SystemAdmin",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
+        revoke_role(
+            actor=_THIRD_CALLER,
+            target_subject=_FIRST_CALLER[0],
+            access_role="SystemOwner",
+            store=store,
+            issuer=_ISSUER,
+        )
+    message = str(exc_info.value)
+    assert message == "The authorization store is temporarily unavailable."
+    assert "host" not in message.lower()
+    assert "port" not in message.lower()
+    assert "psycopg" not in message.lower()
     assert AccessRole.SYSTEM_OWNER in store.active_roles_for(_FIRST_CALLER)
 
 
@@ -714,3 +851,204 @@ def test_revoke_role_never_falls_open_on_a_store_connection_error() -> None:
             store=store,
             issuer=_ISSUER,
         )
+
+
+# --- list_audit_events (issue #147, Slice 4) --------------------------------
+
+
+def test_list_audit_events_denies_a_caller_without_system_admin_or_above_before_any_query() -> None:
+    """AC-BI-002: a bare AuthenticatedUser caller is denied, and `audit_store.query` never ran."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)  # bootstraps FIRST_CALLER only
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(AccessDeniedError) as exc_info:
+        list_audit_events(
+            _SECOND_CALLER,
+            filters=AuditQueryFilters(),
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert str(exc_info.value) == "You do not have the required access role for this action."
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_never_falls_open_on_an_access_role_store_connection_error() -> None:
+    """AC-BI-011 (gate half): an authz-store outage at the RBAC gate itself fails closed."""
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(AuthorizationStoreUnavailableError):
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(),
+            cursor=None,
+            page_size=25,
+            access_role_store=RaisingAccessRoleStore(),
+            audit_store=audit_store,
+        )
+
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_rejects_an_unregistered_action_filter_before_any_query() -> None:
+    """AC-BI-008: an unknown `action` filter is rejected, naming 'action', query never ran."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(action="nonexistent.action.never_registered"),
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "action" in str(exc_info.value)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_rejects_an_unregistered_resource_type_filter_before_any_query() -> None:
+    """AC-BI-008: an unknown `resource_type` filter is rejected, naming 'resource_type'."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(resource_type="nonexistent_resource_type"),
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "resource_type" in str(exc_info.value)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_rejects_a_from_later_than_to_time_range_before_any_query() -> None:
+    """AC-BI-008: `occurred_from` later than `occurred_to` is rejected."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+    filters = AuditQueryFilters(
+        occurred_from=datetime(2026, 1, 2, tzinfo=UTC),
+        occurred_to=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=filters,
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "occurred_from" in str(exc_info.value)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_rejects_a_page_size_above_the_maximum_before_any_query() -> None:
+    """AC-BI-008: `page_size` above the configured maximum is rejected."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(),
+            cursor=None,
+            page_size=101,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "page_size" in str(exc_info.value)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_returns_the_audit_store_result_after_a_successful_gate() -> None:
+    """A SystemAdmin/SystemOwner caller with valid filters gets `query`'s own page back."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    sample_event = AuditEventRow(
+        id="11111111-1111-1111-1111-111111111111",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        actor_subject="some-actor",
+        actor_issuer=_ISSUER,
+        action="access_role.grant",
+        resource_type="principal",
+        resource_id="some-target",
+        outcome="applied",
+        details={"access_role": "SystemAdmin"},
+    )
+    audit_store = FakeAuditStore(
+        query_result=AuditQueryPage(events=(sample_event,), next_cursor="opaque-cursor")
+    )
+    filters = AuditQueryFilters(action="access_role.grant")
+
+    result = list_audit_events(
+        _FIRST_CALLER,
+        filters=filters,
+        cursor="prior-cursor",
+        page_size=10,
+        access_role_store=access_role_store,
+        audit_store=audit_store,
+    )
+
+    assert result == audit_store.query_result
+    assert audit_store.query_calls == [(filters, "prior-cursor", 10)]
+
+
+def test_list_audit_events_never_falls_open_when_the_audit_store_is_unreachable() -> None:
+    """AC-BI-011 (query half): the audit store failing to connect surfaces as the same
+    `AuthorizationStoreUnavailableError` every other role-gated action uses (issue #147).
+    """
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore(
+        raise_on_query=AuditPostgresUnavailableError("simulated audit store outage")
+    )
+
+    with pytest.raises(AuthorizationStoreUnavailableError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(),
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert str(exc_info.value) == "The authorization store is temporarily unavailable."
+
+
+def test_list_audit_events_translates_a_malformed_cursor_into_invalid_query_filter_error() -> None:
+    """A malformed `cursor` (decoded by `AuditStore.query` itself) surfaces as the same
+    `InvalidAuditQueryFilterError` family every other invalid filter uses, naming 'cursor'.
+    """
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore(raise_on_query=AuditInvalidCursorError("simulated bad cursor"))
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(),
+            cursor="not-a-real-cursor",
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "cursor" in str(exc_info.value)

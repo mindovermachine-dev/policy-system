@@ -12,7 +12,11 @@
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
   - [Manual steps and operational notes](#manual-steps-and-operational-notes)
 - [Backup](#backup)
+  - [FalkorDB](#falkordb)
+  - [Authz Postgres (including audit_events)](#authz-postgres-including-audit_events)
 - [Restore](#restore)
+  - [FalkorDB](#falkordb-1)
+  - [Authz Postgres (including audit_events)](#authz-postgres-including-audit_events-1)
 - [Troubleshooting / FAQ](#troubleshooting--faq)
 - [Teardown](#teardown)
 
@@ -212,6 +216,8 @@ this guide:
 
 ## Backup
 
+### FalkorDB
+
 FalkorDB persists to a `PersistentVolumeClaim` (`policy-system-falkordb-data`) when
 `falkordb.persistence.enabled=true` (the default in both the local-test and production
 profiles — see the [Helm Chart Values Reference](./helm-chart-values-reference.md)).
@@ -248,7 +254,66 @@ This is a different concern from
 restore, which seeds public reference content into any deployment (fresh or established)
 without needing this backup/restore machinery at all.
 
+### Authz Postgres (including audit_events)
+
+`ps.service.authz` (issue #133) and the shared `ps.service.audit` trail it writes through
+(issue #147) persist to their own PostgreSQL database — configured via `PS_AUTHZ_POSTGRES_HOST`/
+`_PORT`/`_DATABASE`/`_USER`/`_PASSWORD` — holding `access_role_assignments` (who currently
+holds `SystemOwner`/`SystemAdmin`/`PolicyManager`) and `audit_events` (the permanent,
+insert-only record of every bootstrap/grant/revoke, applied or denied, and every future
+audited action that adopts the shared `AuditStore`). This is a **distinct** PostgreSQL
+instance from FalkorDB, from Passkey Signing's own Postgres (`psServiceSigning.postgres`,
+`docs/artifacts/helm-chart-values-reference.md#passkey-signing-postgres-values`), and from
+Authentik's own bundled Postgres — even if an operator points more than one of these at the
+same physical server, per `ServiceConfig.authz_postgres_host`'s own documented allowance
+(`ps-service/src/ps_service/config.py`).
+
+Unlike Passkey Signing (`<release>-signing-postgres` Deployment/Service, chart-rendered),
+this chart does not yet render a dedicated Kubernetes resource for the authz Postgres, nor
+does `ps-service-deployment.yaml` yet wire `PS_AUTHZ_POSTGRES_*` into the PS Service pod's
+own environment the way it wires the Signing Postgres equivalents — an operator provisions
+one independently (in-cluster or managed) and supplies `PS_AUTHZ_POSTGRES_*` to PS Service
+out of band (until that chart wiring exists, a values override or a separately-applied
+Secret/env-injection mechanism of the operator's own choosing). Because it's plain
+PostgreSQL regardless of how it's provisioned, back it up with standard, unmodified
+`pg_dump` tooling — no Policy System-specific backup feature exists or is planned here
+either, mirroring the FalkorDB section above.
+
+1. Confirm the connection you configured for PS Service (`PS_AUTHZ_POSTGRES_HOST`/`_PORT`/
+   `_DATABASE`/`_USER`/`_PASSWORD`) — wherever you set it, since the chart does not render
+   these today. If you did wire them into the PS Service pod's own environment yourself, you
+   can confirm what's actually live there:
+   ```bash
+   kubectl exec deployment/policy-system-ps-service -- env | grep PS_AUTHZ_POSTGRES_
+   ```
+2. Take a full logical backup of that database, in `pg_dump`'s custom format (supports
+   selective `pg_restore` later, and is compressed by default). If the instance is reachable
+   directly (e.g. a managed cloud Postgres, or one exposed outside the cluster):
+   ```bash
+   PGPASSWORD="$PS_AUTHZ_POSTGRES_PASSWORD" pg_dump \
+     -h "$PS_AUTHZ_POSTGRES_HOST" -p "$PS_AUTHZ_POSTGRES_PORT" \
+     -U "$PS_AUTHZ_POSTGRES_USER" -d "$PS_AUTHZ_POSTGRES_DATABASE" \
+     -Fc -f "authz-postgres-backup-$(date +%Y%m%d).dump"
+   ```
+   If it's only reachable in-cluster (e.g. co-located with Passkey Signing's own pod, or a
+   self-hosted `authz-postgres` pod you've added), run the same command inside that pod and
+   copy the result out, mirroring the FalkorDB pod-exec-then-`kubectl cp` pattern above:
+   ```bash
+   POD=<the authz Postgres pod's name>
+   kubectl exec "$POD" -- env PGPASSWORD="$PS_AUTHZ_POSTGRES_PASSWORD" pg_dump \
+     -U "$PS_AUTHZ_POSTGRES_USER" -d "$PS_AUTHZ_POSTGRES_DATABASE" -Fc \
+     -f "/tmp/authz-postgres-backup-$(date +%Y%m%d).dump"
+   kubectl cp "$POD":/tmp/authz-postgres-backup-$(date +%Y%m%d).dump \
+     "./authz-postgres-backup-$(date +%Y%m%d).dump"
+   ```
+
+Store the resulting `.dump` file wherever your backup retention policy requires — it is a
+complete, standalone copy of `access_role_assignments` and `audit_events` (and any future
+table `ps.service.authz`/`ps.service.audit` add to this same database).
+
 ## Restore
+
+### FalkorDB
 
 Restoring loads a previously captured `dump.rdb` snapshot back into FalkorDB so it starts
 from that data. Run this against a deployment whose FalkorDB pod is already up — a fresh
@@ -270,6 +335,48 @@ install already has one running, even before any data has been ingested.
 
 The graph now contains exactly what was in the backup — anything ingested after that
 snapshot was taken is gone.
+
+### Authz Postgres (including audit_events)
+
+Restoring loads a previously captured `pg_dump` custom-format file back into the authz
+Postgres database, replacing its current `access_role_assignments`/`audit_events` (and any
+other table in that database) with the backup's contents. Run this against a database that
+already exists and is reachable at the configured `PS_AUTHZ_POSTGRES_*` connection — a fresh
+install already has one (whatever an operator provisioned per the Backup section above),
+even before `ps-service` has run its own migrations against it.
+
+1. Restore into the target database, dropping and recreating each object the dump contains
+   before loading it (`--clean --if-exists` — safe even on a database that already has some
+   or all of the same tables/rows):
+   ```bash
+   PGPASSWORD="$PS_AUTHZ_POSTGRES_PASSWORD" pg_restore \
+     -h "$PS_AUTHZ_POSTGRES_HOST" -p "$PS_AUTHZ_POSTGRES_PORT" \
+     -U "$PS_AUTHZ_POSTGRES_USER" -d "$PS_AUTHZ_POSTGRES_DATABASE" \
+     --clean --if-exists "authz-postgres-backup-YYYYMMDD.dump"
+   ```
+   (In-cluster equivalent: `kubectl cp` the `.dump` file into the target pod, then run the
+   same `pg_restore` command via `kubectl exec`, mirroring the Backup section's own
+   pod-exec pattern.)
+2. Restart `ps-service` so any in-process connection pool picks up a consistent view of the
+   now-restored database, and so its migration runner (`ps_service.authz.migration_runner`)
+   re-checks the restored schema against its own tracking table on next start:
+   ```bash
+   kubectl rollout restart deployment/policy-system-ps-service
+   ```
+3. Verify the restore landed before relying on it — compare row counts against what the
+   backup was taken from (or, at minimum, confirm both tables are non-empty and the most
+   recent `occurred_at` in `audit_events` matches what you expect from the backup's own
+   timing):
+   ```bash
+   PGPASSWORD="$PS_AUTHZ_POSTGRES_PASSWORD" psql \
+     -h "$PS_AUTHZ_POSTGRES_HOST" -p "$PS_AUTHZ_POSTGRES_PORT" \
+     -U "$PS_AUTHZ_POSTGRES_USER" -d "$PS_AUTHZ_POSTGRES_DATABASE" \
+     -c "SELECT count(*) FROM access_role_assignments;" \
+     -c "SELECT count(*), max(occurred_at) FROM audit_events;"
+   ```
+
+The role roster and audit trail now contain exactly what was in the backup — any grant,
+revoke, or audited action recorded after that snapshot was taken is gone.
 
 ---
 

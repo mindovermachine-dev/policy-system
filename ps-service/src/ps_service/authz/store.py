@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 import psycopg
 
+import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions (issue #147) before any grant/revoke/bootstrap call can reach AuditStore.record
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
     AccessRolePostgresConnectionError,
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 
     from psycopg.rows import TupleRow
 
+    from ps_service.audit.store import AuditStore
     from ps_service.config import ServiceConfig
 
 # The fixed actor/grantor identity recorded for the bootstrap event and the
@@ -120,6 +122,52 @@ class AccessRoleStore(Protocol):
         """Return every row currently in `access_role_assignments`."""
         ...
 
+    def record_grant_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Record a denied grant as one `outcome='rejected'` `access_role.grant` audit event.
+
+        AC-BI-012.
+
+        Called by `ps_service.authz.service.grant_role` immediately before
+        it raises `AccessDeniedError`/`SelfGrantOrRevokeBlockedError` --
+        there is no state-changing transaction for this denial to join
+        (nothing was ever mutated), so the real implementation delegates to
+        `AuditStore.record_standalone`, not `record`.
+
+        Raises:
+            AuditPostgresUnavailableError / AuditPersistenceError: the audit
+                write itself failed (AC-BI-011) -- the caller
+                (`grant_role`) converts this into
+                `AuthorizationStoreUnavailableError` rather than letting the
+                original denial through unaudited.
+        """
+        ...
+
+    def record_revoke_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Record a denied revoke as one `outcome='rejected'` `access_role.revoke` audit event.
+
+        AC-BI-012.
+
+        Same contract as `record_grant_rejected`, for `revoke_role`'s own
+        four denial sites (access denied, self-revoke blocked, SystemOwner
+        floor violation checked pre-mutation, and the store-level
+        concurrent-revoke floor race).
+        """
+        ...
+
 
 __all__ = [
     "AccessRoleStore",
@@ -136,15 +184,6 @@ INSERT INTO access_role_assignments (
     %(granted_by_subject)s, %(granted_by_issuer)s
 )
 ON CONFLICT (principal_subject, principal_issuer, access_role) DO NOTHING
-"""
-
-_INSERT_GRANT_EVENT = """
-INSERT INTO access_role_grant_events (
-    event_type, actor_subject, actor_issuer, target_subject, target_issuer, access_role
-) VALUES (
-    %(event_type)s, %(actor_subject)s, %(actor_issuer)s, %(target_subject)s, %(target_issuer)s,
-    %(access_role)s
-)
 """
 
 _SELECT_ASSIGNMENTS_COLUMNS = (
@@ -272,9 +311,19 @@ class PsycopgAccessRoleStore:
     connection held across calls.
     """
 
-    def __init__(self, config: ServiceConfig) -> None:
-        """Store `config`; no connection is opened until a method is called."""
+    def __init__(self, config: ServiceConfig, *, audit_store: AuditStore) -> None:
+        """Store `config` and the injected `AuditStore` (issue #147); no connection is opened.
+
+        `audit_store` is constructor-injected (L2's plain constructor
+        injection rule, mirrors `AccessRoleStore` itself being
+        constructor-injected wherever it's needed) -- every state-changing
+        method below calls `audit_store.record(cur, ...)` using the *same*
+        cursor/transaction as its own state-changing `INSERT`/`DELETE`, so
+        the audit row commits or rolls back atomically with the state change
+        it documents (AC-BI-006/AC-BI-010).
+        """
         self._config = config
+        self._audit_store = audit_store
 
     def bootstrap_first_owner(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
         """Advisory-locked check-empty-then-insert (PLAN.md §0.10, AC-BI-001/002).
@@ -309,16 +358,15 @@ class PsycopgAccessRoleStore:
                     # naming the rejected principal (D-5), mirroring
                     # `FakeAccessRoleStore.bootstrap_first_owner`'s own
                     # no-match branch (`tests/authz/_fakes.py`) exactly.
-                    cur.execute(
-                        _INSERT_GRANT_EVENT,
-                        {
-                            "event_type": "bootstrap_rejected",
-                            "actor_subject": _BOOTSTRAP_SENTINEL,
-                            "actor_issuer": _BOOTSTRAP_SENTINEL,
-                            "target_subject": principal_subject,
-                            "target_issuer": principal_issuer,
-                            "access_role": AccessRole.SYSTEM_OWNER.value,
-                        },
+                    self._audit_store.record(
+                        cur,
+                        actor_subject=_BOOTSTRAP_SENTINEL,
+                        actor_issuer=_BOOTSTRAP_SENTINEL,
+                        action="access_role.bootstrap_rejected",
+                        resource_type="principal",
+                        resource_id=principal_subject,
+                        outcome="rejected",
+                        details={"reason_code": "bootstrap_identity_mismatch"},
                     )
                     conn.commit()
                     return frozenset({AccessRole.AUTHENTICATED_USER})
@@ -333,16 +381,15 @@ class PsycopgAccessRoleStore:
                             "granted_by_issuer": _BOOTSTRAP_SENTINEL,
                         },
                     )
-                cur.execute(
-                    _INSERT_GRANT_EVENT,
-                    {
-                        "event_type": "bootstrap",
-                        "actor_subject": _BOOTSTRAP_SENTINEL,
-                        "actor_issuer": _BOOTSTRAP_SENTINEL,
-                        "target_subject": principal_subject,
-                        "target_issuer": principal_issuer,
-                        "access_role": AccessRole.SYSTEM_OWNER.value,
-                    },
+                self._audit_store.record(
+                    cur,
+                    actor_subject=_BOOTSTRAP_SENTINEL,
+                    actor_issuer=_BOOTSTRAP_SENTINEL,
+                    action="access_role.bootstrap",
+                    resource_type="principal",
+                    resource_id=principal_subject,
+                    outcome="applied",
+                    details={"access_role": AccessRole.SYSTEM_OWNER.value},
                 )
                 conn.commit()
         except psycopg.Error as exc:
@@ -391,16 +438,15 @@ class PsycopgAccessRoleStore:
                         "granted_by_issuer": actor_issuer,
                     },
                 )
-                cur.execute(
-                    _INSERT_GRANT_EVENT,
-                    {
-                        "event_type": "grant",
-                        "actor_subject": actor_subject,
-                        "actor_issuer": actor_issuer,
-                        "target_subject": target_subject,
-                        "target_issuer": target_issuer,
-                        "access_role": access_role.value,
-                    },
+                self._audit_store.record(
+                    cur,
+                    actor_subject=actor_subject,
+                    actor_issuer=actor_issuer,
+                    action="access_role.grant",
+                    resource_type="principal",
+                    resource_id=target_subject,
+                    outcome="applied",
+                    details={"access_role": access_role.value},
                 )
                 conn.commit()
         except psycopg.Error as exc:
@@ -432,16 +478,15 @@ class PsycopgAccessRoleStore:
                         "access_role": access_role.value,
                     },
                 )
-                cur.execute(
-                    _INSERT_GRANT_EVENT,
-                    {
-                        "event_type": "revoke",
-                        "actor_subject": actor_subject,
-                        "actor_issuer": actor_issuer,
-                        "target_subject": target_subject,
-                        "target_issuer": target_issuer,
-                        "access_role": access_role.value,
-                    },
+                self._audit_store.record(
+                    cur,
+                    actor_subject=actor_subject,
+                    actor_issuer=actor_issuer,
+                    action="access_role.revoke",
+                    resource_type="principal",
+                    resource_id=target_subject,
+                    outcome="applied",
+                    details={"access_role": access_role.value},
                 )
                 conn.commit()
         except psycopg.Error as exc:
@@ -492,16 +537,15 @@ class PsycopgAccessRoleStore:
                         "access_role": AccessRole.SYSTEM_OWNER.value,
                     },
                 )
-                cur.execute(
-                    _INSERT_GRANT_EVENT,
-                    {
-                        "event_type": "revoke",
-                        "actor_subject": actor_subject,
-                        "actor_issuer": actor_issuer,
-                        "target_subject": target_subject,
-                        "target_issuer": target_issuer,
-                        "access_role": AccessRole.SYSTEM_OWNER.value,
-                    },
+                self._audit_store.record(
+                    cur,
+                    actor_subject=actor_subject,
+                    actor_issuer=actor_issuer,
+                    action="access_role.revoke",
+                    resource_type="principal",
+                    resource_id=target_subject,
+                    outcome="applied",
+                    details={"access_role": AccessRole.SYSTEM_OWNER.value},
                 )
                 conn.commit()
         except AccessRoleSystemOwnerFloorRaceError:
@@ -539,3 +583,54 @@ class PsycopgAccessRoleStore:
                 f"failed to list AccessRole assignments: {exc}"
             ) from exc
         return tuple(_row_from_record(record) for record in records)
+
+    def record_grant_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Record a denied grant as one `outcome='rejected'` `access_role.grant` audit event.
+
+        No state-changing transaction exists to join (the denial fires
+        before any store mutation is attempted) -- delegates to
+        `AuditStore.record_standalone`, which opens and commits its own
+        connection (issue #147, Slice 3).
+        """
+        actor_subject, actor_issuer = actor
+        target_subject, _target_issuer = target
+        self._audit_store.record_standalone(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action="access_role.grant",
+            resource_type="principal",
+            resource_id=target_subject,
+            outcome="rejected",
+            details={"access_role": access_role.value, "reason_code": reason_code},
+        )
+
+    def record_revoke_rejected(
+        self,
+        *,
+        actor: tuple[str, str],
+        target: tuple[str, str],
+        access_role: AccessRole,
+        reason_code: str,
+    ) -> None:
+        """Record a denied revoke as one `outcome='rejected'` `access_role.revoke` audit event.
+
+        Same rationale as `record_grant_rejected` (issue #147, Slice 3).
+        """
+        actor_subject, actor_issuer = actor
+        target_subject, _target_issuer = target
+        self._audit_store.record_standalone(
+            actor_subject=actor_subject,
+            actor_issuer=actor_issuer,
+            action="access_role.revoke",
+            resource_type="principal",
+            resource_id=target_subject,
+            outcome="rejected",
+            details={"access_role": access_role.value, "reason_code": reason_code},
+        )

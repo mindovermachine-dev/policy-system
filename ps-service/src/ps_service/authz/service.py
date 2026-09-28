@@ -23,9 +23,16 @@ from ps_service.api.errors import (
     AccessDeniedError,
     AuthorizationStoreUnavailableError,
     InvalidAccessRoleError,
+    InvalidAuditQueryFilterError,
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
 )
+from ps_service.audit.errors import (
+    AuditInvalidCursorError,
+    AuditPersistenceError,
+    AuditPostgresUnavailableError,
+)
+from ps_service.audit.models import is_known_resource_type, resolve_details_model
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
     AccessRolePostgresConnectionError,
@@ -37,6 +44,10 @@ from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.logging.facade import emit_log_entry
 
 if TYPE_CHECKING:
+    from typing import Literal
+
+    from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
+    from ps_service.audit.store import AuditStore
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.authz.store import AccessRoleStore
 
@@ -46,6 +57,28 @@ _INVALID_ACCESS_ROLE_MESSAGE = "The requested access role is not recognized."
 _SELF_GRANT_OR_REVOKE_BLOCKED_MESSAGE = "You cannot grant or revoke your own access roles."
 _SYSTEM_OWNER_FLOOR_VIOLATION_MESSAGE = "This action would leave zero active SystemOwners."
 _SYSTEM_OWNER_FLOOR = 1
+
+# issue #147, Slice 4: `list_audit_events`'s own filter-validation messages
+# (AC-BI-008) -- each names the specific invalid filter, never leaking any
+# internal detail (mirrors `InvalidAccessRoleError`'s own "leaks no internal
+# detail" precedent).
+_INVALID_AUDIT_ACTION_FILTER_MESSAGE = "The 'action' filter names an action that is not registered."
+_INVALID_AUDIT_RESOURCE_TYPE_FILTER_MESSAGE = (
+    "The 'resource_type' filter names a resource type that is not registered."
+)
+_INVALID_AUDIT_TIME_RANGE_FILTER_MESSAGE = (
+    "The 'occurred_from' filter must not be later than 'occurred_to'."
+)
+_INVALID_AUDIT_CURSOR_FILTER_MESSAGE = "The 'cursor' filter is malformed."
+# PLAN.md §4 Slice 4: a plan-original bound, not derived from any specific
+# AC beyond AC-BI-008's "page size above the maximum" -- justified by L2's
+# Data Modeling principle (`docs/coding-standards/level2-python-instructions.md`,
+# "use Field() constraints on anything that flows into query construction")
+# applied to this read path's own cost bound.
+_LIST_AUDIT_EVENTS_MAX_PAGE_SIZE = 100
+_INVALID_AUDIT_PAGE_SIZE_FILTER_MESSAGE = (
+    f"The 'page_size' filter must not exceed {_LIST_AUDIT_EVENTS_MAX_PAGE_SIZE}."
+)
 
 # PLAN.md §0.7, widened per CHANGES.md Appendix A's MAJOR resolution (row 3,
 # `SYSTEM_OWNER`, is the new one this repair adds): which `AccessRole`s
@@ -171,6 +204,53 @@ def _parse_grantable_access_role(
     if role not in rbac:
         raise InvalidAccessRoleError(_INVALID_ACCESS_ROLE_MESSAGE)
     return role
+
+
+def _record_rejected_or_raise_unavailable(
+    store: AccessRoleStore,
+    *,
+    action: Literal["grant", "revoke"],
+    actor: tuple[str, str],
+    target: tuple[str, str],
+    access_role: AccessRole,
+    reason_code: str,
+) -> None:
+    """Record one `outcome='rejected'` `audit_events` row for a grant/revoke denial (AC-BI-012).
+
+    Called immediately before `grant_role`/`revoke_role` raise any of their
+    four denial exceptions (access denied, self-grant/revoke blocked,
+    SystemOwner floor violation) -- generalises the `bootstrap_rejected`
+    mechanism `PsycopgAccessRoleStore.bootstrap_first_owner` already uses for
+    the fourth denial type (bootstrap identity mismatch).
+
+    Design decision (PLAN.md §4 Slice 3, CHANGES.md item 3): if the audit
+    write itself fails (`AuditPostgresUnavailableError`/
+    `AuditPersistenceError` -- e.g. the authz Postgres is unreachable), the
+    *original* denial is never returned to the caller as-is. A denial that
+    cannot be proven to have been durably logged is not a safe "denied"
+    response (AC-BI-011's fail-closed contract applied in reverse): this
+    raises `AuthorizationStoreUnavailableError` instead, which the caller's
+    own `raise <DenialError>(...)` line never reaches.
+
+    Args:
+        store: The `AccessRoleStore` whose `record_grant_rejected`/
+            `record_revoke_rejected` performs the actual write.
+        action: Which of the two methods to call.
+        actor: The denied caller's verified `(sub, iss)` identity.
+        target: The principal the denied grant/revoke targeted.
+        access_role: The role the denied call attempted to grant/revoke.
+        reason_code: One of this action's registered `reason_code` values
+            (`ps_service.authz.audit_actions`).
+
+    Raises:
+        AuthorizationStoreUnavailableError: the audit write failed -- the
+            caller's own denial exception is never raised in this case.
+    """
+    record = store.record_grant_rejected if action == "grant" else store.record_revoke_rejected
+    try:
+        record(actor=actor, target=target, access_role=access_role, reason_code=reason_code)
+    except (AuditPostgresUnavailableError, AuditPersistenceError) as exc:
+        raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
 
 
 def resolve_active_roles(
@@ -317,17 +397,29 @@ def grant_role(
         InvalidAccessRoleError: `access_role` is not one of the three
             grantable roles (AC-BI-013).
         AccessDeniedError: `actor` does not hold the role this grant
-            requires.
+            requires -- one `outcome='rejected'` `access_role.grant` audit
+            event (`reason_code="access_denied"`) is recorded first
+            (AC-BI-012).
         SelfGrantOrRevokeBlockedError: `actor` and the target are the same
-            principal (AC-BI-005).
+            principal (AC-BI-005) -- likewise recorded first
+            (`reason_code="self_grant_blocked"`, AC-BI-012).
         AuthorizationStoreUnavailableError: propagated from any underlying
-            store failure (AC-BI-011).
+            store failure (AC-BI-011), including a failed denial-audit
+            write itself (`_record_rejected_or_raise_unavailable`).
     """
     role = _parse_grantable_access_role(access_role, rbac=_GRANT_RBAC)
+    target = (target_subject, issuer)
     actor_roles = resolve_active_roles(actor, store=store)
     if not (actor_roles & _GRANT_RBAC[role]):
+        _record_rejected_or_raise_unavailable(
+            store,
+            action="grant",
+            actor=actor,
+            target=target,
+            access_role=role,
+            reason_code="access_denied",
+        )
         raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
-    target = (target_subject, issuer)
     rule_result = block_self_target(
         AccessRuleContext(
             actor=actor,
@@ -338,6 +430,14 @@ def grant_role(
         )
     )
     if not rule_result.allowed:
+        _record_rejected_or_raise_unavailable(
+            store,
+            action="grant",
+            actor=actor,
+            target=target,
+            access_role=role,
+            reason_code="self_grant_blocked",
+        )
         raise SelfGrantOrRevokeBlockedError(_SELF_GRANT_OR_REVOKE_BLOCKED_MESSAGE)
     try:
         store.grant(actor=actor, target=target, access_role=role)
@@ -389,20 +489,34 @@ def revoke_role(
         InvalidAccessRoleError: `access_role` is not one of the three roles
             `revoke_role` manages (AC-BI-013).
         AccessDeniedError: `actor` does not hold the role this revoke
-            requires.
+            requires -- one `outcome='rejected'` `access_role.revoke` audit
+            event (`reason_code="access_denied"`) is recorded first
+            (AC-BI-012).
         SelfGrantOrRevokeBlockedError: `actor` and the target are the same
-            principal (AC-BI-005).
+            principal (AC-BI-005) -- likewise recorded first
+            (`reason_code="self_revoke_blocked"`, AC-BI-012).
         SystemOwnerFloorViolationError: revoking `SYSTEM_OWNER` from
             `target_subject` would leave zero active `SystemOwner`s
-            (AC-BI-006).
+            (AC-BI-006) -- recorded first (both the pre-mutation rule check
+            and the store-level concurrent-revoke race translation use
+            `reason_code="system_owner_floor_violation"`, AC-BI-012).
         AuthorizationStoreUnavailableError: propagated from any underlying
-            store failure (AC-BI-011).
+            store failure (AC-BI-011), including a failed denial-audit
+            write itself (`_record_rejected_or_raise_unavailable`).
     """
     role = _parse_grantable_access_role(access_role, rbac=_REVOKE_RBAC)
+    target = (target_subject, issuer)
     actor_roles = resolve_active_roles(actor, store=store)
     if not (actor_roles & _REVOKE_RBAC[role]):
+        _record_rejected_or_raise_unavailable(
+            store,
+            action="revoke",
+            actor=actor,
+            target=target,
+            access_role=role,
+            reason_code="access_denied",
+        )
         raise AccessDeniedError(_ACCESS_DENIED_MESSAGE)
-    target = (target_subject, issuer)
     rule_result = block_self_target(
         AccessRuleContext(
             actor=actor,
@@ -413,6 +527,14 @@ def revoke_role(
         )
     )
     if not rule_result.allowed:
+        _record_rejected_or_raise_unavailable(
+            store,
+            action="revoke",
+            actor=actor,
+            target=target,
+            access_role=role,
+            reason_code="self_revoke_blocked",
+        )
         raise SelfGrantOrRevokeBlockedError(_SELF_GRANT_OR_REVOKE_BLOCKED_MESSAGE)
     if role is AccessRole.SYSTEM_OWNER:
         try:
@@ -431,13 +553,106 @@ def revoke_role(
             )
         )
         if not floor_result.allowed:
+            _record_rejected_or_raise_unavailable(
+                store,
+                action="revoke",
+                actor=actor,
+                target=target,
+                access_role=role,
+                reason_code="system_owner_floor_violation",
+            )
             raise SystemOwnerFloorViolationError(_SYSTEM_OWNER_FLOOR_VIOLATION_MESSAGE)
     try:
         store.revoke(actor=actor, target=target, access_role=role)
         active_system_owners = store.count_active_system_owners()
     except AccessRoleSystemOwnerFloorRaceError as exc:
+        _record_rejected_or_raise_unavailable(
+            store,
+            action="revoke",
+            actor=actor,
+            target=target,
+            access_role=role,
+            reason_code="system_owner_floor_violation",
+        )
         raise SystemOwnerFloorViolationError(_SYSTEM_OWNER_FLOOR_VIOLATION_MESSAGE) from exc
     except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     _maybe_log_system_owner_floor_warning("revoke_role", active_system_owners)
     return RevokeResult(system_owner_floor_warning=active_system_owners == 1)
+
+
+def _validate_audit_query_filters(filters: AuditQueryFilters, *, page_size: int) -> None:
+    """Raise `InvalidAuditQueryFilterError` naming the first invalid filter found (AC-BI-008).
+
+    Runs entirely before `list_audit_events` ever calls `audit_store.query`
+    -- unknown `action` (not in the typed-model registry), unknown
+    `resource_type` (not in the resource-type registry), `occurred_from`
+    later than `occurred_to`, and `page_size` above the configured maximum.
+    `cursor` malformedness is not checked here -- `AuditStore.query` itself
+    validates it (it alone knows the opaque token's internal shape);
+    `list_audit_events` translates that failure separately, below.
+    """
+    if filters.action is not None and resolve_details_model(filters.action) is None:
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_ACTION_FILTER_MESSAGE)
+    if filters.resource_type is not None and not is_known_resource_type(filters.resource_type):
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_RESOURCE_TYPE_FILTER_MESSAGE)
+    if (
+        filters.occurred_from is not None
+        and filters.occurred_to is not None
+        and filters.occurred_from > filters.occurred_to
+    ):
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_TIME_RANGE_FILTER_MESSAGE)
+    if page_size > _LIST_AUDIT_EVENTS_MAX_PAGE_SIZE:
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_PAGE_SIZE_FILTER_MESSAGE)
+
+
+def list_audit_events(
+    principal: tuple[str, str],
+    *,
+    filters: AuditQueryFilters,
+    cursor: str | None,
+    page_size: int,
+    access_role_store: AccessRoleStore,
+    audit_store: AuditStore,
+) -> AuditQueryPage:
+    """Return one filtered, newest-first, paginated page of `audit_events` (AC-BI-007).
+
+    Gated at `require_role(principal, minimum=SYSTEM_ADMIN, store=access_role_store)`
+    first, mirroring `list_assignments`'s own gate-then-query shape exactly
+    -- satisfies AC-BI-001/AC-BI-002's "refused... before any store call."
+    `filters`/`page_size` are then validated (AC-BI-008) before
+    `audit_store.query` is ever called. `cursor` is not validated here --
+    `AuditStore.query` decodes and validates it itself; a malformed cursor
+    surfaces as the same `InvalidAuditQueryFilterError` family, translated
+    below.
+
+    Args:
+        principal: The caller's verified `(sub, iss)` identity.
+        filters: Every combinable filter `list-audit-events` accepts.
+        cursor: A prior page's `next_cursor`, or `None` for the first page.
+        page_size: How many events to return per page (bounded by
+            `_LIST_AUDIT_EVENTS_MAX_PAGE_SIZE`).
+        access_role_store: The `AccessRoleStore` `require_role` resolves
+            `principal`'s roles against.
+        audit_store: The `AuditStore` to query.
+
+    Returns:
+        `AuditQueryPage(events=..., next_cursor=...)`, newest-first.
+
+    Raises:
+        AccessDeniedError: `principal` does not hold `SystemAdmin` or above
+            (AC-BI-002).
+        InvalidAuditQueryFilterError: a filter, `page_size`, or `cursor` is
+            invalid (AC-BI-008) -- named in the message.
+        AuthorizationStoreUnavailableError: propagated from `require_role`
+            (AC-BI-011), or from `audit_store.query` failing to reach the
+            authz Postgres.
+    """
+    require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store)
+    _validate_audit_query_filters(filters, page_size=page_size)
+    try:
+        return audit_store.query(filters=filters, cursor=cursor, page_size=page_size)
+    except AuditInvalidCursorError as exc:
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_CURSOR_FILTER_MESSAGE) from exc
+    except (AuditPostgresUnavailableError, AuditPersistenceError) as exc:
+        raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc

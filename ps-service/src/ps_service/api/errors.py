@@ -268,6 +268,22 @@ class SystemOwnerFloorViolationError(ApiError):
     """
 
 
+class InvalidAuditQueryFilterError(ApiError):
+    """A `list-audit-events` filter/pagination argument is invalid (issue #147, AC-BI-008).
+
+    Raised by ``ps_service.authz.service.list_audit_events`` before
+    ``AuditStore.query`` is ever called, naming the specific invalid input in
+    its message: an unknown ``action`` (not in the typed-model registry), an
+    unknown ``resource_type`` (not in the resource-type registry), an
+    ``occurred_from`` later than ``occurred_to``, or a ``page_size`` above
+    the configured maximum. A caller-safe, domain-level message naming which
+    filter was invalid -- never internal detail -- mirroring
+    ``InvalidAccessRoleError``'s own "leaks no internal detail" precedent
+    (AC-BI-014). Handled as HTTP 400; ``str(exc)`` is safe to surface
+    verbatim.
+    """
+
+
 class AuthorizationStoreUnavailableError(ApiError):
     """The Authz Postgres store could not be reached for a role-gated action (issue #133).
 
