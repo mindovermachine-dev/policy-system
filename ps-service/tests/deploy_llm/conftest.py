@@ -134,6 +134,21 @@ case "${1:-} ${2:-}" in
     case "$verb" in
       show)
         [[ -f "$state/accounts/$name.json" ]]
+        # Simulates an account that is still provisioning: seed_existing_account's
+        # ready_after_polls writes this counter, counting down one more "still not ready" show
+        # per call until it flips the account's provisioningState to Succeeded for good.
+        counter="$state/accounts/$name.creating-polls-remaining"
+        if [[ -f "$counter" ]]; then
+          remaining="$(cat "$counter")"
+          if (( remaining > 0 )); then
+            printf '%s' "$((remaining - 1))" > "$counter"
+          else
+            rm "$counter"
+            jq '.properties.provisioningState = "Succeeded"' "$state/accounts/$name.json" \
+              > "$state/accounts/$name.json.tmp"
+            mv "$state/accounts/$name.json.tmp" "$state/accounts/$name.json"
+          fi
+        fi
         cat "$state/accounts/$name.json"
         ;;
       show-deleted)
@@ -148,8 +163,8 @@ case "${1:-} ${2:-}" in
         ;;
       create)
         mkdir -p "$state/accounts"
-        printf '{"properties":{"endpoint":"https://%s.cognitiveservices.azure.com/"}}' "$name" \
-          > "$state/accounts/$name.json"
+        printf '{"properties":{"endpoint":"https://%s.cognitiveservices.azure.com/",'\
+'"provisioningState":"Succeeded"}}' "$name" > "$state/accounts/$name.json"
         [[ -f "$state/accounts/$name-keys.json" ]] || printf '{"key1":"%s","key2":"%s"}' \
           "${PS_TEST_AZ_INITIAL_KEY1:-FAKE-KEY-1-INITIAL}" \
           "${PS_TEST_AZ_INITIAL_KEY2:-FAKE-KEY-2-INITIAL}" > "$state/accounts/$name-keys.json"
@@ -304,13 +319,19 @@ class DeployLlmFixture:
         """This fixture's own editable copy of `scripts/llm-defaults.conf`."""
         return self.root / "scripts" / "llm-defaults.conf"
 
-    def _environment(self) -> dict[str, str]:
+    def _environment(self, *, env: dict[str, str] | None = None) -> dict[str, str]:
         """Environment for a script run: fake `az`/`kubectl` prepended to `PATH`, throwaway
         `HOME`, plus the `PS_TEST_AZ_*`/`PS_TEST_KUBECTL_*` variables both fakes read/write.
         Both scripts get all of these regardless of which fakes they actually call -- unused
         variables are harmless.
+
+        `DEPLOY_LLM_ACCOUNT_POLL_INTERVAL_SECONDS` defaults to "0" here (production default is
+        15) so a test exercising `wait_for_account_ready`'s poll loop (`seed_existing_account`'s
+        `ready_after_polls`) does not actually sleep. `env` overrides/extends this base, e.g. a
+        test driving `wait_for_account_ready`'s timeout path sets
+        `DEPLOY_LLM_ACCOUNT_READY_TIMEOUT_SECONDS` to a tiny value instead of the 1800s default.
         """
-        return {
+        base = {
             "PATH": os.pathsep.join([str(self.bin_dir), "/usr/bin", "/bin"]),
             "HOME": str(self.home),
             "PS_TEST_AZ_LOG": str(self.az_log),
@@ -318,18 +339,28 @@ class DeployLlmFixture:
             "PS_TEST_KUBECTL_LOG": str(self.kubectl_log),
             "PS_TEST_KUBECTL_STATE_DIR": str(self.kubectl_state),
             "PS_TEST_KUBECTL_APPLIED_DIR": str(self.kubectl_applied),
+            "DEPLOY_LLM_ACCOUNT_POLL_INTERVAL_SECONDS": "0",
         }
+        base.update(env or {})
+        return base
 
-    def run_deploy(self, *args: str, stdin: str | None = None, expect: int | None = 0) -> ScriptRun:
+    def run_deploy(
+        self,
+        *args: str,
+        stdin: str | None = None,
+        expect: int | None = 0,
+        env: dict[str, str] | None = None,
+    ) -> ScriptRun:
         """Run this fixture's copy of `scripts/deploy-llm.sh`.
 
         `stdin=None` closes stdin (`/dev/null`) so an unguarded `read` fails fast instead of
         hanging; pass a string to answer a prompt. `expect=None` to inspect the code yourself
-        (mirrors `ReleaseFixture.run_script`).
+        (mirrors `ReleaseFixture.run_script`). `env` extends/overrides the base environment (see
+        `_environment`).
         """
         script = self.root / "scripts" / "deploy-llm.sh"
         argv = [str(script), *args]
-        env = self._environment()
+        env = self._environment(env=env)
         if stdin is None:
             # No answer supplied: close stdin so an unguarded `read` fails fast (EOF) instead
             # of hanging or inheriting pytest's own stdin.
@@ -538,22 +569,43 @@ class DeployLlmFixture:
         endpoint: str | None = None,
         key1: str = "FAKE-KEY-1-INITIAL",
         key2: str = "FAKE-KEY-2-INITIAL",
+        provisioning_state: str = "Succeeded",
+        ready_after_polls: int = 0,
     ) -> None:
         """Pre-populate an already-existing AIServices account and its key pair (the fake `az
         cognitiveservices account keys list` source) -- for idempotency (S9) and rotation (S10)
         tests that need an account without going through a prior `deploy-llm.sh` run. Defaults
         match the fake `az`'s own `cognitiveservices account create` defaults (PLAN.md §2.2), so
         a seeded account looks like one this script itself would have just created.
+
+        `provisioning_state` simulates a prior run interrupted mid-provisioning (`deploy-llm.sh`
+        checking `properties.provisioningState`, not just whether `account show` succeeds).
+        `ready_after_polls > 0` makes the fake `az`'s `account show` keep reporting
+        `provisioning_state` for that many more calls before flipping to `Succeeded` for good --
+        use it to simulate an account that finishes provisioning while `deploy-llm.sh` is
+        polling.
         """
         resolved_endpoint = endpoint or f"https://{name}.cognitiveservices.azure.com/"
         directory = self.azure_state / "accounts"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{name}.json").write_text(
-            json.dumps({"properties": {"endpoint": resolved_endpoint}}), encoding="utf-8"
+            json.dumps(
+                {
+                    "properties": {
+                        "endpoint": resolved_endpoint,
+                        "provisioningState": provisioning_state,
+                    }
+                }
+            ),
+            encoding="utf-8",
         )
         (directory / f"{name}-keys.json").write_text(
             json.dumps({"key1": key1, "key2": key2}), encoding="utf-8"
         )
+        if ready_after_polls > 0:
+            (directory / f"{name}.creating-polls-remaining").write_text(
+                str(ready_after_polls), encoding="utf-8"
+            )
 
     def seed_deleted_account(self, name: str, *, location: str = "swedencentral") -> None:
         """Pre-populate the exact soft-deleted AIServices account lookup used by the preflight."""

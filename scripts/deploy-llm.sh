@@ -44,6 +44,11 @@ readonly CHAT_MODEL_SKU="GlobalStandard"
 readonly EMBED_MODEL_SKU="DataZoneStandard"
 readonly AZURE_API_VERSION_LITERAL="preview"
 readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key]"
+# How long ensure_account will wait for an already-existing-but-not-yet-Succeeded AIServices
+# account (left mid-provisioning by an interrupted prior run) before giving up. Overridable via
+# env for the test suite; production always uses the defaults.
+readonly ACCOUNT_READY_POLL_INTERVAL_SECONDS="${DEPLOY_LLM_ACCOUNT_POLL_INTERVAL_SECONDS:-15}"
+readonly ACCOUNT_READY_TIMEOUT_SECONDS="${DEPLOY_LLM_ACCOUNT_READY_TIMEOUT_SECONDS:-1800}"
 
 skip_confirmation=false
 rotate_key=false
@@ -528,6 +533,48 @@ fetch_account_endpoint() {
   jq -r '.properties.endpoint' <<< "$1"
 }
 
+# account_provisioning_state <account_json>: prints .properties.provisioningState from an
+# account show/create response.
+account_provisioning_state() {
+  jq -r '.properties.provisioningState' <<< "$1"
+}
+
+# wait_for_account_ready <account_name> <account_json>: polls until <account_json>'s
+# provisioningState reaches a terminal value, returning the final account JSON. Only matters on
+# ensure_account's "already exists" branch -- `account create` itself already blocks until
+# terminal (that is why it can sit there for a long time on a slow region), but a prior run
+# interrupted between that create call returning and Azure actually finishing provisioning (e.g.
+# Ctrl-C, or this script dying mid-wait) leaves an account that `show` happily returns even
+# though it is still "Creating". Without this check, ensure_account would hand that account
+# straight to ensure_deployment, which fails confusingly against a not-yet-ready account.
+wait_for_account_ready() {
+  local account_name="$1" account_json="$2"
+  local state start_seconds=$SECONDS
+  state="$(account_provisioning_state "$account_json")"
+  while [[ "$state" != "Succeeded" && "$state" != "Failed" && "$state" != "Canceled" ]]; do
+    if (( SECONDS - start_seconds >= ACCOUNT_READY_TIMEOUT_SECONDS )); then
+      print_error '%s has been %s for over %ss -- Azure is taking unusually long.\n' \
+        "$account_name" "$state" "$ACCOUNT_READY_TIMEOUT_SECONDS"
+      print_error \
+        'Check https://azure.status.microsoft for a regional incident, then re-run this script; it will resume waiting.\n'
+      exit "$EXIT_FAILURE"
+    fi
+    log_step "Waiting for $account_name to finish provisioning (currently $state)"
+    sleep "$ACCOUNT_READY_POLL_INTERVAL_SECONDS"
+    account_json="$(az cognitiveservices account show --name "$account_name" \
+      --resource-group "$RESOURCE_GROUP_NAME")"
+    state="$(account_provisioning_state "$account_json")"
+  done
+  if [[ "$state" != "Succeeded" ]]; then
+    print_error '%s finished provisioning in state %s, not Succeeded.\n' "$account_name" "$state"
+    print_error 'Delete it and re-run this script to recreate it:\n'
+    print_error '  az cognitiveservices account delete --name %s --resource-group %s\n' \
+      "$account_name" "$RESOURCE_GROUP_NAME"
+    exit "$EXIT_FAILURE"
+  fi
+  printf '%s' "$account_json"
+}
+
 # ensure_account <account_name> <region>: create-if-absent, kind AIServices, SKU S0 (design doc
 # step 6). Writes the resolved endpoint into the process-wide `account_endpoint` (top-of-file
 # note) rather than returning it on stdout, since this function must also set `made_changes`.
@@ -536,6 +583,7 @@ ensure_account() {
   local account_json
   if account_json="$(az cognitiveservices account show --name "$account_name" \
       --resource-group "$RESOURCE_GROUP_NAME" 2>/dev/null)"; then
+    account_json="$(wait_for_account_ready "$account_name" "$account_json")"
     account_endpoint="$(fetch_account_endpoint "$account_json")"
     return 0
   fi
