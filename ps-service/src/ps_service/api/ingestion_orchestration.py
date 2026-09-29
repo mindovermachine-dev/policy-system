@@ -38,7 +38,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
-from ps_service.api.catalog import CatalogEntry
+from ps_service.api.catalog import CatalogEntry, find_by_celex, find_short_name_collision
 from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; IMPL_4 deviation 1 sanctions reuse
     is_safe_verbatim,
@@ -48,6 +48,8 @@ from ps_service.api.errors import (
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PipelineStageError,
+    ShortNameCollisionError,
+    ShortNameCuratedMismatchError,
 )
 from ps_service.api.run_status import clear_stage, set_stage
 from ps_service.config import missing_ingestion_config_fields
@@ -72,6 +74,17 @@ if TYPE_CHECKING:
     from ps_service.ingestion.models import IngestResult
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
+
+# D-SHORTNAME-PATTERN: must start with a letter, alnum/`_`/`-` body, 1-64 chars --
+# mirrors every existing catalog short_name ("cra", "gdpr", "nis2"). Public (not
+# module-private) so both this module's own `CatalogIngestionRequest` `Field()` and
+# `mcp_interface.mcp_server`'s tool-parameter `Field()` share one canonical pattern
+# literal. Per AC-BI-005/CHANGES.md row F4, "one shared validation function" is
+# satisfied at this constant/regex level -- one literal, consumed by two independent
+# declarative `Field(pattern=...)` annotations -- rather than via a single shared
+# callable; the two call sites are pydantic `Field` declarations, not imperative code
+# paths a function could usefully wrap.
+SHORT_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
 
 _COMPONENT = "api"
 _RUN_ACTION = "ingestion_run"
@@ -383,6 +396,99 @@ def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | No
         raise _classify_stage_failure(name, exc, emitter=emitter) from exc
 
 
+# --- curated-mismatch validation (issue #146, Slice 2) ---
+
+
+def validate_and_resolve_catalog_entry(
+    celex: str,
+    short_name: str,
+    *,
+    single_tenant_graph: GraphHandle,
+    emitter: LogEmitter | None = None,
+) -> CatalogEntry | None:
+    """Validate a caller-supplied ``short_name`` against the curated catalog and the graph.
+
+    Shared by ``routes.create_ingestion`` and the ``ingest_regulation`` MCP
+    tool (issue #146, AC-BI-004/005/006) -- one function, called from both
+    entry points, so a curated-CELEX mismatch or a cross-instrument
+    ``short_name`` collision is rejected with byte-identical semantics
+    everywhere, before any pipeline graph is opened. Three checks run in
+    order, each short-circuiting the rest:
+
+    1. Looks up ``celex`` in the curated catalog; when found and its own
+       ``short_name`` doesn't match the caller-supplied one, raises
+       :class:`~ps_service.api.errors.ShortNameCuratedMismatchError` carrying
+       the same message text the pre-#146 ``mcp_server.py`` mismatch branch
+       used verbatim (AC-BI-004).
+    2. Calls :func:`~ps_service.api.catalog.find_short_name_collision` --
+       ``short_name`` already claimed by a *different* curated CELEX raises
+       :class:`~ps_service.api.errors.ShortNameCollisionError` (AC-BI-006).
+    3. Calls :func:`check_short_name_collision` against ``single_tenant_graph``,
+       wrapped in :func:`_run_stage` (the same per-stage failure wrapper the
+       pipeline's own stages use) so a genuine I/O failure during this check
+       fails closed as a :class:`~ps_service.api.errors.PipelineStageError`,
+       never silently treated as "no collision". The wrapped thunk calls
+       *only* :func:`check_short_name_collision` -- it never raises
+       ``ShortNameCollisionError`` itself, since ``_run_stage`` reclassifies
+       any exception a wrapped thunk raises into a ``PipelineStageError``;
+       raising the domain error from inside the thunk would misreport a real
+       collision as a transient stage failure. ``ShortNameCollisionError`` is
+       raised here, in the caller, only after ``_run_stage`` returns a
+       non-``None`` conflicting CELEX.
+
+    This call's own ``single_tenant_graph`` open (at both entry points, before
+    this function is called) and ``run_catalog_ingestion_pipeline``'s later,
+    independent ``_is_already_merged`` preflight open are two separate
+    FalkorDB client constructions -- not lazy (``FalkorDB.__init__`` issues a
+    real ``conn.info(section="server")`` round-trip), but the extra
+    single-digit-millisecond cost is negligible against this pipeline's own
+    end-to-end SLA, and threading one handle through both call sites would
+    require changing ``run_catalog_ingestion_pipeline``'s public signature for
+    no measurable benefit.
+
+    Args:
+        celex: The request's CELEX identifier.
+        short_name: The request's caller-supplied ``short_name``.
+        single_tenant_graph: The already-opened single-tenant graph, queried
+            by the graph-side collision check.
+        emitter: Optional explicit log emitter, used by the graph-side
+            collision check's own ``_run_stage`` failure logging.
+
+    Returns:
+        The matching :class:`CatalogEntry` if ``celex`` is curated, else
+        ``None``.
+
+    Raises:
+        ShortNameCuratedMismatchError: ``celex`` is curated and its own
+            ``short_name`` doesn't equal the caller-supplied one.
+        ShortNameCollisionError: ``short_name`` is already claimed by a
+            different CELEX, curated or already-ingested.
+        PipelineStageError: The graph-side collision check itself fails
+            (e.g. the graph is unreachable).
+    """
+    entry = find_by_celex(celex)
+    if entry is not None and entry.short_name != short_name:
+        raise ShortNameCuratedMismatchError(
+            f"CELEX {celex} is curated under short_name '{entry.short_name}'; "
+            f"pass that value, not '{short_name}'"
+        )
+    catalog_collision = find_short_name_collision(short_name, celex)
+    if catalog_collision is not None:
+        raise ShortNameCollisionError(
+            f"short_name '{short_name}' is already claimed by CELEX {catalog_collision.celex}"
+        )
+    colliding_celex = _run_stage(
+        "collision_check",
+        lambda: check_short_name_collision(single_tenant_graph, celex=celex, short_name=short_name),
+        emitter=emitter,
+    )
+    if colliding_celex is not None:
+        raise ShortNameCollisionError(
+            f"short_name '{short_name}' is already claimed by CELEX {colliding_celex}"
+        )
+    return entry
+
+
 # --- Cellar-fallback existence resolution (D1/D2/D3, AC-BI-003/004/005/006/007) ---
 
 
@@ -643,6 +749,59 @@ def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_i
     )
     rows = cast("list[list[object]]", result.result_set)
     return len(rows) > 0
+
+
+# --- cross-instrument short_name collision check (issue #146, AC-BI-006) ---
+#
+# Two independent `single_tenant` graph opens are accepted for this check plus the
+# `_is_already_merged` preflight above: `FalkorDB.__init__` is not lazy -- it calls
+# `Is_Cluster(conn)`, which issues a real `conn.info(section="server")` round-trip
+# to the FalkorDB/Redis backend. The accepted cost is one extra network round-trip
+# (single-digit milliseconds), negligible against this pipeline's own ~613s
+# end-to-end SLA (`docs/architecture/ps-service-container-architecture.md:734`).
+# Threading a single handle through both call sites to avoid this cost is not
+# worth it -- it would require changing `run_catalog_ingestion_pipeline`'s public
+# signature for no measurable benefit.
+
+_SHORT_NAME_COLLISION_QUERY = (
+    "MATCH (n:RegulatoryInstrument) WHERE n.id STARTS WITH $prefix "
+    "AND n.celex IS NOT NULL AND n.celex <> $celex RETURN n.id, n.celex"
+)
+
+
+def check_short_name_collision(
+    single_tenant_graph: GraphHandle, *, celex: str, short_name: str
+) -> str | None:
+    """Return the conflicting CELEX if `short_name` is already claimed by a different one.
+
+    `STARTS WITH $prefix` is a cheap DB-side candidate filter, not the final answer: a
+    differently-named short_name that happens to be a hyphenated extension of this one
+    (e.g. stored id "cra-legacy-1.0" when checking short_name "cra") would otherwise
+    false-positive. Each candidate's own short-name segment is recovered via the same
+    rpartition("-") convention `_internal_short_name` already uses and compared for exact
+    equality before being treated as a real collision.
+
+    Args:
+        single_tenant_graph: The already-opened single-tenant graph.
+        celex: The CELEX the caller supplied -- a candidate sharing this same
+            CELEX is not a collision (excluded server-side via `n.celex <> $celex`).
+        short_name: The caller-supplied short name to check.
+
+    Returns:
+        The conflicting CELEX, or ``None`` if no other-CELEX instrument is
+        recorded under this exact short name.
+    """
+    result = single_tenant_graph.query(
+        _SHORT_NAME_COLLISION_QUERY, params={"prefix": f"{short_name}-", "celex": celex}
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    for row in rows:
+        candidate_id = cast("str", row[0])
+        conflicting_celex = cast("str", row[1])
+        recorded_short_name, _separator, _version = candidate_id.rpartition("-")
+        if recorded_short_name == short_name:
+            return conflicting_celex
+    return None
 
 
 # --- the sequencer ---

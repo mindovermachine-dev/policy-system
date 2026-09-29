@@ -169,3 +169,27 @@ def find_by_celex(celex: str) -> CatalogEntry | None:
         if entry.celex == celex:
             return entry
     return None
+
+
+def find_short_name_collision(short_name: str, celex: str) -> CatalogEntry | None:
+    """Return the curated entry already claiming ``short_name`` under a different CELEX.
+
+    Compares ``CatalogEntry.short_name`` directly (a plain field-equality scan) --
+    unlike :func:`ps_service.api.ingestion_orchestration.check_short_name_collision`,
+    there is no ``id``-string prefix to disambiguate here (DQ2), since curated
+    entries carry ``short_name`` as its own field.
+
+    Args:
+        short_name: The caller-supplied short name to check.
+        celex: The CELEX the caller supplied alongside it -- an entry that
+            shares ``short_name`` but has this same ``celex`` is not a
+            collision (it is the same instrument, not a different one).
+
+    Returns:
+        The first curated entry whose ``short_name`` matches and whose
+        ``celex`` differs, or ``None`` if none does.
+    """
+    for entry in REGULATION_CATALOG:
+        if entry.short_name == short_name and entry.celex != celex:
+            return entry
+    return None

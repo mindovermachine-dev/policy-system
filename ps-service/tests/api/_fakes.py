@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, Self
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.ingestion_orchestration import (
+    _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key, mirrors this module's own precedent for cross-module private reuse
+    _SHORT_NAME_COLLISION_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key
     GraphOpeners,
     PipelineAdapters,
     PipelineDependencies,
@@ -112,21 +114,45 @@ class FakeGraphHandle:
     ``error`` is set, every ``query()`` call raises it instead (issue #135's
     pre-flight-check failure fixture -- e.g. a graph-unreachable error raised
     before any stage runs).
+
+    ``responses_by_query``/``errors_by_query`` (issue #146) are an *additional*,
+    opt-in dispatch keyed by the query's own literal text, checked before the
+    ``results``/``error`` FIFO fallback above: a real FalkorDB graph answers each
+    distinct Cypher query independently from its own persisted state, regardless
+    of call order or how many other queries preceded it -- unlike a plain FIFO
+    queue, which only gives the right answer when a test's callee issues exactly
+    the one call sequence the queue was built for. ``single_tenant`` now receives
+    two structurally different queries in a caller-dependent order/count (the
+    collision check, then -- only when the caller reaches it -- the pre-flight
+    check), so :func:`build_fake_pipeline_dependencies` uses this dispatch for
+    ``single_tenant`` specifically; every other ``FakeGraphHandle`` use in this
+    module keeps the simpler FIFO ``results`` queue, unaffected.
     """
 
     def __init__(
-        self, results: list[FakeQueryResult] | None = None, *, error: Exception | None = None
+        self,
+        results: list[FakeQueryResult] | None = None,
+        *,
+        error: Exception | None = None,
+        responses_by_query: Mapping[str, FakeQueryResult] | None = None,
+        errors_by_query: Mapping[str, Exception] | None = None,
     ) -> None:
         """Prime the scripted results (default: always an empty result), or an error to raise."""
         self.calls: list[RecordedQuery] = []
         self._results: deque[FakeQueryResult] = deque(results or [])
         self._error = error
+        self._responses_by_query = responses_by_query
+        self._errors_by_query = errors_by_query
 
     def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
-        """Record ``(q, params)`` and return the next scripted result, or raise ``error``."""
+        """Record ``(q, params)`` and return the scripted result, or raise the scripted error."""
         self.calls.append(RecordedQuery(q, params))
+        if self._errors_by_query is not None and q in self._errors_by_query:
+            raise self._errors_by_query[q]
         if self._error is not None:
             raise self._error
+        if self._responses_by_query is not None and q in self._responses_by_query:
+            return self._responses_by_query[q]
         return self._results.popleft() if self._results else FakeQueryResult([])
 
 
@@ -424,6 +450,8 @@ def build_fake_pipeline_dependencies(
     ingest_internal_error: Exception | None = None,
     preflight_hit: bool = False,
     preflight_error: Exception | None = None,
+    collision_row: tuple[str, str] | None = None,
+    collision_error: Exception | None = None,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -445,6 +473,14 @@ def build_fake_pipeline_dependencies(
         preflight_error: If set, the single-tenant graph's pre-flight
             existence query raises this instead of returning (issue #135,
             AC-BI-006 -- e.g. a graph-unreachable error).
+        collision_row: If set, an ``(instrument_id, celex)`` pair the
+            single-tenant graph's cross-instrument short_name collision query
+            (issue #146, ``check_short_name_collision``) returns as its one
+            candidate row -- simulating a different CELEX already recorded
+            under this exact ``short_name``.
+        collision_error: If set, the single-tenant graph's collision-check
+            query raises this instead of returning (issue #146, mirrors
+            ``preflight_error``).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
@@ -453,9 +489,28 @@ def build_fake_pipeline_dependencies(
     recorder = StageRecorder()
     native = FakeGraphHandle()
     baseline = FakeGraphHandle()
+    # `single_tenant` is dispatched by query text (`responses_by_query`/
+    # `errors_by_query`), not a FIFO queue: `validate_and_resolve_catalog_entry`'s
+    # graph-side collision check and `run_catalog_ingestion_pipeline`'s own
+    # `_is_already_merged` pre-flight check both query this same fake, but a
+    # caller that invokes `run_catalog_ingestion_pipeline` directly (most of
+    # this module's own unit tests) never reaches the collision check at all --
+    # so the number and order of calls this fake sees is caller-dependent, and
+    # only a by-query-text dispatch (mirroring how a real, stateful FalkorDB
+    # graph actually answers each distinct query) serves both shapes correctly.
+    responses_by_query: dict[str, FakeQueryResult] = {}
+    errors_by_query: dict[str, Exception] = {}
+    if collision_row is not None:
+        instrument_id, celex = collision_row
+        responses_by_query[_SHORT_NAME_COLLISION_QUERY] = FakeQueryResult([[instrument_id, celex]])
+    if collision_error is not None:
+        errors_by_query[_SHORT_NAME_COLLISION_QUERY] = collision_error
+    if preflight_hit:
+        responses_by_query[_MERGED_INSTRUMENT_EXISTS_QUERY] = FakeQueryResult([["existing-id"]])
+    if preflight_error is not None:
+        errors_by_query[_MERGED_INSTRUMENT_EXISTS_QUERY] = preflight_error
     single_tenant = FakeGraphHandle(
-        results=[FakeQueryResult([["existing-id"]])] if preflight_hit else None,
-        error=preflight_error,
+        responses_by_query=responses_by_query or None, errors_by_query=errors_by_query or None
     )
 
     def _open_native(config: ServiceConfig, short_name: str) -> GraphHandle:

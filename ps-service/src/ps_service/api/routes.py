@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Annotated
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 
-from ps_service.api.catalog import find_by_celex
 from ps_service.api.change_check_orchestration import (
     ChangeCheckDependencies,
     ChangeCheckResult,
@@ -43,6 +42,7 @@ from ps_service.api.ingestion_orchestration import (
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
     run_internal_ingestion_pipeline,
+    validate_and_resolve_catalog_entry,
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
@@ -125,26 +125,34 @@ async def create_ingestion(
     unless the resolved identifier already has a fully-merged
     ``RegulatoryInstrument`` (issue #135), in which case Domain Mapper and
     Company Merge are skipped entirely and the response reports
-    ``outcome="already_ingested"`` with an empty ``stages`` list. A CELEX
-    absent from the curated catalog falls back to a Cellar/ELI existence lookup
-    (``resolve_via_cellar``, also off the event loop) before the pipeline runs --
-    a genuine miss on both sources 404s (AC-BI-005/006), a resolved CELEX runs the
-    same pipeline a curated one would (AC-BI-003/004), fetching the document at
-    most once for the whole request (AC-BI-006). A stage failure -- including a
-    Cellar/ELI outage during resolution -- surfaces as a 502 naming the failing
-    stage (AC-BI-007/008). This ``source: "catalog"`` path is gated behind
+    ``outcome="already_ingested"`` with an empty ``stages`` list. This
+    ``source: "catalog"`` path is gated behind
     ``require_access_role(AccessRole.COMPLIANCE_OFFICER)`` (issue #145), checked
     inline -- off the event loop, via ``run_in_threadpool`` -- immediately after
     the ``source == "internal"`` branch has already returned, before any
     Cellar/catalog pipeline dispatch begins; an unprivileged or unauthenticated
-    caller gets a 403 (``AccessDeniedError``) with no pipeline call made.
-    A ``source: "internal"`` request carries the intake document's content
-    directly in the body (issue #91 -- no server-side path resolution) and runs
-    the internal-seed pipeline (issue #54, S2): today, one ``internal_ingestion``
-    stage that parses, validates, mints, and persists the submission into
-    ``{short}_baseline``/``{short}_native``. The internal path stays entirely
-    ungated (AC-BI-011) -- it is ``ps-cli ingest document``'s existing
-    internal-authoring flow, out of scope for issue #145.
+    caller gets a 403 (``AccessDeniedError``) with no pipeline call made. The
+    catalog path then calls ``validate_and_resolve_catalog_entry`` (issue #146,
+    AC-BI-004/005) -- the same shared function the ``ingest_regulation`` MCP
+    tool calls -- which rejects a curated CELEX whose caller-supplied
+    ``short_name`` doesn't match the catalog's own value, before any pipeline
+    graph is opened. A CELEX absent from the curated catalog falls back to a
+    Cellar/ELI existence lookup (``resolve_via_cellar``, also off the event
+    loop, called with the request's own ``short_name`` so it is used verbatim
+    and never derived from the fetched title -- issue #146 AC-BI-002/003)
+    before the pipeline runs -- a genuine miss on both sources 404s
+    (AC-BI-005/006), a resolved CELEX runs the same pipeline a curated one
+    would (AC-BI-003/004), fetching the document at most once for the whole
+    request (AC-BI-006). A stage failure -- including a Cellar/ELI outage
+    during resolution -- surfaces as a 502 naming the failing stage
+    (AC-BI-007/008). A ``source: "internal"`` request carries the intake
+    document's content directly in the body (issue #91 -- no server-side path
+    resolution) and runs the internal-seed pipeline (issue #54, S2): today,
+    one ``internal_ingestion`` stage that parses, validates, mints, and
+    persists the submission into ``{short}_baseline``/``{short}_native``.
+    The internal path stays entirely ungated (AC-BI-011) -- it is
+    ``ps-cli ingest document``'s existing internal-authoring flow, out of
+    scope for issue #145.
 
     Args:
         request_body: The ``source``-discriminated request body.
@@ -164,6 +172,8 @@ async def create_ingestion(
             ``ComplianceOfficer`` (403; issue #145).
         CatalogIdentifierNotFoundError: The CELEX is absent from the curated
             catalog and does not exist on Cellar/ELI either (404).
+        ShortNameCuratedMismatchError: A curated CELEX's request ``short_name``
+            doesn't match the catalog's own value (409).
         InternalSeedValidationError: The internal request's document fails
             structural or shape validation (422).
         PipelineStageError: A pipeline stage raised (502).
@@ -181,10 +191,18 @@ async def create_ingestion(
         return _to_accepted_response(run_id, outcome)
     await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)
     effective_run_id = request_body.run_id or run_id
-    entry = find_by_celex(request_body.celex)
+    single_tenant_graph = await run_in_threadpool(dependencies.graphs.single_tenant, config)
+    entry = await run_in_threadpool(
+        validate_and_resolve_catalog_entry,
+        request_body.celex,
+        request_body.short_name,
+        single_tenant_graph=single_tenant_graph,
+    )
     ingestion_adapter: IngestionAdapter | None = None
     if entry is None:
-        resolution = await run_in_threadpool(resolve_via_cellar, request_body.celex)
+        resolution = await run_in_threadpool(
+            resolve_via_cellar, request_body.celex, short_name=request_body.short_name
+        )
         entry = resolution.entry
         ingestion_adapter = resolution.adapter
     outcome = await run_in_threadpool(

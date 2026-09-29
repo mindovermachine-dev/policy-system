@@ -25,7 +25,9 @@ from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
-    from ps_service.api.ingestion_orchestration import PipelineDependencies
+    from ps_service.api.catalog import CatalogEntry
+    from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
+    from ps_service.logging import LogEmitter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
@@ -200,6 +202,59 @@ def test_second_ingestion_same_title_is_structural_no_op() -> None:
     assert len(merge_calls) == 2
     assert merge_calls[0].regulatory_instrument_id == "ENGPRAC-3.0"
     assert merge_calls[1].regulatory_instrument_id == "ENGPRAC-3.0"
+
+
+def test_internal_source_request_still_forbids_an_unexpected_short_name_field() -> None:
+    """Issue #146 AC-BI-009: ``InternalIngestionRequest`` (``models.py``) has no
+    ``short_name`` field, and its existing ``extra="forbid"`` config rejects
+    one with 422 -- proving the model's shape is genuinely untouched by the
+    catalog-only ``short_name`` requirement, not just "no diff seen".
+    """
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post(
+        "/ingestions",
+        json={"source": "internal", "content": _REAL_SEED_DOCUMENT, "short_name": "x"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_internal_ingestion_never_calls_validate_and_resolve_catalog_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #146 AC-BI-009: ``routes.py``'s ``if request_body.source == "internal":``
+    early-return (untouched by every #146 slice) never reaches the new
+    curated-mismatch/collision validation -- proving it is provably unreached
+    on this path, not merely untested.
+    """
+
+    def _explode(
+        celex: str,
+        short_name: str,
+        *,
+        single_tenant_graph: GraphHandle,
+        emitter: LogEmitter | None = None,
+    ) -> CatalogEntry | None:
+        _ = (single_tenant_graph, emitter)
+        message = (
+            "validate_and_resolve_catalog_entry must not be called for source=internal "
+            f"(celex={celex!r}, short_name={short_name!r})"
+        )
+        raise AssertionError(message)
+
+    monkeypatch.setattr(
+        "ps_service.api.ingestion_orchestration.validate_and_resolve_catalog_entry", _explode
+    )
+    fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
+    client = _client_with_fake(fake.dependencies)
+
+    response = client.post(
+        "/ingestions", json={"source": "internal", "content": _REAL_SEED_DOCUMENT}
+    )
+
+    assert response.status_code == 200
 
 
 def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() -> None:

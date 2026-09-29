@@ -69,6 +69,10 @@ ignore = [
     "TD002",    # missing-todo-author — author is in git blame
     "TD003",    # missing-todo-link — not every TODO gets an issue; the ones that matter do
     "FIX002",   # line-contains-todo — a TODO comment is allowed to exist
+    # --- executable-bit checks: unreliable on drvfs/9p checkouts (e.g. WSL2 mounting a Windows path) ---
+    # where every file's live permission bits read as executable regardless of git's tracked mode; see
+    # the pre-existing "tools/**" EXE001 per-file-ignore below for the same rationale.
+    "EXE002",   # shebang-missing — chmod state not tracked reliably; a missing shebang isn't meaningful signal here
 ]
 
 [tool.ruff.lint.mccabe]

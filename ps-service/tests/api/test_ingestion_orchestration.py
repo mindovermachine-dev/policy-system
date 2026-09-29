@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from api._fakes import (
+    FakeGraphHandle,
     FakeIngestionAdapter,
+    FakeQueryResult,
     MakeEmitter,
     ReadLines,
     build_fake_pipeline_dependencies,
@@ -29,13 +31,16 @@ from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
     IngestionConfigIncompleteError,
     PipelineStageError,
+    ShortNameCuratedMismatchError,
 )
 from ps_service.api.ingestion_orchestration import (
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    check_short_name_collision,
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
+    validate_and_resolve_catalog_entry,
 )
 from ps_service.api.run_status import get_stage
 from ps_service.company_merge.models import MergeResult, NearMissPair
@@ -464,6 +469,69 @@ def test_run_catalog_ingestion_pipeline_falls_back_to_default_adapter_when_omitt
     )
 
     assert isinstance(fake.recorder.calls[0].kwargs["adapter"], FakeIngestionAdapter)
+
+
+# --- validate_and_resolve_catalog_entry (issue #146, AC-BI-004) --------------
+
+# A real curated CELEX/short_name pair from curated-content/catalog.json --
+# exercises the real REGULATION_CATALOG, not a monkeypatched one, mirroring
+# tests/api/test_catalog.py's own convention for the negative/positive cases.
+_CURATED_CELEX = "32024R2847"
+_CURATED_SHORT_NAME = "cra"
+
+
+def test_validate_and_resolve_catalog_entry_returns_the_curated_entry_on_exact_match() -> None:
+    """AC-BI-004: a curated CELEX whose ``short_name`` matches the catalog's own value
+    resolves to that entry -- issuing exactly one graph query, the collision check
+    (issue #146, AC-BI-006), which the empty-results fake reports as "no collision".
+    """
+    graph = FakeGraphHandle()
+
+    entry = validate_and_resolve_catalog_entry(
+        _CURATED_CELEX, _CURATED_SHORT_NAME, single_tenant_graph=graph
+    )
+
+    assert entry is not None
+    assert entry.celex == _CURATED_CELEX
+    assert entry.short_name == _CURATED_SHORT_NAME
+    assert len(graph.calls) == 1
+    assert graph.calls[0].params == {"prefix": f"{_CURATED_SHORT_NAME}-", "celex": _CURATED_CELEX}
+
+
+def test_validate_and_resolve_catalog_entry_raises_on_curated_mismatch() -> None:
+    """AC-BI-004: a curated CELEX whose caller-supplied ``short_name`` doesn't match the
+    catalog's own value is rejected before any graph is opened, with the exact message
+    text the pre-#146 MCP tool's own mismatch branch used.
+    """
+    graph = FakeGraphHandle()
+
+    with pytest.raises(ShortNameCuratedMismatchError) as exc_info:
+        validate_and_resolve_catalog_entry(
+            _CURATED_CELEX, "not-the-real-short-name", single_tenant_graph=graph
+        )
+
+    assert str(exc_info.value) == (
+        f"CELEX {_CURATED_CELEX} is curated under short_name '{_CURATED_SHORT_NAME}'; "
+        "pass that value, not 'not-the-real-short-name'"
+    )
+    assert graph.calls == []
+
+
+def test_validate_and_resolve_catalog_entry_returns_none_for_a_non_curated_celex() -> None:
+    """A CELEX absent from the curated catalog resolves to ``None`` -- the caller
+    (``routes.create_ingestion``/``mcp_server.ingest_regulation``) then falls back to
+    ``resolve_via_cellar``. The graph-side collision check (issue #146) still runs --
+    it is independent of whether ``celex`` is curated -- and reports no collision.
+    """
+    graph = FakeGraphHandle()
+
+    entry = validate_and_resolve_catalog_entry(
+        _NONCURATED_CELEX, "whatever-short-name", single_tenant_graph=graph
+    )
+
+    assert entry is None
+    assert len(graph.calls) == 1
+    assert graph.calls[0].params == {"prefix": "whatever-short-name-", "celex": _NONCURATED_CELEX}
 
 
 # --- resolve_via_cellar (AC-BI-003/004/005/006/007) --------------------------
@@ -968,3 +1036,69 @@ def test_preflight_check_failure_fails_closed_as_pipeline_stage_error(
     assert exc_info.value.stage == "preflight"
     assert exc_info.value.reason == "preflight failed"
     assert fake.recorder.order == []
+
+
+# --- check_short_name_collision (issue #146, D4/DQ2 -- Appendix C) -----------
+
+
+def test_check_short_name_collision_returns_the_conflicting_celex_when_a_different_celex_holds_the_prefix() -> (  # noqa: E501 - name mirrors CHANGES.md Appendix B verbatim
+    None
+):
+    """A different CELEX already ingested under this exact ``short_name`` is a real collision."""
+    graph = FakeGraphHandle([FakeQueryResult([["cra-1.0", "32024R0001"]])])
+
+    conflict = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="cra"
+    )
+
+    assert conflict == "32024R0001"
+
+
+def test_check_short_name_collision_returns_none_when_no_row_matches() -> None:
+    """No candidate row at all means no collision."""
+    graph = FakeGraphHandle([FakeQueryResult([])])
+
+    conflict = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="cra"
+    )
+
+    assert conflict is None
+
+
+def test_check_short_name_collision_returns_none_when_the_only_matching_row_is_the_same_celex() -> (
+    None
+):
+    """The ``n.celex <> $celex`` clause excludes self-matches -- load-bearing for idempotency.
+
+    The fake graph here stands in for what the real Cypher's ``WHERE ... AND n.celex <>
+    $celex`` clause would already have filtered out server-side; this proves
+    ``check_short_name_collision`` doesn't independently re-introduce a self-match some
+    other way.
+    """
+    graph = FakeGraphHandle([FakeQueryResult([])])
+
+    conflict = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="cra"
+    )
+
+    assert conflict is None
+
+
+def test_check_short_name_collision_returns_none_when_a_candidate_row_only_shares_a_hyphenated_prefix() -> (  # noqa: E501 - name mirrors CHANGES.md Appendix B verbatim
+    None
+):
+    """DQ2's false-positive fix: a ``STARTS WITH`` hit isn't a real collision unless the
+    candidate's own ``rpartition("-")``-derived short name is an exact match.
+
+    ``"cra-legacy-1.0"``'s recorded short name is ``"cra-legacy"`` (rpartition splits off
+    only the trailing ``"1.0"`` version segment) -- not ``"cra"`` -- so this must not be
+    reported as a collision even though ``"cra-legacy-1.0"`` starts with the ``"cra-"``
+    prefix used to prefilter candidates DB-side.
+    """
+    graph = FakeGraphHandle([FakeQueryResult([["cra-legacy-1.0", "32024R0001"]])])
+
+    conflict = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="cra"
+    )
+
+    assert conflict is None

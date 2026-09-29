@@ -297,6 +297,33 @@ class AuthorizationStoreUnavailableError(ApiError):
     """
 
 
+class ShortNameCuratedMismatchError(ApiError):
+    """A caller-supplied ``short_name`` doesn't match a curated CELEX's own canonical value.
+
+    Raised by ``ingestion_orchestration.validate_and_resolve_catalog_entry``
+    before any graph is opened (AC-BI-004) -- shared by ``POST /ingestions``
+    and the ``ingest_regulation`` MCP tool, so both entry points reject a
+    curated-CELEX mismatch with byte-identical semantics. Handled as HTTP
+    409; ``str(exc)`` is domain-level and surfaced verbatim.
+    """
+
+
+class ShortNameCollisionError(ApiError):
+    """A ``short_name`` is already claimed by a different instrument (a different CELEX).
+
+    Raised by ``ingestion_orchestration.validate_and_resolve_catalog_entry`` before
+    any pipeline graph is opened (AC-BI-006) -- covers both a curated-catalog
+    collision (``catalog.find_short_name_collision``, a different curated entry
+    already using this ``short_name``) and an already-ingested non-curated
+    instrument (``ingestion_orchestration.check_short_name_collision``, a
+    different CELEX already recorded in the graph under this exact
+    ``short_name``). Shared by ``POST /ingestions`` and the ``ingest_regulation``
+    MCP tool, so both entry points reject a cross-instrument collision with
+    byte-identical semantics. Handled as HTTP 409; ``str(exc)`` is domain-level
+    and surfaced verbatim.
+    """
+
+
 class PipelineStageError(ApiError):
     """A pipeline stage raised; later stages were skipped (AC-BI-008).
 

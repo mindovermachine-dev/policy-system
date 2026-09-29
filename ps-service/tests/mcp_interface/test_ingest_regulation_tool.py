@@ -413,6 +413,61 @@ def test_curated_celex_mismatched_short_name_is_rejected_before_the_pipeline_run
     assert fake.recorder.calls == []
 
 
+def test_short_name_collision_with_an_already_ingested_different_celex_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #146 AC-BI-006: a non-curated CELEX whose ``short_name`` is already
+    recorded in the single-tenant graph under a *different* CELEX is rejected with
+    the named error string, before any pipeline stage runs -- MCP parity with
+    ``POST /ingestions``'s own graph-side collision check.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    given_short_name = "eu-1111-2020"
+    fake = build_fake_pipeline_dependencies(collision_row=(f"{given_short_name}-1.0", "32024R0001"))
+    monkeypatch.setattr(
+        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
+    )
+
+    result = _call_ingest_regulation(_NONCURATED_CELEX, given_short_name)
+
+    assert result.is_error is False
+    assert _text(result) == (
+        f"error: short_name '{given_short_name}' is already claimed by CELEX 32024R0001"
+    )
+    assert fake.recorder.calls == []
+
+
+def test_short_name_collision_with_a_curated_catalog_entry_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #146 AC-BI-006: a curated CELEX whose own ``short_name`` is already
+    claimed by a *different* curated entry is rejected with the named error string,
+    before any pipeline stage runs -- the catalog-side collision check.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fixture = (
+        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
+        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
+    )
+    monkeypatch.setattr("ps_service.api.catalog.REGULATION_CATALOG", fixture)
+    fake = build_fake_pipeline_dependencies()
+    monkeypatch.setattr(
+        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
+    )
+
+    result = _call_ingest_regulation("32024R0001", "shared-name")
+
+    assert result.is_error is False
+    assert _text(result) == (
+        "error: short_name 'shared-name' is already claimed by CELEX 32024R0002"
+    )
+    assert fake.recorder.calls == []
+
+
 def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_identical_short_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -623,6 +678,75 @@ def test_graph_unavailable_returns_named_error_when_native_graph_open_fails(
 
     assert result.is_error is False
     assert _text(result) == "error: the policy graph database is not reachable"
+    assert fake.recorder.calls == []
+
+
+def test_collision_check_graph_unreachable_returns_graph_unavailable_error_without_opening_any_pipeline_graph(  # noqa: E501 - name mirrors the sibling graph-unavailable test's verbatim-scenario naming
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #146 AC-BI-007: `_resolve_and_ingest` opens the single-tenant
+    graph itself (to run the collision check) before
+    `run_catalog_ingestion_pipeline` ever runs -- that open is wrapped by the
+    same `_sanitize_pipeline_graph_opens`/`_sanitize_graph_open` machinery
+    `test_graph_unavailable_returns_named_error_when_native_graph_open_fails`
+    already proves for the pipeline's own three graph opens, so a failure
+    opening the single-tenant graph here must sanitise to the exact same
+    fixed, generic message -- never leaking driver/host detail -- and no
+    pipeline stage ever runs.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
+
+    def _raising_single_tenant(config: object) -> object:
+        _ = config
+        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
+        raise ConnectionError(message)
+
+    broken_dependencies = dataclasses.replace(
+        fake.dependencies,
+        graphs=dataclasses.replace(fake.dependencies.graphs, single_tenant=_raising_single_tenant),
+    )
+    monkeypatch.setattr(
+        mcp_server, "build_default_pipeline_dependencies", lambda: broken_dependencies
+    )
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    assert _text(result) == "error: the policy graph database is not reachable"
+    assert fake.recorder.calls == []
+
+
+def test_collision_check_query_failure_surfaces_as_pipeline_stage_error_not_graph_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #146 AC-BI-007: when the single-tenant graph *opens* successfully
+    but the collision-check *query itself* fails, that failure never touches
+    `_sanitize_graph_open` (which only wraps the open) -- it is caught by
+    `check_short_name_collision`'s own `_run_stage` wrapping inside
+    `validate_and_resolve_catalog_entry`, becomes a `PipelineStageError`, and
+    is caught by `_resolve_and_ingest`'s existing
+    `except (..., PipelineStageError)` clause, surfacing as
+    `f"error: {exc}"` with the real stage-failure text -- distinct from the
+    generic `_GRAPH_UNAVAILABLE_MESSAGE` the graph-*open* failure mode
+    produces in the sibling test above. No pipeline stage ever runs.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fake = build_fake_pipeline_dependencies(
+        rid="cra-1.0", collision_error=RuntimeError("boom -- must never reach the caller")
+    )
+    monkeypatch.setattr(
+        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
+    )
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    assert _text(result) == "error: collision_check stage failed: collision_check failed"
     assert fake.recorder.calls == []
 
 

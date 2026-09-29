@@ -63,6 +63,11 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
     monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
     monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_HOST", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_PORT", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_USER", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_PASSWORD", raising=False)
+    monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_DATABASE", raising=False)
 
     result = load_config()
 

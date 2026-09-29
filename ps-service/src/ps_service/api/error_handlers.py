@@ -41,6 +41,8 @@ from ps_service.api.errors import (
     RestoreArtifactRejectedError,
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
+    ShortNameCollisionError,
+    ShortNameCuratedMismatchError,
     SystemOwnerFloorViolationError,
 )
 
@@ -111,6 +113,8 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     InvalidAccessRoleError,
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
+    ShortNameCuratedMismatchError,
+    ShortNameCollisionError,
 )
 """API-boundary error types whose ``str(exc)`` is domain-level and safe to surface."""
 
@@ -275,6 +279,16 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "invalid_audit_query_filter",
         status.HTTP_400_BAD_REQUEST,
     ),
+    (
+        ShortNameCuratedMismatchError,
+        "short_name_curated_mismatch",
+        status.HTTP_409_CONFLICT,
+    ),
+    (
+        ShortNameCollisionError,
+        "short_name_collision",
+        status.HTTP_409_CONFLICT,
+    ),
 )
 
 
@@ -392,6 +406,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``PendingApprovalInvalidOrExpiredError`` 404,
     ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
     ``ExportStageFailedError`` 502, ``RequestValidationError`` 422,
+    ``ShortNameCuratedMismatchError`` 409, ``ShortNameCollisionError`` 409,
     everything else 500.
 
     Args:

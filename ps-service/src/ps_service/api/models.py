@@ -15,6 +15,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ps_service.api.ingestion_orchestration import SHORT_NAME_PATTERN
+
 
 class CatalogInstrumentEntry(BaseModel):
     """One curated instrument as returned by ``GET /catalog`` (AC-BI-011).
@@ -55,6 +57,7 @@ class CatalogIngestionRequest(BaseModel):
 
     source: Literal["catalog"]
     celex: str = Field(min_length=10, max_length=10, pattern=r"^3\d{4}[A-Z]\d{4}$")
+    short_name: str = Field(pattern=SHORT_NAME_PATTERN)
     run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
 
 

@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from ps_service.api.catalog import CATALOG, REGULATION_CATALOG, find_by_celex
+from typing import TYPE_CHECKING
+
+from ps_service.api.catalog import (
+    CATALOG,
+    REGULATION_CATALOG,
+    CatalogEntry,
+    find_by_celex,
+    find_short_name_collision,
+)
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_catalog_entries_have_ten_char_celex_and_nonempty_title() -> None:
@@ -36,3 +47,45 @@ def test_find_by_celex_returns_the_matching_entry_for_a_curated_identifier() -> 
     """
     for expected in REGULATION_CATALOG:
         assert find_by_celex(expected.celex) == expected
+
+
+# --- find_short_name_collision (issue #146, D3.1) ----------------------------
+
+
+def test_find_short_name_collision_returns_none_when_unclaimed() -> None:
+    """A ``short_name`` no curated entry uses at all collides with nothing."""
+    assert find_short_name_collision("not-a-real-short-name", "32099R9999") is None
+
+
+def test_find_short_name_collision_returns_the_conflicting_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A different curated entry already claiming ``short_name`` is returned as the conflict.
+
+    ``celex`` is the *caller's* CELEX, matching neither fixture entry's own CELEX --
+    the entry sharing ``short_name`` under a differing CELEX is the collision.
+    """
+    fixture = (
+        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
+        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
+    )
+    monkeypatch.setattr("ps_service.api.catalog.REGULATION_CATALOG", fixture)
+
+    conflict = find_short_name_collision("shared-name", "32024R9999")
+
+    assert conflict == fixture[0]
+
+
+def test_no_two_curated_entries_share_a_short_name() -> None:
+    """Real-catalog invariant: no two distinct curated entries share a ``short_name``.
+
+    Regression guard for AC-BI-006 -- if this ever fails, a new curation entry
+    was added with a ``short_name`` already claimed by another entry.
+    """
+    seen: dict[str, str] = {}
+    for entry in REGULATION_CATALOG:
+        assert entry.short_name not in seen, (
+            f"short_name {entry.short_name!r} is shared by CELEX {seen.get(entry.short_name)} "
+            f"and {entry.celex}"
+        )
+        seen[entry.short_name] = entry.celex

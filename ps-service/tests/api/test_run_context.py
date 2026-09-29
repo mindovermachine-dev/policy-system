@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
 _VALID_CELEX = "32024R2847"
+_VALID_SHORT_NAME = "cra"  # curated-content/catalog.json's own short_name for _VALID_CELEX
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INTERNAL_SEED_DOCUMENT: dict[str, object] = json.loads(
     (
@@ -110,7 +111,10 @@ def test_log_lines_emitted_during_a_request_carry_the_returned_run_id(
     fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
     client = _client_with_fake(fake.dependencies)
 
-    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+    response = client.post(
+        "/ingestions",
+        json={"source": "catalog", "celex": _VALID_CELEX, "short_name": _VALID_SHORT_NAME},
+    )
 
     assert response.status_code == 200
     returned_run_id = response.json()["run_id"]
@@ -175,7 +179,10 @@ def test_error_body_carries_the_request_run_id() -> None:
     )
     client = _client_with_fake(fake.dependencies)
 
-    response = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+    response = client.post(
+        "/ingestions",
+        json={"source": "catalog", "celex": _VALID_CELEX, "short_name": _VALID_SHORT_NAME},
+    )
 
     assert response.status_code == 502
     run_id = response.json()["run_id"]
@@ -247,8 +254,14 @@ def test_two_consecutive_ingestion_requests_get_different_run_ids() -> None:
     fake = build_fake_pipeline_dependencies()
     client = _client_with_fake(fake.dependencies)
 
-    first = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
-    second = client.post("/ingestions", json={"source": "catalog", "celex": _VALID_CELEX})
+    first = client.post(
+        "/ingestions",
+        json={"source": "catalog", "celex": _VALID_CELEX, "short_name": _VALID_SHORT_NAME},
+    )
+    second = client.post(
+        "/ingestions",
+        json={"source": "catalog", "celex": _VALID_CELEX, "short_name": _VALID_SHORT_NAME},
+    )
 
     assert first.status_code == 200
     assert second.status_code == 200

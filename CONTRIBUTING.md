@@ -94,7 +94,7 @@ Run the default suite — everything except the slow, environment-dependent mark
 groups, which are opt-out on the command line:
 
 ```bash
-uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not container_image"
+uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not postgres_live and not container_image"
 ```
 
 Run the full local gate exactly as CI does:

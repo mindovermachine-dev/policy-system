@@ -36,7 +36,6 @@ from mcp.server.mcpserver import (
 from pydantic import AfterValidator, Field
 
 from ps_service import dependency_health
-from ps_service.api.catalog import find_by_celex
 from ps_service.api.change_check_orchestration import (
     build_default_change_check_dependencies,
     run_change_check_sweep,
@@ -54,6 +53,8 @@ from ps_service.api.errors import (
     RestoreArtifactRejectedError,
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
+    ShortNameCollisionError,
+    ShortNameCuratedMismatchError,
     SystemOwnerFloorViolationError,
 )
 from ps_service.api.ingestion_orchestration import (
@@ -62,6 +63,10 @@ from ps_service.api.ingestion_orchestration import (
     build_default_pipeline_dependencies,
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
+    validate_and_resolve_catalog_entry,
+)
+from ps_service.api.ingestion_orchestration import (
+    SHORT_NAME_PATTERN as _SHORT_NAME_PATTERN,  # shared w/ api/models.py's short_name (#146)
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
@@ -188,7 +193,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from importlib.resources.abc import Traversable
 
-    from ps_service.api.catalog import CatalogEntry
     from ps_service.api.change_check_orchestration import ChangeCheckDependencies
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
@@ -213,8 +217,12 @@ _UNEXPECTED_ERROR_MESSAGE = "error: an unexpected error occurred"
 _LLM_INTERFACE_UNAVAILABLE_MESSAGE = "error: LLM Interface is unavailable."
 
 # D-SHORTNAME-PATTERN: must start with a letter, alnum/`_`/`-` body, 1-64 chars --
-# mirrors every existing catalog short_name ("cra", "gdpr", "nis2").
-_SHORT_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+# mirrors every existing catalog short_name ("cra", "gdpr", "nis2"). Now imported as
+# `SHORT_NAME_PATTERN` from `ps_service.api.ingestion_orchestration` (issue #146) --
+# one canonical pattern literal shared with `api/models.py`'s
+# `CatalogIngestionRequest.short_name`, aliased back to this module's original
+# private name so `ingest_regulation`'s `Field(pattern=_SHORT_NAME_PATTERN)` call
+# site needs no further edit.
 # Same CELEX pattern `api/models.py`'s `CatalogIngestionRequest.celex` already enforces.
 _CELEX_PATTERN = r"^3\d{4}[A-Z]\d{4}$"
 # D-INSTRUMENT-ID-STRICTNESS: same charset/length bound as ps-cli's own
@@ -716,23 +724,33 @@ def _sanitize_restore_graph_opens(
 def _resolve_and_ingest(
     celex: str,
     short_name: str,
-    entry: CatalogEntry | None,
     *,
     config: ServiceConfig,
     principal: str | None,
     run_id: str,
 ) -> dict[str, object] | str:
-    """Resolve `entry` (if needed), run the pipeline, and map its exceptions.
+    """Validate/resolve the catalog entry, run the pipeline, and map its exceptions.
 
-    `entry` non-`None` means `celex` is already curated (the caller already
-    matched its `short_name`); `None` means it must be resolved against
-    Cellar/ELI first (issue #96 -- `short_name` is used verbatim, never
-    derived). Any exception this function does not itself catch is the
-    residual D-SANITIZE-UNEXPECTED row, left to `_run_mcp_action`'s own
-    safety net.
+    Calls `validate_and_resolve_catalog_entry` (issue #146, AC-BI-004/005/006)
+    -- the same shared function `routes.create_ingestion` calls -- against the
+    single-tenant graph opened from this call's own sanitized dependency
+    bundle. That function raises `ShortNameCuratedMismatchError` when `celex`
+    is curated and its own `short_name` doesn't match the caller-supplied
+    one, or `ShortNameCollisionError` when `short_name` is already claimed by
+    a different CELEX (curated or already-ingested); otherwise it returns the
+    matching `CatalogEntry` or `None`. A `None` return means `celex` must be
+    resolved against Cellar/ELI first (issue #96 -- `short_name` is used
+    verbatim, never derived). Any exception this function does not itself
+    catch is the residual D-SANITIZE-UNEXPECTED row, left to
+    `_run_mcp_action`'s own safety net.
     """
     ingestion_adapter: IngestionAdapter | None = None
     try:
+        dependencies = _sanitize_pipeline_graph_opens(build_default_pipeline_dependencies())
+        single_tenant_graph = dependencies.graphs.single_tenant(config)
+        entry = validate_and_resolve_catalog_entry(
+            celex, short_name, single_tenant_graph=single_tenant_graph
+        )
         if entry is None:
             resolution = resolve_via_cellar(celex, short_name=short_name)
             entry = resolution.entry
@@ -742,13 +760,15 @@ def _resolve_and_ingest(
             config=config,
             run_id=run_id,
             caller=principal or "unknown",
-            dependencies=_sanitize_pipeline_graph_opens(build_default_pipeline_dependencies()),
+            dependencies=dependencies,
             ingestion_adapter=ingestion_adapter,
         )
     except (
         CatalogIdentifierNotFoundError,
         IngestionConfigIncompleteError,
         PipelineStageError,
+        ShortNameCollisionError,
+        ShortNameCuratedMismatchError,
     ) as exc:
         return f"error: {exc}"
     except McpGraphUnavailableError:
@@ -779,10 +799,12 @@ def ingest_regulation(
     `stages` entry per completed pipeline stage (ingestion, extraction,
     derivation, merge) with its own small integer `summary`. Returns a
     string beginning `error: ` when: `short_name` does not match a curated
-    CELEX's own value; `celex` exists in neither the curated catalog nor
-    Cellar/ELI; the LLM Interface dependency is currently unhealthy (checked
-    before any graph is opened or the pipeline is called); the service
-    configuration is missing an LLM/embedding model or similarity threshold;
+    CELEX's own value; `short_name` is already claimed by a different CELEX
+    (curated or already-ingested); `celex` exists in neither the curated
+    catalog nor Cellar/ELI; the LLM Interface dependency is currently
+    unhealthy (checked before any graph is opened or the pipeline is
+    called); the service configuration is missing an LLM/embedding model
+    or similarity threshold;
     the policy graph database cannot be reached; a pipeline stage genuinely
     fails mid-run; or (this tool's own residual safety net) on any other
     unexpected failure.
@@ -805,19 +827,13 @@ def ingest_regulation(
                 return f"error: {exc}"
         if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
             return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
-        entry = find_by_celex(celex)
-        if entry is not None and short_name != entry.short_name:
-            return (
-                f"error: CELEX {celex} is curated under short_name "
-                f"'{entry.short_name}'; pass that value, not '{short_name}'"
-            )
         # `_run_mcp_action` always binds a run_id via `bind_run_context()` before
         # calling this closure, so `current_run_id()` is never actually `None`
         # here -- the `""` fallback only satisfies the type checker's narrowing,
         # mirroring `_resolve_principal`'s own "unreachable in practice" idiom.
         run_id = current_run_id() or ""
         return _resolve_and_ingest(
-            celex, short_name, entry, config=config, principal=principal, run_id=run_id
+            celex, short_name, config=config, principal=principal, run_id=run_id
         )
 
     return _run_mcp_action("ingest_regulation", principal, _body)
