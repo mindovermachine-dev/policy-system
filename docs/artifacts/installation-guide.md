@@ -117,15 +117,7 @@ kind create cluster --config deploy/kind/cluster.yaml --name policy-system
 kubectl cluster-info --context kind-policy-system
 ```
 
-The cluster config binds PS Service's REST and MCP ports to fixed host ports via
-`extraPortMappings`, so clients reach a stable URL. This must be set at cluster creation
-— it cannot be added to a running cluster — and it is what keeps the system reachable
-without a `kubectl port-forward` held open in a terminal.
-
-`deploy/kind/cluster.yaml` already names the cluster `policy-system`; the explicit
-`--name policy-system` flag is a defensive guard in case your shell already has
-`KIND_CLUSTER_NAME` set from another project, which would otherwise silently override
-the config file's name.
+This last command will print the cluster information, confirming that the local kind cluster is up and running.
 
 ### 5. Provision the Azure LLM backend
 
@@ -150,10 +142,11 @@ This prints a confirmation table — region candidates, resource group, account,
 both model deployments, Key Vault, all resolved from `scripts/llm-defaults.conf`
 (edit that file first if you want different model names/capacities) — and
 prompts `Proceed with these values? [Y/n]`. It then verifies your subscription
-permissions, picks the first candidate region where both models are available at
-the required SKU, checks quota covers the configured capacities, and provisions
-everything, printing a summary line only — never a secret value. Pass `--yes` to
-skip the confirmation prompt.
+permissions, checks the configured region and quota, and provisions everything,
+printing a summary line only — never a secret value. If the deterministic
+AIServices account is soft-deleted, the script detects it and asks before purging
+it permanently so its model capacity is released. Pass `--yes` to accept both
+the deployment and purge confirmations non-interactively.
 
 ```bash
 scripts/sync-llm-secrets-to-kind.sh

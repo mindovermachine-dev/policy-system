@@ -7,7 +7,8 @@
 # Usage:
 #   scripts/deploy-llm.sh [--yes] [--rotate-key]
 #
-#   --yes         Skip the "Proceed with these values? [Y/n]" prompt (the table still prints).
+#   --yes         Accept confirmation prompts, including permanent purge of this script's
+#                 deterministic soft-deleted AIServices account (the table still prints).
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
 #                 (the "inactive" slot) and write its new value back. Branches immediately after
 #                 flag parsing -- skips config validation, the confirmation table, RBAC
@@ -465,6 +466,43 @@ resource_group_exists() {
   az group show --name "$RESOURCE_GROUP_NAME" >/dev/null 2>&1
 }
 
+# deleted_account_exists <account_name> <region>: true only when Azure's deleted-account
+# collection contains the exact account this script is about to recreate.
+deleted_account_exists() {
+  local account_name="$1" region="$2"
+  az cognitiveservices account show-deleted --name "$account_name" \
+    --resource-group "$RESOURCE_GROUP_NAME" --location "$region" >/dev/null 2>&1
+}
+
+# purge_deleted_account_if_present <account_name> <region>: permanently purges the exact
+# deterministic account after explicit confirmation. A soft-deleted account keeps model quota
+# allocated and prevents this script from recreating the same account name.
+purge_deleted_account_if_present() {
+  local account_name="$1" region="$2"
+  if ! deleted_account_exists "$account_name" "$region"; then
+    return 0
+  fi
+
+  printf 'Found soft-deleted AIServices account %s in %s. Purge it permanently? [y/N] ' \
+    "$account_name" "$region"
+  local purge_answer=""
+  if [[ "$skip_confirmation" == true ]]; then
+    printf 'y\n'
+    purge_answer="y"
+  else
+    read -r purge_answer || true
+  fi
+  if [[ ! "$purge_answer" =~ ^[Yy]$ ]]; then
+    print_error 'Purge declined; cannot recreate AIServices account %s. No changes made.\n' \
+      "$account_name"
+    exit "$EXIT_FAILURE"
+  fi
+
+  log_step "Purging soft-deleted AIServices account $account_name"
+  az cognitiveservices account purge --name "$account_name" \
+    --resource-group "$RESOURCE_GROUP_NAME" --location "$region" >/dev/null
+}
+
 # ensure_resource_group <region>: create-if-absent (AC-BI-009, AC-BI-010) -- the first link in
 # the provisioning chain. Sets made_changes=true only when a create actually happened; this is
 # the check-before-act idiom AC-BI-011's idempotent rerun depends on.
@@ -746,6 +784,9 @@ main() {
   rbac_preflight "$subscription_id"
 
   local region="$LLM_REGION"
+  log_step "Checking for a soft-deleted AIServices account in $region"
+  purge_deleted_account_if_present "$account_name" "$region"
+
   local model_list
   log_step "Checking model availability in $region"
   model_list="$(verify_target_region "$region")"

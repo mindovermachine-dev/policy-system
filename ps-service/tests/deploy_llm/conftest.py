@@ -136,6 +136,16 @@ case "${1:-} ${2:-}" in
         [[ -f "$state/accounts/$name.json" ]]
         cat "$state/accounts/$name.json"
         ;;
+      show-deleted)
+        location="$(get_arg --location "$@")"
+        marker="$state/deleted-accounts/$location/$name.json"
+        [[ -f "$marker" ]]
+        cat "$marker"
+        ;;
+      purge)
+        location="$(get_arg --location "$@")"
+        rm "$state/deleted-accounts/$location/$name.json"
+        ;;
       create)
         mkdir -p "$state/accounts"
         printf '{"properties":{"endpoint":"https://%s.cognitiveservices.azure.com/"}}' "$name" \
@@ -528,6 +538,14 @@ class DeployLlmFixture:
         )
         (directory / f"{name}-keys.json").write_text(
             json.dumps({"key1": key1, "key2": key2}), encoding="utf-8"
+        )
+
+    def seed_deleted_account(self, name: str, *, location: str = "swedencentral") -> None:
+        """Pre-populate the exact soft-deleted AIServices account lookup used by the preflight."""
+        directory = self.azure_state / "deleted-accounts" / location
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{name}.json").write_text(
+            json.dumps({"name": name, "location": location}), encoding="utf-8"
         )
 
     def seed_existing_deployment(self, account: str, name: str) -> None:
