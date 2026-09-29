@@ -32,19 +32,11 @@ llm:
   provider: azure
 
 psServiceSigning:
-  # Prod-active path: points at the Key-Vault-sourced Secret
-  # scripts/deploy-ps.sh's ensure_ps_service_signing_secrets provisions
-  # (own Secret, never Authentik's) -- this is the *resolved literal* output
-  # of policy-system.signingPostgresCredentialsSecretName (_helpers.tpl) for
-  # this repo's one fixed Helm release name ("policy-system",
-  # scripts/deploy-ps.sh's HELM_RELEASE_NAME), matching
-  # authentik.authentik.existingSecret.secretName's own hardcoded-literal
-  # convention below (Helm never templates values files, so this cannot be a
-  # live `{{ include ... }}` call). Once set, signing-postgres-secret.yaml
-  # renders no Secret of its own — psServiceSigning.postgres.password above
-  # is then dead, local-test-only input.
+  # existingSecret is intentionally NOT overridden here (issue #159) -- the
+  # chart self-provisions policy-system-signing-postgres-credentials in prod
+  # too, via signing-postgres-secret.yaml's lookup+randAlphaNum idiom, the
+  # same as local-test/kind. No Key Vault or other external call required.
   postgres:
-    existingSecret: "policy-system-signing-postgres-credentials"
     persistence:
       durableStorageClass:
         # Prod-active path: Premium SSD, Retain-reclaim StorageClass for this
@@ -109,11 +101,14 @@ authentik:
   # `authentik.authentik.*` nesting below.
   authentik:
     existingSecret:
-      # Non-secret Secret *name* only — the chart never generates this
-      # Secret's contents (AC-BI-010); scripts/deploy-ps.sh (a later slice)
-      # creates/populates it from Key-Vault-sourced values. This is the
-      # *resolved literal* output of policy-system.authentikCredentialsSecretName
-      # (_helpers.tpl) for this repo's one fixed Helm release name
+      # Non-secret Secret *name* only. As of issue #159, this chart generates
+      # this Secret's contents itself (templates/authentik-credentials-secret.yaml,
+      # via policy-system.generateOrReuseSecretValue's lookup+randAlphaNum idiom)
+      # unless authentik.credentialsExistingSecret is set, in which case an
+      # operator provisions the Secret externally instead -- see that value's
+      # own comment. This is the *resolved literal* output of
+      # policy-system.authentikCredentialsSecretName (_helpers.tpl) for this
+      # repo's one fixed Helm release name
       # ("policy-system", scripts/deploy-ps.sh's HELM_RELEASE_NAME) —
       # NOT a live `{{ include ... }}` template call: Helm never templates
       # values files, and the upstream chart's own `authentik.secret.name`
@@ -126,7 +121,10 @@ authentik:
       # postgresql.host/port/name/user) is consequently never read by the
       # chart at all (upstream's own values.yaml WARNING: "when set,
       # authentik.* secret values are ignored" — confirmed literally true
-      # for every key, not just the two secret ones).
+      # for every key, not just the two secret ones). Kept in sync with
+      # authentik.credentialsExistingSecret by hand, not by any automatic Helm
+      # wiring -- authentik-credentials-secret.yaml's own fail() guard catches
+      # the two disagreeing.
       secretName: "policy-system-authentik-credentials"
     postgresql:
       # Non-secret Postgres connection values, pointed at S2's hand-rolled

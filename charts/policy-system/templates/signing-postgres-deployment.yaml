@@ -40,11 +40,11 @@ spec:
                   # Own Secret (policy-system.signingPostgresCredentialsSecretName), never
                   # Authentik's policy-system.authentikCredentialsSecretName or any
                   # FalkorDB credential -- AC-BI-006's "distinct" framing extended to
-                  # secrets. In prod this points at the Key-Vault-sourced Secret
-                  # scripts/deploy-ps.sh's ensure_ps_service_signing_secrets provisions
-                  # (values-prod.yaml's psServiceSigning.postgres.existingSecret); in
-                  # local-test/kind, signing-postgres-secret.yaml renders one from the
-                  # plain psServiceSigning.postgres.password default instead.
+                  # secrets. By default (both profiles, issue #159),
+                  # signing-postgres-secret.yaml generates and persists this Secret's
+                  # password itself via lookup+randAlphaNum -- no external call
+                  # required; set psServiceSigning.postgres.existingSecret to point at
+                  # an operator-managed Secret instead.
                   name: {{ include "policy-system.signingPostgresCredentialsSecretName" . }}
                   key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
           volumeMounts:

@@ -628,19 +628,17 @@ case "${1:-} ${2:-}" in
         [[ "$all_ready" == true ]]
         ;;
       "exec deployment/"*)
-        # exec deployment/<name> -- psql -U <user> -d <db> -c "ALTER USER ... PASSWORD '...';"
-        # (rotate_authentik_secrets_main, S9/#129) -- the live in-database password change this
-        # rotation issues against the already-running Postgres pod (see that function's own
-        # comment for why a plain Deployment restart cannot rotate a postgres role's password by
-        # itself). Nothing for this fake to persist -- the outer branch above already logged the
-        # full invocation (including the ALTER USER text) to $PS_TEST_KUBECTL_LOG, which is all
-        # the tests need to observe -- this just reproduces psql's own success output.
+        # exec deployment/<name> -- psql -U <user> -d <db> -c "ALTER USER ... PASSWORD '...';".
+        # Generic fake for an in-database password change issued against an already-running
+        # Postgres pod. Nothing for this fake to persist -- the outer branch above already logged
+        # the full invocation (including the ALTER USER text) to $PS_TEST_KUBECTL_LOG, which is
+        # all a test needs to observe -- this just reproduces psql's own success output.
         printf 'ALTER ROLE\n'
         ;;
       "rollout restart")
-        # rollout restart deployment/<name> (rotate_authentik_secrets_main, S9/#129) -- a
-        # fire-and-forget rollout trigger with no state this fake models; reproduces kubectl's
-        # own "deployment.apps/<name> restarted" stdout line.
+        # rollout restart deployment/<name> -- a fire-and-forget rollout trigger with no state
+        # this fake models; reproduces kubectl's own "deployment.apps/<name> restarted" stdout
+        # line.
         name="${3#deployment/}"
         printf 'deployment.apps/%s restarted\n' "$name"
         ;;

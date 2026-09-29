@@ -135,7 +135,13 @@ class PsTokenVerifier:
         """
         self._auth_context = auth_context
         self._jwk_client = jwk_client or jwt.PyJWKClient(
-            auth_context.jwks_uri, cache_jwk_set=True, lifespan=300
+            auth_context.jwks_uri,
+            cache_jwk_set=True,
+            lifespan=300,
+            # PyJWT >=2.14 throttles the unknown-`kid` forced refresh behind a
+            # 30s-default cooldown; AC-BI-008 requires the refetch-once to
+            # happen every time, so that cooldown is disabled here.
+            cooldown_duration=0,
         )
         self._emitter = emitter
 

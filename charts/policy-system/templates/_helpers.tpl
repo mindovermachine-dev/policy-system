@@ -88,11 +88,15 @@ duplicate the literal name string.
 
 {{/*
 Name of the Secret consumed by the upstream `authentik` dependency's own
-`authentik.existingSecret.secretName` value (AC-BI-010, issue #129 S3). This
-chart never generates this Secret's contents itself -- scripts/deploy-ps.sh (a
-later slice) provisions it from Key-Vault-sourced values, matching the
-`llm.existingSecret`/authentik-postgres-credentials consume-only convention
-already used elsewhere in this chart.
+`authentik.existingSecret.secretName` value (AC-BI-010, issue #129 S3).
+As of issue #159, this chart generates this Secret's own contents itself
+(templates/authentik-credentials-secret.yaml, via
+policy-system.generateOrReuseSecretValue) whenever
+`authentik.credentialsExistingSecret` is unset -- the escape hatch, when set,
+points this helper (and therefore the rendered Secret name) at an
+operator-managed Secret instead. Mirrors
+policy-system.signingPostgresCredentialsSecretName's exact
+"operator-managed-name-or-chart-generates" shape.
 
 IMPORTANT: this helper's output cannot be embedded as live `{{ }}` template
 syntax inside values.yaml/values-prod.yaml -- Helm never templates values
@@ -101,14 +105,16 @@ files, and the upstream chart's own `authentik.secret.name` helper
 `authentik.existingSecret.secretName` verbatim with no `tpl` re-evaluation
 (embedding template syntax there breaks `helm template` outright with a YAML
 parse error, verified empirically -- see IMPL_SLICE_3.md). This helper exists
-as the single documented definition of the pattern; values-prod.yaml's own
-comment cites it and hardcodes its *resolved* literal output for this repo's
+as the single documented definition of the pattern; values.yaml/
+values-prod.yaml's own `authentik.authentik.existingSecret.secretName`
+comments cite it and hardcode its *resolved* literal output for this repo's
 one fixed Helm release name ("policy-system", scripts/deploy-ps.sh's
-HELM_RELEASE_NAME), so any other consumer of this exact Secret name (e.g. a
-later slice's deploy-ps.sh) computes the identical string.
+HELM_RELEASE_NAME) -- kept in sync by hand with this helper's default output,
+not by any automatic Helm wiring (see authentik-credentials-secret.yaml's own
+fail() guard, issue #159, for the safety net when the two disagree).
 */}}
 {{- define "policy-system.authentikCredentialsSecretName" -}}
-{{- printf "%s-authentik-credentials" (include "policy-system.fullname" .) -}}
+{{- .Values.authentik.credentialsExistingSecret | default (printf "%s-authentik-credentials" (include "policy-system.fullname" .)) -}}
 {{- end }}
 
 {{/*
@@ -132,11 +138,13 @@ renders one from a plain value" convention (values.yaml llm.existingSecret /
 templates/secret.yaml) -- deliberately NOT authentik's own
 kubectl-apply-only, no-values-fallback shape, since (unlike the upstream
 `authentik` dependency's all-or-nothing existingSecret) nothing here forces
-every other value to be Secret-sourced too. In prod, values-prod.yaml points
-this at the deterministic name scripts/deploy-ps.sh's
-ensure_ps_service_signing_secrets provisions from Key Vault -- own Secret,
-never appended to policy-system.authentikCredentialsSecretName's Secret
-(AC-BI-006's isolation extended to credentials).
+every other value to be Secret-sourced too. When existingSecret is unset (the
+default in both values.yaml and values-prod.yaml as of issue #159),
+signing-postgres-secret.yaml generates and persists this Secret's own
+password itself via policy-system.generateOrReuseSecretValue -- no external
+(Key Vault or otherwise) call required -- own Secret, never appended to
+policy-system.authentikCredentialsSecretName's Secret (AC-BI-006's isolation
+extended to credentials).
 */}}
 {{- define "policy-system.signingPostgresCredentialsSecretName" -}}
 {{- .Values.psServiceSigning.postgres.existingSecret | default (printf "%s-signing-postgres-credentials" (include "policy-system.fullname" .)) -}}
@@ -157,3 +165,41 @@ signing-postgres-secret.yaml does for Passkey Signing.
 {{- define "policy-system.authentikApiTokenSecretName" -}}
 {{- .Values.psService.authentik.existingSecret | default (printf "%s-authentik-api-token" (include "policy-system.fullname" .)) -}}
 {{- end }}
+
+{{/*
+Generates a Secret value once and makes it survive every subsequent `helm
+upgrade` by reading it back from an already-installed Secret via `lookup`,
+falling back to a freshly `randAlphaNum`-generated value when no live cluster
+is reachable (`helm template`/`helm lint`/`helm unittest`, AC-BI-004) or the
+named Secret/key does not exist yet (first install, AC-BI-001/AC-BI-002,
+issue #159).
+
+Re-implements the same lookup-then-generate idiom the bundled Authentik
+dependency's own, unreferenced Bitnami common library implements at
+charts/authentik-2026.8.3.tgz ->
+authentik/charts/postgresql/charts/common/templates/_secrets.tpl's
+common.secrets.passwords.manage (lines 103-110, 116-138) and
+common.secrets.lookup (lines 164-175) -- NOT `include`-able from this chart's
+own templates, because the postgresql sub-subchart it lives in is
+dependency-condition-gated off in every profile this chart ships
+(authentik.postgresql.enabled: false), and Helm excludes a
+condition-disabled dependency's templates from the whole render's
+named-template namespace entirely.
+
+Usage:
+{{ include "policy-system.generateOrReuseSecretValue" (dict "secretName" (include "some.secretName.helper" .) "key" "SOME_KEY" "length" 32 "context" $) }}
+
+Params:
+  - secretName - String - Required - name of the Secret to look up.
+  - key        - String - Required - key inside that Secret's data to reuse if present.
+  - length     - Int    - Required - length of a freshly generated value (randAlphaNum).
+  - context    - Dict   - Required - the root context ($), for .Release.Namespace.
+*/}}
+{{- define "policy-system.generateOrReuseSecretValue" -}}
+{{- $existing := lookup "v1" "Secret" .context.Release.Namespace .secretName -}}
+{{- if and $existing $existing.data (hasKey $existing.data .key) -}}
+{{- index $existing.data .key | b64dec -}}
+{{- else -}}
+{{- randAlphaNum (.length | int) -}}
+{{- end -}}
+{{- end -}}

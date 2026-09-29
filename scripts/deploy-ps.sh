@@ -4,7 +4,6 @@
 # Usage:
 #   scripts/deploy-ps.sh [--yes]
 #   scripts/deploy-ps.sh --rotate-key
-#   scripts/deploy-ps.sh --rotate-authentik-secrets
 #
 #   --yes         Skip the "Proceed with these values? [Y/n]" prompt (the table still prints).
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
@@ -14,17 +13,13 @@
 #                 matter for rotating an already-provisioned account's key). Fails clearly if run
 #                 before a first successful deploy (require_account_exists/require_keyvault_exists
 #                 below).
-#   --rotate-authentik-secrets
-#                 Regenerate Authentik's own Django `secret_key` and Postgres password
-#                 (AC-BI-009), write them to Key Vault and re-sync the cluster's
-#                 `policy-system-authentik-credentials` Secret, issue an in-database `ALTER USER`
-#                 against the live Postgres pod (a plain postgres image ignores
-#                 `POSTGRES_PASSWORD` after first init -- see rotate_authentik_secrets_main), and
-#                 roll-restart the Authentik server/worker Deployments so the new secret_key
-#                 (session-signing key) takes effect immediately. Branches immediately after flag
-#                 parsing, same as --rotate-key; fails clearly if run before a first successful
-#                 deploy (require_keyvault_exists/require_authentik_secrets_exist/
-#                 require_aks_cluster_exists below).
+#
+# Issue #159: Authentik's own Django `secret_key`/Postgres password and the Passkey Signing
+# Postgres password are no longer generated or synced by this script -- the Helm chart itself
+# now generates and persists them (a `lookup`+`randAlphaNum` idiom in
+# charts/policy-system/templates/authentik-credentials-secret.yaml/signing-postgres-secret.yaml),
+# created/updated as ordinary chart-rendered resources by `helm upgrade --install` (below, in
+# ensure_release). This script makes no Key Vault or kubectl calls for either secret.
 #
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success -- including
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
@@ -55,11 +50,10 @@ readonly POSITIVE_INTEGER_PATTERN='^[1-9][0-9]*$'
 # Matches scripts/deploy-llm.sh's own AZURE_API_VERSION_LITERAL (issue #105) -- not evaluator-
 # tunable there either; the API version is a platform constant, not a per-subscription choice.
 readonly AZURE_API_VERSION_LITERAL="preview"
-readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key] [--rotate-authentik-secrets]"
+readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key]"
 
 skip_confirmation=false
 rotate_key=false
-rotate_authentik_secrets=false
 # account_endpoint / made_changes are process-wide state written by ensure_account/ensure_*
 # below (S9). Set via plain assignment inside functions that are always called as a plain
 # statement, never wrapped in a `$(...)` command substitution -- that would fork a subshell
@@ -74,17 +68,15 @@ made_changes=false
 # discipline as every other process-wide variable above.
 public_hostname=""
 
-# parse_args <args...>: sets skip_confirmation/rotate_key/rotate_authentik_secrets from CLI
-# flags; fails fast otherwise. --rotate-key/--rotate-authentik-secrets are both checked in
-# main() BEFORE any of S5-S18's provisioning body runs, mirroring scripts/deploy-llm.sh's own
-# proven shape (its own parse_args/main()) -- see rotate_key_main/rotate_authentik_secrets_main
+# parse_args <args...>: sets skip_confirmation/rotate_key from CLI flags; fails fast otherwise.
+# --rotate-key is checked in main() BEFORE any of S5-S18's provisioning body runs, mirroring
+# scripts/deploy-llm.sh's own proven shape (its own parse_args/main()) -- see rotate_key_main
 # below.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes) skip_confirmation=true ;;
       --rotate-key) rotate_key=true ;;
-      --rotate-authentik-secrets) rotate_authentik_secrets=true ;;
       *)
         print_error 'unknown flag: %s\n%s\n' "$1" "$USAGE"
         exit "$EXIT_USAGE"
@@ -359,43 +351,6 @@ readonly REQUIRED_PROVIDERS=(
 # `refresh_token`, breaking every ps-cli command after the very first `auth login`.
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
-# Key Vault secret names for Authentik's own generate-once secrets (S7, AC-BI-010) -- dash-named
-# to match Key Vault's own character restrictions, same convention as AZURE-API-KEY/etc above.
-readonly AUTHENTIK_SECRET_KEY_VAULT_NAME="AUTHENTIK-SECRET-KEY"
-readonly AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME="AUTHENTIK-POSTGRES-PASSWORD"
-# The Kubernetes Secret name ensure_authentik_secrets below creates/reads -- must exactly match
-# charts/policy-system/templates/_helpers.tpl's own policy-system.authentikCredentialsSecretName
-# helper's resolved output for this repo's one fixed Helm release name ("policy-system",
-# HELM_RELEASE_NAME below), and values-prod.yaml's own hardcoded
-# authentik.authentik.existingSecret.secretName literal (IMPL_SLICE_3.md) -- confirmed identical
-# by reading both.
-readonly AUTHENTIK_SECRET_NAME="policy-system-authentik-credentials"
-# Non-secret Postgres connection values (S2's own hand-rolled Postgres Service/database/user) --
-# must match charts/policy-system/values-prod.yaml's own documented
-# authentik.authentik.postgresql.host/port/name/user literals exactly (IMPL_SLICE_3.md: these
-# values are the single documented source of truth this script copies from, kept in sync by hand,
-# not by any Helm wiring).
-readonly AUTHENTIK_POSTGRES_HOST="policy-system-authentik-postgres"
-readonly AUTHENTIK_POSTGRES_PORT="5432"
-readonly AUTHENTIK_POSTGRES_USER="authentik"
-readonly AUTHENTIK_POSTGRES_DB="authentik"
-
-# Passkey Signing's own, distinct Postgres instance (issue #131, PLAN.md §4 Slice 1, AC-BI-006) --
-# NEVER shares Authentik's or FalkorDB's credential surface. Key Vault secret name for its own
-# generate-once Postgres password, mirroring AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME's naming
-# convention exactly. The Kubernetes Secret name below must exactly match
-# charts/policy-system/templates/_helpers.tpl's own policy-system.signingPostgresCredentialsSecretName
-# helper's resolved output, and values-prod.yaml's own hardcoded
-# psServiceSigning.postgres.existingSecret literal -- confirmed identical by reading both.
-#
-# Unlike AUTHENTIK_POSTGRES_HOST/PORT/USER/DB above, this script carries no equivalent
-# host/port/user/database constants: ps-service-deployment.yaml sources
-# PS_PASSKEYSIGNING_POSTGRES_HOST/_PORT/_DATABASE/_USER directly from plain, non-secret Helm
-# values (charts/policy-system/values-prod.yaml's psServiceSigning.postgres.database/user, and the
-# chart's own rendered Service name) rather than from this script's Secret -- only the password is
-# actually secret, so only the password needs a deploy-ps.sh-owned value at all.
-readonly SIGNING_POSTGRES_PASSWORD_VAULT_NAME="PS-SERVICE-SIGNING-POSTGRES-PASSWORD"
-readonly SIGNING_POSTGRES_SECRET_NAME="policy-system-signing-postgres-credentials"
 
 # Fixed AKS node shape (AC-BI-011, PLAN.md §0.6) -- not evaluator-tunable, matching the spike's
 # own resolved "testing one deployment shape" decision (scripts/ps-defaults.conf has no
@@ -440,13 +395,6 @@ readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
 # its `authentik.server.fullname` template appends "-server" to that -- see IMPL_SLICE_5.md for
 # the full derivation and the exact `helm template` output this was read from.
 readonly AUTHENTIK_SERVICE_NAME="${HELM_RELEASE_NAME}-authentik-server"
-# Authentik worker Deployment name (S9, #129, AC-BI-009) -- the upstream `authentik` dependency
-# chart's own `authentik.worker.fullname` template appends "-worker" to the same
-# "<release-name>-authentik" base AUTHENTIK_SERVICE_NAME's own comment derives, confirmed
-# empirically the same way (IMPL_SLICE_5.md's own `helm template` derivation already reads this
-# Deployment name off the rendered manifest, just never assigned it to a constant since S5 had no
-# caller for it yet -- rotate_authentik_secrets_main below is the first).
-readonly AUTHENTIK_WORKER_NAME="${HELM_RELEASE_NAME}-authentik-worker"
 # Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- reads
 # charts/policy-system/values-prod.yaml from the repo's actual chart directory, never a local
 # copy that could silently drift from it. This script (scripts/deploy-ps.sh) lives ONE directory
@@ -1068,119 +1016,6 @@ ensure_llm_secret() {
   return 0
 }
 
-# generate_random_secret <length>: prints a fresh random alphanumeric string of exactly <length>
-# characters, read from /dev/urandom -- no extra tool dependency beyond what bash scripts already
-# assume (tr/head, both POSIX coreutils), matching new_scope_uuid's own now-removed "no extra
-# tool" precedent (issue #129 S6 deleted that Entra-only helper) rather than introducing a new
-# dependency on openssl/uuidgen/python3 this script has never required. Never printed/logged by
-# any caller beyond feeding the next comparison/`az`/`kubectl` call (AC-BI-013's never-log
-# discipline, same convention read_secret_value's own docstring establishes).
-generate_random_secret() {
-  local length="$1"
-  # `|| true` swallows the SIGPIPE-driven 141 `tr` gets once `head -c` has read exactly $length
-  # bytes and closes its end of the pipe -- an expected, harmless race under `set -o pipefail`
-  # (tr's own exit status, not head's, becomes the pipeline's exit status), not a real failure;
-  # without this, `set -e` would abort the whole script on every single call.
-  (LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "$length") || true
-}
-
-# ensure_authentik_secrets <vault_name>: generate-once (never regenerated once present), write-
-# if-changed into Key Vault, then sync ALL required `AUTHENTIK_*` keys into the cluster as a
-# single Kubernetes Secret (issue #129 S7, AC-BI-009's non-rotation half, AC-BI-010) -- mirrors
-# ensure_llm_secret's own read-from-Key-Vault -> `kubectl create secret --dry-run=client -o yaml |
-# apply` idiom, reusing the SAME Key Vault <vault_name> the LLM secrets already use (no new
-# vault). Unlike the LLM key (re-fetched from a live Azure resource every run), Authentik's own
-# Django secret_key and Postgres password have no external source of truth -- read_secret_value
-# returning an empty string is this script's own "never generated before" signal (same
-# empty-means-absent convention write_secret_if_changed already relies on), so a value already in
-# Key Vault is always reused verbatim, never silently replaced.
-#
-# Per IMPL_SLICE_3.md's own load-bearing finding: the upstream `authentik` chart's
-# `existingSecret` mechanism is all-or-nothing once set -- the server/worker Deployments source
-# 100% of their config via `envFrom: secretRef` against this one Secret, ignoring every
-# `authentik.authentik.*` non-secret value entirely. This Secret must therefore carry ALL of
-# AUTHENTIK_POSTGRESQL__{HOST,PORT,USER,PASSWORD,NAME} plus AUTHENTIK_SECRET_KEY, not just the
-# two generated values -- the non-secret connection literals
-# (AUTHENTIK_POSTGRES_HOST/PORT/USER/DB above) match values-prod.yaml's own documented
-# authentik.authentik.postgresql.* values exactly (kept in sync by hand, no automatic Helm
-# wiring). S2's own hand-rolled Postgres container (charts/policy-system/templates/
-# authentik-postgres-deployment.yaml) was updated to read its OWN password from this exact same
-# Secret/key -- one source of truth, no second, duplicate password Secret.
-# sync_authentik_secret_to_cluster <secret_key> <pg_password>: writes/re-applies the
-# `policy-system-authentik-credentials` K8s Secret with the given values -- the single
-# `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` idiom both
-# ensure_authentik_secrets (generate-once) and rotate_authentik_secrets_main (S9, force-
-# regenerate) apply against, so the Secret's exact key set (AC-BI-010) is defined in exactly one
-# place. Sets made_changes the same way every other apply_output_changed caller does.
-sync_authentik_secret_to_cluster() {
-  local secret_key="$1" pg_password="$2" apply_output
-  apply_output="$(kubectl create secret generic "$AUTHENTIK_SECRET_NAME" \
-    --from-literal="AUTHENTIK_SECRET_KEY=$secret_key" \
-    --from-literal="AUTHENTIK_POSTGRESQL__HOST=$AUTHENTIK_POSTGRES_HOST" \
-    --from-literal="AUTHENTIK_POSTGRESQL__PORT=$AUTHENTIK_POSTGRES_PORT" \
-    --from-literal="AUTHENTIK_POSTGRESQL__USER=$AUTHENTIK_POSTGRES_USER" \
-    --from-literal="AUTHENTIK_POSTGRESQL__PASSWORD=$pg_password" \
-    --from-literal="AUTHENTIK_POSTGRESQL__NAME=$AUTHENTIK_POSTGRES_DB" \
-    --dry-run=client -o yaml | kubectl apply -f -)"
-  apply_output_changed "$apply_output" && made_changes=true
-  return 0
-}
-
-ensure_authentik_secrets() {
-  local vault_name="$1"
-  local secret_key pg_password
-
-  secret_key="$(read_secret_value "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME")"
-  if [[ -z "$secret_key" ]]; then
-    secret_key="$(generate_random_secret 60)"
-  fi
-  pg_password="$(read_secret_value "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME")"
-  if [[ -z "$pg_password" ]]; then
-    pg_password="$(generate_random_secret 32)"
-  fi
-
-  write_secret_if_changed "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME" "$secret_key"
-  write_secret_if_changed "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME" "$pg_password"
-
-  sync_authentik_secret_to_cluster "$secret_key" "$pg_password"
-}
-
-# ensure_ps_service_signing_secrets <vault_name>: generate-once (never regenerated once present),
-# write-if-changed into Key Vault, then sync the Passkey Signing component's own Postgres password
-# into the cluster as a single, dedicated Kubernetes Secret (issue #131, PLAN.md §4 Slice 1,
-# AC-BI-006/AC-BI-007) -- mirrors ensure_authentik_secrets above exactly (same
-# read-from-Key-Vault -> generate-if-absent -> write-if-changed -> kubectl apply idiom, same
-# reused Key Vault <vault_name>, no new vault), except this component has no equivalent of
-# Authentik's own Django AUTHENTIK_SECRET_KEY -- only one generate-once secret exists here.
-#
-# Deliberately its OWN Key Vault secret name and OWN Kubernetes Secret ($SIGNING_POSTGRES_SECRET_NAME)
-# -- never appended to $AUTHENTIK_SECRET_NAME. The two Postgres instances (Authentik's and Passkey
-# Signing's) must never share a credential surface, matching AC-BI-006's "distinct" framing
-# extended to secrets (see charts/policy-system/templates/signing-postgres-deployment.yaml's own
-# comment on the same point). Unlike Authentik's existingSecret (all-or-nothing: every
-# AUTHENTIK_* value must be baked in because the upstream chart sources 100% of its config via
-# envFrom), ps-service-deployment.yaml consumes PS_PASSKEYSIGNING_POSTGRES_* as discrete env vars,
-# so this Secret only ever needs to carry the one value that's actually secret (the password) --
-# host/port/database/user stay plain, non-secret Helm values (charts/policy-system/values-prod.yaml's
-# psServiceSigning.postgres.database/user).
-ensure_ps_service_signing_secrets() {
-  local vault_name="$1"
-  local pg_password apply_output
-
-  pg_password="$(read_secret_value "$vault_name" "$SIGNING_POSTGRES_PASSWORD_VAULT_NAME")"
-  if [[ -z "$pg_password" ]]; then
-    pg_password="$(generate_random_secret 32)"
-  fi
-
-  write_secret_if_changed "$vault_name" "$SIGNING_POSTGRES_PASSWORD_VAULT_NAME" "$pg_password"
-
-  apply_output="$(kubectl create secret generic "$SIGNING_POSTGRES_SECRET_NAME" \
-    --from-literal="PS_PASSKEYSIGNING_POSTGRES_PASSWORD=$pg_password" \
-    --dry-run=client -o yaml | kubectl apply -f -)"
-  apply_output_changed "$apply_output" && made_changes=true
-  return 0
-}
-
 # release_values_json <issuer> <audience> <cli_client_id> <scopes>: prints the JSON shape of the
 # --set values this script passes to `helm upgrade --install`, in the same structure
 # `helm get values -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly
@@ -1518,42 +1353,13 @@ require_account_exists() {
 }
 
 # require_keyvault_exists <vault_name> <flag_name>: fails clearly if the Key Vault has not been
-# created yet. <flag_name> (e.g. "--rotate-key", "--rotate-authentik-secrets") names the calling
-# rotation mode's own flag in the error message -- shared by both rotate_key_main and
-# rotate_authentik_secrets_main, neither of which has anything to rotate before a first
-# successful plain deploy.
+# created yet. <flag_name> (e.g. "--rotate-key") names the calling rotation mode's own flag in
+# the error message.
 require_keyvault_exists() {
   local vault_name="$1" flag_name="$2"
   if ! keyvault_exists "$vault_name"; then
     print_error 'Key Vault %s not found. Run scripts/deploy-ps.sh first (without %s).\n' \
       "$vault_name" "$flag_name"
-    exit "$EXIT_FAILURE"
-  fi
-}
-
-# require_authentik_secrets_exist <vault_name>: fails clearly if Authentik's own secret_key/
-# Postgres password have never been generated -- a Key Vault can already exist (e.g. from LLM
-# provisioning, S9) without ensure_authentik_secrets (S7) ever having run against it, so
-# require_keyvault_exists alone is not a sufficient guard for --rotate-authentik-secrets.
-# Mirrors require_account_exists/require_keyvault_exists's own guard shape.
-require_authentik_secrets_exist() {
-  local vault_name="$1"
-  if [[ -z "$(read_secret_value "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME")" ]] || \
-     [[ -z "$(read_secret_value "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME")" ]]; then
-    print_error 'Authentik secrets not found in %s. Run scripts/deploy-ps.sh first (without --rotate-authentik-secrets).\n' \
-      "$vault_name"
-    exit "$EXIT_FAILURE"
-  fi
-}
-
-# require_aks_cluster_exists <cluster_name>: fails clearly if the AKS cluster has not been
-# created yet -- --rotate-authentik-secrets needs a live cluster to `kubectl exec`/`rollout
-# restart` against. Mirrors require_account_exists/require_keyvault_exists's own guard shape.
-require_aks_cluster_exists() {
-  local cluster_name="$1"
-  if ! aks_cluster_exists "$cluster_name"; then
-    print_error 'AKS cluster %s not found. Run scripts/deploy-ps.sh first (without --rotate-authentik-secrets).\n' \
-      "$cluster_name"
     exit "$EXIT_FAILURE"
   fi
 }
@@ -1621,84 +1427,6 @@ rotate_key_main() {
     "$inactive_slot" "$active_slot"
 }
 
-# rotate_authentik_secrets_main: `--rotate-authentik-secrets` mode (issue #129 S9, AC-BI-009's
-# rotation half). main() branches into this immediately after flag parsing, before any of
-# S5-S18's provisioning body runs -- same shape as rotate_key_main above.
-#
-# Unlike rotate_key_main (which only overwrites a Key Vault value -- the next full deploy run is
-# what eventually syncs it into the cluster), this rotation re-syncs the cluster's own
-# `policy-system-authentik-credentials` Secret immediately, for two credentials with very
-# different "how do I actually take effect" answers:
-#
-#   Postgres password -- a plain postgres image (charts/policy-system/templates/
-#   authentik-postgres-deployment.yaml's own container) only ever reads `POSTGRES_PASSWORD` at
-#   first-`initdb` time, inside docker-entrypoint.sh's own "is $PGDATA already initialized?"
-#   branch. Once S2's PVC already holds an initialized data directory -- true for every rotation
-#   (by definition, there was already a first successful deploy) -- that branch is always
-#   skipped, so a changed `POSTGRES_PASSWORD` env var has ZERO effect on the live role's actual
-#   password, restart or not. Silently writing a new password into the Secret and restarting only
-#   the Deployment would desync the Secret from the real DB password and lock Authentik out of
-#   its own DB the moment ITS pods next restart and try to reconnect with the "new" value. The
-#   only correct fix is an in-database `ALTER USER`, issued here directly against the
-#   already-running Postgres pod over `kubectl exec` (a local, unix-socket connection --
-#   `trust`-authenticated by the official postgres image's own default pg_hba.conf, so no
-#   password is required to issue this specific command). The Postgres Deployment itself is
-#   never restarted -- there is nothing a restart would accomplish here.
-#
-#   Django secret_key -- rotating it invalidates every existing Authentik session (it's Django's
-#   session-signing key), and the Authentik server/worker pods only ever read their
-#   envFrom-sourced config once, at process start. Since this rotation DOES re-sync the cluster
-#   Secret right away (unlike rotate_key_main's LLM-key rotation, which never touches the
-#   cluster and so needs no restart of anything), the server/worker Deployments must be
-#   explicitly roll-restarted for the new secret_key to take effect now rather than at some
-#   unrelated future restart.
-#
-# Never prints a secret value -- new_secret_key/new_pg_password only ever feed the next
-# `az`/`kubectl` call or comparison, matching read_secret_value's own never-log discipline
-# (AC-BI-013).
-rotate_authentik_secrets_main() {
-  local subscription_id vault_name cluster_name
-  subscription_id="$(fetch_subscription_id)"
-  vault_name="$(llm_keyvault_name "$subscription_id")"
-  cluster_name="$(aks_cluster_name "$subscription_id")"
-
-  log_step "Checking Key Vault, Authentik secrets, and AKS cluster exist"
-  require_keyvault_exists "$vault_name" "--rotate-authentik-secrets"
-  require_authentik_secrets_exist "$vault_name"
-  require_aks_cluster_exists "$cluster_name"
-
-  log_step "Fetching AKS credentials for $cluster_name"
-  ensure_aks_credentials "$cluster_name"
-
-  local new_secret_key new_pg_password
-  log_step "Regenerating the Django secret_key"
-  new_secret_key="$(generate_random_secret 60)"
-
-  log_step "Regenerating the Postgres password"
-  new_pg_password="$(generate_random_secret 32)"
-  # See this function's own comment above: a restart alone cannot rotate a live postgres role's
-  # password -- only an in-database ALTER USER can. generate_random_secret is alnum-only
-  # (A-Za-z0-9), so it is always safe to embed directly in this single-quoted SQL literal without
-  # further escaping.
-  kubectl exec "deployment/${AUTHENTIK_POSTGRES_HOST}" -- \
-    psql -U "$AUTHENTIK_POSTGRES_USER" -d "$AUTHENTIK_POSTGRES_DB" \
-    -c "ALTER USER ${AUTHENTIK_POSTGRES_USER} WITH PASSWORD '${new_pg_password}';" >/dev/null
-
-  log_step "Writing rotated secrets to $vault_name"
-  write_secret_if_changed "$vault_name" "$AUTHENTIK_SECRET_KEY_VAULT_NAME" "$new_secret_key"
-  write_secret_if_changed "$vault_name" "$AUTHENTIK_POSTGRES_PASSWORD_VAULT_NAME" "$new_pg_password"
-
-  log_step "Syncing rotated secrets into the cluster"
-  sync_authentik_secret_to_cluster "$new_secret_key" "$new_pg_password"
-
-  log_step "Restarting Authentik server/worker to pick up the rotated secrets"
-  kubectl rollout restart "deployment/${AUTHENTIK_SERVICE_NAME}" >/dev/null
-  kubectl rollout restart "deployment/${AUTHENTIK_WORKER_NAME}" >/dev/null
-
-  printf 'Rotated Authentik secret_key and Postgres password. Restarted %s and %s.\n' \
-    "$AUTHENTIK_SERVICE_NAME" "$AUTHENTIK_WORKER_NAME"
-}
-
 main() {
   parse_args "$@"
 
@@ -1706,12 +1434,6 @@ main() {
 
   if [[ "$rotate_key" == true ]]; then
     rotate_key_main
-    return
-  fi
-
-  if [[ "$rotate_authentik_secrets" == true ]]; then
-    check_required_tools kubectl
-    rotate_authentik_secrets_main
     return
   fi
 
@@ -1788,10 +1510,6 @@ main() {
 
   log_step "Syncing LLM credentials into the cluster"
   ensure_llm_secret "$vault_name"
-  log_step "Syncing Authentik credentials into the cluster"
-  ensure_authentik_secrets "$vault_name"
-  log_step "Syncing Passkey Signing Postgres credentials into the cluster"
-  ensure_ps_service_signing_secrets "$vault_name"
 
   # issue #129 (CHANGES.md row F3): the ingress/DNS-label/hostname-resolution steps below moved
   # here, ahead of "Reconciling the Helm release" -- Authentik's own issuer is now a path under PS

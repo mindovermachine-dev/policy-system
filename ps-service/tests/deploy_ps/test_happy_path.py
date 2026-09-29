@@ -145,11 +145,13 @@ def test_fresh_subscription_completes_end_to_end_provisioning_everything(
     assert not _lines_starting_with(az_log, "ad app"), "an `az ad app` call was made (AC-BI-001)"
     assert not _lines_starting_with(az_log, "ad sp"), "an `az ad sp` call was made (AC-BI-001)"
 
-    # Authentik's own secrets synced into the cluster (S7, issue #129).
-    assert (
-        deploy_ps_fixture.read_kubectl_applied("Secret", "policy-system-authentik-credentials")
-        is not None
-    ), "Authentik credentials Secret was never applied"
+    # Issue #159: Authentik's own credentials Secret (and the signing-Postgres one) are no longer
+    # synced into the cluster by this script itself -- the Helm chart now generates/renders both
+    # as ordinary chart resources via `helm upgrade --install` below (S15/ensure_release). This
+    # fake `helm` never actually renders the real chart (see conftest.py's own FAKE_HELM_SCRIPT
+    # docstring), so that rendering is proven separately by charts/policy-system/tests/*.yaml
+    # (helm-unittest); the script-side "makes no such call itself" proof lives in
+    # test_no_authentik_or_signing_keyvault_calls.py.
 
     # AKS node VM-size allowlist + vCPU quota preflight (S12, AC-BI-011).
     assert _lines_starting_with(az_log, "vm list-skus"), "VM-size allowlist check never ran"

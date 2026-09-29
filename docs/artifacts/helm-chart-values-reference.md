@@ -14,6 +14,7 @@ that walkthrough, step 6 onward.
 - [Ollama values](#ollama-values)
 - [Azure values](#azure-values)
 - [Passkey Signing Postgres values](#passkey-signing-postgres-values)
+- [Authentik credentials values](#authentik-credentials-values)
 
 ## Core values
 
@@ -201,8 +202,7 @@ the same "always-on" posture as `falkordb.*`.
 | `psServiceSigning.postgres.image.repository` / `psServiceSigning.postgres.image.tag` | `postgres` / `16-alpine` | Signing Postgres image — same version family as `.devcontainer/docker-compose.yml`'s local dev `postgres` service. |
 | `psServiceSigning.postgres.database` | `ps_service_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` — the database name, injected into `ps-service`'s own Deployment as a plain (non-secret) env var. |
 | `psServiceSigning.postgres.user` | `ps_service` | `PS_PASSKEYSIGNING_POSTGRES_USER` — same non-secret env-var wiring as `database` above. |
-| **`psServiceSigning.postgres.password`** | `"ps_service_signing_dev_password"` | **(AC-BI-007)** Local-test/kind default only — read solely when `existingSecret` below is empty, in which case the chart renders a `Secret` from it (`templates/signing-postgres-secret.yaml`). Never set a real value here in a committed file for a real deployment — use `existingSecret` instead. |
-| **`psServiceSigning.postgres.existingSecret`** | `""` | **(AC-BI-007)** Set to reuse an operator-managed Secret name instead of the plain `password` value above — same `existingSecret`-or-render convention as `llm.existingSecret`. In production, `scripts/deploy-ps.sh`'s `ensure_ps_service_signing_secrets` provisions this Secret from a Key-Vault-sourced, generate-once password (own Key Vault secret, own Kubernetes Secret — never appended to Authentik's), and `values-prod.yaml` points this key at that Secret's deterministic name. |
+| **`psServiceSigning.postgres.existingSecret`** | `""` | **(AC-BI-002/AC-BI-007, issue #159)** When unset (the default in both profiles), the chart generates and persists `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` itself via a `lookup`+`randAlphaNum` idiom (`templates/signing-postgres-secret.yaml`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead — same `existingSecret`-or-render convention as `llm.existingSecret`. |
 | `psServiceSigning.postgres.persistence.size` | `10Gi` | PVC storage request for the signing Postgres data volume. |
 | `psServiceSigning.postgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
 | `psServiceSigning.postgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
@@ -220,5 +220,29 @@ kubectl create secret generic my-signing-postgres-secret \
   --from-literal=PS_PASSKEYSIGNING_POSTGRES_PASSWORD="$SIGNING_POSTGRES_PASSWORD"
 helm upgrade policy-system ./charts/policy-system \
   --set psServiceSigning.postgres.existingSecret=my-signing-postgres-secret \
+  --wait
+```
+
+## Authentik credentials values
+
+| Key | Default (local-test) | Purpose |
+| --- | --- | --- |
+| **`authentik.credentialsExistingSecret`** | `""` | **(AC-BI-001/AC-BI-005/AC-BI-007, issue #159)** When unset (the default in both profiles), the chart generates and persists Authentik's `AUTHENTIK_SECRET_KEY`/`AUTHENTIK_POSTGRESQL__PASSWORD` itself via a `lookup`+`randAlphaNum` idiom (`templates/authentik-credentials-secret.yaml`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead. This is a **separate** value from `authentik.authentik.existingSecret.secretName` below — the upstream `authentik` sub-chart's own routing switch — and when set, it must be given the **same** Secret name as that value, or the render fails with a `fail()` guard naming both values. |
+| `authentik.authentik.existingSecret.secretName` | `"policy-system-authentik-credentials"` (never empty) | The upstream `authentik` dependency's own switch for which Secret its server/worker Deployments consume via `envFrom`. Always carries this deterministic literal (`policy-system.authentikCredentialsSecretName`, `templates/_helpers.tpl`) unless overridden together with `authentik.credentialsExistingSecret` above — an empty value here makes the upstream chart fall back to a *different*, sub-chart-owned Secret name this chart never populates. |
+
+```bash
+# Example: point the chart at an operator-managed Secret instead of letting it
+# generate its own Authentik credentials Secret. Both values below must match.
+kubectl create secret generic my-authentik-secret \
+  --from-literal=AUTHENTIK_SECRET_KEY="$AUTHENTIK_SECRET_KEY" \
+  --from-literal=AUTHENTIK_POSTGRESQL__PASSWORD="$AUTHENTIK_POSTGRES_PASSWORD" \
+  --from-literal=AUTHENTIK_POSTGRESQL__HOST=policy-system-authentik-postgres \
+  --from-literal=AUTHENTIK_POSTGRESQL__PORT=5432 \
+  --from-literal=AUTHENTIK_POSTGRESQL__USER=authentik \
+  --from-literal=AUTHENTIK_POSTGRESQL__NAME=authentik
+helm upgrade policy-system ./charts/policy-system \
+  --set authentik.enabled=true \
+  --set authentik.credentialsExistingSecret=my-authentik-secret \
+  --set authentik.authentik.existingSecret.secretName=my-authentik-secret \
   --wait
 ```

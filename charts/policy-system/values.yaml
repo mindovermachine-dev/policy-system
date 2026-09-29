@@ -135,17 +135,10 @@ psServiceSigning:
       tag: "16-alpine"
     database: ps_service_signing
     user: ps_service
-    # Local-test/kind default only -- a fixed, non-sensitive literal mirroring
-    # .devcontainer/docker-compose.yml's own dev-only postgres service
-    # password (issue #131 Slice 1a). Read only when existingSecret below is
-    # empty (signing-postgres-secret.yaml renders a Secret from it); never
-    # used once existingSecret is set (prod path).
-    password: "ps_service_signing_dev_password"
-    # Set to reuse an operator-managed Secret name instead of the plain
-    # password value above -- values-prod.yaml points this at the
-    # deterministic name scripts/deploy-ps.sh's ensure_ps_service_signing_secrets
-    # provisions from Key Vault (AC-BI-007). Mirrors llm.existingSecret's
-    # convention exactly.
+    # Set to reuse an operator-managed Secret name instead of letting the
+    # chart generate and persist its own random password (issue #159) --
+    # signing-postgres-secret.yaml renders no Secret of its own when this is
+    # set. Mirrors llm.existingSecret's convention exactly.
     existingSecret: ""
     persistence:
       size: 10Gi
@@ -162,6 +155,16 @@ authentik:
   # production auth broker (invite-only local-account signup), gated on this
   # same condition at the Chart.yaml dependency level (see #129).
   enabled: false
+  # Set to reuse an operator-managed Secret name instead of this chart generating
+  # its own Authentik credentials Secret (issue #159) -- mirrors
+  # psServiceSigning.postgres.existingSecret's convention, but is a SEPARATE value
+  # from authentik.authentik.existingSecret.secretName below (the upstream
+  # sub-chart's own routing switch): that value must always carry a non-empty
+  # name (see its own comment), so it cannot double as this chart's own
+  # generate-or-not gate. When this is set, it must equal
+  # authentik.authentik.existingSecret.secretName exactly, or the render fails
+  # (authentik-credentials-secret.yaml's own fail() guard).
+  credentialsExistingSecret: ""
   postgres:
     # Authentik's own hand-rolled Postgres (AC-BI-008, #129 S2) — mirrors
     # FalkorDB's durable-StorageClass/Retain/NetworkPolicy pattern rather
@@ -202,11 +205,20 @@ authentik:
     # own `authentik:` key, hence `authentik.authentik.*` here and in
     # values-prod.yaml.
     existingSecret:
-      # Never set a real value here -- values-prod.yaml points this at the
-      # deterministic name computed by policy-system.authentikCredentialsSecretName
-      # (_helpers.tpl). Empty here is inert anyway (authentik.enabled: false
-      # above drops the whole dependency from the render).
-      secretName: ""
+      # Never left empty (issue #159) -- an empty value here makes the upstream
+      # chart's own authentik.secret.name helper
+      # (charts/authentik/templates/_helpers.tpl) fall back to a DIFFERENT,
+      # sub-chart-owned Secret name this chart never populates (AC-BI-001). This
+      # is the *resolved literal* output of
+      # policy-system.authentikCredentialsSecretName (_helpers.tpl) for this
+      # repo's one fixed Helm release name -- NOT a live `{{ include ... }}`
+      # call (Helm never templates values files; see values-prod.yaml's own
+      # comment). Local-test/kind still renders this chart's own Secret from
+      # authentik-credentials-secret.yaml (authentik.enabled: false above means
+      # the whole dependency -- and this literal -- is inert regardless, but it
+      # must still never be empty on principle, matching values-prod.yaml
+      # exactly).
+      secretName: "policy-system-authentik-credentials"
     postgresql:
       # Non-secret connection values only -- never a password/secret_key
       # here (see values-prod.yaml's own comment on why, and secret.yaml's
