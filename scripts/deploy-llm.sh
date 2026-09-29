@@ -410,15 +410,17 @@ validate_capacity_range() {
 # model_remaining_quota <usage_json> <model_name> <sku>: prints the remaining quota (limit minus
 # current usage) for <model_name>'s <sku> SKU in <usage_json>. Azure's `usage list` reports each
 # entry under the key "OpenAI.<sku>.<model_name>" (e.g. "OpenAI.GlobalStandard.gpt-5.4-mini"), not
-# a bare model or SKU name, so the lookup key has to be built to match.
+# a bare model or SKU name, so the lookup key has to be built to match. Azure also reports
+# currentValue/limit as JSON floats (e.g. "1000.0") -- `floor` normalizes to a bash-arithmetic-safe
+# integer string, since `$(( ))` errors on a literal decimal point.
 model_remaining_quota() {
   local usage="$1" model_name="$2" sku="$3"
   local usage_key="OpenAI.${sku}.${model_name}"
   local current limit
   current="$(jq -r --arg key "$usage_key" \
-    '.[] | select(.name.value == $key) | .currentValue' <<< "$usage")"
+    '.[] | select(.name.value == $key) | .currentValue | floor' <<< "$usage")"
   limit="$(jq -r --arg key "$usage_key" \
-    '.[] | select(.name.value == $key) | .limit' <<< "$usage")"
+    '.[] | select(.name.value == $key) | .limit | floor' <<< "$usage")"
   printf '%s' "$((limit - current))"
 }
 

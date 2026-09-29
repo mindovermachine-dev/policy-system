@@ -490,15 +490,26 @@ class DeployLlmFixture:
         --location <region>` response `deploy-llm.sh`'s quota check (S7) parses. `chat`/`embed`
         are each `(current_value, limit)`. Entry names mirror Azure's real
         "OpenAI.<sku>.<model_name>" key shape (confirmed against a live subscription), not a bare
-        "chat"/"embed" placeholder -- the script looks entries up by that exact key.
+        "chat"/"embed" placeholder -- the script looks entries up by that exact key. currentValue/
+        limit are written as JSON floats (e.g. 1000.0), matching Azure's real response shape, so a
+        test catches deploy-llm.sh parsing them as anything other than a bash-arithmetic-safe
+        integer.
         """
         chat_current, chat_limit = chat
         embed_current, embed_limit = embed
         chat_key = f"OpenAI.{DEFAULT_CHAT_MODEL_SKU}.{DEFAULT_CHAT_MODEL_NAME}"
         embed_key = f"OpenAI.{DEFAULT_EMBED_MODEL_SKU}.{DEFAULT_EMBED_MODEL_NAME}"
         payload = [
-            {"name": {"value": chat_key}, "currentValue": chat_current, "limit": chat_limit},
-            {"name": {"value": embed_key}, "currentValue": embed_current, "limit": embed_limit},
+            {
+                "name": {"value": chat_key},
+                "currentValue": float(chat_current),
+                "limit": float(chat_limit),
+            },
+            {
+                "name": {"value": embed_key},
+                "currentValue": float(embed_current),
+                "limit": float(embed_limit),
+            },
         ]
         directory = self.azure_state / "usage"
         directory.mkdir(parents=True, exist_ok=True)
