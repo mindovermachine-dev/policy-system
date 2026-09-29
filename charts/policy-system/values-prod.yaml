@@ -72,6 +72,16 @@ authentik:
   postgresql:
     enabled: false
 
+  # AC-BI-002: explicitly re-pin to ClusterIP. Without this override, prod would
+  # inherit values.yaml's local-test NodePort default (Helm merges -f values-prod.yaml
+  # ON TOP of values.yaml; it does not replace it) -- prod's own Ingress-based exposure
+  # (ensure_authentik_ingress, docs/architecture/customer-azure-deployment.md's
+  # "Dual-purpose, single-hostname Ingress" section) is the only exposure mechanism in
+  # production, and must remain so.
+  server:
+    service:
+      type: ClusterIP
+
   # S5 (#129/CHANGES.md row F1): serves Authentik from a subpath of PS Service's own hostname
   # (path-based routing, /auth) rather than its own dedicated hostname. `global.env` is the
   # upstream `authentik` dependency chart's own plain env-var list applied to every one of its

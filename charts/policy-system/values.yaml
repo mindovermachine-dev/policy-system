@@ -96,6 +96,17 @@ psService:
   # entry so pods can resolve host.containers.internal when llm.provider is
   # ollama. Empty by default — the chart can't know this statically.
   ollamaHostGatewayIP: ""
+  # Hostname PS Service's own pod must resolve to the kind node's container IP so its
+  # OIDC issuer validation (PS_AUTH_ISSUER, issue #58) reaches the SAME bundled Authentik
+  # instance a LAN client reaches -- via the fixed NodePort mapped in deploy/kind/cluster.yaml
+  # (authentik.server.service.nodePortHttp, issue #160), never a Service DNS name (a
+  # browser/ps-cli off-cluster cannot resolve cluster-internal DNS). Both empty by default --
+  # the chart can't know either statically, same posture as ollamaHostGatewayIP above.
+  # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
+  # /etc/hosts pointing at 127.0.0.1; a colleague on the same LAN points it at the
+  # evaluator's laptop's LAN IP instead. See docs/artifacts/installation-guide.md.
+  authentikHostname: ""
+  authentikHostAliasIP: ""
 
 llm:
   # ollama | azure
@@ -198,6 +209,20 @@ authentik:
     # dependency's own nested Bitnami Postgres subchart so it never runs
     # alongside authentik.postgres.* above (PLAN.md §0.3, #129 S3).
     enabled: false
+  server:
+    # Local-test/kind default: NodePort with a fixed port, so deploy/kind/cluster.yaml's
+    # extraPortMappings can map it through to the LAN (issue #160). ClusterIP (upstream
+    # default) is explicitly restored in values-prod.yaml — prod exposes Authentik via
+    # Ingress instead (docs/architecture/customer-azure-deployment.md), and relying on
+    # silence here would let prod inherit NodePort by accident, since -f values-prod.yaml
+    # only OVERRIDES this file's defaults, it doesn't replace them (AC-BI-002).
+    service:
+      type: NodePort
+      # Matches the upstream authentik chart's own default (authentik/values.yaml,
+      # server.service.nodePortHttp) -- kept explicit here (not left to fall through to
+      # the sub-chart's default) so this value and deploy/kind/cluster.yaml's third
+      # extraPortMappings entry have one obvious, co-located source of truth.
+      nodePortHttp: 30080
   authentik:
     # The upstream `authentik` dependency has no alias, so this chart's own
     # top-level `authentik:` key IS the entire subchart values context --

@@ -259,6 +259,48 @@ tests:
             - ip: "10.88.0.1"
               hostnames: ["host.containers.internal"]
 
+  # --- Issue #160: authentikHostname/authentikHostAliasIP hostAliases wiring ---
+
+  - it: authentikHostname+authentikHostAliasIP set (no ollama) renders the exact hostAliases entry
+    set:
+      psService.authentikHostname: authentik.local
+      psService.authentikHostAliasIP: 172.18.0.2
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases
+          value:
+            - ip: "172.18.0.2"
+              hostnames: ["authentik.local"]
+
+  - it: authentikHostname set without authentikHostAliasIP renders no hostAliases entry for it
+    set:
+      psService.authentikHostname: authentik.local
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostAliases
+
+  - it: authentikHostAliasIP set without authentikHostname renders no hostAliases entry for it
+    set:
+      psService.authentikHostAliasIP: 172.18.0.2
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostAliases
+
+  - it: ollamaHostGatewayIP and authentikHostname/authentikHostAliasIP both set render both hostAliases entries, coexisting
+    set:
+      llm.provider: ollama
+      psService.ollamaHostGatewayIP: 10.88.0.1
+      psService.authentikHostname: authentik.local
+      psService.authentikHostAliasIP: 172.18.0.2
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases
+          value:
+            - ip: "10.88.0.1"
+              hostnames: ["host.containers.internal"]
+            - ip: "172.18.0.2"
+              hostnames: ["authentik.local"]
+
   # --- S8: ports, probes, security context ---
 
   - it: container port is 8000

@@ -119,6 +119,21 @@ kubectl cluster-info --context kind-policy-system
 
 This last command will print the cluster information, confirming that the local kind cluster is up and running.
 
+> [!WARNING]
+> **Already have a `policy-system` kind cluster from before this guide added Authentik
+> support?** `kind`'s `extraPortMappings` are fixed at cluster creation and cannot be
+> changed on an existing cluster. To pick up the new Authentik NodePort mapping (used by
+> [step 7's optional Authentik setup](#7-deploy-policy-system-backend)) you must delete
+> and recreate the cluster:
+> ```bash
+> kind delete cluster --name policy-system
+> ```
+> **This destroys all existing kind PVC data** — FalkorDB's graph and (if enabled)
+> Authentik's Postgres database both live on PVCs backed by this cluster's local
+> storage. Re-run the `kind create cluster` command above, then re-run step 5 onward;
+> see [User Guide: Load curated content](./user-guide.md#load-curated-content) to
+> reload FalkorDB's data afterward.
+
 ### 5. Provision the Azure LLM backend
 
 This provisions a real Azure Cognitive Services (`AIServices`) account, two model
@@ -234,6 +249,81 @@ for how to upgrade to a newer release later — your graph data is kept across u
 
 A freshly deployed system has an empty graph and can answer nothing — see the [User
 Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
+
+#### Optional: Enable Authentik as the local IdP
+
+By default the evaluator profile runs with `psService.localTestBypass.enabled=true`
+(no auth). To instead exercise the bundled Authentik IdP — e.g. to test OIDC
+login/`ps-cli auth login` flows before rolling out to production — enable it and tell
+PS Service's pod how to reach it. This requires the third `deploy/kind/cluster.yaml`
+port mapping added above, so make sure step 4's cluster-recreate warning doesn't apply
+to you first.
+
+Find the kind node container's own IP address:
+
+```bash
+podman inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'
+```
+
+(`docker inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'`
+if you're running kind under Docker instead of Podman.) This is the address PS
+Service's pod must resolve your chosen Authentik hostname to, so its OIDC issuer
+validation reaches the exact same Authentik instance a browser reaches via the NodePort
+mapping in `deploy/kind/cluster.yaml`.
+
+Enabling Authentik as the IdP also requires turning the local-test bypass **off** —
+`psService.localTestBypass.enabled=true` disables OIDC entirely (step 7), so leaving it
+on here would silently keep using no-auth mode instead of exercising Authentik.
+Separately, `authentik.enabled=true` only deploys the Authentik pod itself; it does not
+wire PS Service's own OIDC configuration to it, so `psService.auth.issuer`/`.audience`/
+`.cliClientId`/`.scopes` must be set explicitly too. The values below are this chart's
+bundled-Authentik values (fixed by `charts/policy-system/files/authentik-blueprint.yaml`),
+adapted for this guide's own `authentik.local:30080` NodePort address instead of a
+shared production Ingress hostname — see [idp-configuration-contract.md](./idp-configuration-contract.md#the-four-values-resolved)
+for where they come from. Then deploy with:
+
+```bash
+helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
+  --set llm.existingSecret=policy-system-llm-credentials \
+  --set psService.localTestBypass.enabled=false \
+  --set authentik.enabled=true \
+  --set psService.authentikHostname=authentik.local \
+  --set psService.authentikHostAliasIP=<kind-node-container-IP-from-above> \
+  --set psService.auth.issuer=http://authentik.local:30080/application/o/ps-cli/ \
+  --set psService.auth.audience=ps-cli \
+  --set psService.auth.cliClientId=ps-cli \
+  --set psService.auth.scopes="openid profile email offline_access" \
+  --wait
+```
+
+> [!NOTE]
+> `psService.localTestBypass.enabled=false` also requires
+> `psService.authzBootstrapOwner.subject`/`.issuer` to be set (issue #144) — Helm's
+> render fails naming them otherwise. This guide does not yet walk through choosing
+> those values for a local Authentik login; see that fail message and `values.yaml`'s
+> `authzBootstrapOwner` comment for what they mean before running the command above.
+
+`authentik.local` is just this guide's chosen hostname — pick any name you like, as
+long as it matches what you add to `/etc/hosts` next:
+
+- **On the evaluator's own machine** (the one running the kind cluster), map it to
+  loopback:
+  ```
+  127.0.0.1 authentik.local
+  ```
+- **On a colleague's machine on the same LAN**, map it to the evaluator laptop's own
+  LAN IP instead (e.g. `ipconfig getifaddr en0` on macOS):
+  ```
+  192.168.1.42 authentik.local
+  ```
+
+Authentik's login page is then reachable at `http://authentik.local:30080/`.
+
+> [!WARNING]
+> This traffic is **plaintext HTTP — no TLS**. It is accepted only for local/LAN
+> evaluator use on `kind`, and must **never** be used in production. Production exposes
+> Authentik behind a TLS-terminating Ingress instead (see
+> [customer-azure-deployment.md](../architecture/customer-azure-deployment.md)).
 
 ### 8. Install the Policy System plugin
 

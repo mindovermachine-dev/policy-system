@@ -23,13 +23,24 @@ spec:
         {{- include "policy-system.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: ps-service
     spec:
-      {{- if and (eq .Values.llm.provider "ollama") .Values.psService.ollamaHostGatewayIP }}
+      {{- if or (and (eq .Values.llm.provider "ollama") .Values.psService.ollamaHostGatewayIP) (and .Values.psService.authentikHostname .Values.psService.authentikHostAliasIP) }}
       # Podman injects host.containers.internal into the kind node container's
       # own /etc/hosts, but a Pod's netns does not inherit it — hostAliases is
-      # Kubernetes' documented fix (CHANGES.md B2).
+      # Kubernetes' documented fix (CHANGES.md B2). Two independent conditions can each
+      # contribute their own list entry below; each is gated by its OWN `if` so setting
+      # one leaves the other's rendering (or absence) completely unchanged (AC-BI-006,
+      # issue #160) — never combine them into a single flattened condition, or one
+      # entry silently overwrites the other's `hostAliases:` key instead of coexisting
+      # (AC-BI-003).
       hostAliases:
+        {{- if and (eq .Values.llm.provider "ollama") .Values.psService.ollamaHostGatewayIP }}
         - ip: {{ .Values.psService.ollamaHostGatewayIP | quote }}
           hostnames: ["host.containers.internal"]
+        {{- end }}
+        {{- if and .Values.psService.authentikHostname .Values.psService.authentikHostAliasIP }}
+        - ip: {{ .Values.psService.authentikHostAliasIP | quote }}
+          hostnames: [{{ .Values.psService.authentikHostname | quote }}]
+        {{- end }}
       {{- end }}
       containers:
         - name: ps-service

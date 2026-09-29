@@ -1,0 +1,30 @@
+suite: authentik server service exposure (issue #160)
+set:
+  # Unrelated to this suite's assertions — set only so the chart's fail-closed
+  # OIDC guard (#58) and azure-credentials guard (secret.yaml) don't block
+  # rendering the rest of the chart while we assert on Authentik's own
+  # server Service (mirrors authentik-profile-gating_test.yaml's convention).
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # NOTE on test order: the `authentik` dependency is condition-gated
+  # (`condition: authentik.enabled`, Chart.yaml). Helm evaluates that
+  # condition once per render and, when false, drops the subchart from the
+  # chart tree entirely — so `authentik.enabled: true` cases must run before
+  # any disabled-default case in this suite (mirrors
+  # authentik-profile-gating_test.yaml:10-16's own caveat; this suite has no
+  # disabled case today, but keep any future addition after these).
+
+  - it: authentik enabled on the local-test/kind default profile renders the server Service as NodePort on the fixed port
+    set:
+      authentik.enabled: true
+    template: charts/authentik/templates/server/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[?(@.name=="http")].nodePort
+          value: 30080

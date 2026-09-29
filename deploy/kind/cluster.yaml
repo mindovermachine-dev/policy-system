@@ -2,6 +2,11 @@
 # Cross-referenced with charts/policy-system/values.yaml:
 #   - hostPort 8000 -> containerPort 30800 matches psService.service.nodePort
 #   - hostPort 3000 -> containerPort 30300 matches falkordb.browser.nodePort
+#   - hostPort 30080 == containerPort 30080 -> Authentik server Service NodePort
+#     (authentik.server.service.nodePortHttp); listenAddress 0.0.0.0, not 127.0.0.1 --
+#     LAN clients traverse this mapping, in-cluster pods reach the node's own container
+#     IP directly on the NodePort, bypassing it entirely (issue #160). This is the only
+#     LAN-reachable (non-loopback) entry in this file.
 # FalkorDB's own Redis port is intentionally never mapped here — it stays
 # ClusterIP-only in every environment (AC-BI-002).
 kind: Cluster
@@ -17,4 +22,8 @@ nodes:
       - containerPort: 30300
         hostPort: 3001
         listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: "0.0.0.0"
         protocol: TCP

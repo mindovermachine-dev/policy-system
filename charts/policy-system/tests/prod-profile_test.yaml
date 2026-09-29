@@ -17,6 +17,7 @@ templates:
   - ps-service-service.yaml
   - secret.yaml
   - ps-service-deployment.yaml
+  - charts/authentik/templates/server/service.yaml
 tests:
   - it: falkordb browser service does not render under prod values
     template: falkordb-browser-service.yaml
@@ -61,3 +62,12 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_LLMINTERFACE_EMBED_MODEL")].value
           value: azure/text-embedding-3-large
+
+  - it: authentik server Service remains ClusterIP under prod values
+    template: charts/authentik/templates/server/service.yaml
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - notExists:
+          path: spec.ports[0].nodePort
