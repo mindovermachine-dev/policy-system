@@ -250,7 +250,11 @@ this repo:
 URL:  `https://github.com/mindovermachine-dev/policy-system`
 ```
 
-This installs the `ps-qna` skill and its `policy-system-graph` MCP connector. Unlike a
+This installs the full set of Policy System skills (`ps-qna`, `ps-author-policy`,
+`ps-check-regulations`, `ps-ingest-regulation`, `ps-assess-instrument-applicability`,
+`ps-invite-user`, `ps-manage-access-roles`, `ps-list-audit-events`,
+`ps-near-miss-review`, `ps-restore-instrument`, `ps-policy-lifecycle`, and
+`ps-get-catalog-listing`) and its shared `policy-system-graph` MCP connector. Unlike a
 typical remote connector, this one runs **locally** — the plugin declares it as a
 `stdio` server backed by `ps-cli-mcp-bridge` (installed alongside `ps-cli` in step 6), which reaches whichever PS Service instance `ps-cli`'s current
 context points at ([Configuring which PS Service instance ps-cli
@@ -261,11 +265,19 @@ sends no `Authorization` header when nothing is stored — the same shape as eve
 unauthenticated `ps-cli` call.
 
 Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat
-— tools bind when a conversation starts. `policy-system-graph` expose two tools,
-`domain_concepts` and `cypher`. If it doesn't, check `~/Library/Logs/Claude/mcp*.log`
-and, separately, the bridge's own log at `~/.config/ps-cli/mcp-bridge.log`
-(`$PS_CLI_CONFIG_DIR/mcp-bridge.log` if that's set) — written independently of whatever
-the host does with the bridge's stderr.
+— tools bind when a conversation starts. `policy-system-graph` exposes the tools
+backing each of the skills above — including `domain_concepts` and `cypher` for direct
+graph queries — plus the catalog-source, access-role, and audit-event tools used by the
+[Role System](./user-guide.md#role-system). If nothing binds, check
+`~/Library/Logs/Claude/mcp*.log` and, separately, the bridge's own log at
+`~/.config/ps-cli/mcp-bridge.log` (`$PS_CLI_CONFIG_DIR/mcp-bridge.log` if that's set) —
+written independently of whatever the host does with the bridge's stderr.
+
+Outside local-test, several of these tools — ingesting/restoring/exporting curated
+content and running change-checks — require the caller to hold the `ComplianceOfficer`
+[access role](./user-guide.md#role-system) first; a fresh production instance has no
+roles granted until its first caller bootstraps as `SystemOwner` (see [Manage access
+roles](./user-guide.md#manage-access-roles)).
 
 Once installed, see the [User Guide](./user-guide.md#using-claude-desktop) for how to
 ask a question.
