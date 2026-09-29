@@ -141,7 +141,9 @@ scripts/deploy-llm.sh
 This prints a confirmation table — region candidates, resource group, account,
 both model deployments, Key Vault, all resolved from `scripts/llm-defaults.conf`
 (edit that file first if you want different model names/capacities) — and
-prompts `Proceed with these values? [Y/n]`. It then verifies your subscription
+prompts `Proceed with these values? [Y/n]`. 
+
+It then verifies your subscription
 permissions, checks the configured region and quota, and provisions everything,
 printing a summary line only — never a secret value. If the deterministic
 AIServices account is soft-deleted, the script detects it and asks before purging
@@ -178,7 +180,7 @@ SHA-256 against the release's `SHA256SUMS` asset, then installs it via `uv tool 
 and puts it on `PATH` through `uv`'s tool-install shims. Verify:
 
 ```
-$ ps-cli --version
+ps-cli --version
 ```
 
 PS Service isn't deployed yet at this point, so the second line reports
@@ -200,13 +202,12 @@ brew install helm
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --set llm.existingSecret=policy-system-llm-credentials --wait
+  --set llm.existingSecret=policy-system-llm-credentials \
+  --set psService.localTestBypass.enabled=true \
+  --wait
 ```
 
-`llm.existingSecret` points the chart at the
-credentials step 5 synced into this cluster — Azure is the chart's default provider, so this flag is
-required unless you opted into `llm.provider=ollama` instead (see step 5's tip). This step can take a
-few minutes to complete as the container images are downloaded.
+`psService.localTestBypass.enabled=true` disables OIDC. Never use it in production.
 
 Run the command below to check if ps-service and falkordb are in "Running" state
 
