@@ -73,6 +73,7 @@ They are enforced during code implementation and impact assessment.
 - Write tests that verify behavior, not implementation.
 - Each test should have a single reason to fail.
 - Test names describe the scenario and expected outcome — specific naming conventions are defined in L2 per language.
+- Default to Detroit-style (classicist) unit tests: exercise real collaborators and assert on resulting state/output. Reserve mocks/stubs for true boundaries the test can't run for real (network, external services, clock, randomness) — not for internal collaborators of the unit under test. Don't assert on interactions (call counts/args) unless the interaction itself is the behavior being specified.
 
 ## Immutability by Default
 
