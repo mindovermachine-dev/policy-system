@@ -19,6 +19,7 @@
   - [3. Run scripts/deploy-ps.sh](#3-run-scriptsdeploy-pssh)
   - [4. Access the cluster with kubelogin](#4-access-the-cluster-with-kubelogin)
   - [5. Set up each user's computer](#5-set-up-each-users-computer)
+- [SystemOwner bootstrap](#systemowner-bootstrap)
 
 This guide covers **deploying** Policy System — either an evaluator local-test
 instance on your own laptop, or a production customer-tenant rollout to Azure. If
@@ -211,20 +212,67 @@ There is no separate upgrade command — re-run `install.sh` whenever a newer re
 
 ### 7. Deploy Policy System Backend
 
+The evaluator profile runs with real OIDC login against the bundled Authentik IdP —
+`psService.localTestBypass.enabled=true` cannot start in a container (the bypass refuses to
+bind a non-loopback host, and every container image binds `0.0.0.0`), so this step deploys
+with the bypass **off**. This requires the third `deploy/kind/cluster.yaml` port mapping
+added in step 4, so make sure step 4's cluster-recreate warning doesn't apply to you.
+
 ```bash
 brew install helm
 ```
 
+Find the kind node container's own IP address:
+
+```bash
+podman inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'
+```
+
+(`docker inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'`
+if you're running kind under Docker instead of Podman.) PS Service's pod must resolve your
+chosen Authentik hostname to this address, so its OIDC issuer validation reaches the exact
+same Authentik instance a browser reaches via the NodePort mapping in
+`deploy/kind/cluster.yaml`.
+
+`authentik.local` is just this guide's chosen hostname — pick any name you like, as long as
+it matches what you add to `/etc/hosts`:
+
+- **On the evaluator's own machine** (the one running the kind cluster), map it to
+  loopback:
+  ```
+  127.0.0.1 authentik.local
+  ```
+- **On a colleague's machine on the same LAN**, map it to the evaluator laptop's own
+  LAN IP instead (e.g. `ipconfig getifaddr en0` on macOS):
+  ```
+  192.168.1.42 authentik.local
+  ```
+
+Deploy. The `psService.auth.*` values are this chart's bundled-Authentik values (fixed by
+`charts/policy-system/files/authentik-blueprint.yaml`, see
+[idp-configuration-contract.md](./idp-configuration-contract.md#the-four-values-resolved)),
+adapted for this guide's `authentik.local:30080` NodePort address instead of a shared
+production Ingress hostname. `psService.authzBootstrapOwner.*` is the identity allowed to
+claim `SystemOwner`; you don't know your own yet, so this first pass uses the
+[placeholder identity](#step-1-deploy-with-a-placeholder-identity):
+
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
   --set llm.existingSecret=policy-system-llm-credentials \
-  --set psService.localTestBypass.enabled=true \
+  --set psService.localTestBypass.enabled=false \
+  --set authentik.enabled=true \
+  --set psService.authentikHostname=authentik.local \
+  --set psService.authentikHostAliasIP=<kind-node-container-IP-from-above> \
+  --set psService.auth.issuer=http://authentik.local:30080/application/o/ps-cli/ \
+  --set psService.auth.audience=ps-cli \
+  --set psService.auth.cliClientId=ps-cli \
+  --set psService.auth.scopes="openid profile email offline_access" \
+  --set psService.authzBootstrapOwner.subject=unclaimed-placeholder \
+  --set psService.authzBootstrapOwner.issuer=https://placeholder.invalid \
   --wait
 ```
 
-`psService.localTestBypass.enabled=true` disables OIDC. Never use it in production.
-
-Run the command below to check if ps-service and falkordb are in "Running" state
+Run the command below to check that ps-service, falkordb and authentik are in "Running" state
 
 ```bash
 kubectl get pods
@@ -242,88 +290,24 @@ curl http://127.0.0.1:8000/ready
 open http://localhost:3001/login
 ```
 
-`localhost:3001/login` opens to FalkorDB web ui used to explore the graph database
-
-Once deployed, see the [Operations Guide](./operations-guide.md#updating-to-the-latest-version)
-for how to upgrade to a newer release later — your graph data is kept across upgrades.
-
-A freshly deployed system has an empty graph and can answer nothing — see the [User
-Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
-
-#### Optional: Enable Authentik as the local IdP
-
-By default the evaluator profile runs with `psService.localTestBypass.enabled=true`
-(no auth). To instead exercise the bundled Authentik IdP — e.g. to test OIDC
-login/`ps-cli auth login` flows before rolling out to production — enable it and tell
-PS Service's pod how to reach it. This requires the third `deploy/kind/cluster.yaml`
-port mapping added above, so make sure step 4's cluster-recreate warning doesn't apply
-to you first.
-
-Find the kind node container's own IP address:
-
-```bash
-podman inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'
-```
-
-(`docker inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'`
-if you're running kind under Docker instead of Podman.) This is the address PS
-Service's pod must resolve your chosen Authentik hostname to, so its OIDC issuer
-validation reaches the exact same Authentik instance a browser reaches via the NodePort
-mapping in `deploy/kind/cluster.yaml`.
-
-Enabling Authentik as the IdP also requires turning the local-test bypass **off** —
-`psService.localTestBypass.enabled=true` disables OIDC entirely (step 7), so leaving it
-on here would silently keep using no-auth mode instead of exercising Authentik.
-Separately, `authentik.enabled=true` only deploys the Authentik pod itself; it does not
-wire PS Service's own OIDC configuration to it, so `psService.auth.issuer`/`.audience`/
-`.cliClientId`/`.scopes` must be set explicitly too. The values below are this chart's
-bundled-Authentik values (fixed by `charts/policy-system/files/authentik-blueprint.yaml`),
-adapted for this guide's own `authentik.local:30080` NodePort address instead of a
-shared production Ingress hostname — see [idp-configuration-contract.md](./idp-configuration-contract.md#the-four-values-resolved)
-for where they come from. Then deploy with:
-
-```bash
-helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --set llm.existingSecret=policy-system-llm-credentials \
-  --set psService.localTestBypass.enabled=false \
-  --set authentik.enabled=true \
-  --set psService.authentikHostname=authentik.local \
-  --set psService.authentikHostAliasIP=<kind-node-container-IP-from-above> \
-  --set psService.auth.issuer=http://authentik.local:30080/application/o/ps-cli/ \
-  --set psService.auth.audience=ps-cli \
-  --set psService.auth.cliClientId=ps-cli \
-  --set psService.auth.scopes="openid profile email offline_access" \
-  --wait
-```
-
-> [!NOTE]
-> `psService.localTestBypass.enabled=false` also requires
-> `psService.authzBootstrapOwner.subject`/`.issuer` to be set (issue #144) — Helm's
-> render fails naming them otherwise. This guide does not yet walk through choosing
-> those values for a local Authentik login; see that fail message and `values.yaml`'s
-> `authzBootstrapOwner` comment for what they mean before running the command above.
-
-`authentik.local` is just this guide's chosen hostname — pick any name you like, as
-long as it matches what you add to `/etc/hosts` next:
-
-- **On the evaluator's own machine** (the one running the kind cluster), map it to
-  loopback:
-  ```
-  127.0.0.1 authentik.local
-  ```
-- **On a colleague's machine on the same LAN**, map it to the evaluator laptop's own
-  LAN IP instead (e.g. `ipconfig getifaddr en0` on macOS):
-  ```
-  192.168.1.42 authentik.local
-  ```
-
-Authentik's login page is then reachable at `http://authentik.local:30080/`.
+`localhost:3001/login` opens to FalkorDB web ui used to explore the graph database.
+Authentik's login page is reachable at `http://authentik.local:30080/`.
 
 > [!WARNING]
 > This traffic is **plaintext HTTP — no TLS**. It is accepted only for local/LAN
 > evaluator use on `kind`, and must **never** be used in production. Production exposes
 > Authentik behind a TLS-terminating Ingress instead (see
 > [customer-azure-deployment.md](../architecture/customer-azure-deployment.md)).
+
+Nobody holds `SystemOwner` yet. Follow [SystemOwner bootstrap](#systemowner-bootstrap) to
+claim it: read your own `sub`/`iss`, then redeploy this same command with those two values
+in place of the placeholder.
+
+Once deployed, see the [Operations Guide](./operations-guide.md#updating-to-the-latest-version)
+for how to upgrade to a newer release later — your graph data is kept across upgrades.
+
+A freshly deployed system has an empty graph and can answer nothing — see the [User
+Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
 
 ### 8. Install the Policy System plugin
 
@@ -407,7 +391,11 @@ az account set --subscription <subscription-id>
 
 `scripts/ps-defaults.conf` holds the evaluator-tunable defaults: region candidates,
 chat/embedding model names and SKUs, capacities, and `TLS_CONTACT_EMAIL` (used for
-Let's Encrypt expiry/revocation notices — leave blank to be prompted interactively).
+Let's Encrypt expiry/revocation notices — leave blank to be prompted interactively),
+`AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER` (the identity allowed to
+claim `SystemOwner` — also prompted for when blank; on a first deploy enter the
+[placeholder identity](#step-1-deploy-with-a-placeholder-identity), see
+[SystemOwner bootstrap](#systemowner-bootstrap)).
 The default SKUs are proven to have quota on a fresh subscription; if your
 subscription/region differs, see the [Operations Guide](./operations-guide.md#manual-steps-and-operational-notes)
 item 1 for how to discover the right values before your first run.
@@ -465,6 +453,10 @@ kubectl get pods
 ps-service and falkordb should both be in "Running" state. This is a manual,
 per-operator, per-machine prerequisite `deploy-ps.sh` does not automate.
 
+Nobody holds `SystemOwner` after this first run. Follow [SystemOwner
+bootstrap](#systemowner-bootstrap) below, then rerun `scripts/deploy-ps.sh` with your real
+`sub`/`iss` — an unchanged identity on a later rerun is a no-op, so this is safe to repeat.
+
 Once deployed, see the [Operations Guide](./operations-guide.md#production-operations)
 for rotating the API key, manual operational notes, and teardown.
 
@@ -505,3 +497,74 @@ For `ps-cli` configuration reference (context/credential storage, env vars, conf
 files), see [User Guide: Appendix — ps-cli reference](./user-guide.md#appendix-ps-cli-reference).
 For PS Service / chart-level configuration, see the [Helm Chart Values
 Reference](./helm-chart-values-reference.md).
+
+---
+
+## SystemOwner bootstrap
+
+The first authenticated caller whose `(sub, iss)` matches
+`psService.authzBootstrapOwner.subject`/`.issuer` is granted `SystemOwner`, exactly once.
+Anyone else who reaches an empty instance first gets nothing (the attempt is audited as
+`access_role.bootstrap_rejected`). The catch: your Authentik `sub` isn't known until you've
+logged in once, so claiming ownership takes two deploys. This applies to both the
+[Evaluator](#7-deploy-policy-system-backend) and [Production](#3-run-scriptsdeploy-pssh)
+installs — only the deploy command and the Authentik base URL differ.
+
+### Step 1: deploy with a placeholder identity
+
+Deploy with `subject=unclaimed-placeholder` and `issuer=https://placeholder.invalid`
+(evaluator: the `--set` flags in step 7; production: enter them when `scripts/deploy-ps.sh`
+prompts, or set them in `scripts/ps-defaults.conf`). `.invalid` is a top-level domain
+reserved by RFC 2606 that can never be a real issuer, so no real principal's `(sub, iss)`
+matches it: nobody is granted `SystemOwner` during this pass, and the role table stays
+empty, so your real identity can still claim it later.
+
+### Step 2: log in once and read your own `sub`/`iss`
+
+`ps-cli` never prints or stores an access token, so request one directly with Authentik's
+device flow. `<issuer>` is the value of `psService.auth.issuer` — evaluator:
+`http://authentik.local:30080/application/o/ps-cli/`; production:
+`https://<label>.<region>.cloudapp.azure.com/auth/application/o/ps-cli/`.
+
+```bash
+ISSUER=<issuer>
+DEVICE_ENDPOINT=$(curl -s "${ISSUER}.well-known/openid-configuration" | jq -r .device_authorization_endpoint)
+TOKEN_ENDPOINT=$(curl -s "${ISSUER}.well-known/openid-configuration" | jq -r .token_endpoint)
+curl -s -d client_id=ps-cli -d "scope=openid profile email" "$DEVICE_ENDPOINT"
+```
+
+Open the returned `verification_uri_complete` in a browser and sign in, then exchange the
+returned `device_code` (it expires after 60 seconds; rerun the previous command if it does):
+
+```bash
+curl -s -d client_id=ps-cli \
+  -d grant_type=urn:ietf:params:oauth:grant-type:device_code \
+  -d device_code=<device_code> "$TOKEN_ENDPOINT" | jq -r .access_token
+```
+
+Decode the access token's payload (the middle, dot-separated part) — no signature check is
+needed here, you're only reading your own claims:
+
+```bash
+echo '<access_token>' | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | . + ("="*((4 - length % 4) % 4)) | @base64d | fromjson | {sub, iss}'
+```
+
+Note both values exactly, character for character — a single differing character means no
+match.
+
+### Step 3: redeploy with the real identity
+
+Evaluator: rerun step 7's `helm upgrade` with
+`--set psService.authzBootstrapOwner.subject=<sub>` and
+`--set psService.authzBootstrapOwner.issuer=<iss>` in place of the placeholder. Production:
+edit `AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`AUTHZ_BOOTSTRAP_OWNER_ISSUER` in
+`scripts/ps-defaults.conf` and rerun `scripts/deploy-ps.sh` (or enter them at its prompts).
+Rerunning with the same pair again changes nothing.
+
+### Step 4: log in again to claim ownership
+
+The next role-gated call you make while logged in as that same principal — for example
+listing access roles through the `ps-manage-access-roles` skill — is the one that wins the
+bootstrap and makes you `SystemOwner`. See the [User Guide's Role
+System](./user-guide.md#role-system) for what to do with it.
+

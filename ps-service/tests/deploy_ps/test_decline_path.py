@@ -27,6 +27,8 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
+AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
+AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
 """
 
 

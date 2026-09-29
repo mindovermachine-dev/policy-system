@@ -55,6 +55,9 @@ DEFAULT_CHAT_MODEL_VERSION = "2024-07-18"
 DEFAULT_EMBED_MODEL_NAME = "text-embedding-3-large"
 DEFAULT_EMBED_MODEL_SKU = "Standard"
 DEFAULT_EMBED_MODEL_VERSION = "1"
+# Mirrors the operator-supplied bootstrap identity `fill_tls_contact_email` writes (issue #161).
+DEFAULT_BOOTSTRAP_OWNER_SUBJECT = "bootstrap-owner-subject"
+DEFAULT_BOOTSTRAP_OWNER_ISSUER = "https://issuer.example.test/application/o/ps-cli/"
 # Ample enough that the default seeded quota never binds against the default capacities
 # (200/350) -- tests that want quota to bind call seed_usage()/seed_empty_usage() themselves.
 AMPLE_QUOTA_LIMIT = 10_000
@@ -770,6 +773,16 @@ class DeployPsFixture:
         text = self.config_path.read_text(encoding="utf-8")
         replaced = text.replace('TLS_CONTACT_EMAIL=""', f'TLS_CONTACT_EMAIL="{email}"')
         assert replaced != text, f'{self.config_path}: TLS_CONTACT_EMAIL="" not found to replace'
+        # Issue #161: every full-success run also needs the operator-supplied bootstrap identity,
+        # or validate_config rejects it -- filled here alongside the TLS email, since every test
+        # that needs one needs the other.
+        replaced = replaced.replace(
+            'AUTHZ_BOOTSTRAP_OWNER_SUBJECT=""',
+            f'AUTHZ_BOOTSTRAP_OWNER_SUBJECT="{DEFAULT_BOOTSTRAP_OWNER_SUBJECT}"',
+        ).replace(
+            'AUTHZ_BOOTSTRAP_OWNER_ISSUER=""',
+            f'AUTHZ_BOOTSTRAP_OWNER_ISSUER="{DEFAULT_BOOTSTRAP_OWNER_ISSUER}"',
+        )
         self.config_path.write_text(replaced, encoding="utf-8")
 
     def _environment(self) -> dict[str, str]:

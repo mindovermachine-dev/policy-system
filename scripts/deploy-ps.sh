@@ -94,6 +94,9 @@ load_config() {
   fi
   # shellcheck source=ps-defaults.conf
   source "$CONFIG_FILE"
+  # A config predating issue #161 has neither field; default both blank so the prompt (rather than
+  # `set -u`'s unbound-variable error) is what an operator with an older file sees.
+  : "${AUTHZ_BOOTSTRAP_OWNER_SUBJECT:=}" "${AUTHZ_BOOTSTRAP_OWNER_ISSUER:=}"
 }
 
 # print_error <format> [args...]: like `printf <format> >&2`, wrapped in COLOR_RED/COLOR_RESET
@@ -207,6 +210,25 @@ prompt_for_tls_contact_email() {
   read -r TLS_CONTACT_EMAIL || true
 }
 
+# prompt_for_authz_bootstrap_owner: interactively asks for AUTHZ_BOOTSTRAP_OWNER_SUBJECT/_ISSUER
+# when the config file left either blank -- like TLS_CONTACT_EMAIL, there is no sensible value to
+# bake into a checked-in file: it is the operator's own Authentik `sub`/`iss`, which cannot be
+# known before their first login (issue #161). The chart's fail() guard rejects any
+# localTestBypass.enabled=false render without both, so this script must never silently omit them.
+# Enter a placeholder guaranteed not to match any real principal (installation-guide.md's
+# "SystemOwner bootstrap" section) on a first deploy, then rerun with the real values. Skipped
+# per-field when already set, so a fully pre-filled config never blocks on stdin.
+prompt_for_authz_bootstrap_owner() {
+  if [[ -z "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT" ]]; then
+    printf 'Expected first SystemOwner subject (`sub` claim; AUTHZ_BOOTSTRAP_OWNER_SUBJECT): '
+    read -r AUTHZ_BOOTSTRAP_OWNER_SUBJECT || true
+  fi
+  if [[ -z "$AUTHZ_BOOTSTRAP_OWNER_ISSUER" ]]; then
+    printf 'Expected first SystemOwner issuer (`iss` claim; AUTHZ_BOOTSTRAP_OWNER_ISSUER): '
+    read -r AUTHZ_BOOTSTRAP_OWNER_ISSUER || true
+  fi
+}
+
 # validate_config: runs every config validation rule against the loaded config, in order.
 # LLM_CHAT_MODEL_SKU/LLM_EMBED_MODEL_SKU are new fields vs. deploy-llm.sh (whose SKUs are
 # hardcoded literals, not evaluator-tunable there) -- the spike proved SKU choice is genuinely
@@ -221,6 +243,8 @@ validate_config() {
   validate_non_empty "LLM_EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_SKU"
   validate_positive_integer "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY"
   validate_non_empty "TLS_CONTACT_EMAIL" "$TLS_CONTACT_EMAIL"
+  validate_non_empty "AUTHZ_BOOTSTRAP_OWNER_SUBJECT" "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT"
+  validate_non_empty "AUTHZ_BOOTSTRAP_OWNER_ISSUER" "$AUTHZ_BOOTSTRAP_OWNER_ISSUER"
 }
 
 # fetch_subscription_id: prints the signed-in az session's subscription id. Called exactly once
@@ -1016,30 +1040,30 @@ ensure_llm_secret() {
   return 0
 }
 
-# release_values_json <issuer> <audience> <cli_client_id> <scopes>: prints the JSON shape of the
-# --set values this script passes to `helm upgrade --install`, in the same structure
-# `helm get values -o json` returns -- lets ensure_release compare desired vs. deployed. Exactly
-# 5 leaf fields (CHANGES.md Appendix A's corrected count, not PLAN.md's original miscounted "4
-# fields" text): llm.existingSecret, psService.auth.issuer, psService.auth.audience,
-# psService.auth.cliClientId, psService.auth.scopes.
+# release_values_json <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>:
+# prints the JSON shape of the --set values this script passes to `helm upgrade --install`, in the
+# same structure `helm get values -o json` returns -- lets ensure_release compare desired vs.
+# deployed. Exactly 7 leaf fields: llm.existingSecret, psService.auth.{issuer,audience,
+# cliClientId,scopes}, and (issue #161) psService.authzBootstrapOwner.{subject,issuer}.
 release_values_json() {
-  local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
+  local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4" owner_subject="$5" owner_issuer="$6"
   jq -n --arg secret "$LLM_SECRET_NAME" --arg issuer "$issuer" --arg audience "$audience" \
     --arg cli "$cli_client_id" --arg scopes "$scopes" \
+    --arg owner_subject "$owner_subject" --arg owner_issuer "$owner_issuer" \
     '{llm: {existingSecret: $secret},
-      psService: {auth: {issuer: $issuer, audience: $audience, cliClientId: $cli, scopes: $scopes}}}'
+      psService: {auth: {issuer: $issuer, audience: $audience, cliClientId: $cli, scopes: $scopes},
+        authzBootstrapOwner: {subject: $owner_subject, issuer: $owner_issuer}}}'
 }
 
-# ensure_release <issuer> <audience> <cli_client_id> <scopes>: write-if-changed against the
-# currently deployed release's values (`helm get values`), since plain `helm upgrade --install`
-# has no built-in no-op detection of its own -- it creates a new revision even when nothing
-# changed. <audience> must be the bare API app ID GUID, never the "api://..." URI form --
-# docs/artifacts/idp-configuration-contract.md's own documented Entra aud-claim quirk (Step 10 /
-# Common pitfalls): login succeeds, every API call still 401s otherwise (AC-BI-002's exact
-# regression). <scopes> is the opposite convention -- the "api://<id>/access_as_user" URI form,
-# the OAuth scope ps-cli's device-flow login requests, never used for token validation itself.
+# ensure_release <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>:
+# write-if-changed against the currently deployed release's values (`helm get values`), since
+# plain `helm upgrade --install` has no built-in no-op detection of its own -- it creates a new
+# revision even when nothing changed. <audience> is the fixed Authentik application slug
+# (issue #129), same literal as <cli_client_id>. <owner_subject>/<owner_issuer> are the
+# operator-supplied expected first-SystemOwner identity (issue #161): rerunning with the same
+# pair is a no-op here, and ps_service's own "grantable once" bootstrap is unaffected either way.
 #
-# Compares only the 5 fields release_values_json sets, extracted from `helm get values`'s output
+# Compares only the 7 fields release_values_json sets, extracted from `helm get values`'s output
 # via the same jq shape, rather than the whole object -- `helm get values` also echoes back
 # everything from `-f values-prod.yaml` (falkordb.*, llm.provider, psService.service.type), which
 # this script never sets itself via --set and doesn't need to compare; a whole-object comparison
@@ -1048,15 +1072,19 @@ release_values_json() {
 # and causing `helm upgrade` to run on every rerun regardless of whether anything changed.
 ensure_release() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
+  local owner_subject="$5" owner_issuer="$6"
   local desired_json
-  desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes")"
+  desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes" \
+    "$owner_subject" "$owner_issuer")"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     local current_json current_subset_json
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
     current_subset_json="$(jq \
       '{llm: {existingSecret: .llm.existingSecret},
         psService: {auth: {issuer: .psService.auth.issuer, audience: .psService.auth.audience,
-          cliClientId: .psService.auth.cliClientId, scopes: .psService.auth.scopes}}}' \
+          cliClientId: .psService.auth.cliClientId, scopes: .psService.auth.scopes},
+          authzBootstrapOwner: {subject: .psService.authzBootstrapOwner.subject,
+            issuer: .psService.authzBootstrapOwner.issuer}}}' \
       <<< "$current_json")"
     if [[ "$(jq -S . <<< "$current_subset_json")" == "$(jq -S . <<< "$desired_json")" ]]; then
       return 0
@@ -1067,7 +1095,9 @@ ensure_release() {
     --set psService.auth.issuer="$issuer" \
     --set psService.auth.audience="$audience" \
     --set psService.auth.cliClientId="$cli_client_id" \
-    --set psService.auth.scopes="$scopes" >/dev/null
+    --set psService.auth.scopes="$scopes" \
+    --set psService.authzBootstrapOwner.subject="$owner_subject" \
+    --set psService.authzBootstrapOwner.issuer="$owner_issuer" >/dev/null
   made_changes=true
 }
 
@@ -1442,6 +1472,7 @@ main() {
   log_step "Loading and validating $CONFIG_FILE_DISPLAY_PATH"
   load_config
   prompt_for_tls_contact_email
+  prompt_for_authz_bootstrap_owner
   validate_config
 
   local subscription_id
@@ -1541,7 +1572,8 @@ main() {
   # hostname, never `login.microsoftonline.com`.
   local issuer
   issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
-  ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES"
+  ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
+    "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT" "$AUTHZ_BOOTSTRAP_OWNER_ISSUER"
 
   log_step "Installing cert-manager"
   ensure_cert_manager

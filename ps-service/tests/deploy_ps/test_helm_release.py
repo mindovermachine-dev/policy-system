@@ -35,6 +35,9 @@ HELM_RELEASE_NAME = "policy-system"
 LLM_SECRET_NAME = "policy-system-llm-credentials"
 AUTHENTIK_APP_SLUG = "ps-cli"
 AUTHENTIK_SCOPES = "openid profile email offline_access"
+# Mirrors conftest.py's DEFAULT_BOOTSTRAP_OWNER_* (what `fill_tls_contact_email` writes).
+DEFAULT_BOOTSTRAP_OWNER_SUBJECT = "bootstrap-owner-subject"
+DEFAULT_BOOTSTRAP_OWNER_ISSUER = "https://issuer.example.test/application/o/ps-cli/"
 
 
 def _llm(values: dict[str, object]) -> dict[str, str]:
@@ -52,6 +55,14 @@ def _auth(values: dict[str, object]) -> dict[str, str]:
     """
     ps_service = cast("dict[str, object]", values["psService"])
     return cast("dict[str, str]", ps_service["auth"])
+
+
+def _bootstrap_owner(values: dict[str, object]) -> dict[str, str]:
+    """Narrows `values["psService"]["authzBootstrapOwner"]` the same way `_auth` narrows
+    `values["psService"]["auth"]` (issue #161).
+    """
+    ps_service = cast("dict[str, object]", values["psService"])
+    return cast("dict[str, str]", ps_service["authzBootstrapOwner"])
 
 
 def _seed(fixture: DeployPsFixture) -> None:
@@ -173,7 +184,7 @@ def test_rerun_with_unchanged_inputs_makes_no_helm_upgrade_call(
 def test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_provider_from_values_prod(  # noqa: E501 - CHANGES.md Appendix A's exact corrected test name, not abbreviated
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """Seeds `helm get values` with the 5 fields a fresh run would itself produce, PLUS extra
+    """Seeds `helm get values` with the 7 fields a fresh run would itself produce, PLUS extra
     fields that only ever come from `-f values-prod.yaml` and this script never sets itself
     (`falkordb.persistence.durableStorageClass`, `llm.provider`, `psService.service.type`) --
     proving the no-op comparison still reports "unchanged" (no new `helm upgrade` call) despite
@@ -198,6 +209,7 @@ def test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_prov
             "llm": {"existingSecret": LLM_SECRET_NAME, "provider": "azure"},
             "psService": {
                 "auth": dict(first_auth),
+                "authzBootstrapOwner": _bootstrap_owner(first_values),
                 "service": {"type": "ClusterIP"},
             },
             "falkordb": {
@@ -211,7 +223,7 @@ def test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_prov
     deploy_ps_fixture.run_deploy("--yes", expect=0)
 
     # No NEW upgrade call beyond the one the first, real run already made -- the seeded release
-    # (re-stating the exact same 5 fields plus values-prod.yaml-only extras) must compare as
+    # (re-stating the exact same 7 fields plus values-prod.yaml-only extras) must compare as
     # unchanged.
     assert len(_upgrade_calls(deploy_ps_fixture)) == upgrade_calls_after_first_run
 
@@ -231,7 +243,10 @@ def test_changed_scopes_triggers_a_new_helm_upgrade_call(
     deploy_ps_fixture.seed_helm_release(
         {
             "llm": {"existingSecret": LLM_SECRET_NAME},
-            "psService": {"auth": stale_auth},
+            "psService": {
+                "auth": stale_auth,
+                "authzBootstrapOwner": _bootstrap_owner(first_values),
+            },
         },
         release=HELM_RELEASE_NAME,
     )
@@ -243,3 +258,90 @@ def test_changed_scopes_triggers_a_new_helm_upgrade_call(
     values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
     assert values is not None
     assert _auth(values)["scopes"] == AUTHENTIK_SCOPES
+
+
+def test_fresh_release_sets_the_operator_supplied_bootstrap_owner_identity(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """AC-BI-002: both `authzBootstrapOwner` fields reach `helm upgrade --set`, never omitted."""
+    _seed(deploy_ps_fixture)
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert values is not None
+    assert _bootstrap_owner(values) == {
+        "subject": DEFAULT_BOOTSTRAP_OWNER_SUBJECT,
+        "issuer": DEFAULT_BOOTSTRAP_OWNER_ISSUER,
+    }
+
+
+def test_rerun_with_a_changed_bootstrap_owner_triggers_a_new_helm_upgrade_call(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """The two-step flow's second pass: swapping the placeholder for the real `sub` must upgrade.
+    Complements AC-BI-005's unchanged-identity no-op, covered by the existing rerun tests.
+    """
+    _seed(deploy_ps_fixture)
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+    calls_after_first_run = len(_upgrade_calls(deploy_ps_fixture))
+    config = deploy_ps_fixture.config_path
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            f'AUTHZ_BOOTSTRAP_OWNER_SUBJECT="{DEFAULT_BOOTSTRAP_OWNER_SUBJECT}"',
+            'AUTHZ_BOOTSTRAP_OWNER_SUBJECT="real-subject"',
+        ),
+        encoding="utf-8",
+    )
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    assert len(_upgrade_calls(deploy_ps_fixture)) == calls_after_first_run + 1
+    values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert values is not None
+    assert _bootstrap_owner(values)["subject"] == "real-subject"
+
+
+def test_blank_bootstrap_owner_without_stdin_fails_naming_the_config_field(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """AC-BI-002: a blank identity that never got answered is an actionable failure, not a
+    silent omission from the `--set` list.
+    """
+    config = deploy_ps_fixture.config_path
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            'TLS_CONTACT_EMAIL=""', 'TLS_CONTACT_EMAIL="tls-contact@example.test"'
+        ),
+        encoding="utf-8",
+    )
+    deploy_ps_fixture.seed_subscription()
+
+    run = deploy_ps_fixture.run_deploy("--yes", expect=1)
+
+    assert "scripts/ps-defaults.conf: AUTHZ_BOOTSTRAP_OWNER_SUBJECT must not be empty" in run.stderr
+    assert _upgrade_calls(deploy_ps_fixture) == []
+
+
+def test_blank_bootstrap_owner_is_prompted_for_interactively(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    config = deploy_ps_fixture.config_path
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            'TLS_CONTACT_EMAIL=""', 'TLS_CONTACT_EMAIL="tls-contact@example.test"'
+        ),
+        encoding="utf-8",
+    )
+    deploy_ps_fixture.seed_subscription()
+
+    deploy_ps_fixture.run_deploy(
+        "--yes", stdin="prompted-sub\nhttps://prompted.example.test/\n", expect=0
+    )
+
+    values = deploy_ps_fixture.read_helm_release_values(HELM_RELEASE_NAME)
+    assert values is not None
+    assert _bootstrap_owner(values) == {
+        "subject": "prompted-sub",
+        "issuer": "https://prompted.example.test/",
+    }
