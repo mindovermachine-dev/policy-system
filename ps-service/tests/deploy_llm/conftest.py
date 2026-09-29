@@ -488,13 +488,17 @@ class DeployLlmFixture:
     def seed_usage(self, region: str, *, chat: tuple[int, int], embed: tuple[int, int]) -> None:
         """Write `azure-state/usage/<region>.json` -- the fake `az cognitiveservices usage list
         --location <region>` response `deploy-llm.sh`'s quota check (S7) parses. `chat`/`embed`
-        are each `(current_value, limit)`.
+        are each `(current_value, limit)`. Entry names mirror Azure's real
+        "OpenAI.<sku>.<model_name>" key shape (confirmed against a live subscription), not a bare
+        "chat"/"embed" placeholder -- the script looks entries up by that exact key.
         """
         chat_current, chat_limit = chat
         embed_current, embed_limit = embed
+        chat_key = f"OpenAI.{DEFAULT_CHAT_MODEL_SKU}.{DEFAULT_CHAT_MODEL_NAME}"
+        embed_key = f"OpenAI.{DEFAULT_EMBED_MODEL_SKU}.{DEFAULT_EMBED_MODEL_NAME}"
         payload = [
-            {"name": {"value": "chat"}, "currentValue": chat_current, "limit": chat_limit},
-            {"name": {"value": "embed"}, "currentValue": embed_current, "limit": embed_limit},
+            {"name": {"value": chat_key}, "currentValue": chat_current, "limit": chat_limit},
+            {"name": {"value": embed_key}, "currentValue": embed_current, "limit": embed_limit},
         ]
         directory = self.azure_state / "usage"
         directory.mkdir(parents=True, exist_ok=True)

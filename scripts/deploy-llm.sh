@@ -291,13 +291,13 @@ capacity_in_range() {
   (( capacity >= minimum && capacity <= maximum ))
 }
 
-# quota_sufficient <usage_json> <usage_key> <capacity>: true if <usage_key>'s remaining quota in
-# <usage_json> covers <capacity>. Boolean sibling of validate_model_quota below -- same reuse
-# rationale as capacity_in_range.
+# quota_sufficient <usage_json> <model_name> <sku> <capacity>: true if <model_name>'s <sku>
+# remaining quota in <usage_json> covers <capacity>. Boolean sibling of validate_model_quota below
+# -- same reuse rationale as capacity_in_range.
 quota_sufficient() {
-  local usage="$1" usage_key="$2" capacity="$3"
+  local usage="$1" model_name="$2" sku="$3" capacity="$4"
   local remaining
-  remaining="$(model_remaining_quota "$usage" "$usage_key")"
+  remaining="$(model_remaining_quota "$usage" "$model_name" "$sku")"
   (( remaining >= capacity ))
 }
 
@@ -315,8 +315,10 @@ region_is_viable() {
   capacity_in_range "$model_list" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
     "$LLM_EMBED_MODEL_CAPACITY" || return 1
   usage="$(az cognitiveservices usage list --location "$region")"
-  quota_sufficient "$usage" "chat" "$LLM_CHAT_MODEL_CAPACITY" || return 1
-  quota_sufficient "$usage" "embed" "$LLM_EMBED_MODEL_CAPACITY" || return 1
+  quota_sufficient "$usage" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" "$LLM_CHAT_MODEL_CAPACITY" \
+    || return 1
+  quota_sufficient "$usage" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_CAPACITY" \
+    || return 1
   return 0
 }
 
@@ -405,10 +407,13 @@ validate_capacity_range() {
     "$EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_CAPACITY" "$region"
 }
 
-# model_remaining_quota <usage_json> <usage_key>: prints the remaining quota (limit minus
-# current usage) for <usage_key> ("chat" or "embed") in <usage_json>.
+# model_remaining_quota <usage_json> <model_name> <sku>: prints the remaining quota (limit minus
+# current usage) for <model_name>'s <sku> SKU in <usage_json>. Azure's `usage list` reports each
+# entry under the key "OpenAI.<sku>.<model_name>" (e.g. "OpenAI.GlobalStandard.gpt-5.4-mini"), not
+# a bare model or SKU name, so the lookup key has to be built to match.
 model_remaining_quota() {
-  local usage="$1" usage_key="$2"
+  local usage="$1" model_name="$2" sku="$3"
+  local usage_key="OpenAI.${sku}.${model_name}"
   local current limit
   current="$(jq -r --arg key "$usage_key" \
     '.[] | select(.name.value == $key) | .currentValue' <<< "$usage")"
@@ -417,9 +422,9 @@ model_remaining_quota() {
   printf '%s' "$((limit - current))"
 }
 
-# validate_model_quota <usage_json> <usage_key> <field_name> <requested_capacity> <region>
-# <account_name>: hard stops with a quota-increase message unless <usage_key>'s remaining quota
-# covers <requested_capacity> (AC-BI-007). Reports working alternative regions via
+# validate_model_quota <usage_json> <model_name> <sku> <field_name> <requested_capacity> <region>
+# <account_name>: hard stops with a quota-increase message unless <model_name>'s <sku> remaining
+# quota covers <requested_capacity> (AC-BI-007). Reports working alternative regions via
 # fail_region_not_viable rather than a bare exit, since this is one of the three ways LLM_REGION
 # itself can fail. Also prints the delete/purge commands for <account_name> -- a prior deploy left
 # soft-deleted keeps reserving its models' capacity against the subscription's regional quota
@@ -427,10 +432,10 @@ model_remaining_quota() {
 # script's account name is deterministic, so the exact remedy command is always knowable even
 # though the script itself only detects quota exhaustion, never resolves it automatically.
 validate_model_quota() {
-  local usage="$1" usage_key="$2" field_name="$3" requested_capacity="$4" region="$5"
-  local account_name="$6"
+  local usage="$1" model_name="$2" sku="$3" field_name="$4" requested_capacity="$5" region="$6"
+  local account_name="$7"
   local remaining
-  remaining="$(model_remaining_quota "$usage" "$usage_key")"
+  remaining="$(model_remaining_quota "$usage" "$model_name" "$sku")"
   if (( remaining < requested_capacity )); then
     print_error '%s: insufficient Azure quota for %s: requested %s, only %s remaining in %s.\n' \
       "$CONFIG_FILE_DISPLAY_PATH" "$field_name" "$requested_capacity" "$remaining" "$region"
@@ -455,10 +460,10 @@ check_quota() {
   local region="$1" account_name="$2"
   local usage
   usage="$(az cognitiveservices usage list --location "$region")"
-  validate_model_quota "$usage" "chat" "LLM_CHAT_MODEL_CAPACITY" "$LLM_CHAT_MODEL_CAPACITY" \
-    "$region" "$account_name"
-  validate_model_quota "$usage" "embed" "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY" \
-    "$region" "$account_name"
+  validate_model_quota "$usage" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" "LLM_CHAT_MODEL_CAPACITY" \
+    "$LLM_CHAT_MODEL_CAPACITY" "$region" "$account_name"
+  validate_model_quota "$usage" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
+    "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY" "$region" "$account_name"
 }
 
 # resource_group_exists: true if the fixed-name resource group already exists.
