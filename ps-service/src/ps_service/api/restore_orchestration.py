@@ -151,6 +151,29 @@ class CatalogRestoreDependencies:
     restore: CatalogRestoreStage
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogRestoreInfra:
+    """The true infra boundaries substitutable via the restore-from-catalog factory.
+
+    :func:`build_default_restore_from_catalog_dependencies` lets a caller substitute exactly
+    these three (issue #163 Slice E) -- never ``restore`` itself.
+
+    Bundles ``fetch_artifact`` (the curated-content HTTP fetch), ``resolve_effective_source``
+    (the FalkorDB-override-check-then-config-fallback resolution), and ``open_db`` (the
+    FalkorDB client construction) -- mirrors ``ingestion_orchestration.GraphOpeners``'s own
+    "bundle every true infra boundary a factory has under one approved accessor" shape,
+    generalised here to a mixed HTTP+FalkorDB set of boundaries rather than ``GraphOpeners``'s
+    pure-FalkorDB set. ``single_tenant_graph_name`` is deliberately excluded -- a pure,
+    I/O-free name lookup no test has ever needed to vary, mirroring
+    ``build_default_near_miss_review_dependencies``'s own precedent of leaving a
+    no-substitution-need field out of its narrowed accessor entirely.
+    """
+
+    fetch_artifact: FetchArtifactCall
+    resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
+    open_db: Callable[[ServiceConfig], FalkorDB]
+
+
 # --- request decoding ---------------------------------------------------
 
 
@@ -453,33 +476,82 @@ def _default_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalog
     return resolve_effective_source(config, open_graph=_open_graph)
 
 
-def build_default_restore_from_catalog_dependencies() -> CatalogRestoreDependencies:
+def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:
+    """Return the real curated-content fetch, effective-source resolution, and FalkorDB opener.
+
+    The *only* moving parts :func:`build_default_restore_from_catalog_dependencies` lets a
+    caller substitute (issue #163 Slice E) -- three true infra boundaries, never the real
+    ``restore_instrument`` business logic sitting on top of them. Extracted to its own
+    top-level function (rather than inlined in
+    :func:`build_default_restore_from_catalog_dependencies`) specifically so it is its own,
+    independently addressable module-level name: a caller-side ``monkeypatch.setattr(
+    "ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra", ...)``
+    substitutes the fetch/resolve/open_db boundary alone, while
+    :func:`build_default_restore_from_catalog_dependencies` itself -- called with no
+    arguments, exactly as every production caller (`mcp_server.py`'s one call site) already
+    does -- still resolves this name at call time (ordinary Python late-binding for a bare
+    module-level call, mirroring ``ingestion_orchestration.build_default_graph_openers``'s/
+    ``near_miss_review_orchestration.build_default_near_miss_review_graph_opener``'s own
+    issue #163 Slice C/D precedent) and so picks up the substitution automatically, with zero
+    change to its own call sites. ``docs/coding-standards/approved-mock-boundaries.yaml``
+    lists this function itself as the approved boundary -- not
+    ``build_default_restore_from_catalog_dependencies``, which stays off that list since it
+    still bundles real business logic (``restore``) alongside this boundary.
+
+    Returns:
+        A :class:`CatalogRestoreInfra` bound to the production curated-content fetch step,
+        the production `resolve_effective_source` (issue #125, Slice 3), and the production
+        FalkorDB connection opener.
+    """
+    return CatalogRestoreInfra(
+        fetch_artifact=fetch_artifact,
+        resolve_effective_source=_default_resolve_effective_source,
+        open_db=_default_open_db,
+    )
+
+
+def build_default_restore_from_catalog_dependencies(
+    *, infra: CatalogRestoreInfra | None = None
+) -> CatalogRestoreDependencies:
     """Wire the real fetch-and-restore path into a ``CatalogRestoreDependencies``.
 
     ``restore_instrument`` is imported **function-locally**, exactly like
     :func:`build_default_restore_dependencies` (M6 -- ``ps_service.main``
     never transitively loads ``ps_service.restore``/``ps_service.
-    company_merge`` at module load). ``curated_source.artifact_client.
-    fetch_artifact`` carries no such restriction (it has no
-    ``ps_service.restore``/``ps_service.company_merge`` dependency of its
-    own -- confirmed by its imports) and is wired via this module's ordinary
-    module-level import.
+    company_merge`` at module load).
+
+    issue #163 Slice E narrowed this factory's own DI seam: ``infra`` is the *only*
+    substitutable parameter. There is deliberately no ``restore`` parameter any more --
+    ``restore`` is always the real, shipped ``ps_service.restore.restore_instrument.
+    restore_instrument``, unconditionally, with no way for a caller (test or otherwise) to
+    substitute fake business logic through this function's own signature. Before this
+    change, a caller could -- and every ``mcp_interface`` unit test covering this tool did --
+    replace this factory's *entire* return value wholesale, faking real restore business
+    logic in the name of substituting only the fetch/FalkorDB boundary beneath it (the
+    "delegate, don't reimplement" violation L2's MCP Interface Patterns section warns
+    against; see ``.orchestrator/tracker/issue-163/AUDIT_RAW/mcp_interface_part2.md``'s
+    DOMINANT FINDING). ``infra=None`` (the default -- every production caller, unchanged)
+    resolves :func:`build_default_restore_from_catalog_infra` at call time, so a
+    ``monkeypatch.setattr`` of *that* function (see its own docstring) is picked up
+    automatically even though this factory itself is never patched.
+
+    Args:
+        infra: The fetch/effective-source/FalkorDB boundary bundle to use, or ``None``
+            (every production caller) to use the real one.
 
     Returns:
-        A :class:`CatalogRestoreDependencies` bound to the production
-        curated-content fetch step, the production `resolve_effective_source`
-        (issue #125, Slice 3), and the same restore entry point / FalkorDB
-        connection/graph-name helpers :func:`build_default_
-        restore_dependencies` uses.
+        A :class:`CatalogRestoreDependencies` bound to the production restore entry point,
+        the production graph-name helper, and the given (or real) infra bundle.
     """
     from ps_service.restore.restore_instrument import (  # noqa: PLC0415 -- M6: function-local
         restore_instrument,
     )
 
+    resolved_infra = infra or build_default_restore_from_catalog_infra()
     return CatalogRestoreDependencies(
-        fetch_artifact=fetch_artifact,
-        resolve_effective_source=_default_resolve_effective_source,
-        open_db=_default_open_db,
+        fetch_artifact=resolved_infra.fetch_artifact,
+        resolve_effective_source=resolved_infra.resolve_effective_source,
+        open_db=resolved_infra.open_db,
         single_tenant_graph_name=_default_single_tenant_graph_name,
         restore=restore_instrument,
     )

@@ -25,7 +25,6 @@ from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
     _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
 )
-from ps_service.query_engine.models import QueryResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -106,33 +105,33 @@ def test_success_returns_columns_rows_row_count_dict(emitter: LogEmitter) -> Non
 
 
 def test_delegates_to_execute_cypher_query(
-    monkeypatch: pytest.MonkeyPatch, emitter: LogEmitter
+    make_emitter: MakeEmitter, read_lines: ReadLines
 ) -> None:
-    calls: list[dict[str, object]] = []
-
-    def spy(
-        query: str,
-        *,
-        graph: object,
-        emitter: object = None,
-        principal: object = None,
-        timeout_ms: int,
-        row_cap: int,
-    ) -> QueryResult:
-        calls.append({"query": query, "graph": graph, "emitter": emitter, "principal": principal})
-        return QueryResult(columns=["x"], rows=[[1]], row_count=1, truncated=False)
-
-    monkeypatch.setattr(mcp_server, "execute_cypher_query", spy)
+    """`handle_mcp_tool_call` reaches the real, in-process
+    `execute_cypher_query` -- not a reimplementation of its cypher-execution
+    logic -- proven by the real `query_engine`/`execute_cypher_query` log
+    entry only that function emits, plus the fake `graph` collaborator's own
+    recorded call, rather than spying on the delegate call. Mirrors
+    `test_principal_given_attaches_principal_to_query_engine_log_entry`'s
+    already-established real-execution-plus-state-assertion pattern.
+    """
+    emitter, log_path = make_emitter()
     fake = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
 
     result = mcp_server.handle_mcp_tool_call(
         "MATCH (n) RETURN n", graph=fake, emitter=emitter, timeout_ms=5000, row_cap=1000
     )
+    emitter.flush()
 
-    assert len(calls) == 1
-    assert calls[0]["graph"] is fake
-    assert calls[0]["query"] == "MATCH (n) RETURN n"
-    assert result == {"columns": ["x"], "rows": [[1]], "row_count": 1, "truncated": False}
+    assert fake.calls[-1] == "MATCH (n) RETURN n"
+    assert result == {"columns": [], "rows": [], "row_count": 0, "truncated": False}
+    lines = read_lines(log_path)
+    entry = next(
+        line
+        for line in lines
+        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
+    )
+    assert entry["outcome"] == "succeeded"
 
 
 def test_principal_given_attaches_principal_to_query_engine_log_entry(

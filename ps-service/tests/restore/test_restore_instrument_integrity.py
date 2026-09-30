@@ -27,7 +27,7 @@ import pytest
 import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.export.models import InstrumentManifest
 from ps_service.export.serialize import checksum_bytes
-from ps_service.restore.errors import ArtifactIntegrityError
+from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
 
@@ -104,27 +104,24 @@ def test_integrity_error_names_instrument_id_and_both_digests() -> None:
     assert checksum_bytes(_REAL_BASELINE_BYTES) in message
 
 
-class _SentinelReachedSchemaVersionCheckError(Exception):
-    """Raised by a monkeypatched `_verify_schema_version` stand-in.
-
-    Proves checksum verification passed control onward without raising
-    `ArtifactIntegrityError` -- a stronger, more targeted proof than running
-    the whole function to completion (which now requires real staging
-    collaborators this file's `_NEVER_TOUCHED_DB` deliberately cannot
-    provide; see module docstring).
+def test_valid_checksums_do_not_raise_artifact_integrity_error() -> None:
+    """Proves checksum verification (D9) passed control onward without
+    raising `ArtifactIntegrityError` -- exercised via the real, very next
+    collaborator (`_verify_schema_version`, D10) itself, which naturally
+    raises `ArtifactSchemaVersionMismatchError` once control reaches it:
+    this module's own `_manifest()` always carries `schema_version="1"`,
+    never equal to the real `DOMAIN_SCHEMA_VERSION` ("2"). A real failure
+    state from the real next collaborator is a stronger, more targeted
+    proof that checksum verification let control through than a
+    monkeypatched sentinel stand-in for "control reached here" would be
+    (AC-BI-004 -- the previous stand-in never exercised
+    `_verify_schema_version` itself, and running the whole function to
+    completion still requires real staging collaborators this file's
+    `_NEVER_TOUCHED_DB` deliberately cannot provide; see module docstring).
     """
-
-
-def test_valid_checksums_do_not_raise_artifact_integrity_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def _sentinel(_artifact: RestoreArtifact) -> None:
-        raise _SentinelReachedSchemaVersionCheckError
-
-    monkeypatch.setattr(restore_instrument_module, "_verify_schema_version", _sentinel)
     artifact = _artifact(_manifest())
 
-    with pytest.raises(_SentinelReachedSchemaVersionCheckError):
+    with pytest.raises(ArtifactSchemaVersionMismatchError):
         _restore(artifact)
 
 
@@ -139,6 +136,10 @@ def test_schema_version_check_is_never_reached_when_checksum_fails(
     def _fail_if_invoked(_artifact: RestoreArtifact) -> None:
         raise AssertionError("_verify_schema_version must not be invoked when checksum fails")
 
+    # Ordering/short-circuit proof (issue #163 §2 case 3): raise-if-called is
+    # a state assertion expressing "never invoked" -- no real input can prove
+    # this negative other than by making invocation itself observable.
+    # detroit-exception: interaction (never-invoked) IS the specified behavior
     monkeypatch.setattr(restore_instrument_module, "_verify_schema_version", _fail_if_invoked)
     manifest = _manifest(baseline_sha256="0" * 64)
     artifact = _artifact(manifest)

@@ -287,9 +287,13 @@ def test_enroll_options_and_verify_reject_an_expired_approval_without_calling_we
     def _fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("webauthn_rp function must not be called for an expired approval")
 
+    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6): the raise fires only if
+    # `_require_pending_and_unexpired`'s rejection failed to happen before reaching webauthn.
+    # detroit-exception: proves enroll/options never reaches webauthn for an expired approval
     monkeypatch.setattr(
         "ps_service.passkey_signing.router.build_registration_options", _fail_if_called
     )
+    # detroit-exception: proves enroll/verify never reaches webauthn for an expired approval
     monkeypatch.setattr("ps_service.passkey_signing.router.verify_registration", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()

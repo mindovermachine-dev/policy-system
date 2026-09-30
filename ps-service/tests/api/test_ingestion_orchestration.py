@@ -31,6 +31,7 @@ from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
     IngestionConfigIncompleteError,
     PipelineStageError,
+    ShortNameCollisionError,
     ShortNameCuratedMismatchError,
 )
 from ps_service.api.ingestion_orchestration import (
@@ -514,6 +515,39 @@ def test_validate_and_resolve_catalog_entry_raises_on_curated_mismatch() -> None
         f"CELEX {_CURATED_CELEX} is curated under short_name '{_CURATED_SHORT_NAME}'; "
         "pass that value, not 'not-the-real-short-name'"
     )
+    assert graph.calls == []
+
+
+def test_validate_and_resolve_catalog_entry_raises_on_curated_short_name_collision() -> None:
+    """Issue #146 AC-BI-006: a curated CELEX whose own ``short_name`` is already claimed
+    by a *different* curated entry is rejected before any graph is opened.
+
+    The real curated catalog can never produce this scenario itself (no two
+    curated entries share a ``short_name`` by construction --
+    ``tests/api/test_catalog.py::test_no_two_curated_entries_share_a_short_name``
+    proves the invariant), so this passes its own fixture tuple via
+    ``validate_and_resolve_catalog_entry``'s ``catalog=`` parameter (AUDIT.md
+    §2 case 11's DI-gap fix) instead of monkeypatching the module-level
+    ``REGULATION_CATALOG`` constant. Replaces
+    ``tests/api/test_ingestions_catalog.py``'s former
+    ``test_short_name_collision_with_a_curated_catalog_entry_is_rejected``,
+    an HTTP round-trip through ``POST /ingestions`` that had no other reason
+    to exist once the real function itself is directly, monkeypatch-free
+    testable -- mirroring the equivalent fix already applied to this same
+    function's MCP-side callers (issue #163 Slice C).
+    """
+    fixture = (
+        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
+        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
+    )
+    graph = FakeGraphHandle()
+
+    with pytest.raises(ShortNameCollisionError) as exc_info:
+        validate_and_resolve_catalog_entry(
+            "32024R0001", "shared-name", single_tenant_graph=graph, catalog=fixture
+        )
+
+    assert str(exc_info.value) == "short_name 'shared-name' is already claimed by CELEX 32024R0002"
     assert graph.calls == []
 
 

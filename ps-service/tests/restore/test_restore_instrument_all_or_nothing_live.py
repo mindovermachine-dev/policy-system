@@ -109,6 +109,9 @@ def test_merge_step_failure_leaves_single_tenant_and_native_untouched(
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise _ForcedMergeFailureError("forced failure partway through the merge step")
 
+    # Fault-injection seam proving D8's all-or-nothing rollback guarantee
+    # against real, live FalkorDB state (issue #163 §2 case 1).
+    # detroit-exception: fault seam proving the all-or-nothing rollback guarantee
     monkeypatch.setattr(graph_writer_module, "persist_canonical_nodes", _raise)
 
     try:

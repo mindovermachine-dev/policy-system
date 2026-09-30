@@ -33,7 +33,6 @@ import contextlib
 import json
 from typing import TYPE_CHECKING
 
-from api._fakes import build_fake_pipeline_dependencies
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); this cross-package import mirrors `test_access_role_tools.py`'s own convention
     FakeAccessRoleStore,
     RaisingAccessRoleStore,
@@ -45,8 +44,10 @@ from mcp.types import CallToolResult, TextContent
 
 from mcp_interface.test_ingest_regulation_tool import (
     _CELEX,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_catalog_source_authz_gate.py`'s own cross-module private-import convention
+    _RID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _SHORT_NAME,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _configure_complete_llm_env,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _use_real_pipeline_stages,  # pyright: ignore[reportPrivateUsage]  -- issue #163 Slice 20: reuse the one real-stage pipeline fixture builder for full-pipeline-success tests, rather than a second copy of its own reasoning in this file
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
@@ -137,17 +138,15 @@ def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatc
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
-    )
+    # No pipeline-dependencies patch needed: `require_role` denies inside
+    # `_body()` before `_resolve_and_ingest`/`build_default_pipeline_dependencies`
+    # is ever reached, so the real, unpatched factory is simply never called.
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_ingest_regulation()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert fake.recorder.calls == []
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,17 +164,14 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         access_role=AccessRole.SYSTEM_ADMIN,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
-    )
+    # No pipeline-dependencies patch needed -- same reasoning as
+    # `test_authenticated_user_only_caller_is_denied` above.
 
     with _verified_actor(sub=_SYSTEM_ADMIN_SUBJECT):
         result = _call_ingest_regulation()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert fake.recorder.calls == []
 
 
 def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,17 +185,14 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
-    )
+    # No pipeline-dependencies patch needed -- same reasoning as
+    # `test_authenticated_user_only_caller_is_denied` above.
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
         result = _call_ingest_regulation()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert fake.recorder.calls == []
 
 
 def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,10 +209,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
-    )
+    _use_real_pipeline_stages(monkeypatch)
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
         result = _call_ingest_regulation()
@@ -227,7 +217,7 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
     assert result.is_error is False
     body = json.loads(_text(result))
     assert body["run_id"]
-    assert body["regulatory_instrument_id"] == "cra-1.0"
+    assert body["regulatory_instrument_id"] == _RID
     assert body["source"] == "catalog"
     assert [stage["stage"] for stage in body["stages"]] == [
         "ingestion",
@@ -248,14 +238,11 @@ def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    monkeypatch.setattr(
-        mcp_server, "build_default_pipeline_dependencies", lambda: fake.dependencies
-    )
+    # No pipeline-dependencies patch needed -- same reasoning as
+    # `test_authenticated_user_only_caller_is_denied` above.
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_ingest_regulation()
 
     assert result.is_error is False
     assert _text(result) == "error: The authorization store is temporarily unavailable."
-    assert fake.recorder.calls == []

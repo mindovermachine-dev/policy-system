@@ -105,6 +105,10 @@ inventory:
     command: uv run pytest -q -n auto --dist=loadscope
     timeout: 10m
 
+  - id: mock-boundary-guardrail
+    name: Check Detroit-style mock boundary discipline in tests
+    command: uv run python scripts/check_mock_boundaries.py ps-service/tests ps-cli/tests
+
   - id: pip-audit
     name: Audit locked dependencies for known CVEs
     timeout: 10m
@@ -229,6 +233,7 @@ waves:
       - ruff-format
       - basedpyright
       - pytest
+      - mock-boundary-guardrail
       - pip-audit
       - helm-lint
       - helm-unittest

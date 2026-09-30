@@ -9,6 +9,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.6.1",
+    "pyyaml>=6.0.3",   # scripts/check_mock_boundaries.py (AC-BI-009): parses docs/coding-standards/approved-mock-boundaries.yaml
     "ruff==0.16.4",
 ]
 
@@ -146,6 +147,7 @@ include = [
     "ps-test-support/tests",
     "tools",                   # D-1: tools/ is IN strict scope (238 errors → B21, required, last priority)
     "docs/regulations",        # D-9: convert_to_markdown.py is IN strict scope (7 errors → B21)
+    "scripts",                 # issue #163 Slice B: check_mock_boundaries.py is a permanent guardrail, IN strict scope (no per-file-ignores carve-out)
 ]
 exclude = [
     "**/__pycache__",

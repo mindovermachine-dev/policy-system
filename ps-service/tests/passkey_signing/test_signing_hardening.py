@@ -513,6 +513,12 @@ def test_expiry_is_checked_before_any_webauthn_call_on_all_four_guarded_routes(
         "build_authentication_options",
         "verify_authentication",
     ):
+        # detroit-exception: raise-if-called trap proving an ordering/non-interaction
+        # guarantee (expiry is checked before any webauthn_rp.* call, across all 4
+        # guarded routes), not an assert_called interaction check -- final assertions
+        # below are on HTTP response state/output, not on this trap's call count.
+        # AUDIT.md §2 case 6 / PLAN.md §5 Slice L. Covers all 4 patched names in this
+        # loop (single physical monkeypatch.setattr call site).
         monkeypatch.setattr(f"ps_service.passkey_signing.router.{name}", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()

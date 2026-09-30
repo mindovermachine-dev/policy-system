@@ -17,10 +17,20 @@ which drives the tool under the local-test bypass (or, for its own real-token
 test, now seeds a `ComplianceOfficer` grant via `_grant_compliance_officer`)
 and needs no change here.
 
-`_INSTRUMENT_ID`/`_fake_dependencies`/`_valid_transport`/`_FakeCatalogRestoreStage`/
+`_INSTRUMENT_ID`/`_use_fake_restore_infra`/`_valid_transport`/
 `_set_similarity_threshold` are imported directly from
 `test_restore_instrument_tool.py` rather than re-declared, so this file can
 never silently drift from that file's own restore-artifact fixtures.
+
+issue #163 Slice E: `build_default_restore_from_catalog_dependencies`'s DI seam is narrowed
+so `restore` is always the real, shipped `restore_instrument` -- this file's own denial/
+outage tests never even reach `build_default_restore_from_catalog_dependencies()` at all
+(the authz gate in `mcp_server.py`'s `restore_instrument` tool body returns before that call
+is ever made), so they need no restore-dependency wiring whatsoever; only the one success
+test still needs the real restore path, via the same `_use_fake_restore_infra`
+`test_restore_instrument_tool.py`'s own happy-path tests use -- its `open_db` default
+(issue #163 Slice 19) is a real, stateful FalkorDB stand-in, so this file needs no
+staging-specific wiring of its own either.
 """
 
 from __future__ import annotations
@@ -41,9 +51,8 @@ from mcp.types import CallToolResult, TextContent
 
 from mcp_interface.test_restore_instrument_tool import (
     _INSTRUMENT_ID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _fake_dependencies,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _FakeCatalogRestoreStage,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_ingest_regulation_authz_gate.py`'s own cross-module private-import convention
     _set_similarity_threshold,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _use_fake_restore_infra,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_ingest_regulation_authz_gate.py`'s own cross-module private-import convention
     _valid_transport,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.authz.models import AccessRole
@@ -124,39 +133,32 @@ def _text(result: CallToolResult) -> str:
     return block.text
 
 
-def _install_fake_restore_dependencies(monkeypatch: pytest.MonkeyPatch) -> _FakeCatalogRestoreStage:
-    _set_similarity_threshold(monkeypatch)
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
-    return stage
-
-
 def test_authenticated_user_only_caller_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-BI-005: a real, non-bypass caller holding only `AuthenticatedUser`
     (never elevated) gets the fixed access-denied message, and no restore
-    stage ever runs.
+    dependency is ever wired up at all -- `require_role` denies before
+    `build_default_restore_from_catalog_dependencies()` is ever called
+    (confirmed by reading `restore_instrument`'s own body), so this test
+    needs no restore-dependency wiring whatsoever.
     """
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    stage = _install_fake_restore_dependencies(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_restore_instrument()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert stage.calls == []
 
 
 def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-BI-005: `require_role`'s own non-hierarchical contract for
     `ComplianceOfficer` -- a caller holding `SystemAdmin` (but never
     separately granted `ComplianceOfficer`) is still denied, proving no
-    implicit admin override reaches this gate.
+    implicit admin override reaches this gate. No restore-dependency wiring
+    needed, see `test_authenticated_user_only_caller_is_denied`'s own
+    docstring.
     """
     configure()
     store = _seeded_store()
@@ -166,14 +168,12 @@ def test_system_admin_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
         access_role=AccessRole.SYSTEM_ADMIN,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    stage = _install_fake_restore_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_ADMIN_SUBJECT):
         result = _call_restore_instrument()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert stage.calls == []
 
 
 def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,25 +181,27 @@ def test_system_owner_without_explicit_grant_is_denied(monkeypatch: pytest.Monke
     `SystemOwner` themselves -- unlike a `SystemAdmin`-minimum gate (where
     `SystemOwner` is deliberately also satisfying), a `ComplianceOfficer`
     minimum is exact-match only, so even `SystemOwner` needs its own
-    explicit grant.
+    explicit grant. No restore-dependency wiring needed, see
+    `test_authenticated_user_only_caller_is_denied`'s own docstring.
     """
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    stage = _install_fake_restore_dependencies(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
         result = _call_restore_instrument()
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert stage.calls == []
 
 
 def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-BI-007: a caller granted `ComplianceOfficer` succeeds exactly as
     `test_restore_instrument_tool.py`'s own happy path already documents --
-    no change to the tool's own success-path response shape.
+    no change to the tool's own success-path response shape. This is the one
+    test in this file that reaches the real restore path, so it (alone)
+    needs the same restore-dependency wiring that file's own happy-path
+    tests use.
     """
     configure()
     store = _seeded_store()
@@ -209,7 +211,8 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
         access_role=AccessRole.COMPLIANCE_OFFICER,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    _install_fake_restore_dependencies(monkeypatch)
+    _set_similarity_threshold(monkeypatch)
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     with _verified_actor(sub=_COMPLIANCE_OFFICER_SUBJECT):
         result = _call_restore_instrument()
@@ -226,18 +229,17 @@ def test_caller_holding_compliance_officer_succeeds(monkeypatch: pytest.MonkeyPa
 
 def test_store_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-BI-011: a simulated store outage surfaces the distinct
-    `authorization_store_unavailable` result, never a silent default/success,
-    and no restore stage ever runs.
+    `authorization_store_unavailable` result, never a silent default/success.
+    No restore-dependency wiring needed, see
+    `test_authenticated_user_only_caller_is_denied`'s own docstring.
     """
     configure()
     monkeypatch.setattr(
         mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
-    stage = _install_fake_restore_dependencies(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call_restore_instrument()
 
     assert result.is_error is False
     assert _text(result) == "error: The authorization store is temporarily unavailable."
-    assert stage.calls == []

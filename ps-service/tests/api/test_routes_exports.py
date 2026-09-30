@@ -206,6 +206,7 @@ def _stub_export_log(  # pyright: ignore[reportUnusedFunction] -- requested via 
     every other test requests this explicitly via
     `@pytest.mark.usefixtures("_stub_export_log")`.
     """
+    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
     monkeypatch.setattr("ps_service.api.export_orchestration.emit_log_entry", _noop_emit)
 
 

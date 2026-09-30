@@ -226,6 +226,10 @@ def test_restore_instrument_retries_past_a_concurrent_write_and_keeps_both(
                 "CREATE (:Test {id: 'concurrent'})"
             )
 
+    # Spy wraps and delegates to the real function -- only used to inject a
+    # real concurrent write at the exact WATCH/EXEC race window and to count
+    # retries (CHANGES.md B1).
+    # detroit-exception: retry count IS the specified behavior (issue #163 §2 case 2)
     monkeypatch.setattr(
         restore_instrument_module,
         "_run_baseline_merge",
@@ -293,6 +297,9 @@ def test_restore_instrument_raises_after_exhausting_retries_leaving_only_concurr
             "CREATE (:Test {id: $id})", {"id": f"concurrent-{call_number}"}
         )
 
+    # Spy wraps and delegates to the real function -- only used to inject a
+    # real concurrent write on every attempt and to count retries (CHANGES.md B1).
+    # detroit-exception: retry count IS the specified behavior (issue #163 §2 case 2)
     monkeypatch.setattr(
         restore_instrument_module,
         "_run_baseline_merge",

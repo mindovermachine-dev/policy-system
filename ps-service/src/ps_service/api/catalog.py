@@ -155,23 +155,35 @@ REGULATION_CATALOG: tuple[CatalogEntry, ...] = tuple(
 existing, unchanged contract (D12). Derived from :data:`CATALOG`, never independently loaded."""
 
 
-def find_by_celex(celex: str) -> CatalogEntry | None:
+def find_by_celex(
+    celex: str, *, catalog: tuple[CatalogEntry, ...] | None = None
+) -> CatalogEntry | None:
     """Return the catalog entry whose CELEX equals ``celex``, or ``None`` if absent.
 
     Args:
         celex: A CELEX identifier to look up (exact string match).
+        catalog: The catalog to search. ``None`` (the default -- every real
+            caller) searches the real, packaged :data:`REGULATION_CATALOG`. A
+            test that needs to exercise a collision scenario the real curated
+            catalog can never produce (it has no duplicate ``short_name``s by
+            construction) passes its own fixture tuple here instead of
+            monkeypatching the module-level constant (AUDIT.md §2 case 11 --
+            a DI-gap smell, not a legitimate mock-boundary substitution).
 
     Returns:
         The matching :class:`CatalogEntry`, or ``None`` when no curated entry
         has that CELEX.
     """
-    for entry in REGULATION_CATALOG:
+    resolved_catalog = catalog if catalog is not None else REGULATION_CATALOG
+    for entry in resolved_catalog:
         if entry.celex == celex:
             return entry
     return None
 
 
-def find_short_name_collision(short_name: str, celex: str) -> CatalogEntry | None:
+def find_short_name_collision(
+    short_name: str, celex: str, *, catalog: tuple[CatalogEntry, ...] | None = None
+) -> CatalogEntry | None:
     """Return the curated entry already claiming ``short_name`` under a different CELEX.
 
     Compares ``CatalogEntry.short_name`` directly (a plain field-equality scan) --
@@ -184,12 +196,16 @@ def find_short_name_collision(short_name: str, celex: str) -> CatalogEntry | Non
         celex: The CELEX the caller supplied alongside it -- an entry that
             shares ``short_name`` but has this same ``celex`` is not a
             collision (it is the same instrument, not a different one).
+        catalog: The catalog to search -- see :func:`find_by_celex`'s own
+            ``catalog`` parameter for why this is a real parameter rather
+            than a module-global monkeypatch target (AUDIT.md §2 case 11).
 
     Returns:
         The first curated entry whose ``short_name`` matches and whose
         ``celex`` differs, or ``None`` if none does.
     """
-    for entry in REGULATION_CATALOG:
+    resolved_catalog = catalog if catalog is not None else REGULATION_CATALOG
+    for entry in resolved_catalog:
         if entry.short_name == short_name and entry.celex != celex:
             return entry
     return None

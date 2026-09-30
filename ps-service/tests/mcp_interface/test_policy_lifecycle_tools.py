@@ -3698,16 +3698,20 @@ def test_bypass_create_policy_draft_supersedes_fork_owned_and_editable(
 def test_create_policy_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Unlike the `redis.exceptions.RedisError` case (`test_graph_unavailable_
+    surfaces_as_its_own_distinct_error` above), `create_policy_draft` only
+    ever catches `RedisError` around its graph write -- a non-`RedisError`
+    exception (e.g. a driver bug, a malformed response) is genuinely
+    unclassified and must fall through to `_run_mcp_action`'s residual
+    safety net instead of the named "graph database is not reachable"
+    message. Scripted for real via `_FakeGraph.raise_on_write`, not by
+    replacing the tool's own delegate.
+    """
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _FakeGraph()
+    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
+    _install_graph(monkeypatch, graph)
     _install_audit_store(monkeypatch, _FakeAuditStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_create_policy_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_create_policy_draft()
@@ -3722,16 +3726,14 @@ def test_create_policy_draft_unexpected_error_is_sanitized(
 def test_update_policy_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """See `test_create_policy_draft_unexpected_error_is_sanitized` above:
+    same non-`RedisError`-escapes-the-catch shape, this tool's own fixture.
+    """
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _UpdatePolicyDraftFakeGraph(_draft_fixture())
+    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
+    _install_graph(monkeypatch, graph)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_update_policy_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_update_policy_draft(fields={"description": "x"})
@@ -3746,16 +3748,12 @@ def test_update_policy_draft_unexpected_error_is_sanitized(
 def test_add_standard_to_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _AddStandardToDraftFakeGraph(_draft_fixture())
+    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
+    _install_graph(monkeypatch, graph)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_add_standard_to_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_add_standard_to_draft()
@@ -3770,16 +3768,14 @@ def test_add_standard_to_draft_unexpected_error_is_sanitized(
 def test_update_standard_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _UpdateStandardDraftFakeGraph(
+        _standard_parent_fixture(),
+        raise_on_write=RuntimeError("connection refused to db-internal-7.prod:6379"),
+    )
+    _install_graph(monkeypatch, graph)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_update_standard_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_update_standard_draft(fields={"description": "x"})
@@ -3794,16 +3790,12 @@ def test_update_standard_draft_unexpected_error_is_sanitized(
 def test_add_control_to_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _AddControlToDraftFakeGraph(_standard_parent_fixture())
+    graph.raise_on_write = RuntimeError("connection refused to db-internal-7.prod:6379")
+    _install_graph(monkeypatch, graph)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_add_control_to_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_add_control_to_draft()
@@ -3818,16 +3810,14 @@ def test_add_control_to_draft_unexpected_error_is_sanitized(
 def test_update_control_draft_unexpected_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """See `test_create_policy_draft_unexpected_error_is_sanitized` above."""
     configure()
-    _install_graph(monkeypatch, _FakeGraph())
+    graph = _UpdateControlDraftFakeGraph(
+        _control_parent_fixture(),
+        raise_on_write=RuntimeError("connection refused to db-internal-7.prod:6379"),
+    )
+    _install_graph(monkeypatch, graph)
     _install_access_role_store(monkeypatch, FakeAccessRoleStore())
-
-    def _raise(**kwargs: object) -> object:
-        del kwargs
-        message = "connection refused to db-internal-7.prod:6379"
-        raise RuntimeError(message)
-
-    monkeypatch.setattr(mcp_server, "run_update_control_draft", _raise)
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         result = _call_update_control_draft(fields={"description": "x"})

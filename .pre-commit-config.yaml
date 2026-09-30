@@ -40,6 +40,12 @@ repos:
         entry: actionlint
         language: system
         files: ^\.github/workflows/.*\.ya?ml$
+      - id: mock-boundary-guardrail
+        name: mock boundary guardrail (Detroit-style discipline)
+        entry: uv run python scripts/check_mock_boundaries.py
+        language: system
+        pass_filenames: true
+        files: ^(ps-service|ps-cli)/tests/.*\.py$
       - id: pip-audit
         name: pip-audit (locked dependencies)
         entry: bash -c 'uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off'

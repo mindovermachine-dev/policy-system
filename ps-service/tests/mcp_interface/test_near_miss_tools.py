@@ -104,18 +104,34 @@ branch.
 
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_ingest_regulation_tool.py`'s/`test_check_regulations_tool.py`'s own
-convention. The fake `NearMissReviewDependencies` bundle
-(`_fake_dependencies`/`_record`) is the existing REST-side fixture already
-exercised by `tests/api/test_routes_near_misses.py` -- reused here via a
-cross-module import rather than reinvented (PLAN.md's explicit Slice 3.1
-instruction, extended here to Slice 3.2's own `resolve=` parameter that same
-fixture already supports), mirroring this codebase's own established
-cross-module-private-import convention for production code (e.g.
-`mcp_server.py`'s own imports of `routes._to_accepted_response`).
+convention. `_record` (`tests/api/test_routes_near_misses.py`'s own fixture,
+reused here via cross-module import rather than reinvented, mirroring this
+codebase's established cross-module-private-import convention -- e.g.
+`mcp_server.py`'s own imports of `routes._to_accepted_response`) builds the
+`PendingReviewRecord` field values this file scripts into fake FalkorDB rows.
 `tests/api/` is an importable package (`tests/api/_fakes.py`'s own module
 docstring), so this cross-package import works the same way
 `test_check_regulations_tool.py`'s `from api._fakes import
 build_fake_change_check_dependencies` already does.
+
+issue #163 Slice D: `build_default_near_miss_review_dependencies`'s DI seam
+is narrowed so only its FalkorDB `open_single_tenant_graph` opener is
+substitutable (`near_miss_review_orchestration.py`'s own module docstring) --
+`list_pending_reviews`/`resolve_review` are always the real, shipped
+`ps_service.company_merge.pending_review` functions now. This file therefore
+no longer fakes those two collaborators at all: `_ScriptedGraphHandle`
+(below) is a structural `GraphHandle` stand-in that scripts per-call
+`graph.query(...)` results/exceptions -- mirroring
+`tests/company_merge/test_pending_review_{list,resolve}.py`'s own
+`_FakeGraph`/`_FakeQueryResult` (a fresh, local, private copy here, not a
+cross-package import, matching this codebase's established "own copy per
+module" convention) -- and the *real* `list_pending_reviews`/`resolve_review`
+run against it, issuing their own real Cypher query strings and mapping the
+scripted rows back exactly as they would against real FalkorDB. Where an
+earlier version of this file asserted a fake collaborator was/was not
+called, the rewritten test instead asserts on `graph.calls` (which real
+queries the real functions actually issued) or on the tool's own output --
+proof about real behaviour, not about whether a fake was invoked.
 
 `pytest-asyncio` is not installed; this file drives the tool with a bare
 `asyncio.run(server.call_tool(...))`, exactly like `test_cypher_tool.py`/
@@ -132,18 +148,16 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from api.test_routes_near_misses import (
-    _fake_dependencies,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
-    _record,  # pyright: ignore[reportPrivateUsage]  -- same reuse, mirrors `_fake_dependencies`' own justification immediately above
+    _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
 )
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.company_merge.models import ResolveOutcome
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
@@ -153,11 +167,11 @@ from ps_service.passkey_signing.models import PendingApprovalRow
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
     from pathlib import Path
-    from typing import Literal
 
     import pytest
 
-    from ps_service.company_merge.falkordb_client import GraphHandle
+    from ps_service.company_merge.models import PendingReviewRecord
+    from ps_service.config import ServiceConfig
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -269,6 +283,106 @@ class _FakePendingApprovalStore:
         return None
 
 
+# --- issue #163 Slice D: script the real `pending_review.list_pending_reviews`/
+# `resolve_review` functions against a structural `GraphHandle` fake, rather than
+# faking those functions themselves (see module docstring). --------------------
+
+
+@dataclasses.dataclass
+class _RecordedGraphCall:
+    """One `graph.query(...)` call the real `pending_review` functions issued."""
+
+    query: str
+    params: dict[str, object] | None
+
+
+class _ScriptedQueryResult:
+    """Satisfies `GraphQueryResult` structurally (own copy, mirrors
+    `tests/company_merge/test_pending_review_list.py`'s own `_FakeQueryResult`).
+    """
+
+    def __init__(self, result_set: list[object]) -> None:
+        self._result_set = result_set
+
+    @property
+    def result_set(self) -> list[object]:
+        return self._result_set
+
+
+class _ScriptedGraphHandle:
+    """Structural `GraphHandle` stand-in scripting one result/exception per call, in order.
+
+    Own local copy of `tests/company_merge/test_pending_review_resolve.py`'s
+    own `_FakeGraph` (not a cross-package import -- mirrors this codebase's
+    "own copy per module" convention), extended so a step may be an
+    `Exception` instance to raise instead of a rows list -- this file's own
+    D-SANITIZE-UNEXPECTED/residual-safety-net tests need `graph.query(...)`
+    itself to raise something unclassified, exactly as it would for a real,
+    misbehaving FalkorDB driver.
+    """
+
+    def __init__(self, steps: list[list[list[object]] | Exception]) -> None:
+        self.calls: list[_RecordedGraphCall] = []
+        self._steps = list(steps)
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _ScriptedQueryResult:
+        self.calls.append(_RecordedGraphCall(q, params))
+        step = self._steps.pop(0) if self._steps else []
+        if isinstance(step, Exception):
+            raise step
+        return _ScriptedQueryResult(cast("list[object]", step))
+
+
+def _row_for(record: PendingReviewRecord) -> list[object]:
+    """The `_LIST_PENDING_REVIEWS_QUERY` row shape `list_pending_reviews` expects.
+
+    Column order mirrors `pending_review._LIST_PENDING_REVIEWS_QUERY`/
+    `list_pending_reviews`'s own unpacking exactly.
+    """
+    return [
+        record.id,
+        record.kind,
+        record.incoming_id,
+        record.incoming_text,
+        record.nearest_existing_id,
+        record.nearest_existing_text,
+        record.similarity,
+        record.created_at,
+    ]
+
+
+def _use_fake_graph_opener_only(
+    monkeypatch: pytest.MonkeyPatch, opener: Callable[[ServiceConfig], object]
+) -> None:
+    """Patch only the narrowed FalkorDB boundary; the real factory wires real
+    `list_pending_reviews`/`resolve_review`.
+
+    Targets `ps_service.api.near_miss_review_orchestration.
+    build_default_near_miss_review_graph_opener` -- the approved-boundary
+    entry issue #163 Slice D added to
+    `docs/coding-standards/approved-mock-boundaries.yaml` -- so
+    `build_default_near_miss_review_dependencies()`'s own, unpatched call
+    (every tool body in `mcp_server.py` makes it with zero arguments) still
+    wires the real business-logic functions; only the graph this opener
+    hands them is substituted.
+    """
+    monkeypatch.setattr(
+        "ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener",
+        lambda: opener,
+    )
+
+
+def _use_scripted_graph(monkeypatch: pytest.MonkeyPatch, graph: _ScriptedGraphHandle) -> None:
+    """`_use_fake_graph_opener_only`, specialised to hand every call the same `graph`."""
+    _use_fake_graph_opener_only(monkeypatch, lambda _config: graph)
+
+
+def _raising_open(config: object) -> object:
+    _ = config
+    message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
+    raise ConnectionError(message)
+
+
 def _call_near_misses_list() -> CallToolResult:
     result = asyncio.run(mcp_server.server.call_tool("near_misses_list", {}))
     assert isinstance(result, CallToolResult)
@@ -295,10 +409,8 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
 
     first = _record("review_aaa", kind="Capability", similarity=0.62)
     second = _record("review_bbb", kind="Policy", similarity=0.81)
-    dependencies, _ = _fake_dependencies((first, second))
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    graph = _ScriptedGraphHandle(steps=[[_row_for(first), _row_for(second)]])
+    _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_list()
 
@@ -351,19 +463,11 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    recorded_calls: list[tuple[str, str]] = []
-
-    def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph
-        recorded_calls.append((review_id, decision))
-        return ResolveOutcome(review_id=review_id, decision=decision)
-
-    dependencies, _ = _fake_dependencies((), resolve=_resolve)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    # Step 1 (`_FIND_REVIEW_QUERY`): the review exists, kind "Capability".
+    # Step 2 (`_DELETE_REVIEW_QUERY`): the real `resolve_review` does not
+    # inspect this call's return value at all for `keep-separate`.
+    graph = _ScriptedGraphHandle(steps=[[["Capability"]], []])
+    _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
 
@@ -378,7 +482,15 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
         "approval_url": None,
         "expires_at": None,
     }
-    assert recorded_calls == [("review_aaa", "keep-separate")]
+    # Proof that the real `resolve_review` actually ran its documented
+    # 2-query sequence for `review_aaa`/`keep-separate` -- asserted on the
+    # real queries/params it issued against `graph`, not on a fake
+    # collaborator's own recorded call.
+    assert len(graph.calls) == 2
+    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[0].query
+    assert graph.calls[0].params == {"review_id": "review_aaa"}
+    assert "DELETE r" in graph.calls[1].query
+    assert graph.calls[1].params == {"review_id": "review_aaa"}
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
@@ -433,33 +545,21 @@ def test_merge_returns_pending_approval_without_executing_the_merge(
     """PLAN.md §4 Slice 1's own defining test: calling `near_misses_resolve`
     with `decision="merge"` for a real, authenticated caller returns a
     pending approval immediately -- no elicitation, no `confirmed` argument
-    -- and never calls the fake `resolve_review` delegate at all, proving
-    the graph is left completely unchanged (reusing the same
-    `_fake_dependencies`/`_record` merge-fixture setup the old, now-removed
-    elicitation test used).
+    -- and never calls the real `resolve_review` at all, proving the graph
+    is left completely unchanged (`create_merge_pending_approval` only ever
+    calls `open_single_tenant_graph`/`list_pending_reviews`, per its own
+    docstring).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    recorded_calls: list[tuple[str, str]] = []
-
-    def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph
-        recorded_calls.append((review_id, decision))
-        return ResolveOutcome(
-            review_id=review_id,
-            decision=decision,
-            winner_id="capability_existing_a",
-            loser_id="capability_incoming_a",
-        )
-
     record = _record("review_aaa")
-    dependencies, _ = _fake_dependencies((record,), resolve=_resolve)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    # One `_LIST_PENDING_REVIEWS_QUERY` call is all `create_merge_pending_approval`
+    # issues (its own early-existence check); `resolve_review`'s own
+    # FIND/DELETE/MERGE queries would be additional calls, so `len(graph.calls)
+    # == 1` below is itself the proof `resolve_review` never ran.
+    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
+    _use_scripted_graph(monkeypatch, graph)
     monkeypatch.setattr(
         mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
     )
@@ -473,10 +573,10 @@ def test_merge_returns_pending_approval_without_executing_the_merge(
     assert body["pending_approval_id"]
     assert body["approval_url"]
     assert body["expires_at"]
-    # The loser node is never touched and no edge is re-pointed: the fake
-    # `resolve_review` delegate above -- the only code path that would ever
-    # perform that write -- is never called.
-    assert recorded_calls == []
+    # The loser node is never touched and no edge is re-pointed: only the
+    # one list-pending-reviews read ran against the graph -- `resolve_review`
+    # (the only code path that would ever perform that write) never did.
+    assert len(graph.calls) == 1
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
@@ -522,10 +622,8 @@ def test_resolve_merge_unresolved_review_not_found_returns_named_error(
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    dependencies, _ = _fake_dependencies(())  # no unresolved reviews at all
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    graph = _ScriptedGraphHandle(steps=[[]])  # no unresolved reviews at all
+    _use_scripted_graph(monkeypatch, graph)
 
     with _verified_actor():
         result = _call_near_misses_resolve("review_missing", "merge")
@@ -543,17 +641,7 @@ def test_resolve_merge_graph_unavailable_returns_named_error(
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    dependencies, _ = _fake_dependencies(())
-
-    def _raising_open(config: object) -> object:
-        _ = config
-        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
-        raise ConnectionError(message)
-
-    broken_dependencies = dataclasses.replace(dependencies, open_single_tenant_graph=_raising_open)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: broken_dependencies
-    )
+    _use_fake_graph_opener_only(monkeypatch, _raising_open)
 
     with _verified_actor():
         result = _call_near_misses_resolve("review_aaa", "merge")
@@ -573,10 +661,8 @@ def test_resolve_merge_residual_unexpected_exception_returns_generic_error(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
     record = _record("review_aaa")
-    dependencies, _ = _fake_dependencies((record,))
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
+    _use_scripted_graph(monkeypatch, graph)
 
     class _RaisingStore:
         def create_pending_approval(self, **kwargs: object) -> object:
@@ -615,10 +701,8 @@ def test_check_approval_reports_pending_for_a_freshly_created_approval(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
     record = _record("review_aaa")
-    dependencies, _ = _fake_dependencies((record,))
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    graph = _ScriptedGraphHandle(steps=[[_row_for(record)]])
+    _use_scripted_graph(monkeypatch, graph)
     store = _FakePendingApprovalStore()
     monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
 
@@ -748,17 +832,7 @@ def test_list_graph_unavailable_returns_named_error(
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    dependencies, _ = _fake_dependencies(())
-
-    def _raising_open(config: object) -> object:
-        _ = config
-        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
-        raise ConnectionError(message)
-
-    broken_dependencies = dataclasses.replace(dependencies, open_single_tenant_graph=_raising_open)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: broken_dependencies
-    )
+    _use_fake_graph_opener_only(monkeypatch, _raising_open)
 
     result = _call_near_misses_list()
 
@@ -771,24 +845,16 @@ def test_list_residual_unexpected_exception_returns_generic_error_and_logs_detai
 ) -> None:
     """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
     exception `near_misses_list`'s own body does not itself sanitise (here,
-    `dependencies.list_pending_reviews` raising something unclassified, with
-    the single-tenant graph already successfully opened) is caught by
-    `_run_mcp_action`'s residual safety net -- returned as the fixed,
-    generic message (never the raw exception text), with the full `repr`
-    logged server-side only.
+    the real `list_pending_reviews`'s own `graph.query(...)` call raising
+    something unclassified, with the single-tenant graph already
+    successfully opened) is caught by `_run_mcp_action`'s residual safety
+    net -- returned as the fixed, generic message (never the raw exception
+    text), with the full `repr` logged server-side only.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
-    dependencies, _ = _fake_dependencies(())
-
-    def _raising_list(graph: object) -> object:
-        _ = graph
-        raise ValueError("boom -- must never reach the caller")
-
-    broken_dependencies = dataclasses.replace(dependencies, list_pending_reviews=_raising_list)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: broken_dependencies
-    )
+    graph = _ScriptedGraphHandle(steps=[ValueError("boom -- must never reach the caller")])
+    _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_list()
 
@@ -821,16 +887,10 @@ def test_resolve_not_found_or_already_resolved_returns_named_error(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    def _resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph, review_id, decision
-        return None
-
-    dependencies, _ = _fake_dependencies((), resolve=_resolve)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
-    )
+    # `_FIND_REVIEW_QUERY` returns zero rows: the real `resolve_review`
+    # returns `None` immediately, before any write query is ever issued.
+    graph = _ScriptedGraphHandle(steps=[[]])
+    _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_resolve("review_missing", "keep-separate")
 
@@ -860,17 +920,7 @@ def test_resolve_graph_unavailable_returns_named_error(
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    dependencies, _ = _fake_dependencies(())
-
-    def _raising_open(config: object) -> object:
-        _ = config
-        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
-        raise ConnectionError(message)
-
-    broken_dependencies = dataclasses.replace(dependencies, open_single_tenant_graph=_raising_open)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: broken_dependencies
-    )
+    _use_fake_graph_opener_only(monkeypatch, _raising_open)
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
 
@@ -883,8 +933,9 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
 ) -> None:
     """D-AUDIT-WRAPPER point 4 / D-SANITIZE-UNEXPECTED's last row: an
     exception `near_misses_resolve`'s own body does not itself sanitise
-    (here, `dependencies.resolve_review` raising something unclassified,
-    with the single-tenant graph already successfully opened) is caught by
+    (here, the real `resolve_review`'s own write-query call raising
+    something unclassified, with the single-tenant graph already
+    successfully opened and the review found) is caught by
     `_run_mcp_action`'s residual safety net -- returned as the fixed,
     generic message (never the raw exception text), with the full `repr`
     logged server-side only. Uses `keep-separate` so no elicitation round
@@ -893,16 +944,13 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
-    def _raising_resolve(
-        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
-    ) -> ResolveOutcome | None:
-        _ = graph, review_id, decision
-        raise RuntimeError("boom -- must never reach the caller")
-
-    dependencies, _ = _fake_dependencies((), resolve=_raising_resolve)
-    monkeypatch.setattr(
-        mcp_server, "build_default_near_miss_review_dependencies", lambda: dependencies
+    # Step 1 (`_FIND_REVIEW_QUERY`) succeeds; Step 2 (`_DELETE_REVIEW_QUERY`,
+    # wrapped in `_execute_query`) raises something `_execute_query` itself
+    # does not catch (only `redis.exceptions.RedisError` is handled there).
+    graph = _ScriptedGraphHandle(
+        steps=[[["Capability"]], RuntimeError("boom -- must never reach the caller")]
     )
+    _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
 

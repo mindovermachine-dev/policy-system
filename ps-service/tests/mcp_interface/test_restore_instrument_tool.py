@@ -19,16 +19,39 @@ Slice 2.3 (added below in a follow-up edit) proves principal resolution
 (both the `mcp_interface` audit log and the delegate's own `actor` kwarg)
 under a real verified bearer token.
 
+issue #163 Slice E: `build_default_restore_from_catalog_dependencies`'s DI
+seam is narrowed so only its `fetch_artifact`/`resolve_effective_source`/
+`open_db` boundary bundle (`CatalogRestoreInfra`) is substitutable
+(`restore_orchestration.py`'s own module docstring) -- `restore` is always
+the real, shipped `ps_service.restore.restore_instrument.restore_instrument`
+now. This file therefore no longer fakes `restore` at all: every scenario
+that can be reached without a real GRAPH.COPY/WATCH-guarded FalkorDB round
+trip (checksum/schema_version/content-validation rejection, every
+pre-restore failure mode, and the never-reached-the-delegate cases) drives
+the REAL `restore_instrument` against a real, correctly-checksummed
+artifact via `_manifest`/`_transport_with`. The handful of scenarios that
+need the whole staged-write sequence to *succeed* (GRAPH.COPY/WATCH-guarded
+RENAME finalize) get there by substituting only the `open_db` boundary
+(`_use_fake_restore_infra`'s own default, `_default_open_db_stub`) with a
+real, stateful, in-memory FalkorDB-shaped test-data builder
+(`_FakeStagingFalkorDB`, below) -- duplicated verbatim from `tests/restore/
+test_restore_instrument_audit_log.py`'s own identically-named fixture
+(Slice I, IMPL_SLICE_8.md), not imported (see that fixture's own leading
+comment for why), so `stage_graph`/`stage_and_finalize_policy_system_leg`/
+`raw_connection` all run FOR REAL against it, exactly as that file's own
+tests already prove. No `# detroit-exception:` escape hatch is needed here
+any more (issue #163 Slice 19: the prior raw no-op stubs for those two
+functions, and the docstring justifying them, are gone).
+
 Hand-written structural fakes throughout -- no `unittest.mock` -- mirroring
 `test_get_catalog_listing_tool.py`'s/`test_restorations_from_catalog.py`'s
 own convention. `FakeCuratedArtifactTransport`/`FakeFailingCuratedSourceTransport`
 (`tests/api/_fakes.py`) are the existing fixtures the REST-side
 `POST /restorations/from-catalog` test suite already uses -- reused here
-unchanged, not reinvented, per PLAN.md's own instruction. `_FakeDb`,
-`_FakeCatalogRestoreStage`, `_fetch_artifact_through`, and
-`_fake_dependencies` mirror `test_restorations_from_catalog.py`'s own
-identically-named/-shaped helpers (that file's fixtures are local to it, not
-exported, so they are mirrored here rather than imported).
+unchanged, not reinvented, per PLAN.md's own instruction. `_fetch_artifact_through`
+mirrors `test_restorations_from_catalog.py`'s own identically-shaped helper
+(that file's fixture is local to it, not exported, so it is mirrored here
+rather than imported).
 
 `pytest-asyncio` is not installed; this file drives the tool with a bare
 `asyncio.run(server.call_tool(...))`, exactly like
@@ -39,8 +62,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import json
+import re
 from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
@@ -53,13 +76,17 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
-from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+from ps_service.api.restore_orchestration import CatalogRestoreInfra
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.models import AccessRole
+from ps_service.company_merge.falkordb_client import single_tenant_graph_name
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.curated_source.artifact_client import fetch_artifact
 from ps_service.curated_source.resolve import EffectiveCatalogSource
+from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
+from ps_service.export.models import SerializedGraph, SerializedNode
+from ps_service.export.serialize import checksum_bytes, to_json_bytes
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -67,8 +94,6 @@ from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
 )
-from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
-from ps_service.restore.models import RestoreOutcome
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
@@ -83,7 +108,6 @@ if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.artifact_client import FetchArtifactCall, FetchedArtifact
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
-    from ps_service.restore.models import RestoreArtifact
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
@@ -93,72 +117,67 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 _ALLOWED_ALGORITHMS = frozenset({"RS256"})
 
 _INSTRUMENT_ID = "CRA-1.0"
-
-_VALID_MANIFEST: dict[str, object] = {
-    "instrument_id": _INSTRUMENT_ID,
-    "celex": "32024R2847",
-    "title": "Cyber Resilience Act",
-    "short_name": "CRA",
-    "version": "1.0",
-    "source_type": "external",
-    "jurisdiction": "EU",
-    "schema_version": "1",
-    "exported_at": "2026-01-01T00:00:00Z",
-    "baseline_sha256": "a" * 64,
-    "native_sha256": "b" * 64,
-}
-_BASELINE_BYTES = b'{"nodes": [], "edges": []}'
-_NATIVE_BYTES = b'{"nodes": [], "edges": []}'
+_EMPTY_GRAPH_BYTES = to_json_bytes(SerializedGraph(nodes=(), edges=()))
 
 
-def _valid_transport() -> FakeCuratedArtifactTransport:
+def _manifest(**overrides: object) -> dict[str, object]:
+    """A valid `InstrumentManifest` payload, real checksums included.
+
+    Every field is real/self-consistent by default (`baseline_sha256`/
+    `native_sha256` computed from `_EMPTY_GRAPH_BYTES`, `schema_version` the
+    real `DOMAIN_SCHEMA_VERSION`) so the real `restore_instrument`'s D9/D10
+    verification passes unless a caller deliberately overrides a field to
+    break it.
+    """
+    manifest: dict[str, object] = {
+        "instrument_id": _INSTRUMENT_ID,
+        "celex": "32024R2847",
+        "title": "Cyber Resilience Act",
+        "short_name": "CRA",
+        "version": "1.0",
+        "source_type": "external",
+        "jurisdiction": "EU",
+        "schema_version": DOMAIN_SCHEMA_VERSION,
+        "exported_at": "2026-01-01T00:00:00Z",
+        "baseline_sha256": checksum_bytes(_EMPTY_GRAPH_BYTES),
+        "native_sha256": checksum_bytes(_EMPTY_GRAPH_BYTES),
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def _transport_with(
+    *, native_blob: bytes = _EMPTY_GRAPH_BYTES, **manifest_overrides: object
+) -> FakeCuratedArtifactTransport:
     return FakeCuratedArtifactTransport(
         {
-            "manifest.json": json.dumps(_VALID_MANIFEST).encode("utf-8"),
-            "baseline.json": _BASELINE_BYTES,
-            "native.json": _NATIVE_BYTES,
+            "manifest.json": json.dumps(_manifest(**manifest_overrides)).encode("utf-8"),
+            "baseline.json": _EMPTY_GRAPH_BYTES,
+            "native.json": native_blob,
         }
     )
 
 
-@dataclasses.dataclass
-class _FakeDb:
-    """A stand-in for `falkordb.FalkorDB` -- never actually touched by these fakes."""
+def _valid_transport() -> FakeCuratedArtifactTransport:
+    return _transport_with()
 
 
-class _FakeCatalogRestoreStage:
-    """Records every call (including the `actor` kwarg) and returns/raises a result."""
+def _content_violating_transport() -> FakeCuratedArtifactTransport:
+    """A transport whose native leg carries a label outside `NATIVE_ALLOWED_LABELS`.
 
-    def __init__(self, *, error: Exception | None = None) -> None:
-        self.calls: list[dict[str, object]] = []
-        self._error = error
-
-    def __call__(
-        self,
-        artifact: RestoreArtifact,
-        *,
-        db: object,
-        single_tenant_graph_name: str,
-        similarity_threshold: float,
-        actor: str,
-        emitter: object | None = None,
-        source: str | None = None,
-    ) -> RestoreOutcome:
-        _ = (db, emitter)
-        self.calls.append(
-            {
-                "single_tenant_graph_name": single_tenant_graph_name,
-                "similarity_threshold": similarity_threshold,
-                "actor": actor,
-                "source": source,
-            }
+    Its checksum is computed from the actual (violating) bytes, so D9 passes
+    and the real `_validate_content` is the thing that rejects it (GH #104)
+    -- zero FalkorDB calls either way, exactly like a checksum/schema_version
+    rejection.
+    """
+    bad_native_bytes = to_json_bytes(
+        SerializedGraph(
+            nodes=(SerializedNode(label="EvilLabel", properties={"id": "x"}),), edges=()
         )
-        if self._error is not None:
-            raise self._error
-        return RestoreOutcome(
-            instrument_id=artifact.manifest.instrument_id,
-            stages=("verified", "staged", "merged_and_finalized"),
-        )
+    )
+    return _transport_with(
+        native_blob=bad_native_bytes, native_sha256=checksum_bytes(bad_native_bytes)
+    )
 
 
 def _fetch_artifact_through(transport: CuratedSourceTransport) -> FetchArtifactCall:
@@ -168,18 +187,457 @@ def _fetch_artifact_through(transport: CuratedSourceTransport) -> FetchArtifactC
     return _call
 
 
-def _fake_dependencies(
-    transport: CuratedSourceTransport, stage: _FakeCatalogRestoreStage
-) -> CatalogRestoreDependencies:
-    def _resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
-        return EffectiveCatalogSource(url=config.curated_source_base_url, is_override=False)
+def _resolve_effective_source_stub(config: ServiceConfig) -> EffectiveCatalogSource:
+    return EffectiveCatalogSource(url=config.curated_source_base_url, is_override=False)
 
-    return CatalogRestoreDependencies(
-        fetch_artifact=_fetch_artifact_through(transport),
-        resolve_effective_source=_resolve_effective_source,
-        open_db=lambda config: cast("FalkorDB", _FakeDb()),
-        single_tenant_graph_name=lambda config: "policy_system",
-        restore=stage,
+
+# --------------------------------------------------------------------------
+# A real, stateful in-memory FalkorDB-shaped test-data builder (issue #163 Slice 19).
+#
+# Duplicated from `tests/restore/test_restore_instrument_audit_log.py`'s own
+# `_FakeStagingFalkorDB`/`_FakeStagedGraph`/`_FakeSingleTenantGraph`/
+# `_FakeWatchablePipeline`/`_FakeRawConnection` (Slice I, IMPL_SLICE_8.md),
+# verbatim -- NOT imported, per this test suite's own established
+# per-file-duplication convention (that file's own `_FakeSingleTenantGraph`
+# docstring: "duplicated per this test suite's existing per-component
+# convention" from `test_restore_instrument_classification_passthrough.py`).
+# A cross-package import (`mcp_interface` -> `restore`) was tried first and
+# rejected: pytest's importlib import mode registers each package in
+# `sys.modules` lazily, the first time IT collects a file belonging to that
+# package; since `mcp_interface` sorts alphabetically before `restore`,
+# `sys.modules["restore"]` is not yet populated when this file is collected
+# in a fresh worker process (confirmed empirically: reproduces under the
+# exact `uv run pytest -q -n auto --dist=loadscope` invocation this repo's
+# own CI/exit-criteria command uses, not just a narrow-subset artifact) --
+# duplication sidesteps that hazard entirely.
+#
+# Previously (before issue #163 Slice 19), this file's own
+# `_use_real_restore_with_staging_faked` monkeypatched `stage_graph`/
+# `stage_and_finalize_policy_system_leg` into raw no-op stubs (behind two
+# now-removed `# detroit-exception:` comments citing this same file's
+# staging convention as precedent) -- an AC-BI-004 violation confirmed by
+# VERIFY_B.md, since the cited precedent had already been upgraded to this
+# real fixture and the fix never propagated back here. This fixture lets
+# `stage_graph`/`stage_and_finalize_policy_system_leg`/`raw_connection` all
+# run FOR REAL: a real `GRAPH.COPY` snapshot and a real WATCH-guarded
+# `RENAME` finalize against this in-memory graph-key registry, not a
+# scripted no-op.
+# --------------------------------------------------------------------------
+
+
+class _FakeQueryResult:
+    """Satisfies `GraphQueryResult`/the bare `.result_set` shape structurally."""
+
+    def __init__(self, result_set: list[object]) -> None:
+        self._result_set = result_set
+
+    @property
+    def result_set(self) -> list[object]:
+        return self._result_set
+
+
+class _FakeRegulatoryInstrumentNode:
+    """Satisfies `graph_reader._RegulatoryInstrumentNode` structurally -- only
+    `.properties` is ever read.
+    """
+
+    def __init__(self, properties: dict[str, object]) -> None:
+        self.properties = properties
+
+
+_CREATE_NODE_RE = re.compile(r"CREATE \(n:(?P<label>\w+)\) SET n = row")
+_MERGE_EDGE_RE = re.compile(
+    r"MATCH \(s:(?P<source_label>\w+) \{id: row\.source_id\}\), "
+    r"\(t:(?P<target_label>\w+) \{id: row\.target_id\}\) "
+    r"MERGE \(s\)-\[r:(?P<rel>\w+)\]->\(t\)"
+)
+_COUNT_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN count\(n\) AS c$")
+_WHOLE_NODE_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+) \{id: \$(?P<param>\w+)\}\) RETURN n$")
+_PROVENANCE_READ_RE = re.compile(
+    r"^MATCH \(r:RegulatoryInstrument \{id: \$regulatory_instrument_id\}\)-\[e:(?P<rel>\w+)\]->"
+    r"\(n:(?P<label>\w+)\) RETURN n\.id, e\.(?P<prop>\w+)$"
+)
+_EDGE_READ_RE = re.compile(
+    r"^MATCH \(s:(?P<source_label>\w+)\)-\[:(?P<rel>\w+)\]->\(t:(?P<target_label>\w+)\) "
+    r"RETURN s\.id, t\.id$"
+)
+_NODE_READ_RE = re.compile(
+    r"^MATCH \(n:(?P<label>\w+)\)(?P<filter> WHERE n\.status = 'approved')? "
+    r"RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$"
+)
+_VIVIFY_QUERY = "MATCH (n) WHERE false RETURN n"
+
+
+class _FakeStagedGraph:
+    """A generic, mutable in-memory graph store standing in for one
+    FalkorDB-selected staged key (`stage_graph`'s `{short}_native`/
+    `{short}_baseline` legs).
+
+    Populated FOR REAL by `ps_service.restore.populate.populate_graph`'s two
+    generic write templates (`UNWIND $rows AS row CREATE (n:{label}) SET n =
+    row` / the matching edge `MERGE`), and read back FOR REAL by
+    `ps_service.company_merge.graph_reader.read_baseline_graph`'s twenty-two
+    fixed-literal read queries -- every one of which follows one of four
+    regular shapes (a node-column projection, the whole-node RegulatoryInstrument
+    read, a bare two-column edge read, or a RegulatoryInstrument-anchored
+    provenance-edge read), so one regex-driven dispatcher answers all of
+    them generically instead of hand-listing per-label branches. Not a
+    general Cypher engine -- recognizes exactly the query shapes these two
+    real modules issue, the same "structural fake, not a mock" precedent
+    `_FakeBaselineGraph` (`test_restore_instrument_classification_
+    passthrough.py`) already established, just backed by generically-
+    populated tables instead of constructor-supplied rows.
+    """
+
+    def __init__(self) -> None:
+        self._nodes: dict[str, dict[str, dict[str, object]]] = {}
+        self._edges: dict[tuple[str, str, str], list[tuple[str, str, dict[str, object]]]] = {}
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        params = params or {}
+        if q == _VIVIFY_QUERY:
+            return _FakeQueryResult([])
+        if match := _CREATE_NODE_RE.search(q):
+            label = match.group("label")
+            table = self._nodes.setdefault(label, {})
+            for row in cast("list[dict[str, object]]", params["rows"]):
+                table[cast("str", row["id"])] = dict(row)
+            return _FakeQueryResult([])
+        if match := _MERGE_EDGE_RE.search(q):
+            key = (match.group("rel"), match.group("source_label"), match.group("target_label"))
+            bucket = self._edges.setdefault(key, [])
+            for row in cast("list[dict[str, object]]", params["rows"]):
+                bucket.append(
+                    (
+                        cast("str", row["source_id"]),
+                        cast("str", row["target_id"]),
+                        dict(cast("dict[str, object]", row["properties"])),
+                    )
+                )
+            return _FakeQueryResult([])
+        if match := _COUNT_RE.match(q):
+            return _FakeQueryResult([[len(self._nodes.get(match.group("label"), {}))]])
+        if match := _WHOLE_NODE_READ_RE.match(q):
+            row = self._nodes.get(match.group("label"), {}).get(
+                cast("str", params[match.group("param")])
+            )
+            if row is None:
+                return _FakeQueryResult([])
+            return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(dict(row))]])
+        if match := _PROVENANCE_READ_RE.match(q):
+            # `_edges` is keyed (rel, source_label, target_label); provenance
+            # edges are always sourced from RegulatoryInstrument.
+            key = (match.group("rel"), "RegulatoryInstrument", match.group("label"))
+            wanted_source = cast("str", params["regulatory_instrument_id"])
+            prop = match.group("prop")
+            return _FakeQueryResult(
+                [
+                    [target_id, edge_properties.get(prop)]
+                    for source_id, target_id, edge_properties in self._edges.get(key, [])
+                    if source_id == wanted_source
+                ]
+            )
+        if match := _EDGE_READ_RE.match(q):
+            key = (match.group("rel"), match.group("source_label"), match.group("target_label"))
+            return _FakeQueryResult(
+                [
+                    [source_id, target_id]
+                    for source_id, target_id, _props in self._edges.get(key, [])
+                ]
+            )
+        if match := _NODE_READ_RE.match(q):
+            label = match.group("label")
+            approved_only = bool(match.group("filter"))
+            columns = [c.split(".", 1)[1] for c in match.group("cols").split(", ")]
+            rows: list[object] = []
+            for row in self._nodes.get(label, {}).values():
+                if approved_only and row.get("status") != "approved":
+                    continue
+                rows.append([row.get(column) for column in columns])
+            return _FakeQueryResult(rows)
+        raise AssertionError(f"unexpected query issued: {q!r}")
+
+
+class _FakeSingleTenantGraph:
+    """Answers Capability/Policy existing-canonical-index reads and every
+    `graph_writer` write query `_run_baseline_merge` issues against the
+    single-tenant/snapshot graph -- mirrors `test_restore_instrument_
+    classification_passthrough.py`'s own `_FakeSingleTenantGraph` exactly
+    (duplicated per this test suite's per-component fake convention), plus
+    a `.copy()` (`GRAPH.COPY`) method that file never needed: its tests call
+    `_run_baseline_merge` directly, bypassing `staging.
+    stage_and_finalize_policy_system_leg`'s own `snapshot_single_tenant`
+    step, which this file's tests -- running the REAL staging orchestration
+    -- do not.
+    """
+
+    def __init__(
+        self,
+        *,
+        registry: dict[str, object] | None = None,
+        capability_rows: list[object] | None = None,
+        policy_rows: list[object] | None = None,
+        practice_area_rows: list[object] | None = None,
+        risk_path_rows: list[object] | None = None,
+    ) -> None:
+        self._registry = registry
+        self._capabilities: dict[str, list[object]] = {}
+        for row in capability_rows or []:
+            row_list = list(cast("list[object]", row))
+            self._capabilities[cast("str", row_list[0])] = row_list
+        self._policies: dict[str, list[object]] = {}
+        for row in policy_rows or []:
+            row_list = list(cast("list[object]", row))
+            self._policies[cast("str", row_list[0])] = row_list
+        self._standards: dict[str, list[object]] = {}
+        self._controls: dict[str, list[object]] = {}
+        self._practice_areas: dict[str, dict[str, object]] = {}
+        for row in practice_area_rows or []:
+            row_list = list(cast("list[object]", row))
+            self._practice_areas[cast("str", row_list[0])] = dict(
+                cast("dict[str, object]", row_list[1])
+            )
+        self._risk_paths: dict[str, dict[str, object]] = {}
+        for row in risk_path_rows or []:
+            row_list = list(cast("list[object]", row))
+            self._risk_paths[cast("str", row_list[0])] = dict(
+                cast("dict[str, object]", row_list[1])
+            )
+        self.calls: list[object] = []
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        self.calls.append((q, params))
+        if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
+            return _FakeQueryResult([list(row) for row in self._capabilities.values()])
+        if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
+            return _FakeQueryResult([list(row) for row in self._policies.values()])
+        if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
+            self._set(self._standards, params, "title")
+            return _FakeQueryResult([])
+        if "MERGE (n:Control {id: $id}) SET n += $properties" in q:
+            self._set(self._controls, params, "title")
+            return _FakeQueryResult([])
+        if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
+            self._mint(self._capabilities, params, "name")
+            return _FakeQueryResult([])
+        if "MERGE (n:Policy {id: $id}) ON CREATE SET" in q:
+            self._mint(self._policies, params, "title")
+            return _FakeQueryResult([])
+        if "MERGE (n:PracticeArea {id: $id}) ON CREATE SET" in q:
+            self._mint_properties(self._practice_areas, params)
+            return _FakeQueryResult([])
+        if "MERGE (n:RiskPath {id: $id}) ON CREATE SET" in q:
+            self._mint_properties(self._risk_paths, params)
+            return _FakeQueryResult([])
+        if "MATCH (n:Capability {id: $id}) WHERE n.embedding IS NULL" in q:
+            self._backfill(self._capabilities, params)
+            return _FakeQueryResult([])
+        if "MATCH (n:Policy {id: $id}) WHERE n.embedding IS NULL" in q:
+            self._backfill(self._policies, params)
+            return _FakeQueryResult([])
+        if q == "UNWIND $ids AS id MATCH (n {id: id}) RETURN id":
+            assert params is not None
+            requested_ids = cast("list[str]", params["ids"])
+            known_ids = (
+                set(self._capabilities)
+                | set(self._policies)
+                | set(self._standards)
+                | set(self._controls)
+                | set(self._practice_areas)
+                | set(self._risk_paths)
+            )
+            return _FakeQueryResult([[rid] for rid in requested_ids if rid in known_ids])
+        return _FakeQueryResult([[0]])  # any other write (RegulatoryInstrument, edges, ...)
+
+    def copy(self, clone: str) -> object:
+        """`GRAPH.COPY` stand-in: snapshot this graph's full state under `clone`.
+
+        Registers the clone into the shared registry `_FakeStagingFalkorDB`
+        passed at construction, so a later `db.select_graph(clone)` returns
+        this same snapshot object -- `stage_and_finalize_policy_system_leg`'s
+        own `snapshot_single_tenant` -> `run_offline_merge(snapshot_name)` ->
+        `select_company_merge_graph(db, snapshot_name)` call chain.
+        """
+        snapshot = _FakeSingleTenantGraph(
+            registry=self._registry,
+            capability_rows=[list(row) for row in self._capabilities.values()],
+            policy_rows=[list(row) for row in self._policies.values()],
+            practice_area_rows=[[pid, dict(props)] for pid, props in self._practice_areas.items()],
+            risk_path_rows=[[rid, dict(props)] for rid, props in self._risk_paths.items()],
+        )
+        snapshot._standards = dict(self._standards)  # same-class internal copy
+        snapshot._controls = dict(self._controls)  # same-class internal copy
+        if self._registry is not None:
+            self._registry[clone] = snapshot
+        return snapshot
+
+    def _set(
+        self, table: dict[str, list[object]], params: dict[str, object] | None, text_key: str
+    ) -> None:
+        assert params is not None
+        node_id = cast("str", params["id"])
+        properties = cast("dict[str, object]", params["properties"])
+        table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
+
+    def _mint(
+        self, table: dict[str, list[object]], params: dict[str, object] | None, text_key: str
+    ) -> None:
+        assert params is not None
+        node_id = cast("str", params["id"])
+        if node_id in table:
+            return
+        properties = cast("dict[str, object]", params["properties"])
+        table[node_id] = [node_id, properties.get(text_key), properties.get("embedding")]
+
+    def _mint_properties(
+        self, table: dict[str, dict[str, object]], params: dict[str, object] | None
+    ) -> None:
+        assert params is not None
+        node_id = cast("str", params["id"])
+        if node_id in table:
+            return
+        properties = cast("dict[str, object]", params["properties"])
+        table[node_id] = dict(properties)
+
+    def _backfill(self, table: dict[str, list[object]], params: dict[str, object] | None) -> None:
+        assert params is not None
+        node_id = cast("str", params["id"])
+        row = table.get(node_id)
+        if row is None or row[2] is not None:
+            return
+        row[2] = params["embedding"]
+
+
+class _FakeWatchablePipeline:
+    """Satisfies `_WatchablePipeline` structurally: a single-writer fake, so
+    `watch()` never observes a conflicting change and `execute()` always
+    succeeds -- these tests exercise the SUCCESS paths only (concurrency-
+    retry itself is already proven live by `test_restore_instrument_
+    concurrency_live.py`).
+    """
+
+    def __init__(self, registry: dict[str, object]) -> None:
+        self._registry = registry
+        self._queued: list[tuple[str, str]] = []
+
+    def watch(self, *names: str) -> None:
+        del names
+
+    def multi(self) -> None:
+        pass
+
+    def rename(self, src: str, dst: str) -> object:
+        self._queued.append((src, dst))
+        return None
+
+    def execute(self) -> list[object]:
+        for src, dst in self._queued:
+            self._registry[dst] = self._registry.pop(src)
+        self._queued = []
+        return []
+
+    def reset(self) -> None:
+        self._queued = []
+
+
+class _FakeRawConnection:
+    """Satisfies `_RawGraphConnection` structurally, backed by the same
+    registry `_FakeStagingFalkorDB.select_graph` reads/writes -- so a
+    `RENAME` (finalize) or `DELETE` (discard-on-failure) is a real mutation
+    of the same in-memory graph-key store every `select_graph` call sees.
+    """
+
+    def __init__(self, registry: dict[str, object]) -> None:
+        self._registry = registry
+
+    def rename(self, src: str, dst: str) -> bool:
+        self._registry[dst] = self._registry.pop(src)
+        return True
+
+    def delete(self, *names: str) -> int:
+        deleted = 0
+        for name in names:
+            if name in self._registry:
+                del self._registry[name]
+                deleted += 1
+        return deleted
+
+    def pipeline(self, *, transaction: bool = True) -> _FakeWatchablePipeline:
+        del transaction
+        return _FakeWatchablePipeline(self._registry)
+
+
+class _FakeStagingFalkorDB:
+    """The `db: FalkorDB` stand-in for these tests: a real (in-memory) graph-
+    key registry, so `stage_graph`/`stage_and_finalize_policy_system_leg`/
+    `_run_baseline_merge`/`raw_connection` all run unmocked against it.
+    """
+
+    def __init__(self, single_tenant_graph_name: str) -> None:
+        self._graphs: dict[str, object] = {}
+        self._graphs[single_tenant_graph_name] = _FakeSingleTenantGraph(registry=self._graphs)
+        self.connection = _FakeRawConnection(self._graphs)
+
+    def select_graph(self, name: str) -> object:
+        if name not in self._graphs:
+            self._graphs[name] = _FakeStagedGraph()
+        return self._graphs[name]
+
+
+def _default_open_db_stub(config: ServiceConfig) -> FalkorDB:
+    """The `open_db` boundary's own default: a real, in-memory FalkorDB stand-in.
+
+    Issue #163 Slice 19: previously `lambda config: cast("FalkorDB", object())`, a value
+    only viable because the staging/merge/finalize collaborators underneath it
+    (`stage_graph`/`stage_and_finalize_policy_system_leg`/`raw_connection`) were themselves
+    monkeypatched into raw no-op stubs -- an AC-BI-004 violation (VERIFY_B.md), since
+    `tests/restore/test_restore_instrument_audit_log.py` had already replaced that exact
+    pattern with a real, stateful in-memory FalkorDB-shaped test-data builder
+    (`_FakeStagingFalkorDB` above), just never propagated back here. This default means every
+    scenario that reaches this far now drives the REAL `stage_graph`/`stage_and_finalize_
+    policy_system_leg`/`raw_connection` -- a real `GRAPH.COPY` snapshot and a real
+    WATCH-guarded `RENAME` finalize against this in-memory graph-key registry, not a scripted
+    no-op. `single_tenant_graph_name()` (the same real accessor
+    `restore_orchestration._default_single_tenant_graph_name` resolves through, since
+    `CatalogRestoreInfra` deliberately excludes that field from substitution) seeds the fake
+    under the exact key name the real orchestration will look it up by. A fresh instance is
+    built per call, matching the once-per-tool-call cardinality `dependencies.open_db(config)`
+    is actually invoked at.
+    """
+    del config
+    return cast("FalkorDB", _FakeStagingFalkorDB(single_tenant_graph_name()))
+
+
+def _use_fake_restore_infra(
+    monkeypatch: pytest.MonkeyPatch,
+    transport: CuratedSourceTransport,
+    *,
+    open_db: Callable[[ServiceConfig], FalkorDB] | None = None,
+    fetch_artifact_override: FetchArtifactCall | None = None,
+) -> None:
+    """Patch only the narrowed fetch/resolve/open_db boundary; the real factory wires the
+    real `restore_instrument` business logic.
+
+    Targets `ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra`
+    -- the approved-boundary entry issue #163 Slice E added to
+    `docs/coding-standards/approved-mock-boundaries.yaml` -- so
+    `build_default_restore_from_catalog_dependencies()`'s own, unpatched call (`mcp_server.py`'s
+    one call site makes it with zero arguments) still wires the real, shipped
+    `restore_instrument`; only the curated-content fetch/effective-source-resolution/FalkorDB
+    boundary beneath it is substituted. `open_db` defaults to `_default_open_db_stub` -- a real,
+    stateful FalkorDB stand-in (issue #163 Slice 19), not an inert placeholder -- so every
+    caller of this function gets a working staging/merge/finalize path for free unless it
+    supplies its own `open_db` (e.g. to prove the boundary is never opened, or to force a
+    connection failure).
+    """
+    infra = CatalogRestoreInfra(
+        fetch_artifact=fetch_artifact_override or _fetch_artifact_through(transport),
+        resolve_effective_source=_resolve_effective_source_stub,
+        open_db=open_db or _default_open_db_stub,
+    )
+    monkeypatch.setattr(
+        "ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra",
+        lambda: infra,
     )
 
 
@@ -201,6 +659,22 @@ def _set_similarity_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.83")
 
 
+def _restore_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        line
+        for line in all_lines
+        if line.get("component") == "restore" and line.get("action") == "restore_instrument"
+    ]
+
+
+def _mcp_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        line
+        for line in all_lines
+        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
+    ]
+
+
 # --- Slice 2.1: happy path ----------------------------------------------------
 
 
@@ -217,12 +691,7 @@ def test_happy_path_returns_accepted_response_shape_and_logs_principal(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
-    stage = _FakeCatalogRestoreStage()
-    transport = _valid_transport()
-    fake_dependencies = _fake_dependencies(transport, stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     result = _call_restore_instrument()
 
@@ -237,11 +706,7 @@ def test_happy_path_returns_accepted_response_shape_and_logs_principal(
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
-    mcp_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
-    ]
+    mcp_lines = _mcp_log_lines(all_lines)
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line["run_id"] for line in mcp_lines)
     assert len({line["run_id"] for line in mcp_lines}) == 1
@@ -260,12 +725,8 @@ def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_fil
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage()
     transport = _valid_transport()
-    fake_dependencies = _fake_dependencies(transport, stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, transport)
 
     result = _call_restore_instrument()
 
@@ -277,26 +738,25 @@ def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_fil
 
 
 def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_actor(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
-    """The fake `restore` delegate is called with `actor` equal to the
-    resolved principal (D-RESTORE-DELEGATE's `actor=principal or "unknown"`
-    convention).
+    """The REAL `restore_instrument`'s own D14 audit log entries carry `caller` equal to the
+    resolved principal (D-RESTORE-DELEGATE's `actor=principal or "unknown"` convention) --
+    a stronger proof than a fake delegate's own recorded kwarg, since it proves the actor
+    genuinely reached the real function's own logging, not just a spy.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
-    configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    emitter = configure()
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     result = _call_restore_instrument()
 
     assert result.is_error is False
-    assert len(stage.calls) == 1
-    assert stage.calls[0]["actor"] == LOCAL_TEST_PRINCIPAL_ID
+    emitter.flush()
+    restore_lines = _restore_log_lines(read_lines(resolve_default_log_path()))
+    assert [line["outcome"] for line in restore_lines] == ["started", "succeeded"]
+    assert all(line.get("caller") == LOCAL_TEST_PRINCIPAL_ID for line in restore_lines)
 
 
 # --- Slice 2.1: validation (D-INSTRUMENT-ID-STRICTNESS) ------------------------
@@ -311,18 +771,17 @@ def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body
     regex: pydantic-core's regex backend has no look-around support) rejects
     a leading hyphen, a forward slash, and two `".."`-containing values --
     the same cases `test_parser.py`'s own `_instrument_id_type` tests cover
-    -- before `restore_instrument`'s body ever runs (the fake delegate is
-    never called). A bare in-process `server.call_tool` (this module's own
-    convention throughout) propagates that schema rejection as a raised
-    `ToolError`, not a returned `CallToolResult(is_error=True)` -- confirmed
-    by reading `MCPServer.call_tool`'s own body, which skips the
-    `_handle_call_tool` wire-level handler's `except Exception -> CallToolResult`
-    translation that a real transport call goes through.
+    -- before `restore_instrument`'s body ever runs (the fetch transport
+    below is never called). A bare in-process `server.call_tool` (this
+    module's own convention throughout) propagates that schema rejection as
+    a raised `ToolError`, not a returned `CallToolResult(is_error=True)` --
+    confirmed by reading `MCPServer.call_tool`'s own body, which skips the
+    `_handle_call_tool` wire-level handler's `except Exception ->
+    CallToolResult` translation that a real transport call goes through.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage()
 
     class _NeverCalledTransport:
         def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> NoReturn:
@@ -330,15 +789,11 @@ def test_malformed_instrument_id_is_rejected_at_the_schema_layer_before_the_body
             message = "must not be called for a schema-rejected call"
             raise AssertionError(message)
 
-    fake_dependencies = _fake_dependencies(_NeverCalledTransport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _NeverCalledTransport())
 
     for bad_instrument_id in ("-leading-hyphen", "has/slash", "../etc/passwd", "a/../b"):
         with pytest.raises(ToolError):
             _call_restore_instrument(bad_instrument_id)
-        assert stage.calls == []
 
 
 # --- Slice 2.2 auth infra: mirrors test_get_catalog_listing_tool.py's/
@@ -485,8 +940,7 @@ def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate
     `test_get_catalog_listing_tool.py`'s own pattern, never a bare in-process
     `server.call_tool` -- the token's `sub` claim (never
     `LOCAL_TEST_PRINCIPAL_ID`) reaches both the `mcp_interface` log entries'
-    `principal` AND `run_restoration_from_catalog_source`'s own delegate
-    `actor` kwarg.
+    `principal` AND the real `restore_instrument`'s own D14 `caller` field.
 
     Issue #145: the caller must also hold `ComplianceOfficer` now that this
     tool is gated, so `_grant_compliance_officer` seeds that grant for this
@@ -498,30 +952,24 @@ def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate
     token_sub = "user-restore-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)
     _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     with _authenticated_test_client(auth_context=auth_context) as client:
         result_text = _call_restore_instrument_over_http(client, token=token)
 
     body = json.loads(result_text)
     assert body["instrument_id"] == _INSTRUMENT_ID
-    assert len(stage.calls) == 1
-    assert stage.calls[0]["actor"] == token_sub
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
-    mcp_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
-    ]
+    mcp_lines = _mcp_log_lines(all_lines)
     assert [line["outcome"] for line in mcp_lines] == ["started", "succeeded"]
     assert all(line.get("principal") == token_sub for line in mcp_lines)
     assert not any(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
+
+    restore_lines = _restore_log_lines(all_lines)
+    assert [line["outcome"] for line in restore_lines] == ["started", "succeeded"]
+    assert all(line.get("caller") == token_sub for line in restore_lines)
 
 
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(
@@ -538,43 +986,30 @@ def test_local_test_bypass_principal_still_threads_through_when_no_token_is_pres
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
 
     result = _call_restore_instrument()
 
     assert result.is_error is False
     emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    mcp_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
-    ]
+    mcp_lines = _mcp_log_lines(read_lines(resolve_default_log_path()))
     assert all(line.get("principal") == LOCAL_TEST_PRINCIPAL_ID for line in mcp_lines)
 
 
 def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principal(
     monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider, read_lines: ReadLines
 ) -> None:
-    """AC-BI-007: a FAILED call -- reusing Slice 2.2's checksum-rejection
-    branch -- still carries the resolved real-token principal on its
-    `outcome="failed"` `mcp_interface` log entry, not only the succeeded-call
-    case proven above.
+    """AC-BI-007: a FAILED call -- a real checksum-mismatched artifact -- still carries the
+    resolved real-token principal on its `outcome="failed"` `mcp_interface` log entry, not
+    only the succeeded-call case proven above.
     """
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-restore-failed-7"
     token = mock_oidc_provider.mint_token(sub=token_sub)
-    stage = _FakeCatalogRestoreStage(error=ArtifactIntegrityError("checksum mismatch"))
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
+    _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
 
     with _authenticated_test_client(auth_context=auth_context) as client:
         result_text = _call_restore_instrument_over_http(client, token=token)
@@ -583,11 +1018,7 @@ def test_failed_call_under_a_real_verified_token_still_carries_the_subs_principa
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
-    mcp_lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
-    ]
+    mcp_lines = _mcp_log_lines(all_lines)
     assert [line["outcome"] for line in mcp_lines] == ["started", "failed"]
     assert all(line.get("principal") == token_sub for line in mcp_lines)
 
@@ -601,16 +1032,20 @@ def test_curated_source_unreachable_returns_named_error_and_never_calls_the_dele
     """D-SANITIZE-RESTORE: an unreachable curated-content source
     (`CuratedSourceUnavailableError`, raised by `run_restoration_from_catalog_source`
     when `fetch_artifact` raises `CuratedSourceFetchError`) is caught and
-    returned as `error: <str(exc)>` verbatim -- the restore delegate is never
-    called.
+    returned as `error: <str(exc)>` verbatim -- the FalkorDB boundary is
+    never opened (the restore delegate is never reached).
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(FakeFailingCuratedSourceTransport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
+    open_db_calls: list[object] = []
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    _use_fake_restore_infra(
+        monkeypatch, FakeFailingCuratedSourceTransport(), open_db=_counting_open_db
     )
 
     result = _call_restore_instrument()
@@ -619,22 +1054,19 @@ def test_curated_source_unreachable_returns_named_error_and_never_calls_the_dele
     text = _text(result)
     assert text.startswith("error: ")
     assert text != "error: an unexpected error occurred"
-    assert stage.calls == []
+    assert open_db_calls == []
 
 
 def test_checksum_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """D-SANITIZE-RESTORE: the fetched artifact's checksum doesn't match its
-    own manifest (`ArtifactIntegrityError` from the fake `restore` delegate)
-    -> `RestoreArtifactRejectedError`, returned as `error: <str(exc)>`.
+    own manifest (real `ArtifactIntegrityError` from the real `restore_instrument`,
+    zero FalkorDB calls -- D9 runs before any) -> `RestoreArtifactRejectedError`,
+    returned as `error: <str(exc)>`.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage(error=ArtifactIntegrityError("checksum mismatch"))
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
 
     result = _call_restore_instrument()
 
@@ -645,39 +1077,35 @@ def test_checksum_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_schema_version_mismatch_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: `ArtifactSchemaVersionMismatchError` from the fake
-    `restore` delegate -> `RestoreArtifactRejectedError`, returned verbatim.
+    """D-SANITIZE-RESTORE: real `ArtifactSchemaVersionMismatchError` from the real
+    `restore_instrument` (D10, zero FalkorDB calls) -> `RestoreArtifactRejectedError`,
+    returned verbatim.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage(error=ArtifactSchemaVersionMismatchError("schema mismatch"))
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    bad_schema_version = "not-" + DOMAIN_SCHEMA_VERSION
+    _use_fake_restore_infra(monkeypatch, _transport_with(schema_version=bad_schema_version))
 
     result = _call_restore_instrument()
 
     assert result.is_error is False
     text = _text(result)
     assert text.startswith("error: ")
-    assert "schema mismatch" in text
+    assert "schema_version" in text
 
 
 def test_restore_stage_failure_returns_named_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """D-SANITIZE-RESTORE: any other restore-stage failure (a generic
-    exception from the fake `restore` delegate) -> `RestoreStageFailedError`,
-    returned as `error: <str(exc)>` naming the failing stage.
+    """D-SANITIZE-RESTORE: any other restore-stage failure -- here, a real
+    `ArtifactContentRejectedError` from the real `restore_instrument`'s own
+    content-validation step (GH #104, a native leg carrying a label outside
+    the allow-list) -> `RestoreStageFailedError`, returned as `error:
+    <str(exc)>` naming the failing stage.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage(error=RuntimeError("disk full"))
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _content_violating_transport())
 
     result = _call_restore_instrument()
 
@@ -695,16 +1123,19 @@ def test_missing_similarity_threshold_returns_named_configuration_error(
     any try/except inside `run_restoration_from_catalog_source`, when
     `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` is unset -- reaches the tool the
     same uncaught way, and is still caught by this tool's own
-    `RestoreStageFailedError` handler.
+    `RestoreStageFailedError` handler. The FalkorDB boundary is never
+    opened -- this check runs before `dependencies.open_db` is ever called.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     monkeypatch.delenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", raising=False)
     configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: fake_dependencies
-    )
+    open_db_calls: list[object] = []
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    _use_fake_restore_infra(monkeypatch, _valid_transport(), open_db=_counting_open_db)
 
     result = _call_restore_instrument()
 
@@ -712,7 +1143,7 @@ def test_missing_similarity_threshold_returns_named_configuration_error(
     text = _text(result)
     assert text.startswith("error: ")
     assert "PS_COMPANYMERGE_SIMILARITY_THRESHOLD" in text
-    assert stage.calls == []
+    assert open_db_calls == []
 
 
 def test_graph_unavailable_returns_generic_graph_message(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -724,24 +1155,18 @@ def test_graph_unavailable_returns_generic_graph_message(monkeypatch: pytest.Mon
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
 
     def _raising_open_db(config: ServiceConfig) -> FalkorDB:
         _ = config
         message = "connection refused -- must never reach the caller"
         raise ConnectionRefusedError(message)
 
-    broken_dependencies = dataclasses.replace(fake_dependencies, open_db=_raising_open_db)
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: broken_dependencies
-    )
+    _use_fake_restore_infra(monkeypatch, _valid_transport(), open_db=_raising_open_db)
 
     result = _call_restore_instrument()
 
     assert result.is_error is False
     assert _text(result) == "error: the policy graph database is not reachable"
-    assert stage.calls == []
 
 
 def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
@@ -757,19 +1182,14 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     _set_similarity_threshold(monkeypatch)
     emitter = configure()
-    stage = _FakeCatalogRestoreStage()
-    fake_dependencies = _fake_dependencies(_valid_transport(), stage)
 
     def _raising_fetch_artifact(base_url: str, instrument_id: str) -> FetchedArtifact:
         _ = (base_url, instrument_id)
         message = "boom -- must never reach the caller"
         raise ValueError(message)
 
-    broken_dependencies = dataclasses.replace(
-        fake_dependencies, fetch_artifact=_raising_fetch_artifact
-    )
-    monkeypatch.setattr(
-        mcp_server, "build_default_restore_from_catalog_dependencies", lambda: broken_dependencies
+    _use_fake_restore_infra(
+        monkeypatch, _valid_transport(), fetch_artifact_override=_raising_fetch_artifact
     )
 
     result = _call_restore_instrument()
@@ -777,12 +1197,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert result.is_error is False
     assert _text(result) == "error: an unexpected error occurred"
     emitter.flush()
-    all_lines = read_lines(resolve_default_log_path())
-    lines = [
-        line
-        for line in all_lines
-        if line.get("component") == "mcp_interface" and line.get("action") == "restore_instrument"
-    ]
+    lines = _mcp_log_lines(read_lines(resolve_default_log_path()))
     assert [line["outcome"] for line in lines] == ["started", "failed"]
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID

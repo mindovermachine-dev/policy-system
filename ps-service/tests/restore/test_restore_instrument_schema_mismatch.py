@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import InstrumentManifest
 from ps_service.export.serialize import checksum_bytes
+from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.restore.errors import ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
 from ps_service.restore.restore_instrument import restore_instrument
@@ -87,25 +87,24 @@ def test_schema_version_mismatch_error_names_both_versions() -> None:
     assert DOMAIN_SCHEMA_VERSION in message
 
 
-class _SentinelReachedStartedLogError(Exception):
-    """Raised by a monkeypatched `_emit_restore_log` stand-in.
-
-    Proves schema_version verification passed control onward (to
+def test_matching_schema_version_does_not_raise() -> None:
+    """Proves schema_version verification (D10) passed control onward (to
     `restore_instrument`'s `outcome="started"` audit-log emission) without
-    raising `ArtifactSchemaVersionMismatchError` -- a stronger, more
-    targeted proof than running the whole function to completion (which now
-    requires real staging collaborators this file's `_NEVER_TOUCHED_DB`
-    deliberately cannot provide; see `test_restore_instrument_integrity.py`'s
-    module docstring).
+    raising `ArtifactSchemaVersionMismatchError` -- exercised via the real,
+    very next collaborator (`_emit_restore_log` -> the real `emit_log_entry`
+    facade), which naturally raises `LoggingLifecycleError` once control
+    reaches it: this file's `_restore()` helper passes no `emitter=`, and
+    the root conftest's autouse `_isolate_logging` fixture resets the
+    facade's process-wide default emitter to `None` around every test, so
+    "no emitter and no default configured" is a real, deterministic failure
+    state here -- a stronger, more targeted proof than a monkeypatched
+    sentinel standing in for "control reached here" (AC-BI-004), and than
+    running the whole function to completion, which still requires real
+    staging collaborators this file's `_NEVER_TOUCHED_DB` deliberately
+    cannot provide (see `test_restore_instrument_integrity.py`'s module
+    docstring).
     """
-
-
-def test_matching_schema_version_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _sentinel(**_kwargs: object) -> None:
-        raise _SentinelReachedStartedLogError
-
-    monkeypatch.setattr(restore_instrument_module, "_emit_restore_log", _sentinel)
     artifact = _artifact(_manifest(schema_version=DOMAIN_SCHEMA_VERSION))
 
-    with pytest.raises(_SentinelReachedStartedLogError):
+    with pytest.raises(LoggingLifecycleError):
         _restore(artifact)

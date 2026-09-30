@@ -23,7 +23,6 @@ import pytest
 import redis.exceptions
 from mcp.types import CallToolResult, TextContent
 
-from ps_service.config import ServiceConfigurationError
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -32,14 +31,10 @@ from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
     _WRITE_CLAUSE_REJECTION_MESSAGE,  # pyright: ignore[reportPrivateUsage]  # test pins the exact module-internal rejection wording
 )
-from ps_service.query_engine.models import QueryResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-
-    from ps_service.logging.emitter import LogEmitter
-    from ps_service.query_engine.falkordb_client import GraphHandle
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -70,11 +65,13 @@ class _FakeGraphHandle:
         self._result = result
         self._error = error
         self.calls: list[str] = []
+        self.timeouts: list[int | None] = []
 
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> _FakeQueryResult:
         self.calls.append(q)
+        self.timeouts.append(timeout)
         if self._error is not None:
             raise self._error
         if q == _SEED_CHECK_QUERY:
@@ -124,37 +121,34 @@ def test_cypher_tool_passes_config_query_timeout_ms_and_row_cap_to_execute_cyphe
 ) -> None:
     """S2 (pulled forward from S4 per CHANGES.md Flaw 1): `cypher()` resolves
     `config = load_config()` and must thread `config.query_timeout_ms`/
-    `config.query_row_cap` all the way into `execute_cypher_query` -- the one
-    real production call site, not just a test-only signature. Mirrors
-    `test_handle_mcp_tool_call.py::test_delegates_to_execute_cypher_query`'s
-    spy style.
+    `config.query_row_cap` all the way into the real, unmonkeypatched
+    `execute_cypher_query` -- the one real production call site, not just a
+    test-only signature. Proven end to end via state/output instead of a
+    spy: `timeout_ms` is recorded by the boundary fake's own `graph.query`
+    call (the real collaboration surface), and `row_cap`'s effect is proven
+    by the returned `row_count`/`truncated` shape, mirroring
+    `test_truncated_result_propagates_true_through_cypher_tool` immediately
+    below.
     """
+    monkeypatch.setenv("PS_QUERY_ROW_CAP", "2")
     configure()
-    calls: list[dict[str, object]] = []
-
-    def spy(
-        query: str,
-        *,
-        graph: object,
-        emitter: object = None,
-        principal: object = None,
-        timeout_ms: int,
-        row_cap: int,
-    ) -> QueryResult:
-        calls.append({"timeout_ms": timeout_ms, "row_cap": row_cap})
-        return QueryResult(columns=["x"], rows=[[1]], row_count=1, truncated=False)
-
-    monkeypatch.setattr(mcp_server, "execute_cypher_query", spy)
-    handle = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
+    handle = _FakeGraphHandle(
+        result=_FakeQueryResult(
+            header=[[0, "id"]],
+            result_set=[["a"], ["b"], ["c"], ["d"]],
+        )
+    )
     _install_graph(monkeypatch, handle)
     config = mcp_server.load_config()
 
-    result = _call_cypher("MATCH (n) RETURN n")
+    result = _call_cypher("MATCH (n) RETURN n.id")
 
     assert result.is_error is False
-    assert len(calls) == 1
-    assert calls[0]["timeout_ms"] == config.query_timeout_ms
-    assert calls[0]["row_cap"] == config.query_row_cap
+    assert handle.calls[-1] == "MATCH (n) RETURN n.id"
+    assert handle.timeouts[-1] == config.query_timeout_ms
+    body = json.loads(_text(result))
+    assert body["row_count"] == config.query_row_cap
+    assert body["truncated"] is True
 
 
 def test_truncated_result_propagates_true_through_cypher_tool(
@@ -205,39 +199,34 @@ def test_success_via_call_tool_returns_json_content(monkeypatch: pytest.MonkeyPa
     }
 
 
-def test_delegates_in_process_via_call_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    configure()
-    real_execute = mcp_server.execute_cypher_query
-    seen: list[str] = []
-
-    def spy(
-        query: str,
-        *,
-        graph: GraphHandle,
-        emitter: LogEmitter | None = None,
-        principal: str | None = None,
-        timeout_ms: int,
-        row_cap: int,
-    ) -> QueryResult:
-        seen.append(query)
-        return real_execute(
-            query,
-            graph=graph,
-            emitter=emitter,
-            principal=principal,
-            timeout_ms=timeout_ms,
-            row_cap=row_cap,
-        )
-
-    monkeypatch.setattr(mcp_server, "execute_cypher_query", spy)
+def test_delegates_in_process_via_call_tool(
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+) -> None:
+    """S2: `cypher()` reaches the real, in-process, unmonkeypatched
+    `execute_cypher_query` (never a subprocess, never a reimplementation) --
+    proven by the real `query_engine`/`execute_cypher_query` log entry only
+    that function emits, plus the fake `graph` collaborator's own recorded
+    call, mirroring `test_cypher_tool_attaches_local_test_principal_when_bypass_active`'s
+    already-established real-execution-plus-state-assertion pattern, rather
+    than spying on the delegate call.
+    """
+    emitter = configure()
     handle = _FakeGraphHandle(result=_FakeQueryResult(header=[], result_set=[]))
     _install_graph(monkeypatch, handle)
 
     result = _call_cypher("MATCH (n) RETURN n")
 
-    assert seen == ["MATCH (n) RETURN n"]
     assert result.is_error is False
+    assert handle.calls[-1] == "MATCH (n) RETURN n"
     assert not hasattr(mcp_server, "subprocess")
+    emitter.flush()
+    lines = read_lines(resolve_default_log_path())
+    entry = next(
+        line
+        for line in lines
+        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
+    )
+    assert entry["outcome"] == "succeeded"
 
 
 def test_write_clause_error_propagated_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,12 +276,13 @@ def test_connection_failure_returns_sanitised_error(monkeypatch: pytest.MonkeyPa
 
 
 def test_service_configuration_error_does_not_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real malformed `PS_FALKORDB_PORT` drives the real `load_config()`
+    into its own `ServiceConfigurationError` path (sibling tests in this
+    file, e.g. `PS_QUERY_ROW_CAP` above, already use the same real-env-var
+    shape) -- not a monkeypatched `load_config` standing in for it.
+    """
     configure()
-
-    def boom() -> object:
-        raise ServiceConfigurationError("PS_FALKORDB_PORT must be an integer, got 'abc'")
-
-    monkeypatch.setattr(mcp_server, "load_config", boom)
+    monkeypatch.setenv("PS_FALKORDB_PORT", "abc")
 
     result = _call_cypher("MATCH (n) RETURN n")
 

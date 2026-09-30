@@ -12,15 +12,24 @@ solves on the IdP side, for the same reason (see that module's own docstring).
 `_FakeJsonServer` below plays that role, generalized to serve any one JSON
 body at any one path.
 
-Slice 13's happy-path test drives the poll to completion via a `sleep` fake,
-same convention as `test_device_flow.py`'s own Slice 10 test -- but since
-`handle_auth_login` never exposes the freshly-minted `DeviceAuthorization` to
-its caller (only `on_device_authorization`'s *internal* printing sees it),
-the `device_code` `mock_oidc_provider.complete_device_flow()` needs is
-captured via a `monkeypatch`-installed spy around `device_flow.
-request_device_authorization` that calls straight through to the real
-function and simply records what it returned -- never replacing real
-provider behavior, only observing it.
+Slice 13's happy-path test (and its AC-BI-018 marker-token sibling below) drives
+the poll to completion via a `sleep` fake, same convention as `test_device_flow.py`'s
+own Slice 10 test -- and since `handle_auth_login` never exposes the freshly-minted
+`DeviceAuthorization` to its caller (only `on_device_authorization`'s *internal*
+printing sees it), the `device_code` `mock_oidc_provider.complete_device_flow()`
+needs is read back from `mock_oidc_provider.last_token_request_form["device_code"]`
+-- set at the top of every real `POST /token` this provider handles, so it already
+holds the just-polled device_code by the time `sleep` fires. No monkeypatch needed:
+`request_device_authorization` is never touched, only observed indirectly through
+the provider's own public request-log field.
+
+Issue #163 (Slice O): the one exception is `test_run_auth_login_denied_device_code_
+exits_1_with_ac_bi_009_message`, which drives `run()` (real CLI dispatch) rather
+than `handle_auth_login` directly -- `run()` exposes no `sleep=` override at all, so
+denying the device code strictly before the first real `/token` poll (avoiding a
+real `time.sleep`) has no seam other than a monkeypatch spy on `device_flow.
+request_device_authorization` that calls straight through to the real function and
+reacts to its return value -- see that test's own `# detroit-exception:` comment.
 """
 
 from __future__ import annotations
@@ -32,14 +41,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from ps_cli import device_flow, oidc_discovery
+from ps_cli import device_flow
 from ps_cli.cli import run
 from ps_cli.config import CliConfig
 from ps_cli.credentials import PersistenceCredentialStore, TokenBundle
-from ps_cli.device_flow import DeviceAuthorization, TokenResponse
 from ps_cli.errors import PsCliError
 from ps_cli.modules.auth_handlers import handle_auth_login, handle_auth_logout, handle_auth_status
-from ps_cli.oidc_discovery import ResolvedAuthParameters
 from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, write_targets
 from ps_test_support import mock_oidc_provider as mock_oidc_provider_module
 from ps_test_support.mock_oidc_provider import (
@@ -53,6 +60,8 @@ if TYPE_CHECKING:
     import httpx
     from conftest import InMemoryPersistenceBackend
 
+    from ps_cli.device_flow import DeviceAuthorization
+    from ps_cli.oidc_discovery import ResolvedAuthParameters
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _CLIENT_ID = "ps-cli-test-client"
@@ -205,23 +214,19 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     config = CliConfig(service_url=resource_metadata_server.base_url, context_name="dev")
     credential_store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
 
-    captured_device_auth: list[DeviceAuthorization] = []
-    original_request_device_authorization = device_flow.request_device_authorization
-
-    def _spy_request_device_authorization(
-        params: ResolvedAuthParameters, *, transport: httpx.BaseTransport | None = None
-    ) -> DeviceAuthorization:
-        result = original_request_device_authorization(params, transport=transport)
-        captured_device_auth.append(result)
-        return result
-
-    monkeypatch.setattr(
-        device_flow, "request_device_authorization", _spy_request_device_authorization
-    )
-
     def fake_sleep(seconds: float) -> None:
+        """Approve the device code the just-polled `/token` request used.
+
+        `mock_oidc_provider.last_token_request_form` is set at the top of every real
+        `POST /token` this provider handles -- by the time this fires (right after the
+        first real "authorization_pending" response), it already holds that poll's own
+        `device_code`. No need to intercept `request_device_authorization`'s return
+        value at all -- `handle_auth_login`'s own real device-flow call chain is never
+        replaced, only `sleep` (its own designed-for-this seam).
+        """
         del seconds
-        mock_oidc_provider.complete_device_flow(captured_device_auth[0].device_code)
+        device_code = mock_oidc_provider.last_token_request_form["device_code"]
+        mock_oidc_provider.complete_device_flow(device_code)
 
     handle_auth_login(
         "dev",
@@ -233,9 +238,7 @@ def test_handle_auth_login_happy_path_stores_tokens_and_prints_verification_uri(
     )
 
     printed = capsys.readouterr().out
-    device_auth = captured_device_auth[0]
-    assert device_auth.user_code in printed
-    assert device_auth.verification_uri in printed
+    assert f"{mock_oidc_provider.base_url}/device?user_code=" in printed
     assert f"logged in to dev ({mock_oidc_provider.issuer})" in printed
 
     stored = credential_store.get_tokens("dev")
@@ -378,6 +381,15 @@ def test_run_auth_login_denied_device_code_exits_1_with_ac_bi_009_message(
         mock_oidc_provider.deny_device_code(result.device_code)
         return result
 
+    # `run()`'s real CLI dispatch exposes no `sleep=`/`on_device_authorization=`
+    # override at all (unlike `handle_auth_login` called directly elsewhere in this
+    # file) -- denial must land strictly before the very first real `/token` poll
+    # (`device_auth.interval=1`) or this test would block on a real `time.sleep`
+    # waiting for an approval that never comes. This is the only reachable hook
+    # between minting and that first poll; the wrapped function still calls straight
+    # through to the real `request_device_authorization` unconditionally (a spy, not
+    # a stub), so the real device-authorization request always happens for real.
+    # detroit-exception: no sleep/on_device_authorization seam reachable via run() -- see above.
     monkeypatch.setattr(
         device_flow, "request_device_authorization", _deny_immediately_after_request
     )
@@ -532,64 +544,51 @@ def test_handle_auth_logout_prints_nothing_on_success(
 # --- Slice 22: AC-BI-018 never log a token value -------------------------------------
 
 
-def test_handle_auth_login_output_never_contains_the_access_or_refresh_token_value(
+def test_handle_auth_login_output_never_contains_the_stored_refresh_token_value(
+    mock_oidc_provider: MockOidcProvider,
+    fake_json_server_factory: Callable[[str, dict[str, object]], _FakeJsonServer],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`auth login`'s confirmation line and verification-URI printout never contain
-    the raw access/refresh token value (AC-BI-018).
+    the stored refresh-token value (AC-BI-018), proven with a distinctive marker
+    value forced through the real device-flow/token-minting path (same
+    `mock_oidc_provider_module.secrets.token_urlsafe` approved-boundary seam the
+    oversized-refresh-token happy-path test above uses) -- not a full stub of
+    `resolve_auth_parameters`/`complete_device_login` that never actually exercises
+    real device-flow/refresh-token-minting code at all.
 
-    `resolve_auth_parameters`/`complete_device_login` are monkeypatched to known
-    marker values -- proving the property structurally, for whatever an IdP might
-    ever mint, not just for what today's mock provider happens to generate.
+    No `access_token` marker check any more: `_print_device_authorization` only ever
+    prints `verification_uri`/`user_code`, and `handle_auth_login`'s own confirmation
+    line only ever prints `issuer` -- neither ever touches an access token, and
+    (issue #121, AC-BI-001) `TokenBundle` has no `access_token` field to persist
+    either, so that half of AC-BI-018 is a structural guarantee, not something this
+    test needs to separately prove.
     """
-    marker_access_token = "marker-access-token-should-never-print-79c3"
     marker_refresh_token = "marker-refresh-token-should-never-print-79c3"
-    params = ResolvedAuthParameters(
-        issuer="http://127.0.0.1:1",
-        client_id="cli-client-id",
-        scopes=("openid",),
-        audience=None,
-        device_authorization_endpoint="http://127.0.0.1:1/device_authorization",
-        token_endpoint="http://127.0.0.1:1/token",
+    real_token_urlsafe = mock_oidc_provider_module.secrets.token_urlsafe
+
+    def _fake_token_urlsafe(nbytes: int | None = None) -> str:
+        if nbytes == 32:
+            return marker_refresh_token
+        return real_token_urlsafe(nbytes)
+
+    monkeypatch.setattr(mock_oidc_provider_module.secrets, "token_urlsafe", _fake_token_urlsafe)
+
+    resource_metadata_server = fake_json_server_factory(
+        "/.well-known/oauth-protected-resource", _resource_metadata_body(mock_oidc_provider)
     )
-    device_auth = DeviceAuthorization(
-        device_code="dc",
-        user_code="uc-marker-user-code",
-        verification_uri="http://127.0.0.1:1/device",
-        verification_uri_complete=None,
-        expires_in=600,
-        interval=1,
-    )
-
-    def _fake_resolve(
-        service_url: str, override: object, *, transport: object = None
-    ) -> ResolvedAuthParameters:
-        del service_url, override, transport
-        return params
-
-    def _fake_complete_device_login(
-        params_: ResolvedAuthParameters,
-        *,
-        transport: object = None,
-        sleep: object = None,
-        on_device_authorization: Callable[[DeviceAuthorization], None] | None = None,
-    ) -> TokenResponse:
-        del params_, transport, sleep
-        if on_device_authorization is not None:
-            on_device_authorization(device_auth)
-        return TokenResponse(
-            access_token=marker_access_token,
-            refresh_token=marker_refresh_token,
-            expires_in=3600,
-        )
-
-    monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
-    monkeypatch.setattr(device_flow, "complete_device_login", _fake_complete_device_login)
-
-    config = CliConfig(service_url="http://ps-service.example", context_name="dev")
+    config = CliConfig(service_url=resource_metadata_server.base_url, context_name="dev")
     credential_store = _FakeCredentialStore()
+
+    def fake_sleep(seconds: float) -> None:
+        """Approve the device code the just-polled `/token` request used (see the
+        happy-path test above for why `last_token_request_form` needs no spy).
+        """
+        del seconds
+        device_code = mock_oidc_provider.last_token_request_form["device_code"]
+        mock_oidc_provider.complete_device_flow(device_code)
 
     handle_auth_login(
         "dev",
@@ -597,18 +596,14 @@ def test_handle_auth_login_output_never_contains_the_access_or_refresh_token_val
         config_dir=tmp_path,
         credential_store=credential_store,
         auth_override=None,
+        sleep=fake_sleep,
     )
 
     printed = capsys.readouterr()
-    assert marker_access_token not in printed.out
-    assert marker_access_token not in printed.err
     assert marker_refresh_token not in printed.out
     assert marker_refresh_token not in printed.err
     # Sanity: the marker refresh_token really was stored -- this test exercised the
-    # real value, not a stand-in that the code path never actually touched. There is
-    # no `stored.access_token` to check any more (issue #121, AC-BI-001) -- that it
-    # was never persisted is now a structural guarantee (`TokenBundle` has no such
-    # field), not something this test needs to separately prove.
+    # real value, not a stand-in that the code path never actually touched.
     stored = credential_store.get_tokens("dev")
     assert stored is not None
     assert stored.refresh_token == marker_refresh_token

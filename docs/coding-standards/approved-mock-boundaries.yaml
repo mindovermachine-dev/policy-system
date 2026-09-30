@@ -1,0 +1,160 @@
+# docs/coding-standards/approved-mock-boundaries.yaml
+# AC-BI-002 deliverable. Consumed by scripts/check_mock_boundaries.py (AC-BI-009).
+# A mock.patch/Mock(/MagicMock(/monkeypatch.setattr target is compliant iff its resolved dotted
+# path exactly matches one entry below, OR the call site carries a `# detroit-exception: <reason>`
+# comment on the same or immediately preceding line (see level1-coding-principles.md:76's
+# "interaction is the specified behavior" carve-out; PLAN.md §1.2/§2 rules on when that applies).
+# Adding an entry here requires the §1.4 bright-line rule to hold: a zero-business-logic
+# pass-through that is the sole canonical connection surface for its module.
+
+falkordb:
+  - ps_service.ingestion.falkordb_client.connect
+  - ps_service.ingestion.falkordb_client.connect_from_config
+  - ps_service.domain_mapper.falkordb_client.connect
+  - ps_service.domain_mapper.falkordb_client.connect_from_config
+  - ps_service.company_merge.falkordb_client.connect
+  - ps_service.company_merge.falkordb_client.connect_from_config
+  - ps_service.change_monitor.falkordb_client.connect
+  - ps_service.change_monitor.falkordb_client.connect_from_config
+  - ps_service.query_engine.falkordb_client.connect
+  - ps_service.query_engine.falkordb_client.connect_from_config
+  - ps_service.export.falkordb_connection.raw_connection
+  # Gap 2 (issue #163 interstitial fix, Slice N find, IMPL_SLICE_13.md): the raw third-party
+  # class itself, for direct-import call sites that construct `FalkorDB(...)` themselves
+  # instead of going through one of the per-component `*.falkordb_client.connect*` wrappers
+  # above -- e.g. `tools/curated-export/export_instrument.py`'s `from falkordb import
+  # FalkorDB`. Distinct from those wrapper entries: this covers the CLI-shim composition-root
+  # shape (PLAN.md §1.4's thin-FalkorDB-wrapper rule extends to the constructor call itself
+  # when a script is its own composition root and never goes through a `*_client.connect*`
+  # wrapper).
+  - falkordb.FalkorDB
+  # Slice C (issue #163): the narrowed graph-opener-only accessor
+  # `build_default_pipeline_dependencies` itself now delegates to internally
+  # (and the only piece of it a caller may substitute) -- replaces the
+  # `build_default_pipeline_dependencies` placeholder below for this factory.
+  - ps_service.api.ingestion_orchestration.build_default_graph_openers
+  # Slice D (issue #163): the narrowed graph-opener-only accessor
+  # `build_default_near_miss_review_dependencies` itself now delegates to
+  # internally (and the only piece of it a caller may substitute) -- mirrors
+  # `build_default_graph_openers` above exactly.
+  - ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener
+  # Slice E (issue #163): the narrowed fetch/effective-source/FalkorDB-opener-only accessor
+  # `build_default_restore_from_catalog_dependencies` itself now delegates to internally (and
+  # the only piece of it a caller may substitute) -- mirrors `build_default_graph_openers`/
+  # `build_default_near_miss_review_graph_opener` above exactly, generalised to a mixed
+  # HTTP+FalkorDB boundary bundle (`CatalogRestoreInfra`) since this factory's true infra
+  # surface is three collaborators, not one.
+  - ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra
+  # NOTE (Slice D/E, §5): mcp_interface's cypher/policy_lifecycle/near_miss/restore tools connect
+  # via one of the above per-component clients — verify exact import path per call site at
+  # Implement time (mcp_interface_part2.md:6 reports ~7 connect_from_config sites across
+  # cypher/policy_lifecycle without naming which component client each resolves to).
+  # Gap 3 (issue #163 interstitial fix, Slice P find, IMPL_SLICE_15.md) — main.py import aliases:
+  # `ps_service/main.py` imports this real wrapper under a local alias
+  # (`from ps_service.ingestion.falkordb_client import check_connectivity_from_config as
+  # check_falkordb_connectivity`), and `test_main.py`/`test_main_integration.py` monkeypatch the
+  # alias name on `main_module`, not the real dotted path. The alias name shares no suffix with
+  # the real path above, so the guardrail's suffix-matcher can't connect them on its own -- this
+  # explicit alias entry is the simpler, targeted fix chosen over general import-alias
+  # resolution (which would need each file's own `from X import Y as Z` statements parsed).
+  - ps_service.main.check_falkordb_connectivity
+
+postgres:
+  - ps_service.authz.store.PsycopgAccessRoleStore
+  - ps_service.authz.store.connect_from_config
+  - ps_service.audit.store.connect_from_config       # re-exported import of authz.store.connect_from_config;
+                                                       # listed separately because mock.patch targets the
+                                                       # name where it is looked up, not where it is defined
+                                                       # (ps_service/audit/store.py:53 imports it from authz.store)
+  - ps_service.audit.store.PsycopgAuditStore
+  - ps_service.passkey_signing.store.PsycopgPendingApprovalStore
+  - ps_service.passkey_signing.store.connect_from_config
+  - ps_service.passkey_signing.signing_credential_store.PsycopgSigningCredentialStore
+  # Gap 3 (issue #163 interstitial fix, Slice P find, IMPL_SLICE_15.md) — main.py import aliases
+  # (see the `falkordb:` section's identical note above for the full explanation):
+  - ps_service.main.check_authz_postgres_connectivity
+  - ps_service.main.check_passkey_signing_postgres_connectivity
+
+llm:
+  - ps_service.llm_interface.client.litellm.completion
+  - ps_service.llm_interface.client.litellm.embedding
+  - ps_service.llm_interface.client.default_completion_caller
+  - ps_service.llm_interface.client.default_embedding_caller
+  - ps_service.llm_interface.structured_completion.supports_response_schema
+  # Gap 3 (issue #163 interstitial fix, Slice P find, IMPL_SLICE_15.md) — main.py import alias
+  # for `ps_service.llm_interface.check_connectivity` (see the `falkordb:` section's identical
+  # note above for the full explanation):
+  - ps_service.main.check_llm_interface_connectivity
+
+http:
+  - ps_service.auth.discovery.fetch_discovery_document
+  - ps_service.invitations.client.create_invitation
+  - ps_service.ingestion.adapters.cellar_eli.fetch.fetch_xhtml
+  - ps_service.ingestion.adapters.cellar_eli.fetch.fetch_rdf
+  # HTTP/FalkorDB-transport-only factories (mcp_interface_part3.md:4-7) — already boundary-only,
+  # NOT the 3 flagged fat factories (those are deliberately absent from this list — see below):
+  - ps_service.mcp_interface.mcp_server.build_default_curated_catalog_dependencies
+  - ps_service.mcp_interface.mcp_server.build_default_change_check_dependencies
+  - msal_extensions.build_encrypted_persistence
+  - ps_cli.credentials._build_production_persistence
+  # Gap 3 (issue #163 interstitial fix, Slice P find, IMPL_SLICE_15.md) — main.py import alias
+  # for `ps_service.ingestion.adapters.cellar_eli.fetch.check_connectivity` (see the
+  # `falkordb:` section's identical note above for the full explanation):
+  - ps_service.main.check_cellar_eli_connectivity
+
+process_os:
+  - sys.stdin                              # ps_cli.mcp_bridge stdin boundary
+  - atexit.register                        # stdlib; see §2 case 4
+  - uvicorn.run
+  - tempfile.mkdtemp
+  - secrets.token_urlsafe
+  - ps_cli.cli.installed_version           # wraps importlib.metadata.version; NOT the same site as
+                                            # §2 case 8's ps-service/test_main.md instance, which is
+                                            # ruled needs-rewrite and stays OFF this list
+  - ps_service.mcp_interface.mcp_server._domain_concepts_path   # §2 case 10
+  # Issue #163 Slice 17 (reconstructed-audit gap-closing fix): a private module-level `Path`
+  # constant redirected to `tmp_path` for deterministic real-file-I/O testing, not a behavior
+  # fake -- matches the `_domain_concepts_path` precedent immediately above exactly (loader
+  # function itself always runs for real, unmodified, against the redirected directory).
+  - company_merge_similarity_sweep._CURATED_CONTENT_DIR
+  # Issue #163 Slice 17: same category, from the original Audit stage's `domain_mapper_export_
+  # llm.md` sub-audit (ruled `DI-override-compliant` there already) -- resource-location config
+  # values (a records dir + a report path), not behavior fakes; `main()` itself always runs for
+  # real, unmodified, against the redirected paths.
+  - exclusion_audit._DEFAULT_RECORDS_DIR
+  - exclusion_audit._DEFAULT_REPORT_PATH
+
+# Deliberately NOT listed: `build_default_pipeline_dependencies` (Slice C),
+# `build_default_near_miss_review_dependencies` (Slice D), and
+# `build_default_restore_from_catalog_dependencies` (Slice E) — issue #163's 3 originally-fat
+# factories are all narrowed now (each still bundles real business logic alongside its own
+# narrowed, approved-boundary-only accessor, so none of the three factory names themselves is
+# itself an approved-boundary target; only each one's own new accessor, listed under the
+# `falkordb:` entries above, is).
+#
+# Slice C (issue #163) narrowed `ps_service.api.ingestion_orchestration.
+# build_default_pipeline_dependencies` itself: it now bundles real business logic
+# (`PipelineStages`/`PipelineAdapters`, always real, no override parameter) with exactly
+# one substitutable piece (`graphs`, defaulted via the new `build_default_graph_openers`
+# accessor above) -- it stays OFF this list on purpose, since it still returns real business
+# logic alongside the boundary; only `build_default_graph_openers` (the boundary-only piece)
+# is approved.
+#
+# Slice D (issue #163) applied the identical narrowing to `ps_service.api.
+# near_miss_review_orchestration.build_default_near_miss_review_dependencies`: real
+# `list_pending_reviews`/`resolve_review` (Company Merge business logic), always, plus exactly
+# one substitutable piece (`open_single_tenant_graph`, defaulted via the new
+# `build_default_near_miss_review_graph_opener` accessor above) -- it stays OFF this list on
+# purpose too, for the same reason.
+#
+# Slice E (issue #163) applied the same narrowing to `ps_service.api.restore_orchestration.
+# build_default_restore_from_catalog_dependencies`: real `restore_instrument` (Restore business
+# logic), always, plus exactly one substitutable piece (`infra`, a `CatalogRestoreInfra` bundle
+# of `fetch_artifact`/`resolve_effective_source`/`open_db`, defaulted via the new
+# `build_default_restore_from_catalog_infra` accessor above) -- it stays OFF this list too, for
+# the same reason. This closes out all 3 originally-fat factories issue #163 flagged.
+
+# Subprocess boundary (not a mock.patch mechanism at all — listed for completeness/documentation,
+# the guardrail does not need to scan for it since it isn't unittest.mock-shaped):
+#   fake az/kubectl/gh/curl/helm binaries on PATH in ps-service/tests/{release,deploy_llm,deploy_ps}
+#   and ps-cli/tests/release — see release-deploy.md; zero remediation, zero guardrail action needed.

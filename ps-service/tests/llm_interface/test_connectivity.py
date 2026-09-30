@@ -37,6 +37,7 @@ def stub_emit_log_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     def _noop_emit_log_entry(**_kwargs: object) -> None:
         return None
 
+    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
     monkeypatch.setattr(_logging_support, "emit_log_entry", _noop_emit_log_entry)
 
 

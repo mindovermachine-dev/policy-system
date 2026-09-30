@@ -11,10 +11,15 @@ output with actor, target email, timestamp, outcome).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from typing import TYPE_CHECKING
 
 import pytest
+from invitations.test_client import (
+    _HttpErrorTransport,  # pyright: ignore[reportPrivateUsage]  -- reuse `create_invitation`'s own fake-transport doubles verbatim (mirrors this file's existing cross-package reuse of `test_catalog_source_authz_gate`'s fixtures) rather than re-declaring them
+    _RecordingTransport,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+)
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
@@ -28,8 +33,7 @@ from mcp_interface.test_catalog_source_authz_gate import (
     _verified_actor,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.authz.models import AccessRole
-from ps_service.invitations.client import InvitationResult
-from ps_service.invitations.errors import AuthentikInvitationError
+from ps_service.invitations.client import create_invitation
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
@@ -42,6 +46,7 @@ if TYPE_CHECKING:
 
 _EMAIL = "target@example.com"
 _TOKEN = "test-authentik-token"
+_BASE_URL = "https://authentik.example.com"
 
 
 def _call(args: dict[str, object]) -> CallToolResult:
@@ -59,8 +64,17 @@ def _text(result: CallToolResult) -> str:
 def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005."""
+    """AC-BI-005.
+
+    Exercises the REAL `ps_service.invitations.client.create_invitation`
+    (issue #163 Slice F fix: `create_invitation` already has its own unused
+    `transport=` DI seam -- rewiring `mcp_server.create_invitation` to a
+    `functools.partial` over the real function with a fake transport lets
+    the tool's delegate run for real instead of being replaced wholesale).
+    """
     configure()
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
     store = _seeded_store()
     store.grant(
         actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
@@ -69,13 +83,12 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
-    def _canned_create_invitation(*_args: object, **_kwargs: object) -> InvitationResult:
-        return InvitationResult(
-            itoken="tok-abc",
-            invite_url="https://authentik.example.com/if/flow/ps-invite-enrollment/?itoken=tok-abc",
-        )
-
-    monkeypatch.setattr(mcp_server, "create_invitation", _canned_create_invitation)
+    transport = _RecordingTransport(json.dumps({"pk": "tok-abc"}).encode())
+    monkeypatch.setattr(
+        mcp_server,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
+    )
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
         result = _call({"email": _EMAIL})
@@ -85,6 +98,7 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
         "itoken": "tok-abc",
         "invite_url": "https://authentik.example.com/if/flow/ps-invite-enrollment/?itoken=tok-abc",
     }
+    assert len(transport.requests) == 1
 
 
 @pytest.mark.parametrize("bad_email", ["not-an-email", "", "missing-domain@"])
@@ -97,19 +111,21 @@ def test_malformed_email_rejected_before_any_authentik_call(
     `ToolError`, never reaching the tool's own body.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
     configure()
-    calls: list[str] = []
 
-    def _never_expected(*_args: object, email: str = "", **_kwargs: object) -> InvitationResult:
-        calls.append(email)
-        return InvitationResult(itoken="unused", invite_url="unused")
-
-    monkeypatch.setattr(mcp_server, "create_invitation", _never_expected)
+    transport = _RecordingTransport(json.dumps({"pk": "unused"}).encode())
+    monkeypatch.setattr(
+        mcp_server,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
+    )
 
     with pytest.raises(ToolError):
         _call({"email": bad_email})
 
-    assert calls == []
+    assert transport.requests == []
 
 
 def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
@@ -117,14 +133,22 @@ def test_authentik_unreachable_returns_sanitized_error_no_stack_trace_no_token(
 ) -> None:
     """AC-BI-008: the returned string never contains the configured
     `authentik_api_token` value or a traceback substring.
+
+    A real HTTP 503 from the transport boundary, translated by the real
+    `create_invitation`'s own error handling -- not a hand-raised
+    `AuthentikInvitationError` standing in for it.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
     configure()
 
-    def _raise(*_args: object, **_kwargs: object) -> InvitationResult:
-        raise AuthentikInvitationError("Authentik invitation request failed: HTTP 503")
-
-    monkeypatch.setattr(mcp_server, "create_invitation", _raise)
+    transport = _HttpErrorTransport(503, "Service Unavailable")
+    monkeypatch.setattr(
+        mcp_server,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
+    )
 
     result = _call({"email": _EMAIL})
 
@@ -144,6 +168,8 @@ def test_successful_invite_emits_audit_log_entry_with_actor_email_outcome(
     `_run_mcp_action` already emits for every tool call.
     """
     emitter = configure()
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
     store = _seeded_store()
     store.grant(
         actor=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER),
@@ -152,13 +178,12 @@ def test_successful_invite_emits_audit_log_entry_with_actor_email_outcome(
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
-    def _canned_create_invitation(*_args: object, **_kwargs: object) -> InvitationResult:
-        return InvitationResult(
-            itoken="tok-audit",
-            invite_url="https://authentik.example.com/if/flow/ps-invite-enrollment/?itoken=tok-audit",
-        )
-
-    monkeypatch.setattr(mcp_server, "create_invitation", _canned_create_invitation)
+    transport = _RecordingTransport(json.dumps({"pk": "tok-audit"}).encode())
+    monkeypatch.setattr(
+        mcp_server,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
+    )
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
         result = _call({"email": _EMAIL})
@@ -188,20 +213,24 @@ def test_denied_caller_does_not_emit_invite_created_audit_entry(
     one.
     """
     emitter = configure()
+    monkeypatch.setenv("PS_AUTHENTIK_API_TOKEN", _TOKEN)
+    monkeypatch.setenv("PS_AUTHENTIK_BASE_URL", _BASE_URL)
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
 
-    def _never_expected(*_args: object, **_kwargs: object) -> InvitationResult:
-        message = "create_invitation must not be called when the gate rejects the caller"
-        raise AssertionError(message)
-
-    monkeypatch.setattr(mcp_server, "create_invitation", _never_expected)
+    transport = _RecordingTransport(json.dumps({"pk": "unused"}).encode())
+    monkeypatch.setattr(
+        mcp_server,
+        "create_invitation",
+        functools.partial(create_invitation, transport=transport),
+    )
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call({"email": _EMAIL})
 
     assert result.is_error is False
     assert _text(result).startswith("error:")
+    assert transport.requests == []
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())

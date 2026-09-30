@@ -26,7 +26,6 @@ from api._fakes import (
     install_compliance_officer_grant,
     install_no_principal,
 )
-from ps_service.api.catalog import CatalogEntry
 from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
@@ -101,6 +100,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # module autouse fi
     against a real emitter in ``test_ingestion_orchestration.py``. Increment 7's
     ``test_run_context.py`` exercises the real facade through the HTTP layer.
     """
+    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -364,34 +364,16 @@ def test_short_name_collision_with_an_already_ingested_different_celex_is_reject
     assert fake.recorder.order == []
 
 
-def test_short_name_collision_with_a_curated_catalog_entry_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Issue #146 AC-BI-006: a curated CELEX whose own ``short_name`` is already
-    claimed by a *different* curated entry is rejected with 409, before any
-    pipeline stage runs -- the catalog-side collision check.
-    """
-    fixture = (
-        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
-        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
-    )
-    monkeypatch.setattr("ps_service.api.catalog.REGULATION_CATALOG", fixture)
-    fake = build_fake_pipeline_dependencies()
-    client = _client_with_fake(fake.dependencies)
-
-    response = client.post(
-        "/ingestions",
-        json={"source": "catalog", "celex": "32024R0001", "short_name": "shared-name"},
-    )
-
-    assert response.status_code == 409
-    body = response.json()
-    assert body["error"]["code"] == "short_name_collision"
-    assert body["error"]["message"] == (
-        "short_name 'shared-name' is already claimed by CELEX 32024R0002"
-    )
-    assert "run_id" in body
-    assert fake.recorder.order == []
+# `test_short_name_collision_with_a_curated_catalog_entry_is_rejected` (issue #146
+# AC-BI-006) moved to `test_ingestion_orchestration.py` as
+# `test_validate_and_resolve_catalog_entry_raises_on_curated_short_name_collision`
+# (issue #163 Slice K): the real curated catalog can never itself produce a
+# same-`short_name` collision, so exercising this scenario required
+# monkeypatching the module-level `REGULATION_CATALOG` constant to fabricate
+# one -- `validate_and_resolve_catalog_entry`'s own `catalog=` parameter
+# (AUDIT.md §2 case 11) is the real DI seam for this, and a route-level HTTP
+# round trip added nothing this function's own direct unit test doesn't
+# already cover monkeypatch-free.
 
 
 def test_collision_check_graph_unreachable_fails_closed_into_502_before_any_pipeline_stage_runs() -> (  # noqa: E501 - name mirrors the sibling collision tests' verbatim-scenario naming
@@ -565,6 +547,15 @@ def test_non_curated_celex_uses_caller_supplied_short_name_verbatim(
 def test_non_curated_celex_never_calls_derive_short_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """Issue #146 AC-BI-003: ``_derive_short_name`` is never called once the request
     supplies its own ``short_name`` for the catalog path's Cellar-fallback.
+
+    The real, unpatched ``_derive_short_name`` runs (``resolve_via_cellar``'s
+    own short-circuit -- ``short_name if short_name is not None else
+    _derive_short_name(...)`` -- never reaches it when a ``short_name`` is
+    supplied): its non-invocation is proven by the *output* state instead of
+    an exploding double, exactly like
+    ``test_non_curated_celex_uses_caller_supplied_short_name_verbatim``
+    above -- the resulting id is the caller-supplied ``short_name`` verbatim,
+    never a slug derived from the Cellar-fetched title.
     """
 
     def _fetch(celex: str) -> bytes:
@@ -575,13 +566,8 @@ def test_non_curated_celex_never_calls_derive_short_name(monkeypatch: pytest.Mon
         _ = celex
         return _RDF_FIXTURE_REGULATION_A
 
-    def _explode(title: str, celex: str) -> str:
-        message = f"_derive_short_name must not be called (title={title!r}, celex={celex!r})"
-        raise AssertionError(message)
-
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.fetch_xhtml", _fetch)
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.fetch_rdf", _fetch_rdf)
-    monkeypatch.setattr("ps_service.api.ingestion_orchestration._derive_short_name", _explode)
     fake = build_fake_pipeline_dependencies(rid=f"{_NONCURATED_SHORT_NAME}-1.0")
     client = _client_with_fake(fake.dependencies)
 
@@ -595,6 +581,7 @@ def test_non_curated_celex_never_calls_derive_short_name(monkeypatch: pytest.Mon
     )
 
     assert response.status_code == 200
+    assert response.json()["regulatory_instrument_id"] == f"{_NONCURATED_SHORT_NAME}-1.0"
 
 
 def test_non_curated_celex_not_found_on_cellar_returns_404_before_any_stage_runs(

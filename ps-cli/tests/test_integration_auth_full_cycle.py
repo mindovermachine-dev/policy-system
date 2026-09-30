@@ -61,7 +61,6 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from ps_cli import device_flow
 from ps_cli.cli import run
 from ps_cli.config import load_config
 from ps_cli.credentials import TokenBundle, build_credential_store
@@ -79,8 +78,6 @@ if TYPE_CHECKING:
     from conftest import InMemoryPersistenceBackend
 
     from ps_cli.credentials import CredentialStore
-    from ps_cli.device_flow import DeviceAuthorization
-    from ps_cli.oidc_discovery import ResolvedAuthParameters
     from ps_cli.targets import AuthOverrides
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -253,7 +250,6 @@ def _build_ps_service_transport(
 def _set_context_and_log_in(
     mock_oidc_provider: MockOidcProvider,
     fake_ps_service_metadata_server: _FakePsServiceMetadataServer,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[AuthOverrides | None, CredentialStore, str]:
     """`config set-context` + a real device-flow `auth login`.
 
@@ -280,25 +276,19 @@ def _set_context_and_log_in(
     )
     assert set_context_exit_code == 0
 
-    # `sleep` faked to approve the device code on its first invocation (mirrors
-    # `test_auth_handlers.py`'s own established convention for this exact seam).
-    captured_device_auth: list[DeviceAuthorization] = []
-    original_request_device_authorization = device_flow.request_device_authorization
-
-    def _spy_request_device_authorization(
-        params: ResolvedAuthParameters, *, transport: httpx.BaseTransport | None = None
-    ) -> DeviceAuthorization:
-        result = original_request_device_authorization(params, transport=transport)
-        captured_device_auth.append(result)
-        return result
-
-    monkeypatch.setattr(
-        device_flow, "request_device_authorization", _spy_request_device_authorization
-    )
-
     def _fake_sleep(seconds: float) -> None:
+        """Approve the device code the just-polled `/token` request used.
+
+        `mock_oidc_provider.last_token_request_form` is set at the top of every
+        real `POST /token` this provider handles -- by the time this fires (right
+        after the first real "authorization_pending" response), it already holds
+        that poll's own `device_code` (mirrors `test_auth_handlers.py`'s own
+        established convention for this exact seam). No need to intercept
+        `request_device_authorization`'s return value at all.
+        """
         del seconds
-        mock_oidc_provider.complete_device_flow(captured_device_auth[0].device_code)
+        device_code = mock_oidc_provider.last_token_request_form["device_code"]
+        mock_oidc_provider.complete_device_flow(device_code)
 
     config = load_config(context=_CONTEXT_NAME, config_dir=config_dir)
     targets = load_targets(config_dir)
@@ -315,7 +305,8 @@ def _set_context_and_log_in(
         sleep=_fake_sleep,
     )
 
-    return auth_override, credential_store, captured_device_auth[0].device_code
+    device_code = mock_oidc_provider.last_token_request_form["device_code"]
+    return auth_override, credential_store, device_code
 
 
 @pytest.mark.integration
@@ -323,7 +314,6 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     mock_oidc_provider: MockOidcProvider,
     fake_ps_service_metadata_server: _FakePsServiceMetadataServer,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """AC-BI-019: log in, make authenticated calls across several invocations, log out.
@@ -346,7 +336,7 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     loudly rather than merely returning the right business-call result by accident.
     """
     auth_override, credential_store, device_code = _set_context_and_log_in(
-        mock_oidc_provider, fake_ps_service_metadata_server, monkeypatch
+        mock_oidc_provider, fake_ps_service_metadata_server
     )
 
     login_output = capsys.readouterr().out
@@ -445,7 +435,6 @@ def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogi
     mock_oidc_provider: MockOidcProvider,
     fake_ps_service_metadata_server: _FakePsServiceMetadataServer,
     portable_persistence: Callable[[str], InMemoryPersistenceBackend],
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Issue #121 Slice 4 dedicated fail-closed proof (TASK.md Deliverables item,
@@ -460,7 +449,7 @@ def test_refresh_token_rejected_by_mock_oidc_provider_surfaces_actionable_relogi
     """
     del portable_persistence
     auth_override, credential_store, _device_code = _set_context_and_log_in(
-        mock_oidc_provider, fake_ps_service_metadata_server, monkeypatch
+        mock_oidc_provider, fake_ps_service_metadata_server
     )
     capsys.readouterr()  # discard the login confirmation printed to stdout
 

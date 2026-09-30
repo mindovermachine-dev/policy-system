@@ -13,9 +13,13 @@ in this codebase.
 
 AC-BI-007: under a valid token, the `cypher` tool's `principal` is the
 token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never `None`. Proven by
-monkeypatching `execute_cypher_query` (mirrors `test_cypher_tool.py`'s own
-spy convention) to capture the `principal=` keyword `handle_mcp_tool_call`
-threads straight through, rather than reimplementing a fake `AccessToken`
+reading the real `query_engine`/`execute_cypher_query` log entry the real,
+unmonkeypatched delegate emits end to end (mirrors `test_cypher_tool.py`'s
+already-established real-execution-plus-state-assertion pattern for this
+exact property, e.g.
+`test_cypher_tool_attaches_local_test_principal_when_bypass_active`), rather
+than spying on the `principal=` keyword `handle_mcp_tool_call` threads
+straight through -- and rather than reimplementing a fake `AccessToken`
 context -- the real `get_access_token()` contextvar, populated by the SDK's
 own `AuthContextMiddleware`, is what supplies it end to end.
 """
@@ -32,6 +36,7 @@ from starlette.applications import Starlette
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.logging import configure
+from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
@@ -42,14 +47,14 @@ from ps_test_support.mock_oidc_provider import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
+    from pathlib import Path
 
     import pytest
 
-    from ps_service.logging.emitter import LogEmitter
-    from ps_service.query_engine.falkordb_client import GraphHandle
-    from ps_service.query_engine.models import QueryResult
     from ps_test_support.mock_oidc_provider import MockOidcProvider
+
+    type ReadLines = Callable[[Path], list[dict[str, object]]]
 
 _BASE_URL = "http://127.0.0.1:8000"
 _JSON_RPC_ACCEPT = "application/json, text/event-stream"
@@ -164,16 +169,19 @@ def test_mcp_request_with_an_invalid_token_is_rejected_with_401(
 
 
 def test_cypher_tool_principal_is_the_valid_tokens_sub(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    monkeypatch: pytest.MonkeyPatch,
+    mock_oidc_provider: MockOidcProvider,
+    read_lines: ReadLines,
 ) -> None:
     """AC-BI-007: under a valid token, the `cypher` tool's `principal` is
     exactly the token's `sub` -- never `LOCAL_TEST_PRINCIPAL_ID`, never
     `None`. Drives the real mounted transport end to end (`initialize` ->
     `notifications/initialized` -> `tools/call`), the same JSON-RPC sequence
     `test_http_transport.py` already establishes, now with a real
-    `Authorization: Bearer <token>` header on every request.
+    `Authorization: Bearer <token>` header on every request. `execute_cypher_query`
+    itself is never monkeypatched here -- see the module docstring.
     """
-    configure()
+    emitter = configure()
     auth_context = _auth_context(mock_oidc_provider)
     token_sub = "user-42"
     token = mock_oidc_provider.mint_token(sub=token_sub)
@@ -185,30 +193,6 @@ def test_cypher_tool_principal_is_the_valid_tokens_sub(
         return fake_db
 
     monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
-
-    calls: list[dict[str, object]] = []
-    real_execute = mcp_server.execute_cypher_query
-
-    def _spy(
-        query: str,
-        *,
-        graph: GraphHandle,
-        emitter: LogEmitter | None = None,
-        principal: str | None = None,
-        timeout_ms: int,
-        row_cap: int,
-    ) -> QueryResult:
-        calls.append({"principal": principal})
-        return real_execute(
-            query,
-            graph=graph,
-            emitter=emitter,
-            principal=principal,
-            timeout_ms=timeout_ms,
-            row_cap=row_cap,
-        )
-
-    monkeypatch.setattr(mcp_server, "execute_cypher_query", _spy)
 
     with _authenticated_test_client(auth_context=auth_context) as client:
         init_response = client.post(
@@ -257,8 +241,15 @@ def test_cypher_tool_principal_is_the_valid_tokens_sub(
     assert call_response.status_code == 200
     result_text = _sse_result_text(call_response.text)
     assert json.loads(result_text)["row_count"] == 1
-    assert len(calls) == 1
-    assert calls[0]["principal"] == token_sub
+
+    emitter.flush()
+    lines = read_lines(resolve_default_log_path())
+    entry = next(
+        line
+        for line in lines
+        if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
+    )
+    assert entry["principal"] == token_sub
 
 
 def _sse_result_text(response_text: str) -> str:

@@ -44,6 +44,23 @@ mirroring `restore_orchestration.py`'s own `ps_service.restore.errors`
 precedent -- unlike `pending_review.py` itself, it is never function-local)
 and translates it into `PendingReviewNotFoundError` with H2's dedicated
 stale-reference message, before any merge write has happened.
+
+issue #163 Slice D narrowed :func:`build_default_near_miss_review_dependencies`'s
+own DI seam, mirroring `ingestion_orchestration.build_default_pipeline_dependencies`'s
+own Slice C narrowing exactly: `open_single_tenant_graph` (the true FalkorDB
+leaf boundary) is the *only* substitutable parameter now -- `list_pending_reviews`/
+`resolve_review` (real Company Merge business logic) are always the real,
+shipped `pending_review` functions, with no way for a caller to substitute
+fakes for them through this factory's own signature any more. Before this
+change, MCP-layer tests replaced this factory's entire return value
+wholesale, faking real Company Merge dedup-resolution logic in the name of
+substituting only the FalkorDB boundary beneath it -- the same
+"factory bundles boundary+business-logic together" violation
+`mcp_interface_part1.md`'s/`mcp_interface_part2.md`'s DOMINANT FINDING
+flagged repo-wide (`.orchestrator/tracker/issue-163/AUDIT_RAW/`). See
+:func:`build_default_near_miss_review_graph_opener` below, the new
+approved-mock-boundary entry (`docs/coding-standards/approved-mock-boundaries.yaml`)
+tests substitute instead.
 """
 
 from __future__ import annotations
@@ -201,7 +218,39 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
     return select_graph(connect_from_config(config), single_tenant_graph_name())
 
 
-def build_default_near_miss_review_dependencies() -> NearMissReviewDependencies:
+def build_default_near_miss_review_graph_opener() -> Callable[[ServiceConfig], GraphHandle]:
+    """Return the real single-tenant graph opener.
+
+    The *only* moving part `build_default_near_miss_review_dependencies` lets a
+    caller substitute (issue #163 Slice D) -- the true infra boundary (one
+    FalkorDB client construction, `_open_single_tenant_graph`), never the real
+    `list_pending_reviews`/`resolve_review` business logic sitting on top of
+    it. Extracted to its own top-level function (rather than inlined in
+    `build_default_near_miss_review_dependencies`) specifically so it is its
+    own, independently addressable module-level name: a caller-side
+    `monkeypatch.setattr("ps_service.api.near_miss_review_orchestration.
+    build_default_near_miss_review_graph_opener", ...)` substitutes the
+    opener alone, while `build_default_near_miss_review_dependencies` itself
+    -- called with no arguments -- still resolves this name at call time
+    (ordinary Python late-binding for a bare module-level call, mirroring
+    `ingestion_orchestration.build_default_graph_openers`'s own
+    issue #163 Slice C precedent) and so picks up the substitution
+    automatically, with zero change to its own call sites.
+    `docs/coding-standards/approved-mock-boundaries.yaml` lists this function
+    itself as the approved boundary -- not
+    `build_default_near_miss_review_dependencies`, which stays off that list
+    since it still bundles real business logic alongside this boundary.
+
+    Returns:
+        `_open_single_tenant_graph`, bound to the production single-tenant
+        FalkorDB graph opener.
+    """
+    return _open_single_tenant_graph
+
+
+def build_default_near_miss_review_dependencies(
+    *, open_single_tenant_graph: Callable[[ServiceConfig], GraphHandle] | None = None
+) -> NearMissReviewDependencies:
     """Wire the real `pending_review` functions into a `NearMissReviewDependencies`.
 
     `ps_service.company_merge.pending_review` is imported **function-locally**
@@ -210,9 +259,26 @@ def build_default_near_miss_review_dependencies() -> NearMissReviewDependencies:
     `build_default_restore_dependencies`/`build_default_pipeline_dependencies`
     exactly.
 
+    issue #163 Slice D narrowed this factory's own DI seam:
+    `open_single_tenant_graph` is the *only* substitutable parameter. There
+    is deliberately no `list_pending_reviews`/`resolve_review` parameter any
+    more -- both are always the real, shipped `pending_review` functions,
+    unconditionally, with no way for a caller (test or otherwise) to
+    substitute fake business logic through this function's own signature.
+    `open_single_tenant_graph=None` (the default -- every production caller,
+    unchanged) resolves `build_default_near_miss_review_graph_opener()` at
+    call time, so a `monkeypatch.setattr` of *that* function (see its own
+    docstring) is picked up automatically even though this factory itself
+    is never patched.
+
+    Args:
+        open_single_tenant_graph: The single-tenant graph opener to use, or
+            `None` (every production caller) to use the real one.
+
     Returns:
         A :class:`NearMissReviewDependencies` bound to the production
-        `list_pending_reviews` and the real single-tenant-graph opener.
+        `list_pending_reviews`/`resolve_review` and the given (or real)
+        single-tenant-graph opener.
     """
     from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- M6: function-local
         list_pending_reviews,
@@ -220,7 +286,9 @@ def build_default_near_miss_review_dependencies() -> NearMissReviewDependencies:
     )
 
     return NearMissReviewDependencies(
-        open_single_tenant_graph=_open_single_tenant_graph,
+        open_single_tenant_graph=(
+            open_single_tenant_graph or build_default_near_miss_review_graph_opener()
+        ),
         list_pending_reviews=list_pending_reviews,
         resolve_review=resolve_review,
     )

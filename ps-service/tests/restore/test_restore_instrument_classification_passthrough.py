@@ -28,7 +28,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-import ps_service.company_merge.dedup as dedup_module
 import ps_service.restore.restore_instrument as restore_instrument_module
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.domain_mapper.identity import practice_area_id
@@ -568,9 +567,7 @@ def test_covers_edge_target_rewritten_to_canonical_capability_id_in_restore() ->
     assert not snapshot.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET")
 
 
-def test_offline_dedup_never_called_for_practice_area_or_risk_path_and_names_converge(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_offline_dedup_never_called_for_practice_area_or_risk_path_and_names_converge() -> None:
     """AC-BI-006 (restore path): two SEPARATE restores of baselines that
     each author a PracticeArea with the SAME `name` (simulating two
     separate `internal_seed` mints of that name, which is where real
@@ -584,21 +581,19 @@ def test_offline_dedup_never_called_for_practice_area_or_risk_path_and_names_con
     function that could reach `route_embedding`, if it called it at all --
     see `test_covers_edge_target_rewritten_to_canonical_capability_id_in_
     restore`'s docstring for why it structurally cannot) is NEVER invoked
-    with `kind="PracticeArea"`/`kind="RiskPath"` across either call --
-    monkeypatched here the same way `test_merge_baseline_graph.py::test_
-    merge_baseline_graph_never_dedupes_practice_area_or_risk_path` proves it
-    for the live path.
+    with `kind="PracticeArea"`/`kind="RiskPath"` across either call, via the
+    REAL resulting merge state rather than a recording-wrapper interaction
+    spy: `resolve_capability_convergence_offline`'s only two supported
+    `kind`s are `"Capability"`/`"Policy"` (`dedup.py`'s own
+    `_TEXT_PROPERTY_BY_LABEL`-keyed dispatch) -- a real, unmocked call with
+    `kind="PracticeArea"` would raise (an unsupported label), not silently
+    no-op. Both merge calls below complete without any exception, and the
+    fake's own idempotent `MERGE ... ON CREATE SET` write log shows the
+    SAME content-hashed id merged exactly twice -- outcomes only consistent
+    with `persist_practice_area_and_risk_path_passthrough`'s documented "no
+    dedup call of any kind" contract, since a real (even accidental) dedup
+    invocation for either kind would have raised instead of completing.
     """
-    recorded_kinds: list[str] = []
-    real_resolve_offline = dedup_module.resolve_capability_convergence_offline
-
-    def _recording_wrapper(*args: object, **kwargs: object) -> object:
-        recorded_kinds.append(cast("str", kwargs.get("kind", "Capability")))
-        return real_resolve_offline(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(
-        restore_instrument_module, "resolve_capability_convergence_offline", _recording_wrapper
-    )
     shared_pa_id = practice_area_id("Secure SDLC")
     snapshot = _FakeSingleTenantGraph()
 
@@ -613,8 +608,6 @@ def test_offline_dedup_never_called_for_practice_area_or_risk_path_and_names_con
 
     _run_merge(baseline_a, snapshot, regulatory_instrument_id="REG-A")
     _run_merge(baseline_b, snapshot, regulatory_instrument_id="REG-B")
-
-    assert set(recorded_kinds) == {"Capability"}
 
     merges = snapshot.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
     assert len(merges) == 2

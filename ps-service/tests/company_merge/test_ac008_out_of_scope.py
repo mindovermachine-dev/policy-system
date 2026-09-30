@@ -345,6 +345,15 @@ def test_merge_baseline_graph_calls_dedup_for_capability_and_policy_only(
             emitter=emitter,
         )
 
+    # detroit-exception: AC-008 ("Role/Requirement/Obligation dedup is out of scope") is itself
+    # phrased as a call-shape claim, not a state/output one -- which `kind=` values
+    # `merge_baseline_graph` invokes `dedupe_canonical_nodes` with, across the two parametrized
+    # baseline shapes (Policy pass firing vs. not), IS the specified behavior here (§1.2's
+    # "interaction is the specified behavior" carve-out; see AUDIT_RAW/company_merge_groupA.md's
+    # ambiguous-case #1 and issue #163 Slice 17's ruling, which distinguishes this site from the
+    # otherwise-identical `test_merge_baseline_graph.py:1642` site -- that one asserted a fixed,
+    # non-conditional invariant with no such docstring argument and was rewritten to real state
+    # instead; this one exercises a genuine data-conditional branch decision).
     monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", _recording_wrapper)
 
     emitter, _log_path = make_emitter()

@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from ps_cli import oidc_discovery
 from ps_cli.credentials import TokenBundle
 from ps_cli.device_flow import (
     AccessTokenCache,
@@ -45,6 +44,8 @@ from ps_test_support.mock_oidc_provider import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _CLIENT_ID = "ps-cli-test-client"
@@ -351,25 +352,61 @@ def _obtain_real_tokens(provider: MockOidcProvider) -> TokenResponse:
     return poll_for_token(params, device_auth, sleep=_fail_if_called)
 
 
-def _patch_resolve_auth_parameters(
-    monkeypatch: pytest.MonkeyPatch, provider: MockOidcProvider
-) -> None:
-    """Bypass PS-Service resource-metadata discovery entirely for these tests.
+def _resource_metadata_handler(
+    provider: MockOidcProvider, *, scopes: list[str] | None = None
+) -> httpx.MockTransport:
+    """A resource-metadata transport pointing `authorization_servers` at `provider`.
 
-    `resolve_auth_parameters`'s own resolution logic is already covered by
-    `test_oidc_discovery.py`; this group's tests exercise
-    `ensure_valid_access_token`'s own refresh/fail-closed logic once parameters are
-    known, so `service_url` here is never a real, reachable server -- only
-    `provider`'s own real device-authorization/token endpoints are.
+    Mirrors `test_oidc_discovery.py`'s own `_resource_metadata_handler` -- the
+    established idiom for this exact seam, duplicated here rather than imported
+    (test modules don't import fixtures from one another in this codebase).
     """
 
-    def _fake_resolve(
-        service_url: str, override: object, *, transport: object = None
-    ) -> ResolvedAuthParameters:
-        del service_url, override, transport
-        return _params_for(provider)
+    def _handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/oauth-protected-resource":
+            return httpx.Response(
+                200,
+                json={
+                    "resource": "http://ps-service.example",
+                    "authorization_servers": [provider.issuer],
+                    "scopes_supported": scopes if scopes is not None else ["openid"],
+                    "ps_cli_client_id": _CLIENT_ID,
+                },
+            )
+        msg = f"unexpected request on the resource-metadata transport: {request.url}"
+        raise AssertionError(msg)
 
-    monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+    return httpx.MockTransport(_handle)
+
+
+class _SplitTransport(httpx.BaseTransport):
+    """Routes PS-Service-shaped requests to a `MockTransport`, everything else real.
+
+    `ensure_valid_access_token` shares one `transport` between `resolve_auth_
+    parameters`'s resource-metadata fetch (a fake PS-Service endpoint -- `service_url`
+    here is never a real, reachable server) and `provider`'s own real openid-
+    configuration/device-authorization/token endpoints (a real, ephemeral-port HTTP
+    server) -- mirrors `test_oidc_discovery.py`'s own `_SplitTransport` exactly.
+    `resolve_auth_parameters`'s own resolution logic is already covered by
+    `test_oidc_discovery.py`; this group's tests exercise `ensure_valid_access_token`'s
+    own refresh/fail-closed logic once parameters are known.
+    """
+
+    def __init__(self, resource_metadata_transport: httpx.MockTransport) -> None:
+        self._resource_metadata_transport = resource_metadata_transport
+        self._real_transport = httpx.HTTPTransport()
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/oauth-protected-resource":
+            return self._resource_metadata_transport.handle_request(request)
+        return self._real_transport.handle_request(request)
+
+
+def _transport_for(
+    provider: MockOidcProvider, *, scopes: list[str] | None = None
+) -> _SplitTransport:
+    """Build the `transport=` DI seam `ensure_valid_access_token` needs for `provider`."""
+    return _SplitTransport(_resource_metadata_handler(provider, scopes=scopes))
 
 
 class TestPeekCachedAccessToken:
@@ -435,7 +472,7 @@ class TestEnsureValidAccessToken:
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
     def test_empty_cache_always_refreshes_regardless_of_how_long_the_bundle_has_been_stored(
-        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+        self, mock_oidc_provider: MockOidcProvider
     ) -> None:
         """AC-BI-003's literal "regardless of any prior token's expiry": there is no
         persisted expiry left to vary at all (AC-BI-001) -- an empty
@@ -443,7 +480,7 @@ class TestEnsureValidAccessToken:
         against the real provider so the returned access token is genuine, not just a
         return-value stand-in.
         """
-        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
         assert initial.refresh_token is not None
         store = _FakeCredentialStore()
@@ -458,6 +495,7 @@ class TestEnsureValidAccessToken:
             auth_override=None,
             credential_store=store,
             access_token_cache=AccessTokenCache(),
+            transport=transport,
         )
 
         assert isinstance(token, str)
@@ -497,7 +535,7 @@ class TestEnsureValidAccessToken:
         assert token == "already-cached"
 
     def test_populated_but_stale_cache_triggers_exactly_one_more_refresh(
-        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+        self, mock_oidc_provider: MockOidcProvider
     ) -> None:
         """Issue #121 critical-flaw fix (CHANGES.md Appendix A1): a cache that already
         holds a token, but whose `expires_at` is in the past, is treated as a cache
@@ -507,7 +545,7 @@ class TestEnsureValidAccessToken:
         once its in-memory token goes stale, instead of returning an increasingly-stale
         token forever.
         """
-        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
         assert initial.refresh_token is not None
         store = _FakeCredentialStore()
@@ -523,6 +561,7 @@ class TestEnsureValidAccessToken:
             auth_override=None,
             credential_store=store,
             access_token_cache=stale_cache,
+            transport=transport,
         )
 
         assert new_token != "stale-token"
@@ -537,12 +576,12 @@ class TestEnsureValidAccessToken:
         assert rotated.refresh_token != initial.refresh_token
 
     def test_expired_bundle_with_valid_refresh_token_refreshes_and_rotates_store(
-        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+        self, mock_oidc_provider: MockOidcProvider
     ) -> None:
         """AC-BI-005: a cache-miss refresh yields a *new* access_token, and the store
         afterward holds the *rotated* refresh_token, not the original.
         """
-        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
         assert initial.refresh_token is not None
         store = _FakeCredentialStore()
@@ -557,6 +596,7 @@ class TestEnsureValidAccessToken:
             auth_override=None,
             credential_store=store,
             access_token_cache=AccessTokenCache(),
+            transport=transport,
         )
 
         rotated = store.get_tokens("dev")
@@ -566,7 +606,7 @@ class TestEnsureValidAccessToken:
         assert new_token != ""
 
     def test_refresh_request_carries_forward_the_resolved_scope(
-        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+        self, mock_oidc_provider: MockOidcProvider
     ) -> None:
         """Issue #119, AC-BI-003: the refresh-token POST sends `params.scopes` as `scope`
         -- proven with `offline_access` in the mix, the scope this fix cares about -- not
@@ -591,13 +631,11 @@ class TestEnsureValidAccessToken:
             TokenBundle(refresh_token=initial.refresh_token, issuer=mock_oidc_provider.issuer),
         )
 
-        def _fake_resolve(
-            service_url: str, override: object, *, transport: object = None
-        ) -> ResolvedAuthParameters:
-            del service_url, override, transport
-            return params
-
-        monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+        # `scopes_supported=["openid", "offline_access"]` -- the resource-metadata
+        # transport's discovered scopes match `params.scopes` above exactly (already
+        # containing `offline_access`, so `resolve_auth_parameters`'s own dedup-append
+        # adds nothing further).
+        transport = _transport_for(mock_oidc_provider, scopes=["openid", "offline_access"])
 
         ensure_valid_access_token(
             context="dev",
@@ -605,6 +643,7 @@ class TestEnsureValidAccessToken:
             auth_override=None,
             credential_store=store,
             access_token_cache=AccessTokenCache(),
+            transport=transport,
         )
 
         sent_scope = mock_oidc_provider.last_token_request_form.get("scope")
@@ -612,34 +651,42 @@ class TestEnsureValidAccessToken:
         assert "offline_access" in sent_scope.split()
 
     def test_refresh_rejected_for_unrecognized_scope_fails_closed_like_any_refresh_error(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """Issue #119, AC-BI-004: an IdP that rejects the newly-added `offline_access`
         scope (e.g. `invalid_scope`) is handled by the existing generic refresh-failure
         path -- no special-casing added, no new crash mode.
+
+        No `mock_oidc_provider` here -- a single, fully-synthetic `httpx.MockTransport`
+        stands in for both PS-Service's resource-metadata endpoint and the (loopback,
+        so `_assert_secure_or_loopback` allows it) IdP's own discovery/token endpoints.
         """
-        params = ResolvedAuthParameters(
-            issuer="http://issuer.example",
-            client_id=_CLIENT_ID,
-            scopes=("openid", "offline_access"),
-            audience=None,
-            device_authorization_endpoint="http://issuer.example/device_authorization",
-            token_endpoint="http://issuer.example/token",
-        )
-
-        def _fake_resolve(
-            service_url: str, override: object, *, transport: object = None
-        ) -> ResolvedAuthParameters:
-            del service_url, override, transport
-            return params
-
-        monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+        fake_issuer = "http://localhost"
 
         def _handle(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/.well-known/oauth-protected-resource":
+                return httpx.Response(
+                    200,
+                    json={
+                        "resource": "http://ps-service.example",
+                        "authorization_servers": [fake_issuer],
+                        "scopes_supported": ["openid", "offline_access"],
+                        "ps_cli_client_id": _CLIENT_ID,
+                    },
+                )
+            if request.url.path == "/.well-known/openid-configuration":
+                return httpx.Response(
+                    200,
+                    json={
+                        "issuer": fake_issuer,
+                        "device_authorization_endpoint": f"{fake_issuer}/device_authorization",
+                        "token_endpoint": f"{fake_issuer}/token",
+                    },
+                )
             return httpx.Response(400, json={"error": "invalid_scope"})
 
         store = _FakeCredentialStore()
-        store.set_tokens("dev", TokenBundle(refresh_token="rt", issuer="http://issuer.example"))
+        store.set_tokens("dev", TokenBundle(refresh_token="rt", issuer=fake_issuer))
 
         with pytest.raises(PsCliError) as excinfo:
             ensure_valid_access_token(
@@ -655,13 +702,13 @@ class TestEnsureValidAccessToken:
         assert "ps-cli auth login" in (excinfo.value.hint or "")
 
     def test_second_call_with_now_stale_refresh_token_raises_fail_closed_not_a_crash(
-        self, mock_oidc_provider: MockOidcProvider, monkeypatch: pytest.MonkeyPatch
+        self, mock_oidc_provider: MockOidcProvider
     ) -> None:
         """Simulates a second process racing on an already-rotated refresh_token: the
         provider's own "already rotated" `invalid_grant` rejection surfaces as
         AC-BI-002's fail-closed error, not a crash.
         """
-        _patch_resolve_auth_parameters(monkeypatch, mock_oidc_provider)
+        transport = _transport_for(mock_oidc_provider)
         initial = _obtain_real_tokens(mock_oidc_provider)
         assert initial.refresh_token is not None
         store = _FakeCredentialStore()
@@ -679,6 +726,7 @@ class TestEnsureValidAccessToken:
             auth_override=None,
             credential_store=store,
             access_token_cache=AccessTokenCache(),
+            transport=transport,
         )
         # A second, racing process still holds the now-stale original token -- and its
         # own, separate (empty) AccessTokenCache, since it is a different invocation.
@@ -691,6 +739,7 @@ class TestEnsureValidAccessToken:
                 auth_override=None,
                 credential_store=store,
                 access_token_cache=AccessTokenCache(),
+                transport=transport,
             )
 
         assert excinfo.value.msg == "stored credentials could not be refreshed"
@@ -702,9 +751,7 @@ class TestEnsureValidAccessToken:
 _MARKER_REFRESH_TOKEN = "marker-refresh-token-should-never-print-79c3"
 
 
-def test_device_flow_never_prints_a_token_value_on_any_error_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
     """A proof pass over every `PsCliError` raised across Slices 10/11
     (`poll_for_token`'s own error paths) and 16/17 (`ensure_valid_access_token`'s
     refresh path), with a distinctive marker value deliberately in scope when each
@@ -752,13 +799,40 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
 
     # Slices 16/17: ensure_valid_access_token's refresh path, with a marker
     # refresh token already in scope when each failure is raised.
-    def _fake_resolve(
-        service_url: str, override: object, *, transport: object = None
-    ) -> ResolvedAuthParameters:
-        del service_url, override, transport
-        return params
+    _fake_issuer = "http://localhost"
 
-    monkeypatch.setattr(oidc_discovery, "resolve_auth_parameters", _fake_resolve)
+    def _discovery_success_then(
+        handle_token: Callable[[httpx.Request], httpx.Response],
+    ) -> httpx.MockTransport:
+        """PS-Service metadata + issuer discovery succeed normally; `/token` is
+        `handle_token`'s own scenario -- isolates each case below to the refresh POST
+        itself, not `resolve_auth_parameters`'s own (separately covered by
+        `test_oidc_discovery.py`) discovery-fetch error handling.
+        """
+
+        def _handle(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/.well-known/oauth-protected-resource":
+                return httpx.Response(
+                    200,
+                    json={
+                        "resource": "http://ps-service.example",
+                        "authorization_servers": [_fake_issuer],
+                        "scopes_supported": ["openid"],
+                        "ps_cli_client_id": _CLIENT_ID,
+                    },
+                )
+            if request.url.path == "/.well-known/openid-configuration":
+                return httpx.Response(
+                    200,
+                    json={
+                        "issuer": _fake_issuer,
+                        "device_authorization_endpoint": f"{_fake_issuer}/device_authorization",
+                        "token_endpoint": f"{_fake_issuer}/token",
+                    },
+                )
+            return handle_token(request)
+
+        return httpx.MockTransport(_handle)
 
     def _assert_refresh_failure_never_leaks_marker(transport: httpx.BaseTransport) -> None:
         store = _FakeCredentialStore()
@@ -782,22 +856,22 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path(
     def _connect_error_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
 
-    _assert_refresh_failure_never_leaks_marker(httpx.MockTransport(_connect_error_handler))
+    _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_connect_error_handler))
 
     def _non_2xx_handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(400, json={"error": "invalid_grant"})
 
-    _assert_refresh_failure_never_leaks_marker(httpx.MockTransport(_non_2xx_handler))
+    _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_non_2xx_handler))
 
     def _malformed_json_handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(200, content=b"not json")
 
-    _assert_refresh_failure_never_leaks_marker(httpx.MockTransport(_malformed_json_handler))
+    _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_malformed_json_handler))
 
     def _malformed_shape_handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(200, json={"token_type": "Bearer"})
 
-    _assert_refresh_failure_never_leaks_marker(httpx.MockTransport(_malformed_shape_handler))
+    _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_malformed_shape_handler))

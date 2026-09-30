@@ -38,7 +38,11 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
-from ps_service.api.catalog import CatalogEntry, find_by_celex, find_short_name_collision
+from ps_service.api.catalog import (
+    CatalogEntry,
+    find_by_celex,
+    find_short_name_collision,
+)
 from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; IMPL_4 deviation 1 sanctions reuse
     is_safe_verbatim,
@@ -405,6 +409,7 @@ def validate_and_resolve_catalog_entry(
     *,
     single_tenant_graph: GraphHandle,
     emitter: LogEmitter | None = None,
+    catalog: tuple[CatalogEntry, ...] | None = None,
 ) -> CatalogEntry | None:
     """Validate a caller-supplied ``short_name`` against the curated catalog and the graph.
 
@@ -453,6 +458,15 @@ def validate_and_resolve_catalog_entry(
             by the graph-side collision check.
         emitter: Optional explicit log emitter, used by the graph-side
             collision check's own ``_run_stage`` failure logging.
+        catalog: The curated catalog to validate against. ``None`` (the
+            default -- every real caller) resolves to the real, packaged
+            :data:`~ps_service.api.catalog.REGULATION_CATALOG`. A test that
+            needs a curated/curated ``short_name`` collision -- a scenario
+            the real curated catalog can never produce, since it has no
+            duplicate ``short_name``s by construction -- passes its own
+            fixture tuple here instead of monkeypatching the module-level
+            constant (AUDIT.md §2 case 11: a DI-gap smell, not a legitimate
+            mock-boundary substitution -- the fix is a real parameter).
 
     Returns:
         The matching :class:`CatalogEntry` if ``celex`` is curated, else
@@ -466,13 +480,13 @@ def validate_and_resolve_catalog_entry(
         PipelineStageError: The graph-side collision check itself fails
             (e.g. the graph is unreachable).
     """
-    entry = find_by_celex(celex)
+    entry = find_by_celex(celex, catalog=catalog)
     if entry is not None and entry.short_name != short_name:
         raise ShortNameCuratedMismatchError(
             f"CELEX {celex} is curated under short_name '{entry.short_name}'; "
             f"pass that value, not '{short_name}'"
         )
-    catalog_collision = find_short_name_collision(short_name, celex)
+    catalog_collision = find_short_name_collision(short_name, celex, catalog=catalog)
     if catalog_collision is not None:
         raise ShortNameCollisionError(
             f"short_name '{short_name}' is already claimed by CELEX {catalog_collision.celex}"
@@ -1310,13 +1324,67 @@ def _default_internal_seed_adapter() -> InternalSeedAdapter:
     return InternalSeedIngestionAdapter()
 
 
-def build_default_pipeline_dependencies() -> PipelineDependencies:
+def build_default_graph_openers() -> GraphOpeners:
+    """Wire the real shipped FalkorDB graph openers into a ``GraphOpeners``.
+
+    This is the *only* moving part :func:`build_default_pipeline_dependencies`
+    lets a caller substitute (M2/issue #163 Slice C) -- the true infra
+    boundary (three FalkorDB client constructions), never the real
+    ``PipelineStages``/``PipelineAdapters`` business logic sitting on top of
+    it. Extracted to its own top-level function (rather than inlined in
+    :func:`build_default_pipeline_dependencies`) specifically so it is its
+    own, independently addressable module-level name: a caller-side
+    ``monkeypatch.setattr("ps_service.api.ingestion_orchestration.
+    build_default_graph_openers", ...)`` substitutes graphs alone, while
+    ``build_default_pipeline_dependencies`` itself -- called with no
+    arguments -- still resolves this name at call time (ordinary Python
+    late-binding for a bare module-level call, the same mechanism
+    :func:`resolve_via_cellar`'s own ``None``-sentinel pattern relies on) and
+    so picks up the substitution automatically, with zero change to its own
+    call sites. ``docs/coding-standards/approved-mock-boundaries.yaml`` lists
+    this function itself as the approved boundary -- not
+    ``build_default_pipeline_dependencies``, which stays off that list since
+    it still bundles real business logic alongside this boundary.
+
+    Returns:
+        A :class:`GraphOpeners` bound to the production FalkorDB openers.
+    """
+    return GraphOpeners(
+        native=_open_native_graph,
+        baseline=_open_baseline_graph,
+        single_tenant=_open_single_tenant_graph,
+    )
+
+
+def build_default_pipeline_dependencies(
+    *, graphs: GraphOpeners | None = None
+) -> PipelineDependencies:
     """Wire the real shipped pipeline entry points into a ``PipelineDependencies``.
 
     Every stage entry point, adapter class, and FalkorDB client is imported
     **function-locally** (here and in the opener helpers) so that importing
     ``ps_service.main`` never transitively loads Domain Mapper or Company Merge at
     module load (M6 / the Process Harness decoupling guarantee).
+
+    issue #163 Slice C narrowed this factory's own DI seam: ``graphs`` is the
+    *only* substitutable parameter. There is deliberately no ``stages``/
+    ``adapters`` parameter any more -- ``PipelineStages`` (
+    ``ingest_regulatory_instrument``/``extract_roles_and_requirements``/
+    ``derive_obligations_and_capabilities``/``merge_baseline_graph``) and
+    ``PipelineAdapters`` are always the real, shipped implementations,
+    unconditionally, with no way for a caller (test or otherwise) to
+    substitute fake business logic through this function's own signature.
+    Before this change, a caller could -- and 23 ``mcp_interface`` unit tests
+    did -- replace this factory's *entire* return value wholesale, faking
+    real Domain Mapper/Company Merge/Ingestion engine logic in the name of
+    substituting only the FalkorDB boundary beneath it (the "delegate, don't
+    reimplement" violation L2's MCP Interface Patterns section warns
+    against; see ``.orchestrator/tracker/issue-163/AUDIT_RAW/
+    mcp_interface_part1.md``'s DOMINANT FINDING). ``graphs=None`` (the
+    default -- every production caller, unchanged) builds the real
+    :class:`GraphOpeners` via :func:`build_default_graph_openers`; a caller
+    that passes ``graphs`` explicitly substitutes only that true infra
+    boundary.
 
     Returns:
         A :class:`PipelineDependencies` bound to the production stage functions,
@@ -1335,11 +1403,7 @@ def build_default_pipeline_dependencies() -> PipelineDependencies:
     )
 
     return PipelineDependencies(
-        graphs=GraphOpeners(
-            native=_open_native_graph,
-            baseline=_open_baseline_graph,
-            single_tenant=_open_single_tenant_graph,
-        ),
+        graphs=graphs if graphs is not None else build_default_graph_openers(),
         stages=PipelineStages(
             ingest=ingest_regulatory_instrument,
             extract=extract_roles_and_requirements,

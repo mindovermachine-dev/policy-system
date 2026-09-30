@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from ps_service.api.catalog import (
     CATALOG,
     REGULATION_CATALOG,
@@ -11,9 +9,6 @@ from ps_service.api.catalog import (
     find_by_celex,
     find_short_name_collision,
 )
-
-if TYPE_CHECKING:
-    import pytest
 
 
 def test_catalog_entries_have_ten_char_celex_and_nonempty_title() -> None:
@@ -57,21 +52,24 @@ def test_find_short_name_collision_returns_none_when_unclaimed() -> None:
     assert find_short_name_collision("not-a-real-short-name", "32099R9999") is None
 
 
-def test_find_short_name_collision_returns_the_conflicting_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_find_short_name_collision_returns_the_conflicting_entry() -> None:
     """A different curated entry already claiming ``short_name`` is returned as the conflict.
 
     ``celex`` is the *caller's* CELEX, matching neither fixture entry's own CELEX --
-    the entry sharing ``short_name`` under a differing CELEX is the collision.
+    the entry sharing ``short_name`` under a differing CELEX is the collision. Passes
+    its own fixture tuple via ``find_short_name_collision``'s ``catalog=`` parameter
+    (AUDIT.md §2 case 11) rather than monkeypatching the module-level
+    ``REGULATION_CATALOG`` constant -- the real curated catalog can never itself
+    produce a same-``short_name`` collision (by construction, proven by
+    ``test_no_two_curated_entries_share_a_short_name`` below), so a test needing one
+    supplies its own catalog through the real, dedicated DI seam instead.
     """
     fixture = (
         CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
         CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
     )
-    monkeypatch.setattr("ps_service.api.catalog.REGULATION_CATALOG", fixture)
 
-    conflict = find_short_name_collision("shared-name", "32024R9999")
+    conflict = find_short_name_collision("shared-name", "32024R9999", catalog=fixture)
 
     assert conflict == fixture[0]
 

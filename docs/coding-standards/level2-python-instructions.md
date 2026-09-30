@@ -40,7 +40,7 @@
 ### Testing Patterns
 
 - pytest. `tests/` mirrors `src/<package>/` substructure 1:1 — a module's tests live in the corresponding `tests/<component>/` directory.
-- Detroit-style by default: wire up real internal collaborators (domain objects, services, in-process components) and assert on the returned value/state. Mock only at component boundaries — external infrastructure clients (FalkorDB, LLM client, other network/process boundaries) — never the internals of the component under test. `unittest.mock` usage should map to one of those boundary seams, not to an in-repo class.
+- Detroit-style by default: wire up real internal collaborators (domain objects, services, in-process components) and assert on the returned value/state. Mock only at component boundaries — external infrastructure clients (FalkorDB, LLM client, other network/process boundaries) — never the internals of the component under test. `unittest.mock` usage should map to one of those boundary seams, not to an in-repo class. See `docs/coding-standards/approved-mock-boundaries.yaml` for the enumerated, guardrail-consumable list of approved boundary targets.
 - Test names describe scenario and expected outcome (`test_raises_when_graph_missing`, not `test_download_2`).
 
 ### Configuration & Secrets

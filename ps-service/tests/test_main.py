@@ -15,8 +15,9 @@ import inspect
 import json
 import tomllib
 from contextlib import asynccontextmanager
+from importlib.metadata import version as installed_version
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -25,9 +26,7 @@ from fastapi.testclient import TestClient
 
 import ps_service.main as main_module
 from ps_service import dependency_health
-from ps_service.auth.errors import AuthConfigurationError
-from ps_service.auth.models import AuthContext
-from ps_service.config import ServiceConfig
+from ps_service.config import ServiceConfig, load_config
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
@@ -35,17 +34,20 @@ from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
+from ps_service.passkey_signing.store import (
+    connect_from_config as connect_passkey_signing_postgres_from_config,
+)
 from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
-    from typing import Self
 
     import httpx
     from fastapi.responses import JSONResponse
     from fastapi.routing import APIRoute
     from starlette.applications import Starlette
 
+    from ps_service.auth.models import AuthContext
     from ps_service.auth.verifier import PsTokenVerifier
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
@@ -117,8 +119,26 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     )
 
 
-def _stub_resolve_auth_context(config: ServiceConfig) -> AuthContext | None:
-    """Stand-in for the real `resolve_auth_context`'s OIDC-discovery branch (issue #58, Slice 2).
+def _fake_fetch_discovery_document(issuer: str, **_kwargs: object) -> dict[str, Any]:
+    """A successful discovery document, exactly matching `_stub_resolve_auth_context`'s
+    old hardcoded `AuthContext` fields (`jwks_uri`, `RS256`-only algorithm support), so every
+    pre-existing assertion in this file keeps passing unchanged.
+
+    Mirrors `tests/invitations/test_startup.py`'s/`tests/authz/
+    test_bootstrap_owner_startup_fail_closed.py`'s own helper of the same shape.
+    """
+    return {
+        "jwks_uri": f"{issuer}/jwks.json",
+        "id_token_signing_alg_values_supported": ["RS256"],
+    }
+
+
+@pytest.fixture(autouse=True)
+def _stub_auth_discovery(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Autouse: exercise the real `resolve_auth_context`, faking only the one real network
+    boundary beneath it (`fetch_discovery_document`, already an approved boundary target).
 
     This file exercises the process harness (logging, readiness, the #67
     local-test bypass, uvicorn wiring) -- none of its tests are about OIDC
@@ -126,42 +146,17 @@ def _stub_resolve_auth_context(config: ServiceConfig) -> AuthContext | None:
     job. Without this stub, `_complete_config()`'s fake
     `https://issuer.example.com` pair (and `_delenv_all_ps_service_vars`'s
     equivalent env vars) would make `create_app` attempt a real,
-    doomed-to-fail network fetch for nearly every test in this file, since
-    Slice 2 replaced Slice 1's placeholder-`AuthContext` "both set" branch
-    with a real `fetch_discovery_document` call. Reproduces
-    `resolve_auth_context`'s exact bypass/presence semantics, minus the
-    real discovery fetch -- no test in this file inspects
-    `app.state.auth_context`'s contents, only whether `create_app` raises.
+    doomed-to-fail network fetch for nearly every test in this file. Unlike
+    the previous `_stub_resolve_auth_context` (a hand-rolled reimplementation
+    of `resolve_auth_context`'s own bypass/presence/discovery decision
+    logic one layer above the true boundary), this fakes only
+    `fetch_discovery_document` -- `resolve_auth_context` itself, including its
+    bypass check, missing-config error, and discovery-document validation, now
+    runs for real on every test in this file.
     """
-    if config.is_local_test_bypass_active:
-        return None
-    if config.auth_issuer is None or config.auth_audience is None:
-        raise AuthConfigurationError(
-            "PS_AUTH_ISSUER and PS_AUTH_AUDIENCE are unset; set both PS_AUTH_ISSUER and "
-            "PS_AUTH_AUDIENCE, or set PS_SERVICE_LOCAL_TEST_BYPASS=true for local-only "
-            "evaluation."
-        )
-    return AuthContext(
-        issuer=config.auth_issuer,
-        audience=config.auth_audience,
-        cli_client_id=config.auth_cli_client_id,
-        scopes=config.auth_scopes,
-        jwks_uri="https://issuer.example.com/jwks.json",
-        allowed_algorithms=frozenset({"RS256"}),
+    monkeypatch.setattr(
+        "ps_service.auth.startup.fetch_discovery_document", _fake_fetch_discovery_document
     )
-
-
-@pytest.fixture(autouse=True)
-def _stub_auth_discovery(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Autouse: replace real OIDC discovery with `_stub_resolve_auth_context` for this file.
-
-    See `_stub_resolve_auth_context`'s own docstring for why this file, specifically,
-    needs it. A test that wants to exercise real discovery behavior belongs in
-    `tests/auth/test_startup_fail_closed.py`, not here.
-    """
-    monkeypatch.setattr(main_module, "resolve_auth_context", _stub_resolve_auth_context)
 
 
 def _complete_config(**overrides: object) -> ServiceConfig:
@@ -235,26 +230,21 @@ def test_health_returns_200_and_alive_status_before_lifespan_runs(app: FastAPI) 
     assert response.json()["status"] == "alive"
 
 
-def test_health_returns_version_field_from_installed_metadata(
-    monkeypatch: pytest.MonkeyPatch, app: FastAPI
-) -> None:
+def test_health_returns_version_field_from_installed_metadata(app: FastAPI) -> None:
     """AC-BI-001: `/health`'s `version` field comes from `installed_version("ps-service")`.
 
-    Monkeypatches `ps_service.main.installed_version` (mirrors this file's own
-    `monkeypatch.setattr(main_module, "configure", fake_configure)` convention), proving the
-    field's value flows from that call rather than a hardcoded literal. A named function with
-    an explicit signature is used instead of a bare lambda so `basedpyright --strict` doesn't
-    flag an unknown parameter/return type (`reportUnknownLambdaType`/`reportUnknownArgumentType`).
+    Calls the real `importlib.metadata.version("ps-service")` directly and compares --
+    safe to run for real (no mocking needed): the very next test,
+    `test_health_version_matches_ps_service_pyproject_toml_version`, already proves this same
+    real call's value is not a coincidental hardcoded literal, since it independently tracks
+    `pyproject.toml`'s own declared version.
     """
-
-    def fake_installed_version(name: str) -> str:
-        return "9.9.9"
-
-    monkeypatch.setattr(main_module, "installed_version", fake_installed_version)
-
     response = TestClient(app).get("/health")
 
-    assert response.json() == {"status": "alive", "version": "9.9.9"}
+    assert response.json() == {
+        "status": "alive",
+        "version": installed_version("ps-service"),
+    }
 
 
 def test_health_version_matches_ps_service_pyproject_toml_version(app: FastAPI) -> None:
@@ -294,31 +284,24 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
     assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
 
 
-def test_lifespan_calls_configure_before_emit_log_entry(
-    monkeypatch: pytest.MonkeyPatch, app: FastAPI
-) -> None:
-    """AC-BI-011: `configure()` is called before `emit_log_entry()` during lifespan startup.
+def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: FastAPI) -> None:
+    """AC-BI-011: `configure()` runs before any `emit_log_entry()` call during lifespan startup.
 
-    Patches `ps_service.main.configure`/`emit_log_entry` (where they are
-    imported/used, not `ps_service.logging.facade` where they are defined),
-    per the Logging facade's documented contract that `configure()` must run
-    before any `emit_log_entry` call.
+    Exercises the real Logging facade (no monkeypatching): `emit_log_entry`'s own real
+    contract raises `LoggingLifecycleError` if no default emitter has been installed yet, so
+    `lifespan` completing without that error, *and* leaving behind a real written log entry,
+    is itself proof `configure()` already ran before `emit_log_entry` was first called --
+    state/output, not a call-order interaction list.
     """
-    call_order: list[str] = []
-
-    def fake_configure(*args: object, **kwargs: object) -> None:
-        call_order.append("configure")
-
-    def fake_emit_log_entry(*args: object, **kwargs: object) -> None:
-        call_order.append("emit_log_entry")
-
-    monkeypatch.setattr(main_module, "configure", fake_configure)
-    monkeypatch.setattr(main_module, "emit_log_entry", fake_emit_log_entry)
-
     with TestClient(app):
         pass
 
-    assert call_order == ["configure", "emit_log_entry"]
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    assert len(lines) >= 1
 
 
 def test_lifespan_emits_exactly_one_startup_success_log_entry(tmp_path: Path, app: FastAPI) -> None:
@@ -487,21 +470,21 @@ def test_main_module_does_not_statically_import_any_pipeline_or_query_surface_co
 
 
 def test_lifespan_startup_failure_propagates_out_of_testclient_enter(
-    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, app: FastAPI
 ) -> None:
     """AC-BI-010 (unit half): a `configure()` failure is not swallowed by `lifespan`.
 
-    Monkeypatches `configure` (as imported into `ps_service.main`) to raise
-    `LoggingConfigurationError`, and asserts the exception propagates out of
-    `with TestClient(app) as client: pass` rather than being caught anywhere
-    along the way — proving startup failures fail fast (L1) instead of being
+    Forces the real `configure()` to fail for real, no monkeypatching of `configure` itself:
+    redirects `PS_LOGGING_DIR` to a path that already exists as a regular file, so
+    `resolve_default_log_path()`'s own `log_dir.mkdir(...)` call raises a real `OSError`,
+    which `configure()` re-raises as `LoggingConfigurationError` -- then asserts that real
+    exception propagates out of `with TestClient(app): pass` rather than being caught
+    anywhere along the way, proving startup failures fail fast (L1) instead of being
     silently absorbed.
     """
-
-    def fake_configure(*args: object, **kwargs: object) -> None:
-        raise LoggingConfigurationError("simulated log directory resolution failure")
-
-    monkeypatch.setattr(main_module, "configure", fake_configure)
+    blocked_path = tmp_path / "not-a-directory"
+    blocked_path.write_text("occupies the path configure() will try to mkdir", encoding="utf-8")
+    monkeypatch.setenv("PS_LOGGING_DIR", str(blocked_path))
 
     with pytest.raises(LoggingConfigurationError), TestClient(app):
         pass
@@ -552,6 +535,7 @@ def test_main_calls_uvicorn_run_with_app_host_and_graceful_shutdown_timeout(
     """
     _delenv_all_ps_service_vars(monkeypatch)
     mock_run = Mock()
+    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec (§1.2)
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     main_module.main()
@@ -574,8 +558,14 @@ def test_main_calls_load_config_exactly_once(monkeypatch: pytest.MonkeyPatch) ->
     happens, then asserts the spy was invoked exactly once.
     """
     _delenv_all_ps_service_vars(monkeypatch)
+    # A `Mock(wraps=...)` spy delegates to the real `load_config` (actual resolution behavior
+    # unchanged) -- only the call *count* below is asserted, and that count is the literally
+    # specified behavior here (§1.2), not a stand-in for business logic.
+    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec (§1.2)
     spy_load_config = Mock(wraps=main_module.load_config)
+    # detroit-exception: spy-through wrapping the real collaborator; call count IS the spec (§1.2)
     monkeypatch.setattr(main_module, "load_config", spy_load_config)
+    # detroit-exception: starting a real ASGI server is unsafe/expensive in a unit test (§1.2)
     monkeypatch.setattr(main_module.uvicorn, "run", Mock())
 
     main_module.main()
@@ -605,6 +595,7 @@ def test_main_honors_ps_service_env_override_in_uvicorn_run_kwargs(
     _delenv_all_ps_service_vars(monkeypatch)
     monkeypatch.setenv(env_var, env_value)
     mock_run = Mock()
+    # detroit-exception: binding a real socket is unsafe here; call args ARE the spec (§1.2)
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     main_module.main()
@@ -626,6 +617,7 @@ def test_main_does_not_call_uvicorn_run_when_bypass_refuses_bind(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     monkeypatch.setenv("PS_SERVICE_HOST", "0.0.0.0")
     mock_run = Mock()
+    # detroit-exception: binding a real socket is unsafe here; the non-call IS the spec (§1.2)
     monkeypatch.setattr(main_module.uvicorn, "run", mock_run)
 
     with pytest.raises(main_module.LocalTestBypassBindRefusedError):
@@ -686,14 +678,14 @@ def test_create_app_instances_have_independent_readiness_state() -> None:
 
 
 def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_filename(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """AC-BI-007: `lifespan` calls `configure(log_path=config.logging_dir / "ps-service.jsonl")`.
 
-    Constructs a `ServiceConfig` with a non-`None` `logging_dir` and
-    monkeypatches `configure` to capture its call kwargs, proving the
-    resolved config's `logging_dir` is threaded through explicitly rather
-    than left to `configure()`'s own `resolve_default_log_path()` fallback.
+    Exercises the real Logging facade (no monkeypatching): constructs a `ServiceConfig` with a
+    non-`None` `logging_dir`, then asserts a real log entry lands at exactly
+    `config.logging_dir / "ps-service.jsonl"` -- state/output, rather than capturing
+    `configure()`'s call kwargs via a stub.
 
     `config.logging_dir` is a *directory* (matching `PS_LOGGING_DIR`'s
     existing env-var semantics), while `configure(log_path=...)` treats a
@@ -701,23 +693,13 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
     join of its own (that join only happens inside `resolve_default_log_path()`,
     which only runs when `log_path=None`). So `lifespan` must join
     `config.logging_dir` with the fixed filename `ps-service.jsonl` itself
-    before calling `configure()` — passing the raw directory through would
+    before calling `configure()` -- passing the raw directory through would
     make the emitter's writer thread hit `IsADirectoryError` on every write,
     silently swallowed by the Logging facade's fallback-on-write-failure
-    contract (AC#6 from issue #20), losing every log entry with no error
-    surfaced anywhere.
+    contract (AC#6 from issue #20): no file would ever land at this exact
+    path, and the real-state assertion below would fail for exactly that
+    reason.
     """
-    captured_kwargs: dict[str, object] = {}
-
-    def fake_configure(*args: object, **kwargs: object) -> None:
-        captured_kwargs.update(kwargs)
-
-    def fake_emit_log_entry(*args: object, **kwargs: object) -> None:
-        pass
-
-    monkeypatch.setattr(main_module, "configure", fake_configure)
-    monkeypatch.setattr(main_module, "emit_log_entry", fake_emit_log_entry)
-
     config = ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -732,7 +714,12 @@ def test_lifespan_calls_configure_with_configs_logging_dir_joined_with_fixed_fil
     with TestClient(scoped_app):
         pass
 
-    assert captured_kwargs == {"log_path": tmp_path / "ps-service.jsonl"}
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    log_path = tmp_path / "ps-service.jsonl"
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+
+    assert len(lines) >= 1
 
 
 def test_create_app_instances_do_not_leak_each_others_logging_dir(tmp_path: Path) -> None:
@@ -977,6 +964,7 @@ def test_lifespan_refuses_before_mcp_session_manager_starts_when_bypass_active_a
         mcp_asgi_app.router.lifespan_context = recording_lifespan_context
         return mcp_asgi_app
 
+    # detroit-exception: wraps/delegates to the real fn, only the lifespan hook swaps (§2 case 9)
     monkeypatch.setattr(main_module, "build_streamable_http_app", wrapped_build_streamable_http_app)
 
     config = _complete_config(host="0.0.0.0", is_local_test_bypass_active=True)
@@ -1208,8 +1196,11 @@ def test_all_three_dependency_checks_run_even_when_the_first_one_fails(
     def succeeding_cellar_check() -> None:
         called.append("cellar_eli")
 
+    # detroit-exception: fixed-order/non-short-circuiting across all 3 probes IS the spec here
     monkeypatch.setattr(main_module, "check_falkordb_connectivity", failing_falkordb_check)
+    # detroit-exception: fixed-order/non-short-circuiting across all 3 probes IS the spec here
     monkeypatch.setattr(main_module, "check_llm_interface_connectivity", succeeding_llm_check)
+    # detroit-exception: fixed-order/non-short-circuiting across all 3 probes IS the spec here
     monkeypatch.setattr(main_module, "check_cellar_eli_connectivity", succeeding_cellar_check)
 
     with TestClient(app):
@@ -1291,40 +1282,48 @@ def test_migration_runner_is_skipped_at_startup_when_postgres_is_not_configured(
         message = "connect_from_config must not be called when Postgres is unconfigured"
         raise AssertionError(message)
 
+    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (§2 case 3)
     monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fail_if_called)
 
     with TestClient(app):
         pass
 
 
-def test_migration_runner_runs_at_startup_when_postgres_is_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PLAN.md §0.6: startup applies pending migrations once via the injected connection."""
-    config = _complete_config(passkey_signing_postgres_host="postgres.internal")
-    applied_with: list[object] = []
+@pytest.mark.postgres_live
+def test_migration_runner_runs_at_startup_when_postgres_is_configured() -> None:
+    """PLAN.md §0.6: startup applies pending migrations once via the injected connection.
 
-    class _FakeConnection:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *exc_info: object) -> None:
-            return None
-
-    def fake_connect(config: ServiceConfig) -> _FakeConnection:
-        return _FakeConnection()
-
-    def fake_apply_pending_migrations(conn: object) -> list[str]:
-        applied_with.append(conn)
-        return []
-
-    monkeypatch.setattr(main_module, "connect_passkey_signing_postgres_from_config", fake_connect)
-    monkeypatch.setattr(main_module, "apply_pending_migrations", fake_apply_pending_migrations)
+    `postgres_live`-marked (mirrors `tests/passkey_signing/test_migration_runner.py`'s own
+    convention -- there is no meaningful fake for "did this SQL actually apply"): runs the real
+    `create_app`/`lifespan` startup path against a real, reachable Passkey Signing Postgres
+    instance, then asserts on real applied-migration state (a real `schema_migrations` row)
+    afterwards, rather than an `applied_with` interaction-count list on a faked
+    `apply_pending_migrations` -- proving startup actually wires the real connection through to
+    the real migration runner, not just that some callable was invoked once.
+    """
+    real_config = load_config()
+    assert real_config.passkey_signing_postgres_host is not None, (
+        "postgres_live requires PS_PASSKEYSIGNING_POSTGRES_HOST to be set"
+    )
+    config = _complete_config(
+        passkey_signing_postgres_host=real_config.passkey_signing_postgres_host,
+        passkey_signing_postgres_port=real_config.passkey_signing_postgres_port,
+        passkey_signing_postgres_database=real_config.passkey_signing_postgres_database,
+        passkey_signing_postgres_user=real_config.passkey_signing_postgres_user,
+        passkey_signing_postgres_password=real_config.passkey_signing_postgres_password,
+    )
 
     with TestClient(create_app(config)):
         pass
 
-    assert len(applied_with) == 1
+    with connect_passkey_signing_postgres_from_config(config) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM schema_migrations WHERE filename = %(filename)s",
+            {"filename": "0001_pending_approvals.sql"},
+        )
+        recorded = cur.fetchone() is not None
+
+    assert recorded is True
 
 
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(
@@ -1635,17 +1634,21 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
     """AC-BI-005: the retry loop is written against `_GATING_DEPENDENCIES`
-    (today: FalkorDB alone), not hardcoded to FalkorDB by name -- proven
-    here with a second, fake gating dependency standing in for a future one
-    (e.g. an identity provider, issue #124's discussion). `app.state.ready`
-    must flip `True` only once every gating dependency succeeds, and each is
-    retried independently on later polls.
+    (today: FalkorDB alone), not hardcoded to FalkorDB by name -- proven here by widening the
+    *real* `_GATING_DEPENDENCIES` set to also cover LLM Interface: an already-real dependency
+    `_all_dependency_probes` already probes for, not a fabricated identity standing in for a
+    future one. `_all_dependency_probes` itself is never replaced -- the real (name, probe)
+    wiring for both dependencies runs unmodified, via the same already-approved-boundary
+    `check_falkordb_connectivity`/`check_llm_interface_connectivity` substitution pattern this
+    file uses throughout -- so this proves the retry loop's own iteration is generic, not that a
+    synthetic probe list happens to behave correctly. `app.state.ready` must flip `True` only
+    once every gating dependency succeeds, and each is retried independently on later polls.
     """
-    fake_dependency = "fake_identity_provider"
     falkordb_reachable = False
-    fake_dependency_reachable = False
+    llm_interface_reachable = False
 
-    def flaky_falkordb_probe() -> None:
+    def flaky_falkordb_probe(config: ServiceConfig) -> None:
+        del config
         if falkordb_reachable:
             dependency_health.mark_healthy(dependency_health.FALKORDB)
             return
@@ -1653,26 +1656,22 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=error)
         raise error
 
-    def flaky_fake_dependency_probe() -> None:
-        if fake_dependency_reachable:
-            dependency_health.mark_healthy(fake_dependency)
+    def flaky_llm_interface_probe(config: ServiceConfig) -> None:
+        del config
+        if llm_interface_reachable:
+            dependency_health.mark_healthy(dependency_health.LLM_INTERFACE)
             return
-        error = ConnectionError("fake dependency down")
-        dependency_health.mark_unhealthy(fake_dependency, error=error)
+        error = ConnectionError("llm interface down")
+        dependency_health.mark_unhealthy(dependency_health.LLM_INTERFACE, error=error)
         raise error
 
-    def fake_all_dependency_probes(
-        config: ServiceConfig,
-    ) -> tuple[tuple[str, Callable[[], None]], ...]:
-        del config
-        return (
-            (dependency_health.FALKORDB, flaky_falkordb_probe),
-            (fake_dependency, flaky_fake_dependency_probe),
-        )
-
-    monkeypatch.setattr(main_module, "_all_dependency_probes", fake_all_dependency_probes)
+    monkeypatch.setattr(main_module, "check_falkordb_connectivity", flaky_falkordb_probe)
+    monkeypatch.setattr(main_module, "check_llm_interface_connectivity", flaky_llm_interface_probe)
+    # detroit-exception: data-only gating-set widening proving generic iteration (not hardcoded)
     monkeypatch.setattr(
-        main_module, "_GATING_DEPENDENCIES", (dependency_health.FALKORDB, fake_dependency)
+        main_module,
+        "_GATING_DEPENDENCIES",
+        (dependency_health.FALKORDB, dependency_health.LLM_INTERFACE),
     )
 
     with TestClient(app) as client:
@@ -1682,7 +1681,7 @@ def test_ready_flips_ready_only_once_every_member_of_an_extended_gating_set_succ
 
         assert client.get("/ready").json()["status"] == "not_ready"
 
-        fake_dependency_reachable = True
+        llm_interface_reachable = True
 
         assert client.get("/ready").json()["status"] == "ready"
 

@@ -1015,6 +1015,29 @@ def install_compliance_officer_grant(
     happy path (or any body-validation path that must reach the handler)
     needs this to present a principal at all.
 
+    Issue #163 Slice K (AUDIT.md ``api_group.md``): ``get_principal`` was
+    flagged as an internal-collaborator violation, fixed everywhere it could
+    be -- ``test_rest_auth_middleware.py``'s own ``list_curated_catalog``
+    sites now wrap the *real* ``get_principal`` via
+    ``app.dependency_overrides[get_principal]``, since that route (and
+    ``resolve_near_miss``/``check_merge_pending_approval``) inject it through
+    a declared ``Depends(get_principal)`` route parameter, a seam
+    ``app.dependency_overrides`` can intercept. ``require_access_role``'s own
+    closure (``dependencies.py``) calls ``get_principal(request)`` as an
+    ordinary Python function call in its body, never through ``Depends(...)``
+    -- FastAPI's override dict is consulted only while resolving a declared
+    dependency, so it has no effect here. The only way to drive a genuinely
+    real, verified ``Principal`` through this exact path would be disabling
+    ``is_local_test_bypass_active``, which forces ``create_app`` into a real
+    OIDC-discovery HTTP fetch (``ps_service.auth.startup.resolve_auth_context``'s
+    own docstring: "``create_app`` never overrides ``resolve_auth_context``'s
+    default ``transport``") plus real Authentik/bootstrap-owner config --
+    machinery disproportionate to what this helper's own callers need (they
+    are testing ``require_access_role``'s authorization gating, not the
+    authentication/JWKS layer ``test_rest_auth_middleware.py`` already owns).
+    Kept as a narrow, honest fake of one thin (2-line, branch-free,
+    read-``request.scope`` only) function.
+
     Args:
         monkeypatch: The test's ``pytest.MonkeyPatch`` fixture.
         granted: ``True`` wires a principal whose resolved roles include
@@ -1044,6 +1067,8 @@ def install_compliance_officer_grant(
         _ = (config, kwargs)
         return _FakeComplianceAccessRoleStore(resolved_roles)
 
+    # (full reasoning: this function's own "Issue #163 Slice K" docstring paragraph above)
+    # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _get_principal)
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
 
@@ -1068,4 +1093,6 @@ def install_no_principal(monkeypatch: pytest.MonkeyPatch) -> None:
     Args:
         monkeypatch: The test's `pytest.MonkeyPatch` fixture.
     """
+    # (same rationale as install_compliance_officer_grant's own docstring paragraph above)
+    # detroit-exception: called as a raw function inside require_access_role's own closure
     monkeypatch.setattr(dependencies, "get_principal", _no_principal)

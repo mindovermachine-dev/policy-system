@@ -25,9 +25,7 @@ from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
-    from ps_service.api.catalog import CatalogEntry
-    from ps_service.api.ingestion_orchestration import GraphHandle, PipelineDependencies
-    from ps_service.logging import LogEmitter
+    from ps_service.api.ingestion_orchestration import PipelineDependencies
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REAL_SEED_DOCUMENT: dict[str, object] = json.loads(
@@ -64,6 +62,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # module autouse fi
     rationale -- ``run_internal_ingestion_pipeline`` emits its own
     ``ingestion_run`` entries through the same process-wide default emitter.
     """
+    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
     monkeypatch.setattr("ps_service.api.ingestion_orchestration.emit_log_entry", _noop_emit)
 
 
@@ -221,32 +220,22 @@ def test_internal_source_request_still_forbids_an_unexpected_short_name_field() 
     assert response.status_code == 422
 
 
-def test_internal_ingestion_never_calls_validate_and_resolve_catalog_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_internal_ingestion_never_calls_validate_and_resolve_catalog_entry() -> None:
     """Issue #146 AC-BI-009: ``routes.py``'s ``if request_body.source == "internal":``
     early-return (untouched by every #146 slice) never reaches the new
     curated-mismatch/collision validation -- proving it is provably unreached
     on this path, not merely untested.
+
+    The real, unpatched ``validate_and_resolve_catalog_entry`` is left in
+    place (never called for ``source="internal"``, so its being real is
+    inert either way); non-invocation is proven by *state* instead of an
+    exploding double -- ``validate_and_resolve_catalog_entry``'s own graph-
+    side collision check is the only thing in this pipeline that would ever
+    query ``fake.single_tenant``, so an empty ``fake.single_tenant.calls``
+    proves it never ran, mirroring
+    ``test_post_ingestions_internal_succeeds_end_to_end``'s own AC-BI-005
+    assertion just above.
     """
-
-    def _explode(
-        celex: str,
-        short_name: str,
-        *,
-        single_tenant_graph: GraphHandle,
-        emitter: LogEmitter | None = None,
-    ) -> CatalogEntry | None:
-        _ = (single_tenant_graph, emitter)
-        message = (
-            "validate_and_resolve_catalog_entry must not be called for source=internal "
-            f"(celex={celex!r}, short_name={short_name!r})"
-        )
-        raise AssertionError(message)
-
-    monkeypatch.setattr(
-        "ps_service.api.ingestion_orchestration.validate_and_resolve_catalog_entry", _explode
-    )
     fake = build_fake_pipeline_dependencies(internal_rid="ENGPRAC-3.0")
     client = _client_with_fake(fake.dependencies)
 
@@ -255,6 +244,7 @@ def test_internal_ingestion_never_calls_validate_and_resolve_catalog_entry(
     )
 
     assert response.status_code == 200
+    assert fake.single_tenant.calls == []
 
 
 def test_internal_ingestion_stage_failure_aborts_before_merge_and_names_stage() -> None:

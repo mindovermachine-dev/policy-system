@@ -359,6 +359,9 @@ def test_a_different_actors_credential_is_rejected_before_verification(
             "verify_authentication must not be called for a wrong-actor credential"
         )
 
+    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6): the raise fires only if
+    # the actor-binding check failed to reject this credential before verification.
+    # detroit-exception: wrong-actor credential never reaches verify_authentication (AC-BI-005)
     monkeypatch.setattr("ps_service.passkey_signing.router.verify_authentication", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()
@@ -455,9 +458,13 @@ def test_sign_options_and_verify_reject_an_expired_approval_without_calling_weba
     def _fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("webauthn_rp function must not be called for an expired approval")
 
+    # Ordering proof via raise, not assert_called (AUDIT.md §2 case 6); mirrors enrollment's F3
+    # proof in test_enrollment_ceremony.py, applied to the sign ceremony's own endpoints.
+    # detroit-exception: proves sign/options never reaches webauthn for an expired approval
     monkeypatch.setattr(
         "ps_service.passkey_signing.router.build_authentication_options", _fail_if_called
     )
+    # detroit-exception: proves sign/verify never reaches webauthn for an expired approval
     monkeypatch.setattr("ps_service.passkey_signing.router.verify_authentication", _fail_if_called)
 
     pending_store = FakePendingApprovalStore()

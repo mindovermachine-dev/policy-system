@@ -87,6 +87,7 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # requested via use
     facade instead; every other test requests this explicitly via
     `@pytest.mark.usefixtures("_stub_run_log")`.
     """
+    # detroit-exception: process-wide atexit logging facade (AUDIT §2 case 12), not a business fake
     monkeypatch.setattr("ps_service.api.change_check_orchestration.emit_log_entry", _noop_emit)
 
 

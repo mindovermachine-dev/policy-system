@@ -26,13 +26,17 @@ import openai
 import pytest
 from litellm.types.utils import Embedding, EmbeddingResponse
 
-from ps_service.company_merge import dedup as dedup_module
 from ps_service.company_merge.errors import (
     CompanyMergeConfigurationError,
     CompanyMergePersistenceError,
 )
 from ps_service.company_merge.merge import merge_baseline_graph
-from ps_service.domain_mapper.identity import capability_id, obligation_id, practice_area_id
+from ps_service.domain_mapper.identity import (
+    capability_id,
+    obligation_id,
+    practice_area_id,
+    risk_path_id,
+)
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
@@ -1620,28 +1624,38 @@ def test_two_baselines_authoring_same_practice_area_name_converge_on_one_node(
 
 
 def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
-    monkeypatch: pytest.MonkeyPatch,
     make_emitter: MakeEmitter,
 ) -> None:
     """AC-BI-006, within-a-single-call structural proof (PLAN.md §4.5): a
-    baseline carrying two PracticeArea rows that both mint to the SAME
-    content-hashed id (simulating two separate incoming entries for the
-    same `name`, converging structurally per PLAN §1.1) plus two COVERS
-    edges from that shared id to two different Capabilities. Monkeypatching
-    `dedup.dedupe_canonical_nodes` to record every `kind=` it is called with
-    proves it is NEVER invoked with `"PracticeArea"`/`"RiskPath"` -- only
-    `"Capability"` (this fixture carries no Policy content).
+    baseline carrying two PracticeArea rows AND two RiskPath rows, each pair
+    minting to the SAME content-hashed id (simulating two separate incoming
+    entries for the same `name`, converging structurally per PLAN §1.1),
+    plus two COVERS edges from the shared PracticeArea id to two different
+    Capabilities.
+
+    Issue #163 Slice 17: this used to prove the "never deduped" claim via a
+    `monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", ...)`
+    recording wrapper -- an internal-collaborator interaction check on core
+    business logic `merge_baseline_graph` itself directly orchestrates, with
+    no docstring-based "this interaction IS the spec" argument (unlike the
+    same function's other call site, `test_ac008_out_of_scope.py:348`).
+    Rewritten to the same technique the sibling test immediately above this
+    one already uses (real resulting graph/embedding-fake state, not a
+    patched collaborator): `merge.py`'s own `_persist_classification_
+    passthrough` never calls `dedup.dedupe_canonical_nodes` for PracticeArea/
+    RiskPath at all -- it goes straight to `graph_writer.persist_practice_
+    area_and_risk_path_passthrough` (issue #106) -- so the real, unmodified
+    `merge_baseline_graph` run below proves the claim two ways: (1) each
+    passthrough kind still converges to exactly ONE node from its two
+    same-id incoming rows, purely structurally, with zero embedding calls
+    for either name, and (2) the embedding fake's own recorded call set is
+    scripted with (and asserted to contain) ONLY the two Capability names --
+    an unscripted PracticeArea/RiskPath embedding attempt would itself raise
+    inside `_ScriptedCallEmbedding`, so this equality check is a real,
+    failure-loud proof, not an omission.
     """
-    recorded_kinds: list[str] = []
-    real_dedupe_canonical_nodes = dedup_module.dedupe_canonical_nodes
-
-    def _recording_wrapper(*args: object, **kwargs: object) -> object:
-        recorded_kinds.append(cast("str", kwargs["kind"]))
-        return real_dedupe_canonical_nodes(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(dedup_module, "dedupe_canonical_nodes", _recording_wrapper)
-
     shared_pa_id = practice_area_id("Secure SDLC")
+    shared_rp_id = risk_path_id("Unpatched Internet-Facing Service")
     cap_a_id = "cap_encrypt_data_at_rest_abc"
     cap_b_id = "cap_rotate_encryption_keys_def"
 
@@ -1659,6 +1673,14 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
             [shared_pa_id, "Secure SDLC", "draft", None, None, None],
             [shared_pa_id, "Secure SDLC", "draft", None, None, None],
         ],
+        # Same convergence proof, RiskPath side: two rows, same content-
+        # hashed id, no MITIGATED_BY/VERIFIED_BY edges needed (classification
+        # edges stay empty; `_persist_classification_passthrough`'s edge
+        # validation no-ops on an empty `classification_edges` tuple).
+        risk_path_rows=[
+            [shared_rp_id, "Unpatched Internet-Facing Service", "draft", None, None, None],
+            [shared_rp_id, "Unpatched Internet-Facing Service", "draft", None, None, None],
+        ],
         covers_rows=[[shared_pa_id, cap_a_id], [shared_pa_id, cap_b_id]],
     )
     single_tenant = _FakeSingleTenantGraph()
@@ -1669,7 +1691,10 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
     # same-run working index (which now contains the first mint), so it
     # still needs its own embedding call even though same-run mints are
     # never eligible merge targets (issue #30). Both names are scripted so
-    # neither call falls through to a real, unconfigured LLM provider.
+    # neither call falls through to a real, unconfigured LLM provider --
+    # and so that any (incorrect) PracticeArea/RiskPath embedding attempt
+    # would raise `AssertionError` inside the fake instead of silently
+    # succeeding.
     call_embedding = _ScriptedCallEmbedding(
         {
             "Encrypt Data At Rest Capability": [1.0, 0.0],
@@ -1687,16 +1712,32 @@ def test_merge_baseline_graph_never_dedupes_practice_area_or_risk_path(
         emitter=emitter,
     )
 
-    assert recorded_kinds == ["Capability"]
+    # No RouteEmbedding-reachable call was ever made with either passthrough
+    # kind's own name -- only the two Capability names -- proving neither
+    # convergence above was ever routed through any embedding comparison
+    # (i.e. `dedupe_canonical_nodes` was never reached for PracticeArea or
+    # RiskPath; it is only ever invoked with `kind="Capability"`/`"Policy"`,
+    # per its own `Literal` signature).
+    assert set(call_embedding.calls) == {
+        "Encrypt Data At Rest Capability",
+        "Rotate Encryption Keys Capability",
+    }
+    assert "Secure SDLC" not in call_embedding.calls
+    assert "Unpatched Internet-Facing Service" not in call_embedding.calls
 
     # Exactly one PracticeArea node: both MERGE calls target the SAME id
     # (the second is a database-engine no-op, `ON CREATE SET` against an
     # id already minted by the first).
-    merges = single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
-    assert len(merges) == 2
-    assert {c.params["id"] for c in merges if c.params is not None} == {shared_pa_id}
+    pa_merges = single_tenant.calls_matching("MERGE (n:PracticeArea {id: $id}) ON CREATE SET")
+    assert len(pa_merges) == 2
+    assert {c.params["id"] for c in pa_merges if c.params is not None} == {shared_pa_id}
 
-    # That one node carries both incoming rows' edges.
+    # Same structural-convergence proof, RiskPath side.
+    rp_merges = single_tenant.calls_matching("MERGE (n:RiskPath {id: $id}) ON CREATE SET")
+    assert len(rp_merges) == 2
+    assert {c.params["id"] for c in rp_merges if c.params is not None} == {shared_rp_id}
+
+    # That one PracticeArea node carries both incoming rows' edges.
     covers_writes = single_tenant.calls_matching("[:COVERS]")
     assert {c.params["source_id"] for c in covers_writes if c.params is not None} == {shared_pa_id}
     assert {c.params["target_id"] for c in covers_writes if c.params is not None} == {
@@ -1908,12 +1949,13 @@ def _classification_only_baseline_graph(
     capability_rows: list[object],
     practice_area_rows: list[object],
     covers_rows: list[object],
+    risk_path_rows: list[object] | None = None,
 ) -> _FakeBaselineGraph:
     """A minimal fixture carrying only Capability + PracticeArea/COVERS
-    content -- no Role/Requirement/Obligation spine needed, mirroring
-    `_internal_baseline_with_governance`'s own "governance-layer-only"
-    shape. Used by the AC-BI-006 tests above, which only care about
-    PracticeArea/Capability convergence.
+    (optionally RiskPath) content -- no Role/Requirement/Obligation spine
+    needed, mirroring `_internal_baseline_with_governance`'s own
+    "governance-layer-only" shape. Used by the AC-BI-006 tests above, which
+    only care about PracticeArea/RiskPath/Capability convergence.
     """
     return _FakeBaselineGraph(
         regulatory_instrument_properties={
@@ -1930,5 +1972,6 @@ def _classification_only_baseline_graph(
         satisfied_by_rows=[],
         requires_rows=[],
         practice_area_rows=practice_area_rows,
+        risk_path_rows=risk_path_rows or [],
         covers_rows=covers_rows,
     )

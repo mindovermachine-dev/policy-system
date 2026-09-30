@@ -15,31 +15,36 @@ monkeypatched transport anywhere in this file (AC-BI-017). `GET /catalog`
 (an existing, already-unauthenticated-before-this-issue route,
 `ps_service/api/routes.py:378`) is the protected route under test throughout.
 
-CHANGES.md item 5: the `list_curated_catalog` monkeypatch is applied
-*before* `create_app()`/`TestClient` construction in every test below (via
-`_client_with_patched_handler`), never after -- patching afterward would be
-vacuous, since `build_api_router()` binds the route to whatever function
-object `ps_service.api.routes.list_curated_catalog` names at `create_app`
-call time.
-
-Slice 4 (AC-BI-005) adds the companion "valid token -> 200, handler invoked
-exactly once, with the correct `Principal`" tests below, using
-`_client_with_principal_capturing_handler`/`_PrincipalCapturingSpy` -- the
-non-vacuous, positive-detection half CHANGES.md item 5 requires alongside
-Slice 3's own `spy.call_count == 0` assertions.
+Issue #163 remediation (Slice K): `GET /catalog`'s real, unpatched
+`ps_service.api.routes.list_curated_catalog` handler runs in every test
+below -- never replaced by an `AsyncMock`/spy. "Handler reached or not" is
+now observed as *state* on a hand-built fake HTTP transport
+(`api._fakes.FakeCuratedSourceTransport`, wired in via the same
+`app.dependency_overrides[provide_curated_catalog_dependencies]` seam
+`test_routes_catalog.py` already uses): a 401 case asserts
+`transport.requests == []` (the real `fetch_catalog` -- and thus the real
+handler -- never ran), and the one 200 case asserts on the real HTTP
+response body instead of a spy's return value. The positive-detection
+"which `Principal` did the handler actually receive" tests
+(`_client_with_principal_capturing_handler`/`_PrincipalCapturingOverride`)
+keep observing that value, but now do so by wrapping the *real*
+`ps_service.api.dependencies.get_principal` via
+`app.dependency_overrides[get_principal]` (the same DI-override seam
+FastAPI already supports for any `Depends(...)`-declared parameter) --
+calling through to the real collaborator and recording what it returned,
+rather than replacing the whole route handler with a substitute.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING
 
 import pytest
-from fastapi import Depends
+from fastapi import Request  # noqa: TC002 -- FastAPI resolves this annotation at runtime
 from fastapi.testclient import TestClient
 
-from ps_service.api.dependencies import get_principal
-from ps_service.api.models import CuratedCatalogResponse
+from api._fakes import FakeCuratedSourceTransport, build_fake_curated_catalog_dependencies
+from ps_service.api.dependencies import get_principal, provide_curated_catalog_dependencies
 from ps_service.auth import Principal
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
@@ -90,69 +95,78 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
     return ServiceConfig(**defaults)  # pyright: ignore[reportArgumentType]  # dict-unpacked kwargs
 
 
-def _client_with_patched_handler(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: MockOidcProvider,
-    **config_overrides: object,
-) -> tuple[TestClient, AsyncMock]:
-    """Build a `TestClient` whose `/catalog` route handler is a call-counting spy.
+def _client_with_fake_catalog_transport(
+    provider: MockOidcProvider, **config_overrides: object
+) -> tuple[TestClient, FakeCuratedSourceTransport]:
+    """Build a `TestClient` whose real `GET /catalog` handler fetches through a fake transport.
 
-    The monkeypatch is applied before `create_app(...)` runs -- see this
-    file's own module docstring (CHANGES.md item 5).
+    `list_curated_catalog` (`ps_service/api/routes.py`) is never replaced --
+    only its `CuratedCatalogDependencies` (`Depends(provide_curated_catalog_dependencies)`)
+    is overridden, the same `app.dependency_overrides` seam
+    `test_routes_catalog.py` already uses. "Was the handler reached" is now a
+    state question answerable off `transport.requests` (empty -- never
+    reached -- for every 401 case below), not an interaction count on a
+    substitute standing in for the handler.
     """
-    spy = AsyncMock(return_value=CuratedCatalogResponse(instruments=[]))
-    monkeypatch.setattr("ps_service.api.routes.list_curated_catalog", spy)
-    client = TestClient(create_app(_config(provider, **config_overrides)))
-    return client, spy
+    transport = FakeCuratedSourceTransport(b"[]")
+    app = create_app(_config(provider, **config_overrides))
+    app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
+        build_fake_curated_catalog_dependencies(transport)
+    )
+    client = TestClient(app)
+    return client, transport
 
 
-class _PrincipalCapturingSpy:
-    """A call-counting `/catalog` handler replacement that also observes the injected `Principal`.
+class _PrincipalCapturingOverride:
+    """Wraps the real `get_principal` dependency to observe what it resolved.
 
-    A bare `AsyncMock()` (as `_client_with_patched_handler` above uses) exposes an
-    `(*args, **kwargs)` signature to `inspect.signature` -- FastAPI would see no
-    `Depends(get_principal)` parameter to resolve at all, so it could never receive
-    the value under test. This is a real callable with a real, introspectable
-    signature instead, so FastAPI's dependant-building machinery resolves
-    `get_principal` and passes its result straight through -- the positive-detection
-    companion to `_client_with_patched_handler`'s call-count-only spies
-    (CHANGES.md item 5: "record a call and assert `spy.call_count == 1`... inspect
-    the `Principal` the handler actually received").
+    `app.dependency_overrides[get_principal] = ...` is the same DI-override
+    seam FastAPI already supports for any `Depends(...)`-declared parameter
+    (`list_curated_catalog`'s own `principal: Annotated[Principal | None,
+    Depends(get_principal)]`). This wrapper *calls* the real
+    `ps_service.api.dependencies.get_principal(request)` and records what it
+    returned before passing it straight through -- the real collaborator is
+    still the one resolving the `Principal`; this only observes the result,
+    it never substitutes for it.
     """
 
     def __init__(self) -> None:
         self.call_count = 0
         self.received_principal: Principal | None = None
 
-    async def __call__(
-        self,
-        principal: Annotated[Principal | None, Depends(get_principal)] = None,
-    ) -> CuratedCatalogResponse:
+    def __call__(self, request: Request) -> Principal | None:
+        principal = get_principal(request)
         self.call_count += 1
         self.received_principal = principal
-        return CuratedCatalogResponse(instruments=[])
+        return principal
 
 
 def _client_with_principal_capturing_handler(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: MockOidcProvider,
-    **config_overrides: object,
-) -> tuple[TestClient, _PrincipalCapturingSpy]:
-    """Build a `TestClient` whose `/catalog` handler is a `_PrincipalCapturingSpy`.
+    provider: MockOidcProvider, **config_overrides: object
+) -> tuple[TestClient, _PrincipalCapturingOverride]:
+    """Build a `TestClient` whose real `GET /catalog` handler runs with an observed `get_principal`.
 
-    Applied before `create_app(...)` runs, for the same non-vacuous-patching
-    reason `_client_with_patched_handler` documents (CHANGES.md item 5).
+    Combines `_client_with_fake_catalog_transport`'s real-handler-plus-fake-
+    transport wiring with a `get_principal` override
+    (`_PrincipalCapturingOverride`) so the test can assert on the exact
+    `Principal` FastAPI resolved for the request, without ever replacing
+    `list_curated_catalog` itself.
     """
-    spy = _PrincipalCapturingSpy()
-    monkeypatch.setattr("ps_service.api.routes.list_curated_catalog", spy)
-    client = TestClient(create_app(_config(provider, **config_overrides)))
-    return client, spy
+    transport = FakeCuratedSourceTransport(b"[]")
+    app = create_app(_config(provider, **config_overrides))
+    app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
+        build_fake_curated_catalog_dependencies(transport)
+    )
+    override = _PrincipalCapturingOverride()
+    app.dependency_overrides[get_principal] = override
+    client = TestClient(app)
+    return client, override
 
 
 def test_no_authorization_header_returns_401_with_www_authenticate_and_handler_never_invoked(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    mock_oidc_provider: MockOidcProvider,
 ) -> None:
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog")
 
@@ -169,102 +183,93 @@ def test_no_authorization_header_returns_401_with_www_authenticate_and_handler_n
         },
         "run_id": None,
     }
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
 @pytest.mark.parametrize("header_value", ["Basic xyz", "Bearer", "NotBearer sometoken"])
 def test_malformed_authorization_header_returns_401(
-    monkeypatch: pytest.MonkeyPatch,
     mock_oidc_provider: MockOidcProvider,
     header_value: str,
 ) -> None:
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": header_value})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
     assert header_value not in response.text
 
 
 def test_token_signed_by_an_untrusted_key_returns_401(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    mock_oidc_provider: MockOidcProvider,
 ) -> None:
     """A token claiming the right `iss`/`aud` but signed by a key never in this issuer's JWKS."""
     untrusted_provider = MockOidcProvider()
     try:
         token = untrusted_provider.mint_token(aud=_AUDIENCE, iss=mock_oidc_provider.issuer)
-        client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+        client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
         response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
     finally:
         untrusted_provider.shutdown()
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
-def test_expired_token_returns_401(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
-) -> None:
+def test_expired_token_returns_401(mock_oidc_provider: MockOidcProvider) -> None:
     token = mock_oidc_provider.mint_token(aud=_AUDIENCE, exp_delta=-3600)
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
-def test_immature_token_with_future_nbf_returns_401(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
-) -> None:
+def test_immature_token_with_future_nbf_returns_401(mock_oidc_provider: MockOidcProvider) -> None:
     token = mock_oidc_provider.mint_token(aud=_AUDIENCE, extra_claims={"nbf": 9_999_999_999})
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
-def test_wrong_audience_token_returns_401(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
-) -> None:
+def test_wrong_audience_token_returns_401(mock_oidc_provider: MockOidcProvider) -> None:
     token = mock_oidc_provider.mint_token(aud="some-other-audience")
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
-def test_wrong_issuer_token_returns_401(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
-) -> None:
+def test_wrong_issuer_token_returns_401(mock_oidc_provider: MockOidcProvider) -> None:
     token = mock_oidc_provider.mint_token(
         aud=_AUDIENCE, iss="https://not-the-configured-issuer.example.com"
     )
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
 
 
 def test_401_body_never_contains_the_raw_token_or_pyjwt_internals(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    mock_oidc_provider: MockOidcProvider,
 ) -> None:
     """AC-BI-004: no presented token, no key id, no library error text in any 401 body."""
     token = mock_oidc_provider.mint_token(aud="wrong-audience")
-    client, spy = _client_with_patched_handler(monkeypatch, mock_oidc_provider)
+    client, transport = _client_with_fake_catalog_transport(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 401
-    assert spy.call_count == 0
+    assert transport.requests == []
     body_text = response.text
     assert token not in body_text
     for leaking_term in (
@@ -280,32 +285,33 @@ def test_401_body_never_contains_the_raw_token_or_pyjwt_internals(
 
 
 def test_valid_token_returns_200_and_handler_receives_matching_principal(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    mock_oidc_provider: MockOidcProvider,
 ) -> None:
     """AC-BI-005: a token that passes validation runs the handler with a `Principal`.
 
-    The positive-detection companion to Slice 3's 401/`spy.call_count == 0`
-    tests above (CHANGES.md item 5): proves the handler is dispatched exactly
-    once (distinguishing "the gate correctly let this request through" from
-    "the spy was never wired at all") *and* that the `Principal` the handler
-    actually received (via `Depends(get_principal)`) carries the minted
-    token's own `sub`/`iss` -- not a placeholder, not `None`.
+    The positive-detection companion to the 401/`transport.requests == []`
+    tests above: proves the real handler is dispatched exactly once
+    (distinguishing "the gate correctly let this request through" from "the
+    override was never wired at all") *and* that the `Principal` the real
+    `get_principal` collaborator resolved (via `Depends(get_principal)`)
+    carries the minted token's own `sub`/`iss` -- not a placeholder, not
+    `None`.
     """
     token = mock_oidc_provider.mint_token(sub="alice@example.com", aud=_AUDIENCE)
-    client, spy = _client_with_principal_capturing_handler(monkeypatch, mock_oidc_provider)
+    client, override = _client_with_principal_capturing_handler(mock_oidc_provider)
 
     response = client.get("/catalog", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200
     assert response.json() == {"instruments": []}
-    assert spy.call_count == 1
-    assert spy.received_principal == Principal(
+    assert override.call_count == 1
+    assert override.received_principal == Principal(
         sub="alice@example.com", iss=mock_oidc_provider.issuer
     )
 
 
 def test_local_test_bypass_active_runs_handler_with_no_principal(
-    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+    mock_oidc_provider: MockOidcProvider,
 ) -> None:
     """When the local-test bypass (#67) is active, no token is required and no `Principal` is bound.
 
@@ -314,12 +320,12 @@ def test_local_test_bypass_active_runs_handler_with_no_principal(
     must surface that as `None`, not raise or fabricate one, matching #67's
     existing unauthenticated contract exactly.
     """
-    client, spy = _client_with_principal_capturing_handler(
-        monkeypatch, mock_oidc_provider, is_local_test_bypass_active=True
+    client, override = _client_with_principal_capturing_handler(
+        mock_oidc_provider, is_local_test_bypass_active=True
     )
 
     response = client.get("/catalog")
 
     assert response.status_code == 200
-    assert spy.call_count == 1
-    assert spy.received_principal is None
+    assert override.call_count == 1
+    assert override.received_principal is None
