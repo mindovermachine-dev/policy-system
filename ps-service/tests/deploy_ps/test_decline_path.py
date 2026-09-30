@@ -1,6 +1,6 @@
 """Decline path: answering `N` at the confirmation prompt (contributes AC-BI-019; PLAN.md §5/S5).
 
-On `N`, `deploy-ps.sh` prints the config file path and exits 0 -- nothing past the confirmation
+On `N`, `deploy-ps-prod.sh` prints the config file path and exits 0 -- nothing past the confirmation
 prompt runs (no RBAC preflight, no provider registration, no resource creation -- none of which
 exist yet at S5, but the same call-log assertion `deploy-llm.sh`'s own decline-path tests use
 still proves it here: no `az` call beyond the one needed to compute the table).
@@ -27,8 +27,7 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
-AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
-AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
+AUTHZ_OWNER_EMAIL="owner@example.test"
 """
 
 

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors scripts/deploy-ps.sh's own literals (S1/S9/S10/S11/S15/S17/S18) -- hardcoded here
+# Mirrors scripts/deploy-ps-prod.sh's own literals (S1/S9/S10/S11/S15/S17/S18) -- hardcoded here
 # rather than parsed from the script, same precedent as every other deploy_ps test module.
 RESOURCE_GROUP_NAME = "rg-policy-system"
 CHAT_MODEL_NAME = "gpt-5.4-mini"

@@ -156,6 +156,10 @@ class ServiceConfig:
     wording carries no bypass carve-out, unlike AC-BI-002's). `authentik_api_token`
     is excluded from this dataclass's `repr()` (`field(repr=False)`,
     AC-BI-004) for the same reason `passkey_signing_postgres_password` is.
+
+    `authentik_public_url` (from `PS_AUTHENTIK_PUBLIC_URL`, issue #165) is
+    optional: when set, it is the base of the invitee-facing enrollment link
+    only; the Authentik API call still uses `authentik_base_url`.
     """
 
     host: str
@@ -191,6 +195,7 @@ class ServiceConfig:
     authz_bootstrap_owner_issuer: str | None = None
     authentik_api_token: str | None = field(default=None, repr=False)
     authentik_base_url: str | None = field(default=None, repr=False)
+    authentik_public_url: str | None = None
 
 
 # The `ServiceConfig` fields the ingestion pipeline (Domain Mapper, Company
@@ -589,6 +594,18 @@ def _parse_authentik_base_url(raw: str) -> str:
     return raw
 
 
+def _parse_authentik_public_url(raw: str) -> str:
+    """Validate `PS_AUTHENTIK_PUBLIC_URL` (issue #165, OD-1=B).
+
+    Same rule as `_parse_authentik_base_url`: an explicitly-set empty or
+    whitespace-only value is rejected rather than treated as unset.
+    """
+    if not raw.strip():
+        message = "PS_AUTHENTIK_PUBLIC_URL must not be empty or whitespace-only"
+        raise ServiceConfigurationError(message)
+    return raw
+
+
 def _resolve_authentik_api_token() -> str | None:
     """Resolve `PS_AUTHENTIK_API_TOKEN`, validating it if set.
 
@@ -610,6 +627,12 @@ def _resolve_authentik_base_url() -> str | None:
     """
     raw = os.environ.get("PS_AUTHENTIK_BASE_URL")
     return _parse_authentik_base_url(raw) if raw is not None else None
+
+
+def _resolve_authentik_public_url() -> str | None:
+    """Resolve `PS_AUTHENTIK_PUBLIC_URL`, validating it if set."""
+    raw = os.environ.get("PS_AUTHENTIK_PUBLIC_URL")
+    return _parse_authentik_public_url(raw) if raw is not None else None
 
 
 def _parse_auth_scopes(raw: str) -> tuple[str, ...]:
@@ -836,4 +859,5 @@ def load_config() -> ServiceConfig:
         authz_bootstrap_owner_issuer=authz_bootstrap_owner_issuer,
         authentik_api_token=_resolve_authentik_api_token(),
         authentik_base_url=_resolve_authentik_base_url(),
+        authentik_public_url=_resolve_authentik_public_url(),
     )

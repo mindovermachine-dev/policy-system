@@ -88,6 +88,10 @@ def create_invitation(
     not the raw email, because Authentik requires `name` unique and a repeat
     invite to the same address must not collide with a still-pending one.
 
+    The invitee-facing link is built from `config.authentik_public_url` when
+    set (issue #165: the API base may be an in-cluster URL the invitee cannot
+    reach), else from `config.authentik_base_url`.
+
     Args:
         config: Supplies `authentik_base_url`/`authentik_api_token` --
             both required to be configured before this is ever reached
@@ -137,5 +141,6 @@ def create_invitation(
             f"Authentik invitation request failed: {type(exc).__name__}"
         ) from exc
     itoken = payload["pk"]
-    invite_url = f"{config.authentik_base_url}{_ENROLLMENT_FLOW_PATH}?itoken={itoken}"
+    link_base = config.authentik_public_url or config.authentik_base_url
+    invite_url = f"{link_base}{_ENROLLMENT_FLOW_PATH}?itoken={itoken}"
     return InvitationResult(itoken=itoken, invite_url=invite_url)

@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Stateful fake `curl` for the Authentik API (issue #165 test harness).
+
+Copied into a test's `bin/` directory (never imported). Models just enough of Authentik's
+admin API for the evaluator install scripts: the shared API token check, groups, users,
+recovery links, WebAuthn devices, user deletion, and an "unreachable" switch.
+
+State lives in a JSON file named by $PS_TEST_CURL_STATE (created on first use). Every call
+appends its argv and resolved URL to $PS_TEST_CURL_LOG. The stdin config (`--config -`) carries
+the bearer token and is NEVER logged, so a test can prove a secret never reaches argv or logs.
+
+State keys (all optional, tests seed them):
+  token             the only bearer token the fake accepts (default "test-token")
+  unreachable       true -> exit 7 (connection refused) for every call
+  token_reject_status  HTTP status for a non-matching token (default 403, the recorded real value)
+  recovery_flow     true -> recovery links work; false -> 400 "No recovery flow set."
+  users             {pk: {"pk", "username", "email", "type", "groups", "is_active"}}
+  devices           {pk: [{"pk": ..., "name": ...}]}  WebAuthn devices per user pk
+  next_pk           counter for new users
+  blueprints        list of blueprint instances (default: the bundled and local-TLS ones)
+  blueprint_list_empty_calls  the first N blueprint lists return no instance (fresh install)
+
+Response shapes are RECORDED from a real Authentik 2026.8.3 (LC1b tracer, issue #165) and live
+in `authentik/*.json` next to this file (secrets and per-run values sanitised). The fake loads
+them from `$PS_TEST_CURL_FIXTURES` or, by default, the `authentik/` directory beside this script;
+a test that copies the fake into a temp `bin/` must copy that directory too or set the variable.
+Real-Authentik behaviours the recording revealed and this fake reproduces on purpose:
+  - an invalid API token is HTTP 403 (not 401) with {"detail": "Token invalid/expired"};
+  - `POST /core/users/` requires `name`;
+  - `GET /authenticators/admin/webauthn/` IGNORES a `user` query and lists every user's devices;
+    the per-user filter is `GET /authenticators/admin/all/?user=<pk>` (a bare JSON array);
+  - a recovery link is built from the request's own scheme and authority.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+import secrets
+import sys
+import uuid
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit
+
+EXIT_UNREACHABLE = 7
+HTTP_OK = 200
+HTTP_CREATED = 201
+HTTP_NO_CONTENT = 204
+HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+
+
+def _fixture(name: str) -> Any:  # noqa: ANN401 - recorded JSON documents are heterogeneous
+    """A deep copy of the recorded Authentik response `name` (see module docstring)."""
+    root = Path(
+        os.environ.get("PS_TEST_CURL_FIXTURES", Path(__file__).resolve().parent / "authentik")
+    )
+    return copy.deepcopy(json.loads((root / f"{name}.json").read_text(encoding="utf-8")))
+
+
+def _envelope(results: list[Any]) -> dict[str, Any]:
+    """The recorded paginated list envelope (users and devices share it) holding `results`."""
+    body: dict[str, Any] = _fixture("users_list")
+    body["results"] = results
+    body["pagination"].update(
+        count=len(results), total_pages=1, start_index=1 if results else 0, end_index=len(results)
+    )
+    return body
+
+
+def _admins_group() -> dict[str, Any]:
+    group: dict[str, Any] = _fixture("groups_list")["results"][0]
+    return group
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    if path.exists():
+        loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        return loaded
+    return {}
+
+
+def _save_state(path: Path, state: dict[str, Any]) -> None:
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def _parse_args(argv: list[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {
+        "method": None,
+        "data": None,
+        "write_out": None,
+        "url": None,
+        "config_stdin": False,
+    }
+    value_flags = {
+        "-X": "method",
+        "--request": "method",
+        "-d": "data",
+        "--data": "data",
+        "--data-raw": "data",
+        "-w": "write_out",
+        "--write-out": "write_out",
+    }
+    ignored_with_value = {
+        "--cacert",
+        "--resolve",
+        "-H",
+        "--header",
+        "-o",
+        "--output",
+        "--max-time",
+        "-m",
+        "--connect-timeout",
+        "--retry",
+    }
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in value_flags:
+            parsed[value_flags[arg]] = argv[i + 1]
+            i += 2
+        elif arg in {"--config", "-K"}:
+            parsed["config_stdin"] = argv[i + 1] == "-"
+            i += 2
+        elif arg in ignored_with_value:
+            i += 2
+        elif arg.startswith("-"):
+            i += 1
+        else:
+            parsed["url"] = arg
+            i += 1
+    return parsed
+
+
+def _bearer_token(*, config_stdin: bool) -> str | None:
+    if not config_stdin:
+        return None
+    match = re.search(r"Bearer ([^\"\s]+)", sys.stdin.read())
+    return match.group(1) if match else None
+
+
+def _user_document(body: dict[str, Any], pk: int) -> dict[str, Any]:
+    """A created-user response: the recorded shape with this request's values filled in."""
+    admins = _admins_group()
+    user: dict[str, Any] = _fixture("user_created")
+    groups = body.get("groups", [])
+    user.update(
+        pk=pk,
+        username=body["username"],
+        name=body["name"],
+        email=body.get("email", ""),
+        type=body.get("type", "internal"),
+        groups=groups,
+        groups_obj=[{**admins, "users": [], "users_obj": []}] if admins["pk"] in groups else [],
+        is_superuser=admins["pk"] in groups,
+        uuid=str(uuid.uuid4()),
+    )
+    return user
+
+
+def _device_documents(
+    users: dict[str, dict[str, Any]], devices: dict[str, list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    """Every WebAuthn device in the recorded admin-list shape (device plus embedded user)."""
+    template: dict[str, Any] = _fixture("webauthn_admin_list_unfiltered")["results"][0]
+    documents: list[dict[str, Any]] = []
+    for user_pk, user_devices in devices.items():
+        user = users.get(user_pk, {"pk": int(user_pk), "username": user_pk})
+        for device in user_devices:
+            document = copy.deepcopy(template)
+            document.update(pk=device["pk"], name=device.get("name", template["name"]))
+            document["user"].update(pk=user["pk"], username=user["username"])
+            documents.append(document)
+    return documents
+
+
+def _devices_all(
+    query: dict[str, list[str]],
+    users: dict[str, dict[str, Any]],
+    devices: dict[str, list[dict[str, Any]]],
+) -> tuple[int, Any]:
+    """`GET /authenticators/admin/all/?user=<pk>`: the real per-user device filter."""
+    pk = query.get("user", [""])[0]
+    if pk not in users:
+        return HTTP_BAD_REQUEST, {"user": [f'Invalid pk "{pk}" - object does not exist.']}
+    template: dict[str, Any] = _fixture("devices_all_one")[0]
+    found: list[dict[str, Any]] = []
+    for device in devices.get(pk, []):
+        found.append({**template, "pk": str(device["pk"]), "name": device.get("name", "")})
+    return HTTP_OK, found
+
+
+def _blueprints(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Blueprint instances, in the shape RECORDED from a live Authentik 2026.8.3 (LC2, issue #165):
+    `pk` uuid, `name` = the blueprint's metadata name, `status`. The default holds the local-TLS
+    blueprint; seed `blueprints` (a list of instances) to override, `[]` for none.
+    """
+    default: list[dict[str, Any]] = _fixture("blueprints_list")["results"]
+    blueprints: list[dict[str, Any]] = state.get("blueprints", default)
+    return blueprints
+
+
+def _blueprint_listing(found: list[dict[str, Any]]) -> dict[str, Any]:
+    """The recorded blueprint list envelope (`autocomplete`, `pagination`, `results`)."""
+    listing: dict[str, Any] = _fixture("blueprints_list")
+    listing["results"] = found
+    listing["pagination"].update(
+        count=len(found), total_pages=1, start_index=1 if found else 0, end_index=len(found)
+    )
+    return listing
+
+
+def _route(state: dict[str, Any], method: str, url: str, body: dict[str, Any]) -> tuple[int, Any]:
+    split = urlsplit(url)
+    path = split.path
+    query = parse_qs(split.query)
+    users: dict[str, dict[str, Any]] = state.setdefault("users", {})
+    devices: dict[str, list[dict[str, Any]]] = state.setdefault("devices", {})
+
+    if path.endswith("/api/v3/core/users/me/") and method == "GET":
+        return HTTP_OK, _fixture("users_me")
+    if path.endswith("/api/v3/core/groups/") and method == "GET":
+        name = unquote(query.get("name", [""])[0])
+        groups = [g for g in [_admins_group()] if not name or g["name"] == name]
+        listing: dict[str, Any] = _fixture("groups_list")
+        listing["results"] = groups
+        return HTTP_OK, listing
+    if path.endswith("/api/v3/core/users/") and method == "GET":
+        username = query.get("username", [None])[0]
+        return HTTP_OK, _envelope([u for u in users.values() if username in {None, u["username"]}])
+    if path.endswith("/api/v3/core/users/") and method == "POST":
+        errors: dict[str, list[str]] = {}
+        if any(u["username"] == body.get("username") for u in users.values()):
+            errors["username"] = _fixture("user_create_duplicate_400")["username"]
+        if "name" not in body:
+            errors["name"] = ["This field is required."]
+        if errors:
+            return HTTP_BAD_REQUEST, errors
+        state["next_pk"] = state.get("next_pk", 1) + 1
+        pk = state["next_pk"]
+        users[str(pk)] = _user_document(body, pk)
+        return HTTP_CREATED, users[str(pk)]
+    recovery = re.search(r"/api/v3/core/users/(\d+)/recovery/$", path)
+    if recovery and method == "POST":
+        if recovery.group(1) not in users:
+            return HTTP_NOT_FOUND, _fixture("recovery_missing_user_404")
+        if not state.get("recovery_flow"):
+            return HTTP_BAD_REQUEST, _fixture("recovery_no_flow_400")
+        token = secrets.token_hex(16)
+        # Real Authentik builds the link from the request's own scheme, authority and web path
+        # prefix (LC1b: `http://127.0.0.1:9000/...` through a port-forward; with
+        # AUTHENTIK_WEB__PATH=/auth/ the path carries `/auth`).
+        prefix = path.split("/api/v3/", maxsplit=1)[0]
+        link = (
+            f"{split.scheme}://{split.netloc}{prefix}/if/flow/ps-passkey-recovery/"
+            f"?flow_token={token}"
+        )
+        return HTTP_OK, {"link": link}
+    if path.endswith("/api/v3/authenticators/admin/webauthn/") and method == "GET":
+        # Real Authentik ignores a `user` query here and lists every device.
+        return HTTP_OK, _envelope(_device_documents(users, devices))
+    if path.endswith("/api/v3/authenticators/admin/all/") and method == "GET":
+        return _devices_all(query, users, devices)
+    if path.endswith("/api/v3/stages/invitation/invitations/") and method == "POST":
+        invitation: dict[str, Any] = _fixture("invitation_created")
+        invitation.update(
+            pk=str(uuid.uuid4()),
+            name=body.get("name", ""),
+            single_use=body.get("single_use", False),
+            fixed_data=body.get("fixed_data", {}),
+        )
+        return HTTP_CREATED, invitation
+    if path.endswith("/api/v3/managed/blueprints/") and method == "GET":
+        name = unquote(query.get("name", [""])[0])
+        found = [b for b in _blueprints(state) if not name or b["name"] == name]
+        # A fresh install: the worker has not discovered its blueprints yet, so the first N lists
+        # come back empty (seed `blueprint_list_empty_calls`).
+        pending = state.get("blueprint_list_empty_calls", 0)
+        if pending > 0:
+            state["blueprint_list_empty_calls"] = pending - 1
+            found = []
+        return HTTP_OK, _blueprint_listing(found)
+    apply_match = re.search(r"/api/v3/managed/blueprints/([^/]+)/apply/$", path)
+    if apply_match and method == "POST":
+        blueprint = next((b for b in _blueprints(state) if b["pk"] == apply_match.group(1)), None)
+        if blueprint is None:
+            return HTTP_NOT_FOUND, {"detail": "No BlueprintInstance matches the given query."}
+        state.setdefault("applied_blueprints", []).append(blueprint["pk"])
+        applied: dict[str, Any] = _fixture("blueprint_apply")
+        applied.update(pk=blueprint["pk"], name=blueprint["name"])
+        return HTTP_OK, applied
+    delete = re.search(r"/api/v3/core/users/(\d+)/$", path)
+    if delete and method == "DELETE":
+        users.pop(delete.group(1), None)
+        return HTTP_NO_CONTENT, None
+    return HTTP_NOT_FOUND, {"detail": f"fake curl: no route for {method} {path}"}
+
+
+def main() -> int:
+    args = _parse_args(sys.argv[1:])
+    state_path = Path(os.environ["PS_TEST_CURL_STATE"])
+    state = _load_state(state_path)
+    log_path = os.environ.get("PS_TEST_CURL_LOG")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(json.dumps({"argv": sys.argv[1:], "url": args["url"]}) + "\n")
+    if state.get("unreachable"):
+        return EXIT_UNREACHABLE
+    method = args["method"] or ("POST" if args["data"] else "GET")
+    token = _bearer_token(config_stdin=args["config_stdin"])
+    if token != state.get("token", "test-token"):
+        status: int = state.get("token_reject_status", HTTP_FORBIDDEN)
+        payload: Any = _fixture("token_invalid_403")
+    else:
+        body = json.loads(args["data"]) if args["data"] else {}
+        status, payload = _route(state, method, args["url"], body)
+        _save_state(state_path, state)
+    if payload is not None:
+        sys.stdout.write(json.dumps(payload))
+    if args["write_out"]:
+        sys.stdout.write(args["write_out"].replace("%{http_code}", str(status)))
+    return 0 if status < HTTP_BAD_REQUEST or "-f" not in sys.argv[1:] else 22
+
+
+if __name__ == "__main__":
+    sys.exit(main())

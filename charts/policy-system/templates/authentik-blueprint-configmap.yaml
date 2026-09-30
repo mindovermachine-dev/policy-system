@@ -12,4 +12,11 @@ data:
   # scans keys with that suffix, applying them on startup and on change.
   authentik-blueprint.yaml: |-
     {{- .Files.Get "files/authentik-blueprint.yaml" | nindent 4 }}
+  {{- if .Values.localTls.secretName }}
+  # Issue #165: registers the locally issued certificate (mounted from the
+  # localTls.secretName Secret at /ps-tls) as Authentik's web certificate. Rendered
+  # only when localTls.secretName is set, so default and production renders are unchanged.
+  authentik-local-tls-blueprint.yaml: |-
+    {{- .Files.Get "files/authentik-local-tls-blueprint.yaml" | nindent 4 }}
+  {{- end }}
 {{- end }}

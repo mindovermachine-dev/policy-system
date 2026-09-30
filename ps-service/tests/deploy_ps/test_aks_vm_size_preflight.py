@@ -1,4 +1,4 @@
-"""AKS node VM-size allowlist + vCPU quota preflight for `scripts/deploy-ps.sh` (AC-BI-011;
+"""AKS node VM-size allowlist + vCPU quota preflight for `scripts/deploy-ps-prod.sh` (AC-BI-011;
 PLAN.md §0.6/§5/S12).
 
 Unlike every other slice in this plan, this AC has no spike-proven mechanism to port --
@@ -43,7 +43,7 @@ SELECTED_REGION = "swedencentral"
 def _aks_related_calls(fixture: DeployPsFixture) -> list[str]:
     """AKS calls that create or modify infrastructure -- excludes the read-only `aks show`
     existence check `check_aks_vm_size` now runs as its own idempotent-rerun guard (see
-    `scripts/deploy-ps.sh`'s `aks_cluster_exists`), which fires on every run, including a
+    `scripts/deploy-ps-prod.sh`'s `aks_cluster_exists`), which fires on every run, including a
     preflight failure, and is expected/correct.
     """
     return [

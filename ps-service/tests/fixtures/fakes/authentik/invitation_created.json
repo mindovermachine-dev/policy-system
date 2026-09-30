@@ -1,0 +1,21 @@
+{
+  "pk": "bd406aa8-dfef-4d61-86a6-10b3a8ac64e1",
+  "name": "ps-invite-lc1abc",
+  "expires": "2026-10-01T14:28:20.153696Z",
+  "fixed_data": {
+    "email": "invitee@example.test"
+  },
+  "created_by": {
+    "pk": 4,
+    "username": "akadmin",
+    "name": "authentik Default Admin",
+    "is_active": true,
+    "last_login": null,
+    "email": "root@example.com",
+    "attributes": {},
+    "uid": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "single_use": true,
+  "flow": null,
+  "flow_obj": null
+}

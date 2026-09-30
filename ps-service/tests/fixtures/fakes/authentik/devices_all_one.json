@@ -1,0 +1,16 @@
+[
+  {
+    "verbose_name": "WebAuthn Device",
+    "verbose_name_plural": "WebAuthn Devices",
+    "meta_model_name": "authentik_stages_authenticator_webauthn.webauthndevice",
+    "pk": "1",
+    "name": "WebAuthn Device",
+    "type": "authentik_stages_authenticator_webauthn.WebAuthnDevice",
+    "confirmed": true,
+    "created": "2026-09-30T14:25:46.034918Z",
+    "last_updated": "2026-09-30T14:27:33.326310Z",
+    "last_used": "2026-09-30T14:27:33.326259Z",
+    "extra_description": null,
+    "external_id": null
+  }
+]

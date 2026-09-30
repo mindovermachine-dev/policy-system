@@ -1,4 +1,4 @@
-"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-ps.sh` (contributes
+"""Naming + confirmation table + `[Y/n]` prompt for `scripts/deploy-ps-prod.sh` (contributes
 AC-BI-019; PLAN.md §5/S5).
 
 Region *selection* (a later slice, S8) hasn't run yet at this point in the flow, so the table's
@@ -35,8 +35,7 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
-AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
-AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
+AUTHZ_OWNER_EMAIL="owner@example.test"
 """
 
 
@@ -117,7 +116,7 @@ def test_yes_flag_prints_table_but_skips_reading_stdin(
 
 def test_deploy_llm_common_lib_is_not_executable() -> None:
     """`scripts/lib/deploy-llm-common.sh` is sourced only, mirroring `scripts/deploy-llm.sh`'s
-    own lib/non-lib distinction (PLAN.md §4) -- unaffected by deploy-ps.sh's new additions.
+    own lib/non-lib distinction (PLAN.md §4) -- unaffected by deploy-ps-prod.sh's new additions.
     """
     import os
     from pathlib import Path

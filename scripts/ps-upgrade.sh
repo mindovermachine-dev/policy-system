@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Combines the operations guide's "Updating to the latest version" steps -- for both Evaluator
 # (local-test) and Production -- into one command (see docs/artifacts/operations-guide.md).
-# Manually, production's step requires reading back 5 fields from `helm get values` and
-# hand-copying them into the next `helm upgrade` invocation so they aren't reset to chart
-# defaults; this script does that read-back and re-supply itself. Environment is detected from
-# the active kubectl context, same kind-* convention scripts/sync-llm-secrets-to-kind.sh already
-# uses to distinguish evaluator from a real cluster.
+# Both branches upgrade with `--reset-then-reuse-values`: the new chart's defaults apply, then the
+# values the release already has (everything the deploy script or an operator supplied at install:
+# auth, bootstrap owner, Authentik URLs, local-TLS settings) are kept, then the flags below
+# override. A plain `helm upgrade` would reset every value not re-supplied to the chart default.
+# Environment is detected from the active kubectl context, same kind-* convention
+# scripts/sync-llm-secrets-to-kind.sh already uses to distinguish evaluator from a real cluster.
 #
 # Usage:
 #   scripts/ps-upgrade.sh
@@ -24,6 +25,7 @@ fi
 print_error() {
   local format="$1"
   shift
+  # shellcheck disable=SC2059 # the caller supplies the printf format; the colour codes wrap it
   printf "${COLOR_RED}${format}${COLOR_RESET}" "$@" >&2
 }
 
@@ -56,44 +58,36 @@ update_client() {
   "${REPO_ROOT}/ps-cli/install.sh"
 }
 
-# read_auth_value <jq filter>: prints one field from the currently-deployed release's values,
-# failing fast if it's missing/null -- silently --set'ing an empty string would wipe that field
-# from the release instead of preserving it (the exact hazard the manual guide step works
-# around by hand).
-read_auth_value() {
-  local filter="$1"
-  local value
-  value="$(jq -r "$filter" <<<"$current_values")"
-  if [[ -z "$value" || "$value" == "null" ]]; then
-    print_error 'Could not read "%s" from the current release'"'"'s values -- refusing to upgrade\n' "$filter"
+# require_release_auth_issuer: refuses to upgrade a release that has no stored OIDC issuer.
+# Production values are reused from the release, so a missing issuer means there is nothing to
+# reuse (never deployed, or deployed without the deploy script) and the upgrade would silently
+# fall back to chart defaults.
+require_release_auth_issuer() {
+  local issuer
+  issuer="$(helm get values "$RELEASE_NAME" -o json | jq -r '.psService.auth.issuer')"
+  if [[ -z "$issuer" || "$issuer" == "null" ]]; then
+    print_error 'Could not read "%s" from the current release'"'"'s values -- refusing to upgrade\n' \
+      ".psService.auth.issuer"
     exit "$EXIT_FAILURE"
   fi
-  printf '%s' "$value"
 }
 
 upgrade_local_test() {
   log_step "Upgrading Policy System (Evaluator/local-test)"
   helm upgrade --install "$RELEASE_NAME" "$CHART_REF" \
+    --reset-then-reuse-values \
     --set llm.existingSecret="$LLM_SECRET" --wait
 }
 
 upgrade_production() {
-  log_step "Reading back current auth values"
-  local current_values issuer audience cli_client_id scopes
-  current_values="$(helm get values "$RELEASE_NAME" -o json)"
-  issuer="$(read_auth_value '.psService.auth.issuer')"
-  audience="$(read_auth_value '.psService.auth.audience')"
-  cli_client_id="$(read_auth_value '.psService.auth.cliClientId')"
-  scopes="$(read_auth_value '.psService.auth.scopes')"
+  log_step "Checking the current release's auth values"
+  require_release_auth_issuer
 
   log_step "Upgrading Policy System (Production)"
   helm upgrade --install "$RELEASE_NAME" "$CHART_REF" \
     -f "$PROD_VALUES_FILE" \
+    --reset-then-reuse-values \
     --set llm.existingSecret="$LLM_SECRET" \
-    --set psService.auth.issuer="$issuer" \
-    --set psService.auth.audience="$audience" \
-    --set psService.auth.cliClientId="$cli_client_id" \
-    --set psService.auth.scopes="$scopes" \
     --wait
 }
 

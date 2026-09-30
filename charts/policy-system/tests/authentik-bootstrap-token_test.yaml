@@ -1,0 +1,146 @@
+suite: authentik bootstrap token shares the PS Service API token Secret (issue #165 Slice 1B)
+# One generated value (policy-system.generateOrReuseSecretValue), one Secret
+# (policy-system-authentik-api-token, key PS_AUTHENTIK_API_TOKEN), consumed by
+# BOTH PS Service (PS_AUTHENTIK_API_TOKEN) and Authentik's server/worker
+# (AUTHENTIK_BOOTSTRAP_TOKEN) so Authentik accepts the very token PS Service sends.
+release:
+  name: policy-system
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  authentik.enabled: true
+templates:
+  - authentik-api-token-secret.yaml
+  - ps-service-deployment.yaml
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  # NOTE on order: authentik.enabled=true cases first (see authentik-server-service_test.yaml).
+
+  - it: server Deployment sources AUTHENTIK_BOOTSTRAP_TOKEN from the shared Secret via secretKeyRef, never a plain value
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].value
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.name
+          value: policy-system-authentik-api-token
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN
+
+  - it: worker Deployment sources AUTHENTIK_BOOTSTRAP_TOKEN from the same Secret and key
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].value
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.name
+          value: policy-system-authentik-api-token
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN
+
+  - it: PS Service references the very same Secret name and key as Authentik
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_API_TOKEN")].valueFrom.secretKeyRef.name
+          value: policy-system-authentik-api-token
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_API_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN
+
+  - it: the Secret holds a generated 64-char alphanumeric token
+    template: authentik-api-token-secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData.PS_AUTHENTIK_API_TOKEN
+          pattern: "^[A-Za-z0-9]{64}$"
+
+  - it: an existing real 64-char token is reused on upgrade (lookup), not regenerated
+    template: authentik-api-token-secret.yaml
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: policy-system-authentik-api-token
+            namespace: NAMESPACE
+          data:
+            # base64 of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ab"
+            PS_AUTHENTIK_API_TOKEN: QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODlhYg==
+    asserts:
+      - equal:
+          path: stringData.PS_AUTHENTIK_API_TOKEN
+          value: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ab
+
+  - it: an existing Secret still holding the old placeholder is treated as absent and gets a fresh token (F-1)
+    template: authentik-api-token-secret.yaml
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: policy-system-authentik-api-token
+            namespace: NAMESPACE
+          data:
+            # base64 of "ps-service-authentik-dev-token"
+            PS_AUTHENTIK_API_TOKEN: cHMtc2VydmljZS1hdXRoZW50aWstZGV2LXRva2Vu
+    asserts:
+      - matchRegex:
+          path: stringData.PS_AUTHENTIK_API_TOKEN
+          pattern: "^[A-Za-z0-9]{64}$"
+
+  - it: existingSecret set while Authentik still points at the default Secret name fails the render
+    set:
+      psService.authentik.existingSecret: my-existing-authentik-secret
+    template: authentik-api-token-secret.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "psService.authentik.existingSecret"
+
+  - it: existingSecret set and the Authentik env overridden to the same name renders and emits no chart Secret
+    set:
+      psService.authentik.existingSecret: my-existing-authentik-secret
+      authentik:
+        server:
+          env:
+            - name: AUTHENTIK_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: my-existing-authentik-secret
+                  key: PS_AUTHENTIK_API_TOKEN
+        worker:
+          env:
+            - name: AUTHENTIK_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: my-existing-authentik-secret
+                  key: PS_AUTHENTIK_API_TOKEN
+    template: authentik-api-token-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: existingSecret set with Authentik disabled is not subject to the env-name guard
+    set:
+      authentik.enabled: false
+      psService.authentik.existingSecret: my-existing-authentik-secret
+    template: authentik-api-token-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

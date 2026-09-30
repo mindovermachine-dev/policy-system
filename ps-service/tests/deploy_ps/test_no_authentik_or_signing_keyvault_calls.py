@@ -1,4 +1,4 @@
-"""Script-level proof that `scripts/deploy-ps.sh` makes no Key Vault or kubectl calls for
+"""Script-level proof that `scripts/deploy-ps-prod.sh` makes no Key Vault or kubectl calls for
 Authentik's or the PS Postgres credentials, and that `--rotate-authentik-secrets` no
 longer exists (issue #159, AC-BI-006's script-side half / AC-BI-009).
 
@@ -52,7 +52,7 @@ def test_fresh_deploy_never_applies_the_authentik_or_signing_postgres_secret_its
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
     """The chart -- not this script -- now owns both Secrets (see this module's own docstring);
-    `deploy-ps.sh` never issues a `kubectl create secret .../apply` for either of them.
+    `deploy-ps-prod.sh` never issues a `kubectl create secret .../apply` for either of them.
     """
     _seed(deploy_ps_fixture)
 

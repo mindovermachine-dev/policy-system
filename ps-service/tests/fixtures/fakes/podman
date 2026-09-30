@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Fake `podman` for the evaluator install script tests (issue #165 test harness).
+
+Copied into a test's `bin/` directory (never imported). Logs argv to $PS_TEST_PODMAN_LOG,
+answers `podman machine list`/`machine inspect` from $PS_TEST_PODMAN_MACHINE_STATE
+(default "running"), answers `inspect <container> --format ...` with $PS_TEST_PODMAN_NODE_IP
+(the kind node's IP; exit $PS_TEST_PODMAN_INSPECT_EXIT, default 0), and exits with
+$PS_TEST_PODMAN_EXIT (default 0) for everything else.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    log_path = os.environ.get("PS_TEST_PODMAN_LOG")
+    if log_path:
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(json.dumps(sys.argv[1:]) + "\n")
+    machine_state = os.environ.get("PS_TEST_PODMAN_MACHINE_STATE", "running")
+    if sys.argv[1:3] == ["machine", "list"]:
+        sys.stdout.write(f"podman-machine-default  {machine_state}\n")
+        return 0
+    if sys.argv[1:3] == ["machine", "inspect"]:
+        sys.stdout.write(json.dumps([{"State": machine_state}]))
+        return 0
+    if sys.argv[1:2] == ["inspect"]:
+        exit_code = int(os.environ.get("PS_TEST_PODMAN_INSPECT_EXIT", "0"))
+        if exit_code == 0:
+            sys.stdout.write(os.environ.get("PS_TEST_PODMAN_NODE_IP", "10.89.0.2") + "\n")
+        return exit_code
+    return int(os.environ.get("PS_TEST_PODMAN_EXIT", "0"))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,8 +1,8 @@
-"""cert-manager install + wait-for-Available before `ClusterIssuer` for `scripts/deploy-ps.sh`
+"""cert-manager install + wait-for-Available before `ClusterIssuer` for `scripts/deploy-ps-prod.sh`
 (AC-BI-016; PLAN.md §5/S17).
 
 `ensure_cert_manager`/`ensure_cluster_issuer` are ported verbatim from `spikes/deploy-ps-azure/
-deploy-ps.sh`'s own equivalents (spike lines 1138-1183), the trusted empirical reference. The
+deploy-ps-prod.sh`'s own equivalents (spike lines 1138-1183), the trusted empirical reference. The
 spike README's own confirmed finding, corrected mid-run after an original wrong assumption: the
 AKS application-routing add-on does NOT bundle cert-manager -- only the managed NGINX ingress
 controller. This script installs cert-manager itself, via its own published OCI chart, and waits
@@ -16,7 +16,7 @@ cluster).
 below is the exact AC-BI-016 claim, proven as a call-log ORDERING assertion (the `kubectl wait`
 line must appear before the `ClusterIssuer` apply line) -- confirmed red-before-green by
 temporarily moving `ensure_cert_manager`'s own `kubectl wait` call to run AFTER
-`ensure_cluster_issuer` in `scripts/deploy-ps.sh`'s `main()`; see IMPL_SLICE_17.md's evidence
+`ensure_cluster_issuer` in `scripts/deploy-ps-prod.sh`'s `main()`; see IMPL_SLICE_17.md's evidence
 block.
 """
 
@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors scripts/deploy-ps.sh's own S17 literals -- hardcoded here rather than parsed from the
+# Mirrors scripts/deploy-ps-prod.sh's own S17 literals -- hardcoded here rather than parsed from the
 # script, same precedent as every other deploy_ps test module.
 CERT_MANAGER_RELEASE_NAME = "cert-manager"
 CERT_MANAGER_CHART_REF = "oci://quay.io/jetstack/charts/cert-manager"

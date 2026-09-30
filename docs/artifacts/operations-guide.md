@@ -4,10 +4,14 @@
 
 - [Evaluator (local-test) operations](#evaluator-local-test-operations)
   - [Updating to the latest version](#updating-to-the-latest-version)
+  - [Owner recovery, certificate renewal and re-running the script](#owner-recovery-certificate-renewal-and-re-running-the-script)
+  - [Reaching the Authentik admin UI (evaluator)](#reaching-the-authentik-admin-ui-evaluator)
+  - [Recreating the kind cluster](#recreating-the-kind-cluster)
   - [Cleanup / teardown](#cleanup--teardown)
   - [Rotating the Azure LLM API key](#rotating-the-azure-llm-api-key)
 - [Production operations](#production-operations)
   - [Updating to the latest version](#updating-to-the-latest-version-1)
+  - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
   - [Manual steps and operational notes](#manual-steps-and-operational-notes)
@@ -35,21 +39,24 @@ installation](./installation-guide.md#evaluator-installation).
 
 ### Updating to the latest version
 
-Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) from a repo checkout — it re-runs
-[`ps-cli/install.sh`](../../ps-cli/install.sh) to pick up the new client version, upgrades the
-Helm release (no `--version` pin, so it always installs the latest chart, matching the client
-version install.sh just picked up), and verifies pod status:
+Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh). It upgrades the release with
+`--reset-then-reuse-values`: the new chart's defaults apply, everything you (or
+`scripts/deploy-ps-eval.sh`) supplied at install — the local certificate Secret, Authentik, the
+bootstrap owner and issuer — is kept, and only `llm.existingSecret` is set again. It also
+updates the client with [`ps-cli/install.sh`](../../ps-cli/install.sh). The reuse behaviour is
+covered by a test against a fake `helm`; it has not been run against a live upgrade.
 
-```bash
-scripts/ps-upgrade.sh
-```
-
-Equivalently, run the steps it automates by hand:
+To do the same by hand (Helm 3.14 or newer):
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --set llm.existingSecret=policy-system-llm-credentials --wait
+  --reset-then-reuse-values --set llm.existingSecret=policy-system-llm-credentials --wait
 ```
+
+`scripts/deploy-ps-eval.sh` re-applies its values only when they changed, so it does not pick
+up a newer chart version by itself.
+
+Then check the PS Service pod:
 
 ```bash
 kubectl get pods -l app.kubernetes.io/component=ps-service \
@@ -62,6 +69,48 @@ version and the image version can never disagree — there is no tag to hand-pin
 flag needed to reset one. Your graph data is kept — FalkorDB persists to a
 `PersistentVolumeClaim` (see [Backup](#backup)), so previously loaded regulations do
 not need to be re-seeded.
+
+### Owner recovery, certificate renewal and re-running the script
+
+Re-running [`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh) is safe and is the
+recovery path for the owner; it is gated by access to the cluster (the script needs `kubectl`
+against it and reads the shared Authentik token from its Secret). With the same
+email as before:
+
+- **Owner with no passkey registered** (the enrolment link expired or was never used): a fresh
+  single-use link is printed.
+- **Owner who already has a passkey**: unchanged, no link is issued. If the only device was lost,
+  remove it from the owner's user page in the Authentik admin UI (next section) and re-run.
+- **Certificate renewal**: the script regenerates the local certificate when it is within 30 days
+  of expiry or the hostname changed (the certificate lasts 397 days; the local CA 10 years). It
+  then makes Authentik serve the new certificate by re-applying its certificate blueprint, with no
+  manual restart, and restarts PS Service only if it had to. Browsers already trust the same CA,
+  so nothing changes for users; a CA that expires is not renewed automatically.
+- **The Authentik bootstrap token does not rotate.** Authentik applies `AUTHENTIK_BOOTSTRAP_TOKEN`
+  once per tenant, so changing the chart-generated Secret later does not change the token Authentik
+  holds; the script then stops with "Authentik rejected the shared API token" before creating
+  anything. See [Installation Guide: Upgrading an existing
+  install](./installation-guide.md#upgrading-an-existing-install) for the fix.
+
+### Reaching the Authentik admin UI (evaluator)
+
+In the evaluator profile the admin UI is on the same HTTPS listener as the login pages, reachable
+from any machine that can reach this laptop's port `30443` — by design. Open
+`https://authentik.local:30443/if/admin/` (your `--hostname`) in a browser that trusts the local
+CA and sign in as the owner. To keep it to your own machine, block port `30443` from the LAN in the
+host firewall. See [Installation Guide: What is exposed
+(evaluator)](./installation-guide.md#what-is-exposed-evaluator).
+
+### Recreating the kind cluster
+
+`deploy/kind/cluster.yaml`'s port mappings are fixed when a cluster is created. A `policy-system`
+cluster created before Authentik was served over HTTPS lacks the `30443` mapping (it had a
+plain-HTTP `30080` one), so it must be deleted and recreated — `kind delete cluster --name
+policy-system`, then the `kind create cluster` command from the installation guide. This destroys
+the cluster's PVC data (FalkorDB graph, PS Postgres, Authentik's Postgres), so load curated
+content again afterwards. The local CA and certificate live outside the cluster (default
+`~/.config/policy-system/eval-tls`) and are reused by the next `scripts/deploy-ps-eval.sh` run,
+which also creates the owner again (a new cluster has a new Authentik).
 
 ### Cleanup / teardown
 
@@ -105,49 +154,61 @@ installation](./installation-guide.md#production-installation).
 
 ### Updating to the latest version
 
-`scripts/deploy-ps.sh`'s Helm reconciliation (`ensure_release`) only calls `helm upgrade
---install` when one of the 5 auth-related fields (`llm.existingSecret`,
-`psService.auth.{issuer,audience,cliClientId,scopes}`) differs from what's already
-deployed. If none of those changed, re-running
-`scripts/deploy-ps.sh` is a no-op and will **not** pick up a new chart version.
+`scripts/deploy-ps-prod.sh`'s Helm reconciliation (`ensure_release`) only calls `helm upgrade
+--install` when one of the 9 script-managed fields (`llm.existingSecret`,
+`psService.auth.{issuer,audience,cliClientId,scopes}`,
+`psService.authzBootstrapOwner.{subject,issuer}`, `psService.authentik.{baseUrl,publicUrl}`)
+differs from what's already deployed. If none of those changed, re-running
+`scripts/deploy-ps-prod.sh` is a no-op and will **not** pick up a new chart version.
 
-Run [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) from a repo checkout instead — it
-re-runs [`ps-cli/install.sh`](../../ps-cli/install.sh) to pick up the new client version, reads
-back the currently-deployed auth values and re-supplies them explicitly so a plain `helm
-upgrade` doesn't reset them to chart defaults, upgrades the Helm release (like Evaluator's
-chart, `CHART_REF` carries no `--version` pin, so this always pulls whatever is latest at that
-OCI reference), and verifies pod status:
-
-```bash
-scripts/ps-upgrade.sh
-```
-
-Equivalently, run the steps it automates by hand:
-
-```bash
-helm get values policy-system -o json
-```
+Use [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh): it upgrades with
+`--reset-then-reuse-values`, so the values the release already has (`psService.auth.*`, the
+bootstrap owner, `psService.authentik.{baseUrl,publicUrl}`) are kept, and `values-prod.yaml` and
+the new chart's defaults still apply. It refuses to run if the release has no stored
+`psService.auth.issuer`. The reuse behaviour is covered by a test against a fake `helm`; it has
+not been run against a live AKS upgrade. By hand (Helm 3.14 or newer):
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  -f charts/policy-system/values-prod.yaml \
-  --set llm.existingSecret=policy-system-llm-credentials \
-  --set psService.auth.issuer=<issuer from helm get values> \
-  --set psService.auth.audience=<audience from helm get values> \
-  --set psService.auth.cliClientId=<cliClientId from helm get values> \
-  --set psService.auth.scopes=<scopes from helm get values> \
-  --wait
+  -f charts/policy-system/values-prod.yaml --reset-then-reuse-values \
+  --set llm.existingSecret=policy-system-llm-credentials --wait
 ```
+
+`ps-cli/install.sh` updates the client (the script runs it for you).
 
 ```bash
 kubectl get pods -l app.kubernetes.io/component=ps-service \
   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
 ```
 
+### Owner recovery and the Authentik admin UI
+
+Re-running `scripts/deploy-ps-prod.sh` with the same owner email (`--owner-email` or
+`AUTHZ_OWNER_EMAIL`) is the owner-recovery path, gated by cluster access: an owner with no passkey
+registered gets a fresh single-use link (printed on `https://<host>/auth/if/flow/...`); an owner
+with one is left unchanged and no link is issued. If the only device was lost, remove it from
+the owner's user page in the admin UI and re-run.
+
+The Authentik admin UI is **not** on the public Ingress; reach it from a machine with cluster
+access (see [Installation Guide, step 4](./installation-guide.md#4-access-the-cluster-with-kubelogin))
+through a port-forward, and leave it running while you work:
+
+```bash
+kubectl port-forward svc/policy-system-authentik-server 9000:80
+```
+
+Then open `http://localhost:9000/auth/if/admin/` and sign in as the owner. Note the `/auth`
+prefix. The public Ingress routes only eight user-facing path prefixes; see [Installation Guide:
+What is exposed (production)](./installation-guide.md#what-is-exposed-production). The Authentik
+API token is the Authentik bootstrap token, stored in the Secret
+`policy-system-authentik-api-token`; it does not rotate, so do not change the Secret alone (see
+[Installation Guide: Upgrading an existing
+install](./installation-guide.md#upgrading-an-existing-install)).
+
 ### Rotate the API key later
 
 ```bash
-scripts/deploy-ps.sh --rotate-key
+scripts/deploy-ps-prod.sh --rotate-key
 ```
 
 Regenerates whichever Azure Cognitive Services API key slot isn't currently active
@@ -169,17 +230,17 @@ scripts/ps-aks.sh start
 ```
 
 [`scripts/ps-aks.sh`](../../scripts/ps-aks.sh) resolves the cluster name the same
-way `deploy-ps.sh` does (a subscription-derived hash, not a fixed string) so there's
+way `deploy-ps-prod.sh` does (a subscription-derived hash, not a fixed string) so there's
 nothing to look up by hand. Give it a minute or two after starting before checking
 pod status — see the `kubectl get pods` command in [Updating to the latest
 version](#updating-to-the-latest-version-1) above.
 
 ### Manual steps and operational notes
 
-Manual steps and known gaps in `scripts/deploy-ps.sh`'s automation, current as of
+Manual steps and known gaps in `scripts/deploy-ps-prod.sh`'s automation, current as of
 this guide:
 
-1. **AOAI SKU/quota discovery — partly automated.** `deploy-ps.sh` validates
+1. **AOAI SKU/quota discovery — partly automated.** `deploy-ps-prod.sh` validates
    whatever SKU/capacity you configure against that region's live-reported range
    and quota, and fails with the exact numbers if insufficient — but discovering
    which SKU has real default quota for your subscription/region in the first
@@ -191,7 +252,7 @@ this guide:
    ```bash
    az cognitiveservices usage list --location <region>
    ```
-2. **AKS node VM-size allowlist + vCPU quota — automated.** `scripts/deploy-ps.sh`
+2. **AKS node VM-size allowlist + vCPU quota — automated.** `scripts/deploy-ps-prod.sh`
    checks both the subscription allowlist and vCPU family quota for the fixed
    `Standard_D4as_v7` node size before ever calling `az aks create`, failing with
    the actual restriction reason or vCPU shortfall rather than a generic error. No
@@ -389,6 +450,10 @@ exactly what was in the backups — anything recorded after the snapshots were t
 | A command fails right after connecting | `ps-cli get health` — reports whether FalkorDB, the LLM Interface, and Cellar/ELI are all reachable, and which is not if any aren't. `health: alive` with `ready: not_ready` means the process is up but FalkorDB is unreachable, or required ingestion config is incomplete — LLM Interface/Cellar-ELI issues are named in `unhealthy_dependencies` without flipping `ready` to `not_ready`. |
 | `ingest regulation` / `ingest document` fails immediately with a config-related error | PS Service's ingestion-required config (`PS_LLMINTERFACE_MODEL`, `PS_LLMINTERFACE_EMBED_MODEL`, `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`) is likely missing — this is a PS Service operator/deployer concern, see [Helm Chart Values Reference](./helm-chart-values-reference.md#core-values). |
 | `ingest regulation` / `ingest document` / `check regulations` fails immediately with "LLM Interface is unavailable" | PS Service's LLM Interface is unreachable — `ps-cli`'s pre-flight check caught it before any pipeline call; check PS Service's `/ready` endpoint and its LLM provider configuration. |
+| `ps-cli auth login` (or the plugin's MCP bridge) against the evaluator reports "Could not reach ..." though Authentik is up | The issuer is HTTPS with a locally issued certificate and `ps-cli` reads only `SSL_CERT_FILE`, not the OS trust store. `export SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem` (or your `PS_EVAL_STATE_DIR`) for `ps-cli`, and set it in Claude Desktop's environment for the bridge. See [Installation Guide, step 8](./installation-guide.md#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin). |
+| A browser shows a certificate warning, or passkey registration is refused, on the evaluator | The browser does not trust the local CA, or the hostname is not mapped in `/etc/hosts` on that machine. Passkeys need a trusted HTTPS origin. Trust `ca.pem` and map the hostname (see step 8). |
+| The deploy script stops with "Authentik rejected the shared API token" | Authentik's bootstrap token never rotates and the Secret no longer matches it. See [Installation Guide: Upgrading an existing install](./installation-guide.md#upgrading-an-existing-install). |
+| An owner or invite link says "No recovery flow set" or the script waited for the blueprint | The bundled Authentik blueprint had not applied yet (about a minute on a fresh install). The scripts wait for it; re-run once Authentik's worker is Ready. |
 | Referencing a context that doesn't exist | `ps-cli` exits non-zero and lists valid context names — see [User Guide: ps-cli Troubleshooting](./user-guide.md#troubleshooting). |
 
 ## Teardown
@@ -400,5 +465,5 @@ az group delete --name rg-policy-system --yes
 ```
 
 The resource group delete covers everything RG-scoped (AKS, the AIServices
-account, Key Vault, networking); `deploy-ps.sh` creates nothing tenant-level, so
+account, Key Vault, networking); `deploy-ps-prod.sh` creates nothing tenant-level, so
 there is nothing to clean up outside the resource group.

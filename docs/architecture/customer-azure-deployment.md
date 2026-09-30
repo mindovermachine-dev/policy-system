@@ -12,7 +12,7 @@
 2. [Threat Model & Scope](#threat-model--scope)
 3. [Flow](#flow)
 4. [Components](#components)
-   - [deploy-ps.sh](#deploy-pssh)
+   - [deploy-ps-prod.sh](#deploy-ps-prodsh)
      - [Configuration](#configuration)
      - [Authentik](#authentik)
      - [AKS cluster](#aks-cluster)
@@ -30,12 +30,15 @@
 
 ## Overview
 
-`docs/architecture/customer-azure-llm-bootstrap.md` describes the Local Test path: a single
-evaluator standing up just the LLM backend (`scripts/deploy-llm.sh`) for a local `kind` cluster.
-This document describes the separate, production/customer-tenant path: `scripts/deploy-ps.sh`,
+`docs/architecture/customer-azure-llm-bootstrap.md` describes the Local Test path's LLM backend:
+a single evaluator standing up just that backend (`scripts/deploy-llm.sh`) for a local `kind`
+cluster, after which `scripts/deploy-ps-eval.sh` deploys the same Helm chart onto that cluster
+with the bundled Authentik over locally trusted HTTPS and creates the first user (the two
+profiles differ only in the script and its values — see [Authentik](#authentik)). This document
+describes the separate, production/customer-tenant path: `scripts/deploy-ps-prod.sh`,
 which provisions a **complete**, internet-reachable Policy System deployment in a customer's own
 Azure subscription — the LLM backend, a bundled Authentik instance PS-Cli and PS Service
-authenticate through (invite-only local-account signup by default —
+authenticate through (invite-only, passkey-only local-account signup by default —
 see [Authentik](#authentik)), an AKS cluster, the Helm release itself, and public HTTPS
 exposure with a Let's Encrypt certificate. It is a new sibling script, not a wrapper around
 `deploy-llm.sh` — it
@@ -45,7 +48,7 @@ back into `deploy-llm.sh` (see [Region Selection & Quota](#region-selection--quo
 scripts remain real, independently useful, and continue to serve their own distinct paths — see
 `customer-azure-llm-bootstrap.md`'s own "See also" note.
 
-Like `deploy-llm.sh`, `deploy-ps.sh` is a single idempotent Bash script run locally under the
+Like `deploy-llm.sh`, `deploy-ps-prod.sh` is a single idempotent Bash script run locally under the
 evaluator/operator's own `az` CLI session, against their own subscription — no CI/CD pipeline,
 no template repo, no persisted state beyond what already exists in Azure and the target AKS
 cluster.
@@ -96,14 +99,14 @@ graph TB
     subgraph Cluster["AKS cluster"]
         Secret["Secret: policy-system-llm-credentials"]
         AuthSecret["Secret: policy-system-authentik-credentials"]
-        Authentik["Authentik subchart\n(server + worker + own Postgres)\nblueprint: invite enrollment,\nWebAuthn, Reputation DenyStage"]
+        Authentik["Authentik subchart\n(server + worker + own Postgres)\nblueprint: passkey-only enrollment\nand recovery, Reputation DenyStage"]
         Release["Helm release: policy-system"]
         CertMgr["cert-manager +\nClusterIssuer letsencrypt-prod"]
         IngressPS["Ingress: policy-system-ps-service\n(TLS via cert-manager)"]
-        IngressAuth["Ingress: policy-system-authentik-server\n(same host, /auth path prefix)"]
+        IngressAuth["Ingress: policy-system-authentik-server\n(same host, 8 allowlisted /auth paths)"]
     end
 
-    Operator -- "1. deploy-ps.sh\n(az CLI, idempotent)" --> RG
+    Operator -- "1. deploy-ps-prod.sh\n(az CLI, idempotent)" --> RG
     RG --> AIS --> Dep1
     AIS --> Dep2
     AIS -- "keys/endpoint" --> KV
@@ -117,7 +120,8 @@ graph TB
     Release --> Authentik
     Operator -- "5. cert-manager + ClusterIssuer" --> CertMgr
     Operator -- "6. PS Service Ingress" --> IngressPS
-    Operator -- "7. Authentik Ingress\n(/auth prefix, same host)" --> IngressAuth
+    Operator -- "7. Authentik Ingress\n(user-facing /auth paths only, same host)" --> IngressAuth
+    Operator -- "8. create owner + passkey link\n(kubectl port-forward, admin API\nnever on the Ingress)" --> Authentik
     PublicIP --> IngressPS
     PublicIP --> IngressAuth
     CertMgr --> IngressPS
@@ -129,9 +133,9 @@ graph TB
 
 ## Components
 
-### deploy-ps.sh
+### deploy-ps-prod.sh
 
-Bash script (`scripts/deploy-ps.sh`) wrapping `az`, `kubectl`, and `helm`. `main()`'s
+Bash script (`scripts/deploy-ps-prod.sh`) wrapping `az`, `kubectl`, and `helm`. `main()`'s
 provisioning order, each step create-if-absent unless noted:
 
 1. **Load and validate configuration** (`load_config`, `prompt_for_tls_contact_email`,
@@ -170,13 +174,22 @@ provisioning order, each step create-if-absent unless noted:
     is a path under this same, single hostname and must exist before `ensure_release` computes it.
 11. **Helm release** — see [below](#helm-release-and-chart-hardening-profile). Authentik's own
     credentials (Django `secret_key`, its own Postgres password) and the PS Postgres (admin, state and
-    signing role) passwords are no longer a separate `deploy-ps.sh` provisioning step (issue #159) — they exist
+    signing role) passwords are no longer a separate `deploy-ps-prod.sh` provisioning step (issue #159) — they exist
     as soon as this release is installed, generated by the chart itself; see [Authentik](#authentik).
 12. **cert-manager, `ClusterIssuer`, and both Ingresses** — see [Public exposure and
     TLS](#public-exposure-and-tls); these remain *after* the Helm release, unlike step 10, since
     nothing about them gates the issuer value.
-13. **Provisioning summary** (`print_provisioning_summary`) — names which secrets exist (never
-    their values) and prints the resulting `https://<hostname>` URL.
+13. **Owner creation** (`provision_authentik_owner`, shared with `deploy-ps-eval.sh` through
+    `scripts/lib/authentik-owner.sh`, issue #165) — once Authentik is Ready, creates the owner given
+    by `--owner-email`/`AUTHZ_OWNER_EMAIL` (or prompted for) as an Authentik administrator whose
+    username and email are that address, with no password, and issues a single-use, time-limited
+    passkey-enrolment link on the public `https://<hostname>/auth` address. The admin API is not on
+    the public Ingress, so the calls go through a temporary `kubectl port-forward`. Nothing is
+    created on any failure. Re-running is the owner-recovery path: an owner with no registered
+    passkey gets a fresh link, one with a passkey is left unchanged.
+14. **Provisioning summary** (`print_provisioning_summary`) — names which secrets exist (never
+    their values), prints the resulting `https://<hostname>` URL, and prints the enrolment link
+    last.
 
 ### Configuration
 
@@ -188,8 +201,12 @@ Quota](#region-selection--quota)):
 - `LLM_REGION_CANDIDATES` — ordered EU region candidate list
 - `LLM_CHAT_MODEL_NAME` / `LLM_CHAT_MODEL_SKU` / `LLM_CHAT_MODEL_CAPACITY`
 - `LLM_EMBED_MODEL_NAME` / `LLM_EMBED_MODEL_SKU` / `LLM_EMBED_MODEL_CAPACITY`
-- `TLS_CONTACT_EMAIL` — Let's Encrypt registration contact; if left blank, `deploy-ps.sh` prompts
+- `TLS_CONTACT_EMAIL` — Let's Encrypt registration contact; if left blank, `deploy-ps-prod.sh` prompts
   for it interactively before validating the rest of the config (`prompt_for_tls_contact_email`)
+- `AUTHZ_OWNER_EMAIL` — the first `SystemOwner` and Authentik administrator (issue #165); if left
+  blank and no `--owner-email` is given, the script prompts for it (never under `--yes`). The
+  address is the owner's Authentik username and OIDC `sub`, so the bootstrap identity is set in the
+  same deploy as the release
 
 Unlike `llm-defaults.conf`, both model SKUs are evaluator-tunable fields here (validated
 non-empty by `validate_config`), not hardcoded literals — the spike this script is built from
@@ -198,11 +215,14 @@ found that different SKUs have non-zero default quota on a fresh subscription th
 
 ### Authentik
 
-Production auth needs no tenant-level app registration. `deploy-ps.sh` bundles
+Production auth needs no tenant-level app registration. `deploy-ps-prod.sh` bundles
 [Authentik](https://goauthentik.io) (MIT-licensed) as PS Service's fixed, self-hosted identity
-broker, active only in the production Helm profile (`authentik.enabled: false` in `values.yaml`,
-`true` in `values-prod.yaml` — the same leaf-value gating mechanism every other profile-specific
-chart feature uses; there is no `.Values.profile` conditional anywhere in this chart). Default
+broker (`authentik.enabled: false` in `values.yaml`, `true` in `values-prod.yaml` and in the
+release `deploy-ps-eval.sh` installs — the same leaf-value gating mechanism every other
+profile-specific chart feature uses; there is no `.Values.profile` conditional anywhere in this
+chart). The evaluator script bundles the same Authentik and blueprint (the blueprint mount is in
+`values.yaml`, so every profile has it), differing in transport and exposure: locally trusted HTTPS
+on a host-mapped NodePort, reachable from the LAN by design, rather than a public Ingress. Default
 signup is invite-only local Authentik accounts — zero open self-registration, zero admin-consent
 step, zero external-IdP dependency. A documented, low-key path to federate the bundled Authentik
 to an upstream IdP still exists — see `docs/artifacts/idp-configuration-contract.md`'s "Optional:
@@ -213,7 +233,7 @@ since federation is configured entirely on Authentik's own side (a Source object
 `authentik` (chart `authentik`, `https://charts.goauthentik.io`, pinned `2026.8.3`, `condition:
 authentik.enabled`), fetched via `helm dependency build` (wired into `.insitu.yml` and
 `on_semver.yml` ahead of every lint/unittest/package step). Authentik's own bundled Bitnami
-Postgres dependency is left off (`authentik.postgresql.enabled: false`); this chart hand-rolls
+Postgres dependency is left off (`authentik.postgresql.enabled: false`, in `values.yaml`); this chart hand-rolls
 Authentik's Postgres instead — `authentik-postgres-{storageclass,pvc,networkpolicy,deployment,
 service}.yaml` — mirroring FalkorDB's own durable-storage pattern exactly: `Premium_LRS`,
 `reclaimPolicy: Retain`, and a `NetworkPolicy` restricting ingress on port 5432 to Authentik's own
@@ -238,27 +258,66 @@ startup/on change — a native Authentik feature, no custom code), covering:
   60-second device-code-window finding). Scope mappings include `offline_access` explicitly — a
   blueprint-created Provider gets no scope mappings by default, and PS-Cli's device flow always
   requests `offline_access` for its refresh token.
-- An **invite-gated Enrollment flow**: Invitation stage (`continue_flow_without_invitation:
-  false` — no invite code, registration is rejected identically whether the code is missing,
-  garbage, expired, or already redeemed) → Prompt (username/name/email/password) → User Write →
-  WebAuthn (passkey) → User Login. The identification stage is additionally patched to accept a
+- An **invite-gated, passkey-only Enrollment flow**: Invitation stage
+  (`continue_flow_without_invitation: false` — no invite code, registration is rejected identically
+  whether the code is missing, garbage, expired, or already redeemed) → Prompt (username/name/email,
+  no password field) → User Write → WebAuthn (passkey) → User Login. An invitee's account
+  therefore has no password set. The identification stage is additionally patched to accept a
   WebAuthn assertion directly at login, so an enrolled passkey genuinely replaces password entry
   rather than only supplementing it as a second factor.
+- A **passkey recovery flow** (WebAuthn setup → User Login, no password stage), set as the brand's
+  `flow_recovery`. It is what the owner's enrolment link is issued from — Authentik cannot issue a
+  recovery link while the brand has none.
+- The ps-cli Provider's **`sub_mode: user_username`**, so the ID token's `sub` is the username;
+  with the owner's username equal to their email, the owner's `sub` is known before they log in.
+- The bundled blueprints first apply Authentik's own shipped `Default - Brand` blueprint. Without
+  that, on a fresh install these blueprints can win a race and create the brand themselves with no
+  default flows, after which Authentik's own blueprint never repairs it.
+- The shipped login flow keeps its **password stage**: removing it is a documented lockout risk
+  (see the Reputation-Policy write-up below), and an administrator can still set a user's
+  password. "Passkey-only" is therefore enforced for enrolment and recovery; the owner and the
+  bundled `akadmin` have no usable password and invitees have none set.
 - A **Reputation-Policy Deny stage** — see the AC-BI-012 write-up below.
 
-**Dual-purpose, single-hostname Ingress, not a second hostname.** Authentik gets its own Ingress
-object (`ensure_authentik_ingress`, chart Service `policy-system-authentik-server`), but it routes
-`/auth`-path traffic on the *same* hostname/Ingress/certificate PS Service's own Ingress already
-resolves and provisions — it carries no `tls:` block or cert-manager annotation of its own, since
-nginx-ingress applies whichever Ingress object's certificate to every Ingress for the same host.
-A design that instead gave Authentik its **own** hostname was considered and rejected (issue #129's
-Critique stage, finding F1): a single Azure Public IP has exactly one `dnsSettings.domainNameLabel`,
-so a second `ensure_dns_label` call for a second hostname would have stolen PS Service's own label
-rather than adding a genuine second one. Authentik has supported non-root subpath serving
+**Dual-purpose, single-hostname Ingress, not a second hostname — and an allowlist, not the whole
+`/auth` prefix.** Authentik gets its own Ingress object (`ensure_authentik_ingress`, chart Service
+`policy-system-authentik-server`), which routes Authentik traffic on the *same*
+hostname/Ingress/certificate PS Service's own Ingress already resolves and provisions — it carries
+no `tls:` block or cert-manager annotation of its own, since nginx-ingress applies whichever
+Ingress object's certificate to every Ingress for the same host. A design that instead gave
+Authentik its **own** hostname was considered and rejected (issue #129's Critique stage, finding
+F1): a single Azure Public IP has exactly one `dnsSettings.domainNameLabel`, so a second
+`ensure_dns_label` call for a second hostname would have stolen PS Service's own label rather than
+adding a genuine second one. Authentik has supported non-root subpath serving
 (`AUTHENTIK_WEB__PATH=/auth/`) since v2024.12, which is what makes the shared-hostname design
 possible — a future change should not reintroduce a dual-hostname design believing subpath serving
 is unsupported. Because Authentik's issuer is now a path under PS Service's own hostname, the
-hostname/DNS-label resolution step had to move earlier in `main()` — see [above](#deploy-pssh).
+hostname/DNS-label resolution step had to move earlier in `main()` — see [above](#deploy-ps-prodsh).
+
+Since issue #165 the Ingress routes **only the eight path prefixes an end user's login and
+enrolment need** (`AUTHENTIK_PUBLIC_PATHS` in the script): `/auth/application/o/`, `/auth/device`,
+`/auth/flows/-/default/`, `/auth/if/flow/`, `/auth/api/v3/flows/executor/`,
+`/auth/api/v3/root/config/`, `/auth/api/v3/core/brands/current/` and `/auth/static/`. Everything
+else — notably the admin UI (`/auth/if/admin/`), the admin and core APIs, and the invitation API —
+is not routed, so PS Service's own catch-all answers those requests on the public host and never
+Authentik. The admin UI is cluster-internal and reached with `kubectl port-forward`. The
+in-cluster consequences: PS Service calls Authentik on its in-cluster Service address
+(`psService.authentik.baseUrl`) for the invitation API and builds only the invitee's link on the
+public address (`psService.authentik.publicUrl` → `PS_AUTHENTIK_PUBLIC_URL`); and the deploy
+script creates the owner through a `kubectl port-forward` to the Service, rewriting the link's
+authority to the public host. The user-facing `/auth/if/user/` page is deliberately not
+allowlisted (an enrolment ends on `/auth/`, which PS Service answers). Verified on ingress-nginx
+under `kind`, **not** on AKS's managed NGINX add-on (see [Open Risks](#open-risks--follow-ups)).
+
+**The evaluator counterpart.** `deploy-ps-eval.sh` keeps the whole Authentik server, admin UI
+included, reachable on `0.0.0.0:30443` (the kind cluster maps Authentik's HTTPS NodePort to the
+host) — deliberately, so a LAN colleague can log in (issue #160) — and serves it over HTTPS with a
+certificate from a local CA the script creates, because browsers only offer passkeys in a secure
+context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. Authentik's
+plain-HTTP NodePort stays inside the node. PS Service's pod trusts the local CA through
+`SSL_CERT_FILE`; `ps-cli` and the MCP bridge need the same variable because they do not read the
+operating-system trust store. The exposure of each profile is stated in the installation guide's
+"What is exposed" sections.
 
 **Secret provisioning and rotation (issue #159 — Helm-native, no Key Vault).** Authentik's Django
 `secret_key` and its own Postgres password have no external (Azure) source of truth to re-derive
@@ -368,7 +427,7 @@ values file's own hardening profile: the durable, `Premium_LRS`/`Retain` FalkorD
 (`falkordb.persistence.durableStorageClass.enabled: true`) and the unconditional FalkorDB
 `NetworkPolicy` restricting ingress to `ps-service` pods only — chart features that exist
 independently of this script (rendered by the chart itself) but are only active in the profile
-`deploy-ps.sh` deploys, not the Local Test path's default `values.yaml`.
+`deploy-ps-prod.sh` deploys, not the Local Test path's default `values.yaml`.
 
 ### Public exposure and TLS
 
@@ -402,7 +461,7 @@ second certificate).
 
 ### `--rotate-key`
 
-`scripts/deploy-ps.sh --rotate-key` branches immediately after flag parsing (`rotate_key_main`),
+`scripts/deploy-ps-prod.sh --rotate-key` branches immediately after flag parsing (`rotate_key_main`),
 before config validation, the confirmation table, RBAC preflight, or any region/quota/AKS/Helm
 step — none of those matter for rotating an already-provisioned account's key. It requires a
 prior successful deploy (`require_account_exists`/`require_keyvault_exists` fail clearly
@@ -414,15 +473,15 @@ prints a key value, old or new.
 
 ### Rotating Authentik's secrets manually
 
-**Issue #159 capability regression:** `scripts/deploy-ps.sh --rotate-authentik-secrets` is
+**Issue #159 capability regression:** `scripts/deploy-ps-prod.sh --rotate-authentik-secrets` is
 **removed**, not redefined. The old flag was a single, session-safe, automated command; now that
 Authentik's `secret_key`/Postgres password and the PS Postgres passwords are generated
 and persisted by the chart itself (a `lookup`+`randAlphaNum` idiom — see [Secret provisioning and
-rotation](#authentik) above), the same `deploy-ps.sh` process has no Key-Vault-staged value left to
+rotation](#authentik) above), the same `deploy-ps-prod.sh` process has no Key-Vault-staged value left to
 rotate, and no comparable rotation flag exists for any other Helm-generated,
 `existingSecret`-gated credential in this repo (`llm.existingSecret`,
 `psPostgres.*.existingSecret`). A faithful automated redefinition would require
-`deploy-ps.sh` to also know `CHART_REF`/`VALUES_PROD_FILE` and drive `helm upgrade` itself — a
+`deploy-ps-prod.sh` to also know `CHART_REF`/`VALUES_PROD_FILE` and drive `helm upgrade` itself — a
 materially more complex script surface than the one removed, not a simplification. Rotation is
 now a **fully manual, multi-step procedure** an operator must perform correctly by hand:
 
@@ -502,7 +561,7 @@ and picks the first where both configured models are `GenerallyAvailable` at the
 `validate_capacity_range` then checks the configured capacities against that region's live
 reported min/max.
 
-`deploy-ps.sh` carries its own copy of this logic with six numeric-correctness fixes found
+`deploy-ps-prod.sh` carries its own copy of this logic with six numeric-correctness fixes found
 during the exploratory spike that are not present in `deploy-llm.sh`:
 
 1. **Null capacity minimum** — `model_capacity_range` coalesces a `null` `capacity.minimum` (SKUs
@@ -556,21 +615,25 @@ model-*availability* failure).
   itself and never touch Key Vault.
 - **Invite-code generation is admin-only, not any-authenticated-user** (`#129 AC-BI-007`) —
   enforced entirely by Authentik's own built-in RBAC on the Invitation-object API/UI, with no
-  custom authorization code in this chart or script; the deploying operator is the only account
-  with admin rights immediately after install.
+  custom authorization code in this chart or script; the owner the script creates (issue #165) is
+  the only account with admin rights immediately after install. That person is both the Authentik
+  administrator and PS's `SystemOwner` — acceptable for a single-owner deployment; splitting the
+  two later is a role change. Re-running the script is the owner-recovery path, gated by cluster
+  access.
 - **Public exposure is real** — unlike the Local Test path, this script's endpoint is reachable
   over the public internet once DNS propagates, secured by a genuine Let's Encrypt certificate
   and PS Service's own existing OIDC bearer-token validation (issue #58), not by network
-  isolation.
+  isolation. Of Authentik, only the eight allowlisted end-user path prefixes are public (see
+  [Authentik](#authentik)); the admin UI and admin API are not.
 - **Key rotation is manual, not automatic.** `--rotate-key` remains an on-demand script command
   (same hygiene-tool posture as `deploy-llm.sh`). Rotating Authentik's secrets is, since issue #159,
   a fully manual `kubectl`/`helm` procedure with no dedicated script flag — see [Rotating
   Authentik's secrets manually](#rotating-authentiks-secrets-manually). Nothing rotates on a
   schedule either way.
 - **Secrets are never logged.** The raw LLM API key/token is only ever compared or forwarded to
-  `az`/`kubectl` by `deploy-ps.sh`, never printed — the closing summary names secret *identifiers*
+  `az`/`kubectl` by `deploy-ps-prod.sh`, never printed — the closing summary names secret *identifiers*
   only, and the HTTPS URL, never a value. Authentik's `secret_key` and both Postgres passwords are,
-  since issue #159, generated and consumed entirely by Helm/Kubernetes — `deploy-ps.sh` never sees
+  since issue #159, generated and consumed entirely by Helm/Kubernetes — `deploy-ps-prod.sh` never sees
   their values at all, and neither `helm install`/`helm upgrade`'s own stdout/stderr nor `helm
   history`'s revision diff ever echoes a Secret's contents (verified live; this chart also defines
   no `NOTES.txt`).
@@ -598,7 +661,7 @@ model-*availability* failure).
   this script, the exploratory spike this script is built from left this specific check
   undischarged (documented there as a manual step). Re-verification against a real subscription
   is recommended before relying on it at the same confidence level as the rest of this script.
-- **Running `deploy-llm.sh` and `deploy-ps.sh` against the same subscription targets the same
+- **Running `deploy-llm.sh` and `deploy-ps-prod.sh` against the same subscription targets the same
   resource group, `AIServices` account, and Key Vault** — both scripts share `RESOURCE_GROUP_NAME`
   and the `llm_account_name`/`llm_keyvault_name` naming functions in
   `scripts/lib/deploy-llm-common.sh`. This is not a defect in either script individually, but an
@@ -611,6 +674,23 @@ model-*availability* failure).
   (issue #58), and the Ingress/TLS manifest shape is proven locally, but the live "a real
   certificate is issued and `/health` returns 200" claim is evidenced only by a one-time
   empirical run during this script's development, not re-exercised automatically on every change.
+- **The production Ingress allowlist and owner flow were verified on `kind`, not on AKS** (issue
+  #165): the real script and `values-prod.yaml` ran against `ingress-nginx` with a stand-in `az` and
+  the cert-manager/Let's Encrypt steps skipped, proving the eight-path allowlist, the blocked admin
+  paths, and a passkey enrolment through the Ingress. AKS's managed NGINX add-on, real Let's
+  Encrypt issuance through this flow and real Azure resources were not exercised.
+- **`invite_user` on production needs a PS Service release that supports
+  `PS_AUTHENTIK_PUBLIC_URL`.** The invitation API is only reachable in-cluster, so PS Service
+  builds the invitee's link on a separate public URL; the repository has that support but no
+  published release does yet (3.11.0 lacks it), so until one ships the link carries the in-cluster
+  address and must be rewritten by hand. It was not exercised end to end through PS Service on
+  production.
+- **The shipped login flow still contains a password stage** (see [Authentik](#authentik)), so
+  passkey-only is enforced at enrolment and recovery only; whether to remove it despite the
+  lockout precedent is a follow-up decision.
+- **`scripts/ps-upgrade.sh` reuse is unit-tested, not live-verified**: it upgrades with
+  `--reset-then-reuse-values` so the values this flow adds (bootstrap owner, Authentik URLs,
+  local-TLS values) survive, checked against a fake `helm` only.
 - **Depends on the same open items `customer-azure-llm-bootstrap.md` already tracks** for the
   shared LLM-provisioning half: quota-exhaustion has no automated remedy beyond detection, and a
   subscription lacking access to all four candidate regions is not yet handled with a specific

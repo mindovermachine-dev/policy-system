@@ -1,8 +1,8 @@
-"""Resource-provider registration + poll for `scripts/deploy-ps.sh` (AC-BI-008; PLAN.md §5/S7).
+"""Resource-provider registration + poll for `scripts/deploy-ps-prod.sh` (AC-BI-008; PLAN.md §5/S7).
 
 Every required provider namespace is registered and polled to `Registered` before any dependent
 resource create -- the spike's own confirmed finding: a fresh subscription has only
-`Microsoft.Authorization` registered by default (`spikes/deploy-ps-azure/deploy-ps.sh`'s
+`Microsoft.Authorization` registered by default (`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s
 `REQUIRED_PROVIDERS` comment).
 
 Interim scope note (see IMPL_SLICE_7.md): S8/S9 (LLM provisioning) don't exist yet at this
@@ -34,11 +34,10 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
-AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
-AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
+AUTHZ_OWNER_EMAIL="owner@example.test"
 """
 
-# Must match scripts/deploy-ps.sh's own REQUIRED_PROVIDERS exactly (the 9 namespaces the spike
+# Must match scripts/deploy-ps-prod.sh's own REQUIRED_PROVIDERS exactly (the 9 namespaces the spike
 # script's REQUIRED_PROVIDERS lists) -- verified independently here rather than imported, since
 # this is a bash constant, not a Python one.
 REQUIRED_PROVIDERS = (
@@ -54,7 +53,7 @@ REQUIRED_PROVIDERS = (
 )
 
 # Short enough that a genuine timeout in the fake harness resolves well within the fixture's own
-# subprocess timeout, without the test waiting out deploy-ps.sh's real ~5-minute default.
+# subprocess timeout, without the test waiting out deploy-ps-prod.sh's real ~5-minute default.
 FAST_POLL_ENV = {
     "PROVIDER_REGISTRATION_WAIT_ATTEMPTS": "2",
     "PROVIDER_REGISTRATION_WAIT_INTERVAL_SECONDS": "0",

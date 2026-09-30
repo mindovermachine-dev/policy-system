@@ -41,7 +41,7 @@ tests:
           path: data["authentik-blueprint.yaml"]
           pattern: "continue_flow_without_invitation:\\s*false"
 
-  - it: Enrollment flow includes a WebAuthn stage (AC-BI-004)
+  - it: Enrollment flow includes a WebAuthn stage (AC-BI-004; hardened to resident key + user verification by issue #165)
     asserts:
       - matchRegex:
           path: data["authentik-blueprint.yaml"]
@@ -110,6 +110,61 @@ tests:
       - matchRegex:
           path: data["authentik-blueprint.yaml"]
           pattern: "slug: ps-cli"
+
+  - it: recovery flow is passkey-only and set as the brand's flow_recovery (issue #165, AC-BI-021)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "designation: recovery"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "flow_recovery: !KeyOf ps-recovery-flow"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "user_verification: required"
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "resident_key_requirement: required"
+
+  - it: no password prompt exists in the blueprint (issue #165, AC-BI-003 passkey-only enrollment)
+    asserts:
+      - notMatchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "type: password"
+      - notMatchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "ps-enrollment-field-password"
+
+  - it: ps-cli provider uses sub_mode user_username (issue #165, AC-BI-022)
+    asserts:
+      - matchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "sub_mode: user_username"
+
+  - it: local TLS blueprint registers the mounted certificate and sets the brand web_certificate (issue #165, 2D)
+    set:
+      localTls.secretName: policy-system-local-tls
+    asserts:
+      - matchRegex:
+          path: data["authentik-local-tls-blueprint.yaml"]
+          pattern: 'certificate_data: !File \[/ps-tls/tls\.crt, ""\]'
+      - matchRegex:
+          path: data["authentik-local-tls-blueprint.yaml"]
+          pattern: 'key_data: !File \[/ps-tls/tls\.key, ""\]'
+      - matchRegex:
+          path: data["authentik-local-tls-blueprint.yaml"]
+          pattern: "web_certificate: !KeyOf ps-local-tls-keypair"
+      - notMatchRegex:
+          path: data["authentik-local-tls-blueprint.yaml"]
+          pattern: "BEGIN"
+
+  - it: without localTls.secretName the local TLS blueprint (and its certificate) is never rendered (issue #165, 2D)
+    asserts:
+      - notExists:
+          path: data["authentik-local-tls-blueprint.yaml"]
+      - notMatchRegex:
+          path: data["authentik-blueprint.yaml"]
+          pattern: "web_certificate"
 
   - it: authentik disabled (default) renders no blueprint ConfigMap
     set:

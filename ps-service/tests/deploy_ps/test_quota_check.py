@@ -161,7 +161,7 @@ def test_deployment_create_call_includes_the_real_model_version_from_model_list(
     --model-version"). `az cognitiveservices account deployment create` (S9) hard-requires
     `--model-version`; `model_version` must read `.model.version` from the already-fetched
     `model list` response so S9's deployment-create call can pass it. S9 hasn't landed yet
-    (deploy-ps.sh doesn't create deployments this slice), so this slice's own extension-point
+    (deploy-ps-prod.sh doesn't create deployments this slice), so this slice's own extension-point
     step logs the resolved versions it computes for S9 to consume -- proving `model_version`
     parses the real per-model version string, not a placeholder.
     """

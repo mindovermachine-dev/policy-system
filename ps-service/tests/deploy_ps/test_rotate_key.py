@@ -1,4 +1,4 @@
-"""`--rotate-key` mode for `scripts/deploy-ps.sh`: active-slot detection + regenerate-the-
+"""`--rotate-key` mode for `scripts/deploy-ps-prod.sh`: active-slot detection + regenerate-the-
 inactive-key, carried over from `scripts/deploy-llm.sh`'s own proven implementation (AC-BI-015
 completion, AC-BI-017's mocked portion; PLAN.md §5/S18).
 
@@ -100,7 +100,7 @@ def test_rotate_key_run_before_any_successful_deploy_fails_clearly(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
     """The preflight-guard case (require_account_exists/require_keyvault_exists): a subscription
-    that has never had a successful `deploy-ps.sh` run has no AIServices account/Key Vault to
+    that has never had a successful `deploy-ps-prod.sh` run has no AIServices account/Key Vault to
     rotate a key against -- this must fail with an actionable message, not crash on an unset
     variable or an unhandled `az` error.
     """
@@ -108,5 +108,5 @@ def test_rotate_key_run_before_any_successful_deploy_fails_clearly(
 
     run = deploy_ps_fixture.run_deploy("--rotate-key", expect=1)
 
-    assert "deploy-ps.sh" in run.stderr
+    assert "deploy-ps-prod.sh" in run.stderr
     assert "--rotate-key" in run.stderr

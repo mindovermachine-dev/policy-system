@@ -42,6 +42,29 @@ spec:
           hostnames: [{{ .Values.psService.authentikHostname | quote }}]
         {{- end }}
       {{- end }}
+      {{- if .Values.localTls.secretName }}
+      initContainers:
+        # Builds PS Service's trust bundle: the image's system CAs plus the local CA.
+        # SSL_CERT_FILE REPLACES the default trust store, so pointing it at the local CA
+        # alone would break every other HTTPS call (Azure OpenAI, Cellar). Same image as
+        # the main container: it already ships /etc/ssl/certs/ca-certificates.crt.
+        - name: build-ca-bundle
+          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 10001
+            runAsNonRoot: true
+          command:
+            - sh
+            - -c
+            - "{ cat /etc/ssl/certs/ca-certificates.crt; echo; cat /ps-ca/ca.crt; } > /ps-trust/bundle.crt"
+          volumeMounts:
+            - name: ps-ca
+              mountPath: /ps-ca
+              readOnly: true
+            - name: ps-trust
+              mountPath: /ps-trust
+      {{- end }}
       containers:
         - name: ps-service
           image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
@@ -78,6 +101,12 @@ spec:
             timeoutSeconds: {{ .Values.psService.probes.liveness.timeoutSeconds }}
             periodSeconds: {{ .Values.psService.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.psService.probes.liveness.failureThreshold }}
+          {{- if .Values.localTls.secretName }}
+          volumeMounts:
+            - name: ps-trust
+              mountPath: /ps-trust
+              readOnly: true
+          {{- end }}
           {{- if eq .Values.llm.provider "azure" }}
           envFrom:
             - secretRef:
@@ -136,6 +165,10 @@ spec:
                   key: PS_AUTHENTIK_API_TOKEN
             - name: PS_AUTHENTIK_BASE_URL
               value: {{ .Values.psService.authentik.baseUrl | quote }}
+            {{- if .Values.psService.authentik.publicUrl }}
+            - name: PS_AUTHENTIK_PUBLIC_URL
+              value: {{ .Values.psService.authentik.publicUrl | quote }}
+            {{- end }}
             - name: PS_COMPANYMERGE_SIMILARITY_THRESHOLD
               value: {{ .Values.psService.companyMerge.similarityThreshold | quote }}
             - name: PS_SERVICE_LOCAL_TEST_BYPASS
@@ -172,3 +205,18 @@ spec:
             - name: PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER
               value: {{ .Values.psService.authzBootstrapOwner.issuer | quote }}
             {{- end }}
+            {{- if .Values.localTls.secretName }}
+            - name: SSL_CERT_FILE
+              value: /ps-trust/bundle.crt
+            {{- end }}
+      {{- if .Values.localTls.secretName }}
+      volumes:
+        - name: ps-ca
+          secret:
+            secretName: {{ .Values.localTls.secretName | quote }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: ps-trust
+          emptyDir: {}
+      {{- end }}

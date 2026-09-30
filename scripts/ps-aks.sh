@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts or stops the AKS cluster provisioned by scripts/deploy-ps.sh -- `az aks stop` pauses
+# Starts or stops the AKS cluster provisioned by scripts/deploy-ps-prod.sh -- `az aks stop` pauses
 # node compute billing without deleting anything (the FalkorDB PVC and Key Vault are
 # untouched); `az aks start` resumes it. See
 # docs/artifacts/operations-guide.md#start-and-stop-the-aks-cluster for the manual command
@@ -7,7 +7,7 @@
 # mid-ingestion) -- this script doesn't check ingestion state, that's still the operator's call.
 #
 # Reuses RESOURCE_GROUP_NAME and aks_cluster_name() from lib/deploy-llm-common.sh so the
-# resolved cluster name always matches what deploy-ps.sh itself provisioned -- no `az aks list`
+# resolved cluster name always matches what deploy-ps-prod.sh itself provisioned -- no `az aks list`
 # guessing.
 #
 # Usage:
@@ -17,7 +17,7 @@
 # Exit codes: 2 usage error, 1 failure (e.g. cluster not found), 0 success.
 set -euo pipefail
 
-# Same COLOR_RED/print_error/log_step discipline as scripts/deploy-ps.sh -- small and
+# Same COLOR_RED/print_error/log_step discipline as scripts/deploy-ps-prod.sh -- small and
 # self-contained enough that every script here copies it rather than sharing it (PLAN.md §0.10).
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
   readonly COLOR_RED=$'\033[31m'
@@ -46,17 +46,17 @@ log_step() {
 }
 
 # fetch_subscription_id: prints the signed-in az session's subscription id -- same call as
-# deploy-ps.sh's own, needed to derive the same deterministic cluster name.
+# deploy-ps-prod.sh's own, needed to derive the same deterministic cluster name.
 fetch_subscription_id() {
   az account show --query id -o tsv
 }
 
 # require_cluster_exists <cluster_name>: fails clearly (not on az aks stop/start's own error
-# text) if deploy-ps.sh hasn't provisioned a cluster yet.
+# text) if deploy-ps-prod.sh hasn't provisioned a cluster yet.
 require_cluster_exists() {
   local cluster_name="$1"
   if ! az aks show --name "$cluster_name" --resource-group "$RESOURCE_GROUP_NAME" >/dev/null 2>&1; then
-    print_error 'AKS cluster %s not found in resource group %s. Run scripts/deploy-ps.sh first.\n' \
+    print_error 'AKS cluster %s not found in resource group %s. Run scripts/deploy-ps-prod.sh first.\n' \
       "$cluster_name" "$RESOURCE_GROUP_NAME"
     exit "$EXIT_FAILURE"
   fi

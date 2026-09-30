@@ -700,6 +700,36 @@ def test_load_config_honors_ps_authentik_base_url_override(
     assert load_config().authentik_base_url == "https://authentik.example.com"
 
 
+@pytest.mark.parametrize("invalid_public_url", ["", "   ", "\t"])
+def test_load_config_raises_for_empty_or_whitespace_ps_authentik_public_url(
+    invalid_public_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/whitespace-only `PS_AUTHENTIK_PUBLIC_URL` fails closed (issue #165, OD-1=B)."""
+    monkeypatch.setenv("PS_AUTHENTIK_PUBLIC_URL", invalid_public_url)
+
+    with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_load_config_unset_ps_authentik_public_url_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absence is not an error: the invitee link then falls back to the base URL."""
+    monkeypatch.delenv("PS_AUTHENTIK_PUBLIC_URL", raising=False)
+
+    assert load_config().authentik_public_url is None
+
+
+def test_load_config_honors_ps_authentik_public_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_AUTHENTIK_PUBLIC_URL` override takes effect."""
+    monkeypatch.setenv("PS_AUTHENTIK_PUBLIC_URL", "https://ps.example.com/auth")
+
+    assert load_config().authentik_public_url == "https://ps.example.com/auth"
+
+
 def test_service_config_repr_never_includes_authentik_api_token() -> None:
     """AC-BI-004: `repr(config)` never includes the configured Authentik API token."""
     config = ServiceConfig(

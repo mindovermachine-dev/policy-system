@@ -1,0 +1,16 @@
+{
+  "pk": "11111111-2222-3333-4444-555555555555",
+  "name": "Policy System local TLS",
+  "path": "mounted/cm-policy-system-authentik-blueprint/authentik-local-tls-blueprint.yaml",
+  "context": {},
+  "last_applied": "2026-01-01T00:00:00.000000Z",
+  "last_applied_hash": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "status": "successful",
+  "enabled": true,
+  "managed_models": [],
+  "metadata": {
+    "name": "Policy System local TLS",
+    "labels": {}
+  },
+  "content": ""
+}

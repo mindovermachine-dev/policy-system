@@ -11,7 +11,7 @@ pointed kubectl at the right cluster via S13's `ensure_aks_credentials`).
 
 The no-op claim is proven via `kubectl apply`'s own machine-readable stdout ("unchanged" vs.
 "created"/"configured"), not a separate diff computed by this test suite -- `apply_output_changed`
-(scripts/deploy-ps.sh) greps exactly that string, and `FAKE_KUBECTL_SCRIPT` reproduces it
+(scripts/deploy-ps-prod.sh) greps exactly that string, and `FAKE_KUBECTL_SCRIPT` reproduces it
 faithfully (conftest.py's own module comment).
 """
 
@@ -84,7 +84,7 @@ def test_rerun_with_unchanged_values_reports_no_change_via_kubectl_apply_unchang
 ) -> None:
     """Two full runs against the same, unchanging subscription state: the second run's `kubectl
     apply` reports "unchanged" for the LLM Secret -- `apply_output_changed`'s own machine-
-    readable signal (scripts/deploy-ps.sh), not a diff this test suite computes itself. The Key
+    readable signal (scripts/deploy-ps-prod.sh), not a diff this test suite computes itself. The Key
     Vault values themselves never change between runs (S9's own `write_secret_if_changed` is
     already proven idempotent by test_llm_provisioning.py), so this isolates S14's own
     `ensure_llm_secret` -> `kubectl apply` idempotency claim.
@@ -109,15 +109,15 @@ def test_rerun_with_unchanged_values_reports_no_change_via_kubectl_apply_unchang
 
 def test_values_prod_file_constant_resolves_to_the_real_chart_file_path() -> None:
     """Parses the literal `readonly VALUES_PROD_FILE=...` assignment straight out of the real,
-    checked-in `scripts/deploy-ps.sh` (never the fixture's isolated `tmp_path` copy, which has no
-    `charts/` tree alongside it) and resolves it exactly as bash would -- `${SCRIPT_DIR}`
+    checked-in `scripts/deploy-ps-prod.sh` (never the fixture's isolated `tmp_path` copy, which has
+    no `charts/` tree alongside it) and resolves it exactly as bash would -- `${SCRIPT_DIR}`
     substituted with the real `scripts/` directory's own absolute path -- then asserts the
     resulting path actually exists on disk.
 
     Deliberately reads the literal back out of the script rather than independently re-deriving
     "the correct" relative path: a wrong number of `../` segments in the real assignment is
-    exactly the bug this test exists to catch. `scripts/deploy-ps.sh` lives ONE directory below
-    the repo root (`scripts/`), unlike `spikes/deploy-ps-azure/deploy-ps.sh` (the empirical
+    exactly the bug this test exists to catch. `scripts/deploy-ps-prod.sh` lives ONE directory below
+    the repo root (`scripts/`), unlike `spikes/deploy-ps-azure/deploy-ps-prod.sh` (the empirical
     reference this constant's value is modeled on), which lives TWO directories below
     (`spikes/deploy-ps-azure/`) and therefore correctly uses two `../` segments where this script
     needs only one. Reproducing the formula instead of reading it back would risk both sides
@@ -127,12 +127,12 @@ def test_values_prod_file_constant_resolves_to_the_real_chart_file_path() -> Non
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[3]
-    script_path = repo_root / "scripts" / "deploy-ps.sh"
+    script_path = repo_root / "scripts" / "deploy-ps-prod.sh"
     script_dir = script_path.parent
     text = script_path.read_text(encoding="utf-8")
 
     match = re.search(r'readonly VALUES_PROD_FILE="([^"]+)"', text)
-    assert match, "VALUES_PROD_FILE constant not found in scripts/deploy-ps.sh"
+    assert match, "VALUES_PROD_FILE constant not found in scripts/deploy-ps-prod.sh"
 
     literal = match.group(1).replace("${SCRIPT_DIR}", str(script_dir))
     resolved = Path(literal).resolve()

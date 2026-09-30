@@ -1,4 +1,4 @@
-"""Config validation for `scripts/deploy-ps.sh` (contributes AC-BI-019; PLAN.md §5/S5).
+"""Config validation for `scripts/deploy-ps-prod.sh` (contributes AC-BI-019; PLAN.md §5/S5).
 
 `validate_config` must reject a malformed `scripts/ps-defaults.conf` -- named field, named
 file, actionable message -- before any `az` call is made (enforced here simply by there being
@@ -34,8 +34,7 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
-AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
-AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
+AUTHZ_OWNER_EMAIL="owner@example.test"
 """
 
 
@@ -184,8 +183,8 @@ def test_blank_tls_contact_email_prompts_interactively(deploy_ps_fixture: Deploy
 
 
 def test_deploy_ps_sh_has_bash_shebang_executable_bit_and_strict_mode() -> None:
-    script = Path(__file__).resolve().parents[3] / "scripts" / "deploy-ps.sh"
+    script = Path(__file__).resolve().parents[3] / "scripts" / "deploy-ps-prod.sh"
     assert os.access(script, os.X_OK), f"{script} is not executable"
     lines = script.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == BASH_SHEBANG, f"deploy-ps.sh does not start with `{BASH_SHEBANG}`"
-    assert "set -euo pipefail" in lines, "deploy-ps.sh does not enable strict mode"
+    assert lines[0] == BASH_SHEBANG, f"deploy-ps-prod.sh does not start with `{BASH_SHEBANG}`"
+    assert "set -euo pipefail" in lines, "deploy-ps-prod.sh does not enable strict mode"

@@ -67,15 +67,39 @@ its prerequisites.
 
 ### Point ps-cli at your instance
 
-**Evaluator / local-test instance**: nothing to do. Out of the box, `ps-cli` targets
-`http://127.0.0.1:8000`, matching what a local `kind` deployment (see [Installation
-Guide: Evaluator installation](./installation-guide.md#evaluator-installation))
-listens on, and no login is required against it.
+**Evaluator instance**: PS Service listens on `http://127.0.0.1:8000` (a local `kind`
+deployment, see [Installation Guide: Evaluator
+installation](./installation-guide.md#evaluator-installation)), and it **requires login**
+through the bundled Authentik. Authentik is served over HTTPS with a locally issued
+certificate, and `ps-cli` reads only the `SSL_CERT_FILE` environment variable for extra CA
+trust (not the operating system store), so point it at the local CA first (the path
+`scripts/deploy-ps-eval.sh` printed, by default `~/.config/policy-system/eval-tls/ca.pem`):
 
-**Production instance**: first find the URL — whoever ran `scripts/deploy-ps.sh` has
+```bash
+export SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem
+```
+
+```bash
+ps-cli config set-context eval --url http://127.0.0.1:8000
+```
+
+```bash
+ps-cli config use-context eval
+```
+
+```bash
+ps-cli auth login
+```
+
+`SSL_CERT_FILE` replaces the default CA bundle for that process, so set it only where you run
+`ps-cli`. The account you sign in with must first have a passkey: the owner registers one from
+the link the deploy script printed, and everyone else from an invitation (see [Invite a new
+user](#invite-a-new-user)). Neither ever sets a password.
+
+**Production instance**: first find the URL — whoever ran `scripts/deploy-ps-prod.sh` has
 it; it's printed at the end of that run (`PS Service: https://<label>.<region>.cloudapp.azure.com`).
 
-Forgot it? `scripts/deploy-ps.sh` is idempotent — re-running it makes no changes if
+Forgot it? `scripts/deploy-ps-prod.sh` is idempotent — re-running it makes no changes if
 nothing's different, and it reprints the URL unconditionally, even on that no-op run.
 Then:
 
@@ -93,8 +117,8 @@ ps-cli auth login
 
 `auth login` runs an OIDC device-authorization flow: `ps-cli` prints a verification
 URL and code, you complete sign-in in a browser, and the resulting token is stored
-under the current context. Production instances are deployed with the bundled Authentik
-identity provider wired in, so this step is required there.
+under the current context. Both the evaluator and production instances are deployed with
+the bundled Authentik identity provider wired in, so this step is required on either.
 
 Every subsequent `ps-cli` command, and the Claude Desktop plugin's
 `policy-system-graph` connector, uses whichever context is current. See the
@@ -152,7 +176,7 @@ requirement.
 ## Using Claude Desktop
 
 Once the Policy System plugin is installed (see [Installation Guide: Install the
-Policy System plugin](./installation-guide.md#8-install-the-policy-system-plugin)),
+plugin](./installation-guide.md#install-the-plugin)),
 you can ask compliance questions directly in a Claude Desktop chat. The plugin's
 `policy-system-graph` MCP connector reaches whichever PS Service instance `ps-cli`'s
 current context points at (see [Point ps-cli at your
@@ -198,8 +222,15 @@ for a confirmed target email through the same MCP connector, confirming the
 exact address with you before calling (this creates a live, audited invite
 — never a plain read) and reporting the resulting `itoken` and `invite_url`,
 which you then deliver to the invitee yourself — no email is sent
-automatically. Requires `SystemAdmin` or above; see [Role
-System](#role-system).
+automatically. Requires `SystemAdmin` or above (`SystemOwner` counts); see [Role
+System](#role-system). The invitee opens the link, enters a username, name and email,
+and registers a passkey — there is no password field, and the account has no password
+set. On the evaluator instance the invitee's machine needs the same CA trust and hostname
+mapping as the owner's (see [Installation Guide, step
+8](./installation-guide.md#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin)).
+On production, `invite_url` carries the public address only once the deployed PS Service
+release supports `PS_AUTHENTIK_PUBLIC_URL`; see [Installation Guide: Verification
+status](./installation-guide.md#verification-status).
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-invite-user skill."_
@@ -248,7 +279,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 
 | Role | How it's granted | What it currently gates |
 | --- | --- | --- |
-| `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
+| `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
 | `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `restore_instrument`, `check_regulations`. No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
@@ -393,16 +424,17 @@ the resulting token is stored under the current context. `ps-cli auth status` sh
 whether you're logged in (context, issuer) without contacting anything; `ps-cli auth
 logout` removes the stored credential.
 
-Whether login is required at all depends on the target PS Service instance:
+Whether login is required depends on the target PS Service instance:
 generic OIDC bearer-token validation against any OIDC-compliant provider (no
 single vendor's IdP is assumed) is implemented server-side
-([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)), but a
-given deployment only enforces it once configured with an issuer/audience — a
-local-test deployment (see [Installation Guide: Evaluator
-installation](./installation-guide.md#evaluator-installation)) runs with no auth
-required at all, so every `ps-cli` command (and the plugin's `policy-system-graph`
-connector — see [Using Claude Desktop](#using-claude-desktop)) works there with no
-login needed. Re-running `config set-context` for an existing context name with a
+([#58](https://github.com/mindovermachine-dev/policy-system/issues/58)), and a
+given deployment enforces it once configured with an issuer/audience. The
+evaluator deployment (see [Installation Guide: Evaluator
+installation](./installation-guide.md#evaluator-installation)) and production both
+are, so every `ps-cli` command (and the plugin's `policy-system-graph` connector — see
+[Using Claude Desktop](#using-claude-desktop)) needs `ps-cli auth login` first. Only a
+deployment started with the local-test bypass (`PS_SERVICE_LOCAL_TEST_BYPASS`, which cannot
+run in a container) needs no login. Re-running `config set-context` for an existing context name with a
 new `--url` always clears any credential previously stored for that name, so nothing
 is ever silently carried over to a new URL.
 
@@ -461,6 +493,12 @@ unhealthy server:
 ❌ Could not reach PS Service at http://127.0.0.1:8000.
 💡 check PS_CLI_SERVICE_URL / ps-cli.toml, and that ps-service is running
 ```
+
+`ps-cli auth login` against an evaluator instance can instead fail with `Could not reach
+<issuer>.` even though Authentik is running: the issuer is HTTPS with a locally issued
+certificate, and `ps-cli` (and `ps-cli-mcp-bridge`) trust only what `SSL_CERT_FILE` names, not the
+operating system store. Export `SSL_CERT_FILE` as shown in [Point ps-cli at your
+instance](#point-ps-cli-at-your-instance) and retry.
 
 Beyond that, PS Service's own health is what to check next — see the [Operations
 Guide: Troubleshooting / FAQ](./operations-guide.md#troubleshooting--faq) for

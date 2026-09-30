@@ -2,7 +2,7 @@
 #
 # Mounted into the bundled Authentik instance via a ConfigMap
 # (templates/authentik-blueprint-configmap.yaml) wired through
-# `authentik.blueprints.configMaps` (values-prod.yaml). Authentik
+# `authentik.blueprints.configMaps` (values.yaml). Authentik
 # auto-discovers and auto-applies any `.yaml`/`.yml`-suffixed key in a
 # ConfigMap listed there, on startup and on change — no manual `ak
 # apply_blueprint` step required in production.
@@ -19,6 +19,20 @@ version: 1
 metadata:
   name: "PS Service — bundled Authentik setup (issue #129)"
 entries:
+  # --- 0. Apply Authentik's shipped `Default - Brand` blueprint FIRST (issue #165, found live).
+  # It creates the one `authentik-default` brand -- `default: true`, plus the authentication,
+  # invalidation, user-settings and request flows -- but only when no default brand exists yet.
+  # Blueprint tasks run concurrently on a fresh install, so without this entry the brand patches
+  # below can win the race and CREATE the brand themselves (`default: false`, no default flows),
+  # after which Authentik's own blueprint skips it for good: no fallback brand for an unknown
+  # SNI name (the listener serves its self-signed certificate) and no default login flow.
+  # `required: true`: a missing shipped blueprint must fail loudly, not silently misconfigure.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        name: Default - Brand
+      required: true
+
   # --- 1. Brand patch: point flow_device_code at Authentik's own shipped
   # default authentication flow. Without this, PS-Cli's device-code
   # verification_uri 404s (the exact silent-404 gap #128's spike flagged) --
@@ -92,7 +106,7 @@ entries:
   # --- 2. One fixed OAuth2 Provider for PS-Cli's device-code login
   # (PLAN.md §0.5 — one Provider, not a separate API-app/CLI-app pair).
   # `client_id` is a blueprint-authored literal, "ps-cli", reused verbatim
-  # as scripts/deploy-ps.sh's fixed AUTHENTIK_APP_SLUG constant (S8) and as
+  # as scripts/deploy-ps-prod.sh's fixed AUTHENTIK_APP_SLUG constant (S8) and as
   # psService.auth.cliClientId/audience -- Authentik's `aud` claim is always
   # the bare OAuth2 Provider client_id (#128 spike finding).
   # access_code_validity widens the "minutes=1" default per #128's second
@@ -119,6 +133,11 @@ entries:
     attrs:
       client_type: public
       client_id: ps-cli
+      # sub_mode (issue #165, AC-BI-022): the ID token `sub` is the user's username, which
+      # the bootstrap owner script sets to the owner's email. That makes the SystemOwner
+      # subject (authzBootstrapOwner.subject) computable before the user exists, so the
+      # first deploy sets it. Invitees get the username they type at enrollment.
+      sub_mode: user_username
       grant_types:
         - "urn:ietf:params:oauth:grant-type:device_code"
         - refresh_token
@@ -216,8 +235,9 @@ entries:
       name: "PS-Cli"
       provider: !KeyOf ps-cli-provider
 
-  # --- 4. Invite-only Enrollment flow: Invitation -> Prompt (username, name,
-  # email, password) -> User Write -> WebAuthn -> User Login, each an
+  # --- 4. Invite-only, passkey-only Enrollment flow: Invitation -> Prompt
+  # (username, name, email; NO password field, issue #165 AC-BI-003) -> User
+  # Write -> WebAuthn (required) -> User Login, each an
   # ordered flowstagebinding. Structure confirmed against the upstream
   # example blueprint blueprints/example/flows-invitation-enrollment-minimal.yaml
   # (same stage sequence/ordering convention, literal names here instead of
@@ -284,32 +304,6 @@ entries:
       placeholder_expression: false
       order: 2
 
-  - model: authentik_stages_prompt.prompt
-    id: ps-enrollment-field-password
-    identifiers:
-      name: ps-enrollment-field-password
-    attrs:
-      field_key: password
-      label: Password
-      type: password
-      required: true
-      placeholder: Password
-      placeholder_expression: false
-      order: 3
-
-  - model: authentik_stages_prompt.prompt
-    id: ps-enrollment-field-password-repeat
-    identifiers:
-      name: ps-enrollment-field-password-repeat
-    attrs:
-      field_key: password_repeat
-      label: Password (repeat)
-      type: password
-      required: true
-      placeholder: Password (repeat)
-      placeholder_expression: false
-      order: 4
-
   - model: authentik_stages_prompt.promptstage
     id: ps-enrollment-prompt-stage
     identifiers:
@@ -319,8 +313,6 @@ entries:
         - !KeyOf ps-enrollment-field-username
         - !KeyOf ps-enrollment-field-name
         - !KeyOf ps-enrollment-field-email
-        - !KeyOf ps-enrollment-field-password
-        - !KeyOf ps-enrollment-field-password-repeat
 
   - model: authentik_stages_user_write.userwritestage
     id: ps-enrollment-user-write-stage
@@ -343,6 +335,10 @@ entries:
       name: ps-enrollment-webauthn
     attrs:
       friendly_name: "Passkey"
+      # Passkey-only (issue #165): a discoverable credential (resident key) with user
+      # verification, so the passwordless login stage in the identification step accepts it.
+      user_verification: required
+      resident_key_requirement: required
 
   - model: authentik_stages_user_login.userloginstage
     id: ps-enrollment-user-login-stage
@@ -381,6 +377,58 @@ entries:
       target: !KeyOf ps-enrollment-flow
       stage: !KeyOf ps-enrollment-user-login-stage
       order: 100
+
+  # --- 4b. Passkey-only Recovery flow (issue #165, AC-BI-021). The owner link the
+  # deploy scripts issue (`POST /api/v3/core/users/{pk}/recovery/`) needs the brand's
+  # `flow_recovery` set: on a fresh install it is null and Authentik answers 400 "No
+  # recovery flow set.". Two stages only, WebAuthn setup then user login: no password
+  # stage and no identification stage, so a recovery link can register a passkey and
+  # log the user in but never set or ask for a password. `authentication: none` because
+  # the recovery token in the link carries the identity.
+  - model: authentik_flows.flow
+    id: ps-recovery-flow
+    identifiers:
+      slug: ps-passkey-recovery
+    attrs:
+      name: "PS Service Passkey Recovery"
+      title: "Register a passkey to sign in to PS Service"
+      designation: recovery
+      authentication: none
+
+  - model: authentik_stages_authenticator_webauthn.authenticatorwebauthnstage
+    id: ps-recovery-webauthn-stage
+    identifiers:
+      name: ps-recovery-webauthn
+    attrs:
+      friendly_name: "Passkey"
+      user_verification: required
+      resident_key_requirement: required
+
+  - model: authentik_stages_user_login.userloginstage
+    id: ps-recovery-user-login-stage
+    identifiers:
+      name: ps-recovery-user-login
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-recovery-flow
+      stage: !KeyOf ps-recovery-webauthn-stage
+      order: 10
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf ps-recovery-flow
+      stage: !KeyOf ps-recovery-user-login-stage
+      order: 100
+
+  # Second patch of the same default brand as entry 1 (identifiers are the same
+  # `domain: authentik-default`), placed AFTER the recovery flow because `!KeyOf` only
+  # resolves ids defined earlier in the same blueprint.
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      flow_recovery: !KeyOf ps-recovery-flow
 
   # --- 5. Reputation Policy (AC-BI-012), enforced via a dedicated DenyStage
   # -- NOT via excluding the shipped password stage's own binding. This is a

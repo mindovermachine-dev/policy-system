@@ -1,0 +1,43 @@
+# Authentik declarative blueprint -- issue #165, local TLS for the evaluator profile.
+#
+# Rendered into the blueprint ConfigMap only when localTls.secretName is set (the eval
+# deploy script supplies the Secret `tls.crt`/`tls.key`, mounted read-only at /ps-tls
+# on the Authentik pods). Registers that certificate and makes it the default brand's
+# web certificate, so Authentik's own HTTPS listener serves the locally trusted leaf.
+#
+# `!File [path, default]` (two-element form): a missing or unreadable file only logs a
+# warning and yields the empty default instead of aborting blueprint discovery.
+# Key material is never embedded in this file.
+#
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: Policy System local TLS
+entries:
+  # --- 0. Apply Authentik's shipped `Default - Brand` blueprint FIRST (issue #165, found live).
+  # It creates the one `authentik-default` brand -- `default: true`, plus the authentication,
+  # invalidation, user-settings and request flows -- but only when no default brand exists yet.
+  # Blueprint tasks run concurrently on a fresh install, so without this entry the brand patches
+  # below can win the race and CREATE the brand themselves (`default: false`, no default flows),
+  # after which Authentik's own blueprint skips it for good: no fallback brand for an unknown
+  # SNI name (the listener serves its self-signed certificate) and no default login flow.
+  # `required: true`: a missing shipped blueprint must fail loudly, not silently misconfigure.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        name: Default - Brand
+      required: true
+
+  - model: authentik_crypto.certificatekeypair
+    id: ps-local-tls-keypair
+    identifiers:
+      name: ps-local-tls
+    attrs:
+      certificate_data: !File [/ps-tls/tls.crt, ""]
+      key_data: !File [/ps-tls/tls.key, ""]
+
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      web_certificate: !KeyOf ps-local-tls-keypair

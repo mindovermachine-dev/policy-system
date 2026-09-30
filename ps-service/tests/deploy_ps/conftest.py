@@ -1,13 +1,13 @@
-"""Shared fixtures for `scripts/deploy-ps.sh` (GH issue #111).
+"""Shared fixtures for `scripts/deploy-ps-prod.sh` (GH issue #111).
 
 Sibling to `ps-service/tests/deploy_llm/conftest.py` (GH issue #105) and extends the exact same
 pattern for the same reason that fixture's own docstring documents: the root `pyproject.toml`'s
 `testpaths` covers `ps-service/tests`/`ps-cli/tests` only, and this is the only test-collected
 location for a `scripts/`-level script.
 
-`scripts/deploy-ps.sh` takes no `--config` flag, same as `deploy-llm.sh` -- a test wanting a
+`scripts/deploy-ps-prod.sh` takes no `--config` flag, same as `deploy-llm.sh` -- a test wanting a
 malformed `scripts/ps-defaults.conf` cannot point the script at an alternate path. Instead, this
-fixture copies the real `scripts/deploy-ps.sh` (plus `scripts/ps-defaults.conf` and the shared
+fixture copies the real `scripts/deploy-ps-prod.sh` (plus `scripts/ps-defaults.conf` and the shared
 `scripts/lib/deploy-llm-common.sh`) into an isolated `tmp_path` copy of the `scripts/` tree and
 runs *that* copy -- the script's own `$SCRIPT_DIR`-relative config lookup then resolves inside
 the fixture, so a test edits `DeployPsFixture.config_path` in place without ever touching the
@@ -19,7 +19,7 @@ preflight); S7 adds `provider register`/`provider show` (resource-provider regis
 S8 adds `cognitiveservices model list` (region availability + capacity range + model version),
 `cognitiveservices usage list` (quota), and `cognitiveservices account deployment show`
 (check_quota's "already deployed, skip" branch) -- real command shapes read from
-`spikes/deploy-ps-azure/deploy-ps.sh`'s own `select_region`/`check_quota`/`deployment_exists`,
+`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own `select_region`/`check_quota`/`deployment_exists`,
 not guessed (PLAN.md §2.2 lists an approximate/older shape; the spike script itself is the
 trusted empirical record per PLAN.md's own framing).
 This grows across S9-S18 as later slices need more of PLAN.md §2's full API (azure-state
@@ -30,12 +30,14 @@ S2-S13 growth.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,21 +57,23 @@ DEFAULT_CHAT_MODEL_VERSION = "2024-07-18"
 DEFAULT_EMBED_MODEL_NAME = "text-embedding-3-large"
 DEFAULT_EMBED_MODEL_SKU = "Standard"
 DEFAULT_EMBED_MODEL_VERSION = "1"
-# Mirrors the operator-supplied bootstrap identity `fill_tls_contact_email` writes (issue #161).
-DEFAULT_BOOTSTRAP_OWNER_SUBJECT = "bootstrap-owner-subject"
-DEFAULT_BOOTSTRAP_OWNER_ISSUER = "https://issuer.example.test/application/o/ps-cli/"
+# Mirrors the owner email `fill_tls_contact_email` writes (issues #161/#165: the owner's email is
+# both the Authentik username and the `sub` PS Service expects).
+DEFAULT_OWNER_EMAIL = "owner@example.test"
+# The shared Authentik API token the fake kubectl serves and the fake curl accepts (never printed).
+FAKE_AUTHENTIK_TOKEN = "test-token"
 # Ample enough that the default seeded quota never binds against the default capacities
 # (200/350) -- tests that want quota to bind call seed_usage()/seed_empty_usage() themselves.
 AMPLE_QUOTA_LIMIT = 10_000
 
-# Mirrors scripts/deploy-ps.sh's own fixed AKS-node-shape literals (S12, PLAN.md §0.6) --
+# Mirrors scripts/deploy-ps-prod.sh's own fixed AKS-node-shape literals (S12, PLAN.md §0.6) --
 # hardcoded here rather than parsed from the script, same precedent as the constants above.
 AKS_NODE_VM_SIZE = "Standard_D4as_v7"
 AKS_NODE_VM_SIZE_FAMILY = "StandardDasv7Family"
 AKS_NODE_COUNT = 2
 AKS_NODE_VM_SIZE_VCPUS = 4
 
-# Mirrors scripts/deploy-ps.sh's own AKS_RBAC_ADMIN_ROLE literal (S13). Mirrors
+# Mirrors scripts/deploy-ps-prod.sh's own AKS_RBAC_ADMIN_ROLE literal (S13). Mirrors
 # scripts/lib/deploy-llm-common.sh's own RESOURCE_GROUP_NAME constant (S1's rename). Mirrors
 # DeployPsFixture.seed_subscription's own default id_/user_id parameters -- named here so S13's
 # new AKS-cluster/role-assignment seeding helpers can compute the exact same scope strings the
@@ -83,14 +87,14 @@ DEFAULT_USER_OBJECT_ID = "22222222-3333-4444-5555-666666666666"
 # test can't accidentally pass by confusing one identity value for another.
 DEFAULT_TENANT_ID = "33333333-4444-5555-6666-777777777777"
 
-# Mirrors scripts/deploy-ps.sh's own LLM_SECRET_NAME/CHART_REF/HELM_RELEASE_NAME literals
+# Mirrors scripts/deploy-ps-prod.sh's own LLM_SECRET_NAME/CHART_REF/HELM_RELEASE_NAME literals
 # (S14/S15) -- hardcoded here rather than parsed from the script, same precedent as the
 # constants above.
 LLM_SECRET_NAME = "policy-system-llm-credentials"
 CHART_REF = "oci://ghcr.io/mindovermachine-dev/charts/policy-system"
 HELM_RELEASE_NAME = "policy-system"
 
-# Mirrors scripts/deploy-ps.sh's own S16/S17 literals (CERT_MANAGER_NAMESPACE and the three
+# Mirrors scripts/deploy-ps-prod.sh's own S16/S17 literals (CERT_MANAGER_NAMESPACE and the three
 # cert-manager deployment names, INGRESS_CLASS) -- hardcoded here rather than parsed from the
 # script, same precedent as every other constant above. DEFAULT_INGRESS_IP is a fake address with
 # no real-world meaning, used only so `seed_subscription`'s bundled baseline (below) gives every
@@ -201,9 +205,10 @@ def _model_availability_entry(
 # Copied into each test's tmp_path so the script under test always finds its config/lib next to
 # itself, exactly as it would in the real repo.
 DEPLOY_PS_RELATIVE_FILES = (
-    Path("scripts/deploy-ps.sh"),
+    Path("scripts/deploy-ps-prod.sh"),
     Path("scripts/ps-defaults.conf"),
     Path("scripts/lib/deploy-llm-common.sh"),
+    Path("scripts/lib/authentik-owner.sh"),
 )
 
 # Fake `az` (S5 -- PLAN.md §2.2 grows this across S6-S18). Dispatches on "$1 $2", same shape as
@@ -360,7 +365,7 @@ case "${1:-} ${2:-}" in
   "cognitiveservices model")
     # cognitiveservices model list --location <region> -- region-availability/capacity-range/
     # model-version probe (select_region/model_capacity_range/model_version, S8). Real command
-    # shape read from spikes/deploy-ps-azure/deploy-ps.sh's own select_region, not guessed.
+    # shape read from spikes/deploy-ps-azure/deploy-ps-prod.sh's own select_region, not guessed.
     region="$(get_arg --location "$@")"
     cat "$state/model-availability/$region.json" 2>/dev/null || printf '[]'
     ;;
@@ -374,7 +379,7 @@ case "${1:-} ${2:-}" in
     # (S9), deployment_exists (S8, feeds check_quota's per-model "already deployed, skip"
     # branch) and ensure_deployment (S9). Real command shapes read from
     # ps-service/tests/deploy_llm/conftest.py's own equivalent fake (same Azure resource types,
-    # just RG-renamed) and spikes/deploy-ps-azure/deploy-ps.sh's own ensure_account/
+    # just RG-renamed) and spikes/deploy-ps-azure/deploy-ps-prod.sh's own ensure_account/
     # ensure_deployment.
     verb="${3:-}"; name="$(get_arg --name "$@")"
     case "$verb" in
@@ -437,7 +442,7 @@ case "${1:-} ${2:-}" in
   "network public-ip")
     # network public-ip {list,show,update} (fetch_public_ip_resource_id/ensure_dns_label/
     # fetch_public_ip_fqdn, S16) -- real command shapes read from spikes/deploy-ps-azure/
-    # deploy-ps.sh's own equivalents, not guessed. Records live at
+    # deploy-ps-prod.sh's own equivalents, not guessed. Records live at
     # public-ips/<node-rg>/<ip>.json (PLAN.md §2.1) -- TEST-owned state for "list" (seed_public_ip
     # stands in for real LB IP allocation, which is external to this script), but "show"/"update"
     # only ever receive a bare resource ID (--ids), never the rg/ip pair -- so a second,
@@ -535,7 +540,7 @@ esac
 # same precedent as ps-service/tests/deploy_llm/conftest.py's own fake kubectl). Unlike that
 # sibling fixture's fake (which only captures the applied manifest), "apply -f -" here ALSO
 # reproduces real kubectl's own "<kind>/<name> {created,configured,unchanged}" stdout line -- the
-# exact machine-readable signal `apply_output_changed` (scripts/deploy-ps.sh, S14) greps for --
+# exact machine-readable signal `apply_output_changed` (scripts/deploy-ps-prod.sh, S14) greps for --
 # and records it to $PS_TEST_KUBECTL_APPLY_OUTPUT_LOG (test-only instrumentation; the real
 # kubectl's own stdout is what the script itself reads, this is just how the test observes it
 # from outside the `$(...)` capture).
@@ -544,6 +549,9 @@ set -euo pipefail
 
 applied="$PS_TEST_KUBECTL_APPLIED_DIR"
 state="$PS_TEST_KUBECTL_STATE_DIR"
+
+# The owner lib passes `-n <namespace>`; it is irrelevant to this fake's dispatch.
+if [[ "${1:-}" == "-n" ]]; then shift 2; fi
 
 # get_arg <flag> "$@" -- same helper as FAKE_AZ_SCRIPT's own (prints the single token following
 # <flag>, or "").
@@ -638,6 +646,28 @@ case "${1:-} ${2:-}" in
         # all a test needs to observe -- this just reproduces psql's own success output.
         printf 'ALTER ROLE\n'
         ;;
+      "config view")
+        # config view --minify --output jsonpath={..namespace} -- the fake context has no namespace.
+        printf ''
+        ;;
+      "get secret")
+        # get secret <name> -o jsonpath={.data.PS_AUTHENTIK_API_TOKEN} (read_bootstrap_token):
+        # the shared Authentik token, base64 like a real Secret's data field.
+        printf '%s' "$PS_TEST_AUTHENTIK_TOKEN_B64"
+        ;;
+      "rollout status")
+        printf 'deployment "%s" successfully rolled out\n' "${3#deployment/}"
+        ;;
+      "port-forward "*)
+        # port-forward svc/<name> :<port> --address 127.0.0.1 -- prints kubectl's own line, then
+        # blocks until the script kills it.
+        if [[ -n "${PS_TEST_PF_FAIL:-}" ]]; then
+          echo 'error: unable to forward port because pod is not running' >&2
+          exit 1
+        fi
+        printf 'Forwarding from 127.0.0.1:%s -> 9000\n' "${PS_TEST_PF_PORT:-45678}"
+        exec sleep 60
+        ;;
       "rollout restart")
         # rollout restart deployment/<name> -- a fire-and-forget rollout trigger with no state
         # this fake models; reproduces kubectl's own "deployment.apps/<name> restarted" stdout
@@ -658,9 +688,9 @@ esac
 # [--set k=v ...]` parses every `--set` into the same nested JSON shape
 # `release_values_json`/`helm get values -o json` use, written to
 # `helm-state/releases/<release>.json`. `-f`/`--values` is consumed but never read -- the fake
-# has no chart to render, and scripts/deploy-ps.sh's own no-op comparison only ever inspects the
-# `--set`-sourced fields, never the `-f` file's contents (that's the exact bug this slice's own
-# no-op comparison guards against -- see `ensure_release`'s comment).
+# has no chart to render, and scripts/deploy-ps-prod.sh's own no-op comparison only ever
+# inspects the `--set`-sourced fields, never the `-f` file's contents (that's the exact bug this
+# slice's own no-op comparison guards against -- see `ensure_release`'s comment).
 FAKE_HELM_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -738,7 +768,7 @@ class ScriptRun:
 
 @dataclass
 class DeployPsFixture:
-    """`scripts/deploy-ps.sh` copied into an isolated tree, plus the fake `az`.
+    """`scripts/deploy-ps-prod.sh` copied into an isolated tree, plus the fake `az`.
 
     Grows across S6-S18 as later slices need more of it (fake `kubectl`/`helm`, more
     `azure-state` seeding helpers -- see PLAN.md §2), mirroring `DeployLlmFixture`'s own growth.
@@ -755,6 +785,8 @@ class DeployPsFixture:
     kubectl_state: Path
     helm_state: Path
     helm_log: Path
+    curl_state: Path
+    curl_log: Path
 
     @property
     def config_path(self) -> Path:
@@ -773,15 +805,10 @@ class DeployPsFixture:
         text = self.config_path.read_text(encoding="utf-8")
         replaced = text.replace('TLS_CONTACT_EMAIL=""', f'TLS_CONTACT_EMAIL="{email}"')
         assert replaced != text, f'{self.config_path}: TLS_CONTACT_EMAIL="" not found to replace'
-        # Issue #161: every full-success run also needs the operator-supplied bootstrap identity,
-        # or validate_config rejects it -- filled here alongside the TLS email, since every test
-        # that needs one needs the other.
+        # Issues #161/#165: every full-success run also needs the owner's email (the first
+        # SystemOwner and Authentik admin), or the run stops before any `az` call.
         replaced = replaced.replace(
-            'AUTHZ_BOOTSTRAP_OWNER_SUBJECT=""',
-            f'AUTHZ_BOOTSTRAP_OWNER_SUBJECT="{DEFAULT_BOOTSTRAP_OWNER_SUBJECT}"',
-        ).replace(
-            'AUTHZ_BOOTSTRAP_OWNER_ISSUER=""',
-            f'AUTHZ_BOOTSTRAP_OWNER_ISSUER="{DEFAULT_BOOTSTRAP_OWNER_ISSUER}"',
+            'AUTHZ_OWNER_EMAIL=""', f'AUTHZ_OWNER_EMAIL="{DEFAULT_OWNER_EMAIL}"'
         )
         self.config_path.write_text(replaced, encoding="utf-8")
 
@@ -806,6 +833,12 @@ class DeployPsFixture:
             "PS_TEST_KUBECTL_STATE_DIR": str(self.kubectl_state),
             "PS_TEST_HELM_STATE_DIR": str(self.helm_state),
             "PS_TEST_HELM_LOG": str(self.helm_log),
+            # Issue #165: the owner-creation step's fake Authentik API (`curl`) and the shared
+            # token the fake kubectl serves as base64 (a real Secret's data field).
+            "PS_TEST_CURL_STATE": str(self.curl_state),
+            "PS_TEST_CURL_LOG": str(self.curl_log),
+            "PS_TEST_CURL_FIXTURES": str(self.root / "authentik-fixtures"),
+            "PS_TEST_AUTHENTIK_TOKEN_B64": base64.b64encode(FAKE_AUTHENTIK_TOKEN.encode()).decode(),
         }
 
     def run_deploy(
@@ -815,18 +848,18 @@ class DeployPsFixture:
         expect: int | None = 0,
         extra_env: dict[str, str] | None = None,
     ) -> ScriptRun:
-        """Run this fixture's copy of `scripts/deploy-ps.sh`.
+        """Run this fixture's copy of `scripts/deploy-ps-prod.sh`.
 
         `stdin=None` closes stdin (`/dev/null`) so an unguarded `read` fails fast instead of
         hanging; pass a string to answer a prompt. `expect=None` to inspect the code yourself
         (mirrors `DeployLlmFixture.run_deploy`). `extra_env` overrides/adds environment
         variables on top of `_environment()`'s defaults -- new in S7, for tests that need a
         short `PROVIDER_REGISTRATION_WAIT_ATTEMPTS`/`_INTERVAL_SECONDS` instead of
-        `deploy-ps.sh`'s real ~5-minute worst case (see the constants' own comment in
-        `scripts/deploy-ps.sh`). `deploy_llm/conftest.py` has no equivalent because
+        `deploy-ps-prod.sh`'s real ~5-minute worst case (see the constants' own comment in
+        `scripts/deploy-ps-prod.sh`). `deploy_llm/conftest.py` has no equivalent because
         `deploy-llm.sh` never needed a test-overridable poll timeout.
         """
-        script = self.root / "scripts" / "deploy-ps.sh"
+        script = self.root / "scripts" / "deploy-ps-prod.sh"
         argv = [str(script), *args]
         env = self._environment()
         if extra_env:
@@ -856,7 +889,7 @@ class DeployPsFixture:
         run = ScriptRun(completed.returncode, completed.stdout, completed.stderr)
         if expect is not None:
             assert run.returncode == expect, (
-                f"deploy-ps.sh {' '.join(args)} -> {run.returncode}, expected {expect}\n"
+                f"deploy-ps-prod.sh {' '.join(args)} -> {run.returncode}, expected {expect}\n"
                 f"--- stdout ---\n{run.stdout}--- stderr ---\n{run.stderr}"
             )
         return run
@@ -1234,7 +1267,7 @@ class DeployPsFixture:
         `seed_model_availability`/`seed_usage`'s own docstrings. PLAN.md §2.1: this state is
         TEST-owned, not written by any other fake `az` call in this fixture -- it stands in for
         real Azure subscription state (what the subscription's SKU catalog actually reports), not
-        something `deploy-ps.sh` itself creates.
+        something `deploy-ps-prod.sh` itself creates.
         """
         payload = [
             {
@@ -1258,8 +1291,8 @@ class DeployPsFixture:
         """Write `azure-state/vm-usage/<region>.json` -- the fake `az vm list-usage --location
         <region> -o json` response `vm_family_quota_sufficient` (S12) parses. One entry, for
         AKS_NODE_VM_SIZE_FAMILY only -- real `az vm list-usage` returns every core-count family on
-        the subscription, but `deploy-ps.sh` only ever reads the one it needs. PLAN.md §2.1: same
-        TEST-owned state as `seed_vm_skus` above.
+        the subscription, but `deploy-ps-prod.sh` only ever reads the one it needs. PLAN.md §2.1:
+        same TEST-owned state as `seed_vm_skus` above.
         """
         payload = [
             {
@@ -1304,7 +1337,8 @@ class DeployPsFixture:
         key2: str = "FAKE-KEY-2-INITIAL",
     ) -> None:
         """Pre-populate an already-existing AIServices account and its key pair (S9) -- for
-        idempotency tests that need an account without going through a prior `deploy-ps.sh` run.
+        idempotency tests that need an account without going through a prior `deploy-ps-prod.sh`
+        run.
         Defaults match the fake `az`'s own `cognitiveservices account create` defaults, so a
         seeded account looks like one this script itself would have just created.
         """
@@ -1362,7 +1396,7 @@ class DeployPsFixture:
     def read_kubectl_apply_output_log(self) -> list[str]:
         """Every `<kind>/<name> {created,configured,unchanged}` line the fake `kubectl apply -f
         -` printed to its own stdout, in order (S14) -- the exact machine-readable signal
-        `apply_output_changed` (scripts/deploy-ps.sh) greps for, captured here as test-only
+        `apply_output_changed` (scripts/deploy-ps-prod.sh) greps for, captured here as test-only
         instrumentation since the script itself only ever sees it inside a `$(...)` command
         substitution.
         """
@@ -1371,6 +1405,34 @@ class DeployPsFixture:
             if self.kubectl_apply_output_log.exists()
             else []
         )
+
+    def seed_curl(self, **state: object) -> None:
+        """Merge <state> into the fake Authentik API's state file (issue #165) -- e.g.
+        `unreachable=True`, `devices={pk: [...]}`, `token_reject_status=401`.
+        """
+        current: dict[str, object] = {}
+        if self.curl_state.exists():
+            current = json.loads(self.curl_state.read_text(encoding="utf-8"))
+        current.update(state)
+        self.curl_state.write_text(json.dumps(current), encoding="utf-8")
+
+    def read_curl_calls(self) -> list[dict[str, object]]:
+        """Every call the fake Authentik-API `curl` recorded (argv and URL; never the token)."""
+        if not self.curl_log.exists():
+            return []
+        return [json.loads(line) for line in self.curl_log.read_text(encoding="utf-8").splitlines()]
+
+    def read_curl_urls(self) -> list[str]:
+        return [str(call["url"]) for call in self.read_curl_calls()]
+
+    def read_authentik_users(self) -> dict[str, dict[str, object]]:
+        """The users the fake Authentik currently holds, keyed by pk."""
+        if not self.curl_state.exists():
+            return {}
+        state: dict[str, dict[str, dict[str, object]]] = json.loads(
+            self.curl_state.read_text(encoding="utf-8")
+        )
+        return state.get("users", {})
 
     def read_helm_log(self) -> list[str]:
         """Every argv line the fake `helm` recorded, in order (S15)."""
@@ -1396,9 +1458,10 @@ class DeployPsFixture:
         for idempotent-rerun tests, and for
         `test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_provider_from_values_prod`,
         which seeds this with extra `-f values-prod.yaml`-sourced fields
-        `scripts/deploy-ps.sh` never sets itself (e.g. `falkordb.persistence.durableStorageClass`)
-        alongside the 5 fields it does, proving the no-op comparison still reports "unchanged"
-        despite the extra fields it was never asked to compare.
+        `scripts/deploy-ps-prod.sh` never sets itself (e.g.
+        `falkordb.persistence.durableStorageClass`) alongside the 5 fields it does, proving
+        the no-op comparison still reports "unchanged" despite the extra fields it was never asked
+        to compare.
         """
         directory = self.helm_state / "releases"
         directory.mkdir(parents=True, exist_ok=True)
@@ -1409,7 +1472,7 @@ def _copy_deploy_ps_files(root: Path) -> None:
     """Copy whichever of `DEPLOY_PS_RELATIVE_FILES` currently exist into `root`.
 
     `copy2` preserves the executable bit, so the script/lib executable-vs-not distinction
-    (scripts/deploy-ps.sh executable, scripts/lib/*.sh not) survives the copy unchanged.
+    (scripts/deploy-ps-prod.sh executable, scripts/lib/*.sh not) survives the copy unchanged.
     """
     for relative in DEPLOY_PS_RELATIVE_FILES:
         source = REPO_ROOT / relative
@@ -1422,8 +1485,8 @@ def _copy_deploy_ps_files(root: Path) -> None:
 
 @pytest.fixture
 def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
-    """Build an isolated copy of the `scripts/deploy-ps.sh` tree under `tmp_path`, plus the fake
-    `az`/`kubectl`/`helm` (this module's `FAKE_AZ_SCRIPT`/`FAKE_KUBECTL_SCRIPT`/
+    """Build an isolated copy of the `scripts/deploy-ps-prod.sh` tree under `tmp_path`, plus the
+    fake `az`/`kubectl`/`helm` (this module's `FAKE_AZ_SCRIPT`/`FAKE_KUBECTL_SCRIPT`/
     `FAKE_HELM_SCRIPT`) on the same shared `bin/` directory -- all three always present (S14/S15
     onwards), since `main()` is one linear flow every full-success run now reaches (see
     `_environment`'s own comment).
@@ -1442,6 +1505,19 @@ def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
     fake_helm = bin_dir / "helm"
     fake_helm.write_text(FAKE_HELM_SCRIPT, encoding="utf-8")
     fake_helm.chmod(0o755)
+    # Issue #165: the owner-creation step talks to Authentik's API through `curl`; the stateful
+    # fake (recorded real response shapes) lives under tests/fixtures/fakes/.
+    fakes_dir = REPO_ROOT / "ps-service" / "tests" / "fixtures" / "fakes"
+    curl_lines = (fakes_dir / "curl").read_text(encoding="utf-8").splitlines()
+    curl_lines[0] = f"#!{sys.executable}"
+    fake_curl = bin_dir / "curl"
+    fake_curl.write_text("\n".join(curl_lines) + "\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+    shutil.copytree(fakes_dir / "authentik", tmp_path / "authentik-fixtures")
+    curl_state = tmp_path / "curl-state.json"
+    curl_state.write_text(
+        json.dumps({"token": FAKE_AUTHENTIK_TOKEN, "recovery_flow": True}), encoding="utf-8"
+    )
     return DeployPsFixture(
         root=tmp_path,
         home=home,
@@ -1454,4 +1530,6 @@ def deploy_ps_fixture(tmp_path: Path) -> DeployPsFixture:
         kubectl_state=tmp_path / "kubectl-state",
         helm_state=tmp_path / "helm-state",
         helm_log=tmp_path / "helm.log",
+        curl_state=curl_state,
+        curl_log=tmp_path / "curl.log",
     )

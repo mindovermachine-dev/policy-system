@@ -28,6 +28,14 @@ tests:
       - equal:
           path: spec.ports[?(@.name=="http")].nodePort
           value: 30080
+      # Issue #165 (AC-BI-023): the HTTPS listener gets its own fixed NodePort, which
+      # deploy/kind/cluster.yaml maps to the host. The plain-HTTP 30080 stays in-node only.
+      - equal:
+          path: spec.ports[?(@.name=="https")].nodePort
+          value: 30443
+      - equal:
+          path: spec.ports[?(@.name=="https")].targetPort
+          value: 9443
 
   # Regression (found during #130 kind verification): the evaluator profile deployed with
   # `authentik.enabled=true` and default values never mounted this chart's blueprint

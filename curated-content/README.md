@@ -33,6 +33,6 @@ RRF, the Data Act, the Web Accessibility Directive, DSA, DORA, and the AI Act (s
 `catalog.json` for the full list with CELEX ids). The internal Engineering Practices
 baseline is not yet curated. Populating a new instrument is a one-time maintainer
 action, tracked separately from restoring an already-curated instrument (see the
-installation guide's
-[Evaluator installation, step 8](../docs/artifacts/installation-guide.md#8-load-regulations-into-the-graph)
+user guide's
+[Load curated content](../docs/artifacts/user-guide.md#load-curated-content)
 for what an operator sees once it is populated).

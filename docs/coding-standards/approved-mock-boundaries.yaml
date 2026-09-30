@@ -157,5 +157,8 @@ process_os:
 
 # Subprocess boundary (not a mock.patch mechanism at all — listed for completeness/documentation,
 # the guardrail does not need to scan for it since it isn't unittest.mock-shaped):
-#   fake az/kubectl/gh/curl/helm binaries on PATH in ps-service/tests/{release,deploy_llm,deploy_ps}
-#   and ps-cli/tests/release — see release-deploy.md; zero remediation, zero guardrail action needed.
+#   fake az/kubectl/gh/curl/helm/podman/openssl binaries on PATH in
+#   ps-service/tests/{release,deploy_llm,deploy_ps,deploy_eval,deploy_lib} and
+#   ps-cli/tests/release — see release-deploy.md; zero remediation, zero guardrail action needed.
+#   (Issue #165: the stateful Authentik-API `curl` and the `podman` fake live as plain executables
+#   under ps-service/tests/fixtures/fakes/ and are copied into each test's bin/, never imported.)

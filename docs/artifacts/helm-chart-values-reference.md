@@ -5,7 +5,9 @@ Every operator-facing key in `charts/policy-system/values.yaml` (local-test defa
 `-f values-prod.yaml`). See the [Installation Guide](./installation-guide.md)'s
 [Evaluator installation](./installation-guide.md#evaluator-installation) walkthrough for
 how to deploy the chart in the first place — this page is the values reference for
-that walkthrough, step 6 onward.
+that walkthrough, step 6 onward. The evaluator and production scripts
+(`scripts/deploy-ps-eval.sh`, `scripts/deploy-ps-prod.sh`) set most of the Authentik-related
+keys below for you; you only set them by hand when deploying the chart without a script.
 
 ## Table of Contents
 
@@ -15,6 +17,7 @@ that walkthrough, step 6 onward.
 - [Azure values](#azure-values)
 - [PS Postgres values](#ps-postgres-values)
 - [Authentik credentials values](#authentik-credentials-values)
+- [Authentik and local TLS values](#authentik-and-local-tls-values)
 
 ## Core values
 
@@ -26,8 +29,8 @@ that walkthrough, step 6 onward.
 | `psService.service.type` | `NodePort` (`ClusterIP` in prod) | PS Service Service type. `NodePort` is what `deploy/kind/cluster.yaml`'s `extraPortMappings` targets locally; prod has no kind-specific reachability mechanism, so it's `ClusterIP`-only there. |
 | `psService.service.nodePort` | `30800` | Fixed NodePort behind host port `8000` (via `extraPortMappings`). Not set in prod (no `nodePort` field when `type: ClusterIP`). |
 | `psService.companyMerge.similarityThreshold` | `0.59` | `PS_COMPANYMERGE_SIMILARITY_THRESHOLD` — fuzzy-match threshold for company entity merging. Empirically recommended by issue #29's labeled precision/recall/F1 sweep, not an undocumented judgment call. |
-| `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass for local evaluation. Off by default even under the local-test profile; an evaluator flips it explicitly to use the plugin path (step 8 of the Installation Guide) without OIDC. |
-| `psService.auth.issuer` | `""` | `PS_AUTH_ISSUER` — the OIDC authorization-server URL (for the bundled Authentik, `https://<hostname>/auth/application/o/ps-cli/`). Required unless `psService.localTestBypass.enabled=true`; see the [IdP configuration contract](./idp-configuration-contract.md). |
+| `psService.localTestBypass.enabled` | `false` | `PS_SERVICE_LOCAL_TEST_BYPASS` — opt-in auth bypass. Off by default and **not used by the evaluator install**: the bypass refuses to bind a non-loopback host and every container image binds `0.0.0.0`, so it cannot start in a container. The evaluator profile runs real OIDC login against the bundled Authentik instead. |
+| `psService.auth.issuer` | `""` | `PS_AUTH_ISSUER` — the OIDC authorization-server URL (for the bundled Authentik: production `https://<hostname>/auth/application/o/ps-cli/`; evaluator `https://<hostname>:30443/application/o/ps-cli/`). Required unless `psService.localTestBypass.enabled=true`; see the [IdP configuration contract](./idp-configuration-contract.md). |
 | `psService.auth.audience` | `""` | `PS_AUTH_AUDIENCE` — the resource-server audience (for the bundled Authentik, the fixed OAuth2 Provider's `client_id`, `ps-cli`). Required unless `psService.localTestBypass.enabled=true`. |
 | `psService.auth.cliClientId` | `""` | `PS_AUTH_CLI_CLIENT_ID` — the public CLI client's id (for the bundled Authentik, `ps-cli`). Optional; when set it is advertised in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`. |
 | `psService.auth.scopes` | `""` | `PS_AUTH_SCOPES` — space/comma-separated OAuth scope(s) a client should request at login (for the bundled Authentik, `openid profile email offline_access`). Not used for token validation, but required in practice: PS-Cli's device-flow login sources its OAuth `scope` request directly from this value via `scopes_supported`, and most IdPs reject an empty scope. See the [IdP configuration contract](./idp-configuration-contract.md). |
@@ -43,7 +46,7 @@ When `psService.localTestBypass.enabled=false` (the chart's default) and either 
 | **`falkordb.persistence.enabled`** | `true` (both profiles) | **(AC-BI-008)** Toggles FalkorDB storage between a `PersistentVolumeClaim` (default) and an `emptyDir` (ephemeral — data lost on pod restart). No manual manifest edits needed — flip via `--set`/`-f` and `helm upgrade`. |
 | `falkordb.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Never hardcoded to kind's default StorageClass name (both profiles) — override explicitly for a real cluster if needed. |
 | `falkordb.browser.enabled` | `true` (`false` in prod) | **(AC-BI-009)** FalkorDB Browser UI Service. On by default for local-test convenience, off in prod. |
-| `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3000` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
+| `falkordb.browser.nodePort` | `30300` | Fixed NodePort behind host port `3001` (via `extraPortMappings`). Only applies when `falkordb.browser.enabled=true`. |
 | `falkordb.image.repository` / `falkordb.image.tag` | `falkordb/falkordb` / `latest` | FalkorDB image. |
 
 Immediately after installing, `falkordb.persistence.enabled` (on by default — data
@@ -257,3 +260,27 @@ helm upgrade policy-system ./charts/policy-system \
   --set authentik.authentik.existingSecret.secretName=my-authentik-secret \
   --wait
 ```
+
+## Authentik and local TLS values
+
+Keys that wire PS Service to the bundled Authentik and, in the evaluator profile, give it a
+locally trusted HTTPS certificate (issue #165). Both deploy scripts set the ones marked
+"script" in one Helm release; see the [IdP configuration
+contract](./idp-configuration-contract.md) for what they mean.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `psService.authzBootstrapOwner.subject` / `.issuer` | `""` / `""` | `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT` / `_ISSUER` — the `(sub, iss)` allowed to claim `SystemOwner`. **Script:** the owner's email (the bundled provider's `sub` is the username, which the scripts make equal to the email) and the Authentik issuer, in the same deploy as everything else. Required (render fails) whenever the bypass is off. |
+| `psService.authentik.existingSecret` | `""` | Reuse an operator-managed Secret (key `PS_AUTHENTIK_API_TOKEN`) as PS Service's Authentik API token instead of the chart-generated one (`<release>-authentik-api-token`, 64 random characters, generated once and kept across upgrades). When `authentik.enabled`, also set the `secretKeyRef` name of `AUTHENTIK_BOOTSTRAP_TOKEN` in `authentik.server.env` and `authentik.worker.env` to the same name, or the render fails. There is **no** `psService.authentik.apiToken` value any more (the old fixed placeholder is gone), and a Secret still holding it is replaced by a generated token. |
+| `psService.authentik.baseUrl` | `https://authentik.example.com` | `PS_AUTHENTIK_BASE_URL` — where PS Service calls Authentik's API for `invite_user`. **Script:** evaluator `https://<hostname>:30443` (trusted through `SSL_CERT_FILE`); production `http://policy-system-authentik-server/auth`, the in-cluster Service, because the invitation API is not on the public Ingress. |
+| `psService.authentik.publicUrl` | `""` | `PS_AUTHENTIK_PUBLIC_URL` — optional user-reachable Authentik address used **only** to build the invitee's enrolment link. Not rendered when empty. **Script:** unset for the evaluator; production `https://<hostname>/auth`. Needs a PS Service image that supports it (see the [Installation Guide's Verification status](./installation-guide.md#verification-status)); older images ignore the variable. |
+| `psService.authentikHostname` / `psService.authentikHostAliasIP` | `""` / `""` | Both set: PS Service's pod resolves that hostname to that IP (a `hostAliases` entry), so its token validation reaches the same Authentik a browser reaches on the kind node's port. **Script (evaluator):** the `--hostname` and the kind node container's IP. Unused in production. |
+| `localTls.secretName` | `""` | Name of a Secret with keys `tls.crt`, `tls.key` and `ca.crt` (created by `scripts/deploy-ps-eval.sh`, never by the chart). Empty = off and nothing below renders. When set, the chart adds a blueprint registering the certificate as Authentik's web certificate and gives PS Service a trust bundle (system CAs plus `ca.crt`) through an init container and `SSL_CERT_FILE`. The init container uses the PS Service image itself. The Authentik pods' own mount of the Secret at `/ps-tls` is supplied by the installer through `authentik.global.volumes` / `authentik.global.volumeMounts` (a values file cannot be conditional). |
+| `authentik.server.service.nodePortHttp` | `30080` | Authentik's plain-HTTP NodePort. **Not** mapped to the host by `deploy/kind/cluster.yaml`; reachable only inside the kind node. Unused in production (`ClusterIP`). |
+| `authentik.server.service.nodePortHttps` | `30443` | Authentik's HTTPS NodePort, and the one Authentik port `deploy/kind/cluster.yaml` maps to the host (`0.0.0.0:30443`, so it is reachable from the LAN by design). Changing the port on an existing kind cluster needs a cluster recreate (port mappings are fixed at creation). |
+| `authentik.server.env` / `authentik.worker.env` | `AUTHENTIK_BOOTSTRAP_TOKEN` from Secret `policy-system-authentik-api-token`, key `PS_AUTHENTIK_API_TOKEN` | Makes Authentik create an API token equal to PS Service's on first start. Authentik applies it **once per tenant** and never rotates it. The Secret name is a literal because Helm never templates values files (the release name is fixed to `policy-system`). Production sets `authentik.global.env` (a list, which Helm replaces rather than merges) for `AUTHENTIK_WEB__PATH=/auth/` only, so these are not overridden there. |
+| `authentik.blueprints.configMaps` | the chart's blueprint ConfigMap | Set in `values.yaml`, so **every** profile, evaluator included, gets the bundled blueprint (the `ps-cli` OIDC provider, passkey-only enrolment and recovery flows, `sub_mode: user_username`). |
+
+The production Ingress exposes only an allowlist of Authentik paths; that list lives in
+`scripts/deploy-ps-prod.sh`, not in the chart — see [Installation Guide: What is exposed
+(production)](./installation-guide.md#what-is-exposed-production).

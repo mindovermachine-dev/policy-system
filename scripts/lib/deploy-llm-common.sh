@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 # Shared naming helpers for scripts/deploy-llm.sh, scripts/sync-llm-secrets-to-kind.sh
-# (issue #105), and scripts/deploy-ps.sh (issue #111) -- all three scripts compute the same
+# (issue #105), and scripts/deploy-ps-prod.sh (issue #111) -- all three scripts compute the same
 # subscription-hash-derived resource names
 # (docs/architecture/customer-azure-llm-bootstrap.md#naming--idempotency;
-# docs/architecture/customer-azure-deployment.md for deploy-ps.sh's own additions below).
+# docs/architecture/customer-azure-deployment.md for deploy-ps-prod.sh's own additions below).
 #
 # Sourced, never executed (mode 100644):
 #   source "$script_dir/lib/deploy-llm-common.sh"
@@ -13,6 +13,7 @@ if [[ -n "${DEPLOY_LLM_COMMON_LIB_LOADED:-}" ]]; then
 fi
 DEPLOY_LLM_COMMON_LIB_LOADED=1
 
+# shellcheck disable=SC2034 # consumed by the scripts that source this library
 readonly RESOURCE_GROUP_NAME="rg-policy-system"
 
 # subscription_hash8 <subscription_id>: prints the first 8 hex chars of sha256(subscription_id).

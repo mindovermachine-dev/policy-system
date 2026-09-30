@@ -1,0 +1,259 @@
+suite: local TLS wiring, chart side (issue #165 Slice 1D)
+# One switch: localTls.secretName (Secret `tls.crt`, `tls.key`, `ca.crt`, created by the
+# evaluator script). Same templates in every profile, value-gated -- no evaluator-only fork
+# (AC-BI-013). The Authentik pods' own mount of that Secret is supplied by the caller through
+# the upstream chart's authentik.global.volumes/volumeMounts (Helm cannot make a values file
+# conditional); the pass-through cases below prove it lands on server AND worker, also under
+# prod values, where authentik.global.env is already overridden.
+release:
+  name: policy-system
+chart:
+  appVersion: 9.9.9
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+  authentik.enabled: true
+  localTls.secretName: policy-system-local-tls
+templates:
+  - authentik-blueprint-configmap.yaml
+  - ps-service-deployment.yaml
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  # NOTE on order: authentik.enabled=true cases first (see authentik-server-service_test.yaml).
+
+  - it: the blueprint ConfigMap gains a second key for the local certificate blueprint
+    template: authentik-blueprint-configmap.yaml
+    asserts:
+      - exists:
+          path: data["authentik-local-tls-blueprint.yaml"]
+      - matchRegex:
+          path: data["authentik-local-tls-blueprint.yaml"]
+          pattern: "version: 1"
+      - exists:
+          path: data["authentik-blueprint.yaml"]
+
+  - it: without localTls.secretName the ConfigMap has only the original key
+    set:
+      localTls.secretName: ""
+    template: authentik-blueprint-configmap.yaml
+    asserts:
+      - notExists:
+          path: data["authentik-local-tls-blueprint.yaml"]
+      - exists:
+          path: data["authentik-blueprint.yaml"]
+
+  - it: PS Service builds a combined trust bundle in an initContainer of the SAME image, non-root
+    template: ps-service-deployment.yaml
+    set:
+      psService.image.tag: 1.2.3
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: build-ca-bundle
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:1.2.3
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:1.2.3
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsNonRoot
+          value: true
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: "/etc/ssl/certs/ca-certificates.crt"
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: "/ps-ca/ca.crt"
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: "/ps-trust/bundle.crt"
+
+  - it: the CA comes from the Secret's ca.crt key only (never the private key) and the bundle lives on an emptyDir
+    template: ps-service-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ps-ca
+            secret:
+              secretName: policy-system-local-tls
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ps-trust
+            emptyDir: {}
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: ps-ca
+            mountPath: /ps-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: ps-trust
+            mountPath: /ps-trust
+
+  - it: the main container trusts the combined bundle through SSL_CERT_FILE
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="SSL_CERT_FILE")].value
+          value: /ps-trust/bundle.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ps-trust
+            mountPath: /ps-trust
+            readOnly: true
+
+  - it: TLS verification is never weakened anywhere in the PS Service pod (AC-BI-008)
+    template: ps-service-deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PYTHONHTTPSVERIFY")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="CURL_CA_BUNDLE")]
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[0].command[2]
+          pattern: "(--insecure|verify=False| -k )"
+
+  - it: authentik hostname and alias behaviour is unchanged by localTls
+    template: ps-service-deployment.yaml
+    set:
+      psService.authentikHostname: authentik.local
+      psService.authentikHostAliasIP: 10.0.0.5
+      psService.authentik.baseUrl: https://authentik.local:30443
+    asserts:
+      - equal:
+          path: spec.template.spec.hostAliases[0].hostnames[0]
+          value: authentik.local
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHENTIK_BASE_URL")].value
+          value: https://authentik.local:30443
+
+  - it: with localTls.secretName unset none of the PS Service TLS wiring renders
+    template: ps-service-deployment.yaml
+    set:
+      localTls.secretName: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="SSL_CERT_FILE")]
+
+  - it: caller-supplied authentik.global volumes, mounts and pod annotations reach the Authentik server
+    template: charts/authentik/templates/server/deployment.yaml
+    set:
+      authentik:
+        global:
+          volumes:
+            - name: ps-tls
+              secret:
+                secretName: policy-system-local-tls
+          volumeMounts:
+            - name: ps-tls
+              mountPath: /ps-tls
+              readOnly: true
+          podAnnotations:
+            checksum/local-tls: abc123
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ps-tls
+            secret:
+              secretName: policy-system-local-tls
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ps-tls
+            mountPath: /ps-tls
+            readOnly: true
+      - equal:
+          path: spec.template.metadata.annotations["checksum/local-tls"]
+          value: abc123
+
+  - it: the same caller-supplied mount reaches the Authentik worker
+    template: charts/authentik/templates/worker/deployment.yaml
+    set:
+      authentik:
+        global:
+          volumes:
+            - name: ps-tls
+              secret:
+                secretName: policy-system-local-tls
+          volumeMounts:
+            - name: ps-tls
+              mountPath: /ps-tls
+              readOnly: true
+          podAnnotations:
+            checksum/local-tls: abc123
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ps-tls
+            mountPath: /ps-tls
+            readOnly: true
+      - equal:
+          path: spec.template.metadata.annotations["checksum/local-tls"]
+          value: abc123
+---
+suite: local TLS wiring under prod values (issue #165 Slice 1D)
+release:
+  name: policy-system
+values:
+  - ../values-prod.yaml
+set:
+  llm.provider: azure
+  llm.azure.apiKey: test-azure-key
+  llm.azure.apiBase: https://example-test.openai.azure.com/
+  psService.auth.issuer: https://example-issuer.test
+  psService.auth.audience: ps-service
+  psService.authzBootstrapOwner.subject: first-owner-subject
+  psService.authzBootstrapOwner.issuer: https://example-issuer.test
+  localTls.secretName: policy-system-local-tls
+templates:
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  - it: prod values keep the /auth/ web path and the bootstrap token while a caller-supplied mount is added on the server
+    template: charts/authentik/templates/server/deployment.yaml
+    set:
+      authentik:
+        global:
+          volumes:
+            - name: ps-tls
+              secret:
+                secretName: policy-system-local-tls
+          volumeMounts:
+            - name: ps-tls
+              mountPath: /ps-tls
+              readOnly: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_WEB__PATH")].value
+          value: /auth/
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")]
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ps-tls
+            mountPath: /ps-tls
+            readOnly: true

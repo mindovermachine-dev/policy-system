@@ -1,0 +1,92 @@
+{
+  "pagination": {
+    "next": 0,
+    "previous": 0,
+    "count": 1,
+    "current": 1,
+    "total_pages": 1,
+    "start_index": 1,
+    "end_index": 1
+  },
+  "results": [
+    {
+      "pk": 5,
+      "username": "owner@example.test",
+      "name": "owner@example.test",
+      "is_active": true,
+      "last_login": null,
+      "date_joined": "2026-09-30T14:24:55.633858Z",
+      "is_superuser": true,
+      "groups": ["5c958740-2290-47cb-a874-82c87b4812a7"],
+      "groups_obj": [
+        {
+          "pk": "5c958740-2290-47cb-a874-82c87b4812a7",
+          "num_pk": 12306,
+          "name": "authentik Admins",
+          "is_superuser": true,
+          "attributes": {}
+        }
+      ],
+      "roles": [],
+      "roles_obj": [],
+      "email": "owner@example.test",
+      "avatar": "data:image/svg+xml;base64,AAAA",
+      "attributes": {},
+      "uid": "0000000000000000000000000000000000000000000000000000000000000000",
+      "path": "users",
+      "type": "internal",
+      "uuid": "ec5736c1-a910-4ec9-bc2e-0f44e860d689",
+      "password_change_date": "2026-09-30T14:24:55.634115Z",
+      "last_updated": "2026-09-30T14:24:55.673024Z"
+    }
+  ],
+  "autocomplete": {
+    "current_model": "authentik_core.user",
+    "models": {
+      "authentik_core.user": {
+        "username": {
+          "type": "str",
+          "nullable": false,
+          "options": null
+        },
+        "name": {
+          "type": "str",
+          "nullable": false,
+          "options": null
+        },
+        "email": {
+          "type": "str",
+          "nullable": false,
+          "options": null
+        },
+        "path": {
+          "type": "str",
+          "nullable": false,
+          "options": null
+        },
+        "is_active": {
+          "type": "bool",
+          "nullable": true,
+          "options": null
+        },
+        "type": {
+          "type": "str",
+          "nullable": false,
+          "options": [
+            "internal",
+            "external",
+            "service_account",
+            "internal_service_account"
+          ]
+        },
+        "attributes": {
+          "type": "relation",
+          "nullable": false,
+          "options": null,
+          "relation": "authentik_core.user_attributes"
+        }
+      },
+      "authentik_core.user_attributes": {}
+    }
+  }
+}

@@ -38,7 +38,7 @@ No CI/CD pipeline and no separate template repo are involved — both scripts ru
 
 This design intentionally mirrors an existing hand-built reference deployment (`policy-system-ingestion` / `rg-policy-system-ingestion` / `kv-psi-pjosemomcujec` in the `Cosmos4Biz-NONPRD` subscription) rather than inventing a new resource shape — the scripts automate what was previously done by hand for that resource.
 
-**See also:** for a full, customer-tenant production deployment — a complete AKS cluster, the bundled Authentik identity provider, the Helm release, and public HTTPS exposure, not just the LLM backend — see `docs/architecture/customer-azure-deployment.md` (`scripts/deploy-ps.sh`).
+**See also:** for a full, customer-tenant production deployment — a complete AKS cluster, the bundled Authentik identity provider, the Helm release, and public HTTPS exposure, not just the LLM backend — see `docs/architecture/customer-azure-deployment.md` (`scripts/deploy-ps-prod.sh`). For the Local Test path's Policy System deployment onto the `kind` cluster this document's scripts prepare — the bundled Authentik over locally trusted HTTPS, the first user created with a passkey-enrolment link — see the installation guide's evaluator path (`scripts/deploy-ps-eval.sh`) and the Authentik section of that same production document, which describes both profiles.
 
 ---
 

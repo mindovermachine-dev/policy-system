@@ -108,7 +108,7 @@ parse error, verified empirically -- see IMPL_SLICE_3.md). This helper exists
 as the single documented definition of the pattern; values.yaml/
 values-prod.yaml's own `authentik.authentik.existingSecret.secretName`
 comments cite it and hardcode its *resolved* literal output for this repo's
-one fixed Helm release name ("policy-system", scripts/deploy-ps.sh's
+one fixed Helm release name ("policy-system", scripts/deploy-ps-prod.sh's
 HELM_RELEASE_NAME) -- kept in sync by hand with this helper's default output,
 not by any automatic Helm wiring (see authentik-credentials-secret.yaml's own
 fail() guard, issue #159, for the safety net when the two disagree).
@@ -156,7 +156,7 @@ Mirrors policy-system.psPostgresSigningSecretName's exact shape
 ("operator-managed name, or the chart renders one from a plain value") --
 deliberately NOT policy-system.authentikCredentialsSecretName above, which is
 a different Secret entirely (the upstream `authentik` dependency's own
-consume-only credentials, provisioned externally by scripts/deploy-ps.sh) --
+consume-only credentials, provisioned externally by scripts/deploy-ps-prod.sh) --
 this chart generates and owns this Secret's contents itself, same as
 ps-postgres-secret.yaml does for Passkey Signing.
 */}}
@@ -192,11 +192,17 @@ Params:
   - key        - String - Required - key inside that Secret's data to reuse if present.
   - length     - Int    - Required - length of a freshly generated value (randAlphaNum).
   - context    - Dict   - Required - the root context ($), for .Release.Namespace.
+  - ignore     - List   - Optional - stored values to treat as absent (a retired placeholder that
+                          must not survive an upgrade as the live credential, issue #165 F-1).
 */}}
 {{- define "policy-system.generateOrReuseSecretValue" -}}
 {{- $existing := lookup "v1" "Secret" .context.Release.Namespace .secretName -}}
+{{- $stored := "" -}}
 {{- if and $existing $existing.data (hasKey $existing.data .key) -}}
-{{- index $existing.data .key | b64dec -}}
+{{- $stored = index $existing.data .key | b64dec -}}
+{{- end -}}
+{{- if and $stored (not (has $stored (.ignore | default list))) -}}
+{{- $stored -}}
 {{- else -}}
 {{- randAlphaNum (.length | int) -}}
 {{- end -}}

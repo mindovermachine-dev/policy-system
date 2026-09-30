@@ -1,0 +1,45 @@
+{
+  "user": {
+    "pk": 4,
+    "username": "akadmin",
+    "name": "authentik Default Admin",
+    "is_active": true,
+    "is_superuser": true,
+    "is_current": true,
+    "groups": [
+      {
+        "name": "authentik Admins",
+        "pk": "5c958740-2290-47cb-a874-82c87b4812a7"
+      }
+    ],
+    "roles": [],
+    "email": "root@example.com",
+    "avatar": "data:image/svg+xml;base64,AAAA",
+    "uid": "0000000000000000000000000000000000000000000000000000000000000000",
+    "settings": {},
+    "type": "internal",
+    "system_permissions": [
+      "manage_media_files",
+      "change_initialpermissions",
+      "view_system_info",
+      "access_admin_interface",
+      "change_role",
+      "add_initialpermissionspermission",
+      "unassign_role_permissions",
+      "delete_initialpermissionspermission",
+      "add_role",
+      "view_initialpermissionspermission",
+      "view_initialpermissions",
+      "view_role",
+      "view_system_settings",
+      "add_initialpermissions",
+      "view_media_files",
+      "delete_role",
+      "delete_initialpermissions",
+      "assign_role_permissions",
+      "edit_system_settings",
+      "change_initialpermissionspermission"
+    ]
+  },
+  "users": []
+}

@@ -18,6 +18,9 @@ templates:
   - secret.yaml
   - ps-service-deployment.yaml
   - charts/authentik/templates/server/service.yaml
+  - charts/authentik/templates/server/deployment.yaml
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
 tests:
   - it: falkordb browser service does not render under prod values
     template: falkordb-browser-service.yaml
@@ -71,3 +74,32 @@ tests:
           value: ClusterIP
       - notExists:
           path: spec.ports[0].nodePort
+      - notExists:
+          path: spec.ports[1].nodePort
+
+  # Issue #165 D-03: values-prod.yaml sets authentik.global.env (a list; Helm replaces lists, it
+  # never merges them), so the bootstrap token must live in a key prod does not override, or prod
+  # silently loses one of the two entries.
+  - it: authentik server and worker keep BOTH the /auth/ web path and the bootstrap token under prod values
+    set:
+      authentik.enabled: true
+    template: charts/authentik/templates/server/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_WEB__PATH")].value
+          value: /auth/
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.name
+          value: policy-system-authentik-api-token
+
+  - it: authentik worker keeps both env entries under prod values too
+    set:
+      authentik.enabled: true
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_WEB__PATH")].value
+          value: /auth/
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="AUTHENTIK_BOOTSTRAP_TOKEN")].valueFrom.secretKeyRef.key
+          value: PS_AUTHENTIK_API_TOKEN

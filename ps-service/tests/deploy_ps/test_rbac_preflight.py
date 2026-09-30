@@ -1,4 +1,4 @@
-"""RBAC preflight for `scripts/deploy-ps.sh` (PLAN.md §0.5/§5/S6 -- user-only, no
+"""RBAC preflight for `scripts/deploy-ps-prod.sh` (PLAN.md §0.5/§5/S6 -- user-only, no
 service-principal branch).
 
 An operator whose signed-in identity has neither `Owner` nor `Contributor` at subscription
@@ -26,8 +26,7 @@ LLM_EMBED_MODEL_NAME="text-embedding-3-large"
 LLM_EMBED_MODEL_SKU="Standard"
 LLM_EMBED_MODEL_CAPACITY=350
 TLS_CONTACT_EMAIL="tls-contact@example.test"
-AUTHZ_BOOTSTRAP_OWNER_SUBJECT="bootstrap-owner-subject"
-AUTHZ_BOOTSTRAP_OWNER_ISSUER="https://issuer.example.test/"
+AUTHZ_OWNER_EMAIL="owner@example.test"
 """
 
 

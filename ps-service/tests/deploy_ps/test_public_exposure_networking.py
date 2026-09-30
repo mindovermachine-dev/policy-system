@@ -1,8 +1,8 @@
-"""Public exposure: application-routing add-on + DNS label for `scripts/deploy-ps.sh` (supports
+"""Public exposure: application-routing add-on + DNS label for `scripts/deploy-ps-prod.sh` (supports
 AC-BI-015; PLAN.md §5/S16).
 
 `ensure_approuting`/`fetch_ingress_public_ip`/`fetch_public_ip_resource_id`/`ensure_dns_label`/
-`fetch_public_ip_fqdn` are ported verbatim from `spikes/deploy-ps-azure/deploy-ps.sh`'s own
+`fetch_public_ip_fqdn` are ported verbatim from `spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own
 equivalents (spike lines 1073-1136), the trusted empirical reference: `az aks approuting enable`
 turns on the managed NGINX ingress controller, then this polls that controller's Service for its
 LoadBalancer public IP, then sets Azure's own public-IP DNS label (`<label>.<region>.
@@ -11,7 +11,7 @@ cloudapp.azure.com` -- no customer-owned domain or DNS zone required, the spike'
 derived `dns_label` -- unchanged since S5, reused here rather than a new naming scheme.
 
 `fetch_ingress_public_ip`'s poll uses the `${VAR:-default}` test-friendly-timeout pattern S7's
-`PROVIDER_REGISTRATION_WAIT_ATTEMPTS`/`_INTERVAL_SECONDS` established (scripts/deploy-ps.sh) --
+`PROVIDER_REGISTRATION_WAIT_ATTEMPTS`/`_INTERVAL_SECONDS` established (scripts/deploy-ps-prod.sh) --
 `INGRESS_IP_WAIT_ATTEMPTS`/`_INTERVAL_SECONDS`.
 """
 
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors DeployPsFixture.seed_subscription's default id_, and scripts/deploy-ps.sh's own
+# Mirrors DeployPsFixture.seed_subscription's default id_, and scripts/deploy-ps-prod.sh's own
 # RESOURCE_GROUP_NAME/DEFAULT_INGRESS_IP -- hardcoded here rather than imported, same precedent as
 # every other deploy_ps test module.
 DEFAULT_SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
@@ -143,8 +143,8 @@ def test_rerun_with_label_already_set_makes_no_public_ip_update_call(
 def test_polls_for_the_ingress_public_ip_and_times_out_with_a_clear_message_if_never_assigned(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """`fetch_ingress_public_ip` (scripts/deploy-ps.sh) fails explicitly, naming the resource it
-    was waiting on, rather than a bash `set -u`-triggered crash or a silent empty hostname
+    """`fetch_ingress_public_ip` (scripts/deploy-ps-prod.sh) fails explicitly, naming the resource
+    it was waiting on, rather than a bash `set -u`-triggered crash or a silent empty hostname
     downstream -- the test-overridable `INGRESS_IP_WAIT_ATTEMPTS`/`_INTERVAL_SECONDS` env vars
     (same `${VAR:-default}` pattern S7's provider-registration poll established) let this run in
     milliseconds instead of the real ~5-minute worst case.

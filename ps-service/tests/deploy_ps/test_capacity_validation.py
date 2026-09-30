@@ -3,7 +3,7 @@ plus the spike's null-capacity bugfix (PLAN.md §5/S8).
 
 `validate_capacity_range` runs once, against `select_region`'s already-chosen region only (no
 fallback-region reporting -- unlike `scripts/deploy-llm.sh`'s post-#110 `fail_region_not_viable`,
-`deploy-ps.sh` never auto-picks a *different* region once one is already selected; a capacity
+`deploy-ps-prod.sh` never auto-picks a *different* region once one is already selected; a capacity
 failure here is a hard stop).
 """
 

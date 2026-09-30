@@ -1,0 +1,4 @@
+{
+  "username": ["This field must be unique."],
+  "name": ["This field is required."]
+}

@@ -1,9 +1,9 @@
-"""AKS cluster creation with AAD+RBAC+hardening flags for `scripts/deploy-ps.sh` (AC-BI-006,
+"""AKS cluster creation with AAD+RBAC+hardening flags for `scripts/deploy-ps-prod.sh` (AC-BI-006,
 AC-BI-012; PLAN.md §5/S13).
 
 `ensure_aks_cluster`'s exact `az aks create` flag set -- AAD-integrated auth, Azure RBAC
 authorization, disabled local accounts, and Azure CNI network policy -- is ported verbatim from
-`spikes/deploy-ps-azure/deploy-ps.sh`'s own `ensure_aks_cluster` (spike lines 939-950), the
+`spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own `ensure_aks_cluster` (spike lines 939-950), the
 trusted empirical reference this whole plan cites. The headline regression this module guards:
 `spikes/deploy-ps-azure/README.md`'s own "Bugs found and fixed" section, confirmed against a
 real subscription during the spike run, states verbatim: "Missing `--network-plugin` (new,
@@ -85,7 +85,7 @@ def test_creates_cluster_with_network_plugin_azure_and_network_policy_azure_toge
 ) -> None:
     """The exact AC-BI-012 regression: `--network-plugin azure` MUST be present alongside
     `--network-policy azure` in the SAME `az aks create` call -- omitting the former fails the
-    real `az aks create` outright (spike README, quoted in `scripts/deploy-ps.sh`'s own
+    real `az aks create` outright (spike README, quoted in `scripts/deploy-ps-prod.sh`'s own
     `ensure_aks_cluster` comment). A test that only checked each flag appeared *somewhere* in the
     log would not catch a regression that moved one of them to a different, unrelated call.
     """

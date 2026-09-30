@@ -3,9 +3,9 @@ stopping at the first candidate where both models are Generally Available (AC-BI
 hard-stops naming every candidate tried if none qualify (AC-BI-010).
 
 Unlike `scripts/deploy-llm.sh` (issue #105, superseded by #110 into a single configured
-`LLM_REGION` with no auto-switching), `deploy-ps.sh` has no single target region -- selection
+`LLM_REGION` with no auto-switching), `deploy-ps-prod.sh` has no single target region -- selection
 *is* the mechanism (PLAN.md §5/S8), a flat loop with an early exit
-(spikes/deploy-ps-azure/deploy-ps.sh's own `select_region`), not deploy-llm.sh's
+(spikes/deploy-ps-azure/deploy-ps-prod.sh's own `select_region`), not deploy-llm.sh's
 fallback-viability-reporting shape. See PLAN.md §5/S8 and
 .orchestrator/tracker/issue-111-deploy-ps-azure-script/IMPL_SLICE_7.md's "Next extension point"
 for the exact `main()` splice point this slice fills.

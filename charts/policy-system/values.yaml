@@ -74,23 +74,31 @@ psService:
     subject: ""
     issuer: ""
   authentik:
-    # PS Service's own service credential for calling Authentik's
-    # invitation-stage API on behalf of the `invite_user` MCP tool (issue
-    # #140) -- never a caller-supplied token. Unlike auth.*/authzBootstrapOwner.*
-    # above, `require_authentik_credential_configured` (CHANGES.md #140 Row 2)
-    # enforces both fields below UNCONDITIONALLY at startup, with no
-    # localTestBypass exemption -- so, mirroring psPostgres.
-    # password's own "non-empty dev default, read only when existingSecret is
-    # empty" shape (never auth.issuer's empty-default-plus-fail()-guard shape),
-    # apiToken/baseUrl below always carry a non-empty dev-default placeholder,
-    # so a default local-test/kind render (where authentik.enabled=false and
-    # no real Authentik exists) still starts cleanly.
-    apiToken: "ps-service-authentik-dev-token"
-    # Set to reuse an operator-managed Secret name instead of the plain
-    # apiToken value above -- mirrors psPostgres.state.existingSecret's
-    # convention exactly.
+    # PS Service's own service credential for calling Authentik's invitation-stage
+    # API on behalf of the `invite_user` MCP tool (issue #140) -- never a
+    # caller-supplied token. `require_authentik_credential_configured` enforces it
+    # UNCONDITIONALLY at startup (no localTestBypass exemption), so the Secret below
+    # renders in every profile, even when authentik.enabled=false.
+    #
+    # There is no value for the token itself (issue #165): the chart generates one
+    # random 64-char value once (templates/authentik-api-token-secret.yaml,
+    # lookup+randAlphaNum, survives upgrades) and the same Secret feeds Authentik's
+    # AUTHENTIK_BOOTSTRAP_TOKEN (authentik.server.env / authentik.worker.env below).
+    # Authentik applies the bootstrap token once per tenant; it does not rotate.
+    #
+    # Set to reuse an operator-managed Secret (key PS_AUTHENTIK_API_TOKEN) instead
+    # of the chart-generated one. When authentik.enabled, also set the secretKeyRef
+    # name of AUTHENTIK_BOOTSTRAP_TOKEN in authentik.server.env and
+    # authentik.worker.env to the same name, or the render fails. Mirrors
+    # psPostgres.state.existingSecret's convention.
     existingSecret: ""
     baseUrl: "https://authentik.example.com"
+    # Optional user-reachable Authentik address (issue #165), used ONLY to build the
+    # enrollment link handed to an invitee; PS Service still calls the Authentik API at
+    # baseUrl. Set it when baseUrl is an in-cluster address (production: the public
+    # `https://<host>/auth`); leave empty when baseUrl is already user-reachable (evaluator).
+    # Empty = PS_AUTHENTIK_PUBLIC_URL is not rendered.
+    publicUrl: ""
   # IP of the Podman network gateway (e.g. `podman network inspect podman
   # --format '{{(index .Subnets 0).Gateway}}'`), used to render a hostAliases
   # entry so pods can resolve host.containers.internal when llm.provider is
@@ -99,7 +107,7 @@ psService:
   # Hostname PS Service's own pod must resolve to the kind node's container IP so its
   # OIDC issuer validation (PS_AUTH_ISSUER, issue #58) reaches the SAME bundled Authentik
   # instance a LAN client reaches -- via the fixed NodePort mapped in deploy/kind/cluster.yaml
-  # (authentik.server.service.nodePortHttp, issue #160), never a Service DNS name (a
+  # (authentik.server.service.nodePortHttps, issues #160/#165), never a Service DNS name (a
   # browser/ps-cli off-cluster cannot resolve cluster-internal DNS). Both empty by default --
   # the chart can't know either statically, same posture as ollamaHostGatewayIP above.
   # A human/ps-cli client on the evaluator's own machine adds the same hostname to their own
@@ -107,6 +115,18 @@ psService:
   # evaluator's laptop's LAN IP instead. See docs/artifacts/installation-guide.md.
   authentikHostname: ""
   authentikHostAliasIP: ""
+
+# Local TLS for the evaluator profile (issue #165). Passkeys need a secure context, so the
+# evaluator's Authentik is served over HTTPS with a locally issued certificate. Set to the
+# name of a Secret with keys `tls.crt`, `tls.key` and `ca.crt` (created by the evaluator
+# install script, never by this chart). Empty = off: nothing below renders, so the default
+# and production renders are unchanged.
+# When set, this chart (a) adds a blueprint that registers the certificate as Authentik's web
+# certificate and (b) gives PS Service a trust bundle (system CAs + `ca.crt`) via SSL_CERT_FILE.
+# The Authentik pods' own mount of the Secret at /ps-tls is supplied by the installer through
+# authentik.global.volumes / authentik.global.volumeMounts (a values file cannot be conditional).
+localTls:
+  secretName: ""
 
 llm:
   # ollama | azure
@@ -225,7 +245,25 @@ authentik:
   blueprints:
     configMaps:
       - "policy-system-authentik-blueprint"
+  # Authentik creates an API token equal to this value on first start (bootstrap). Same Secret
+  # and key PS Service reads as PS_AUTHENTIK_API_TOKEN (templates/authentik-api-token-secret.yaml).
+  # The Secret name is a literal: Helm never templates values files and the release name is fixed
+  # ("policy-system"); see values-prod.yaml -- it sets authentik.global.env (a list, which Helm
+  # replaces rather than merges), so these live under server/worker.env, which prod never sets.
+  worker:
+    env:
+      - name: AUTHENTIK_BOOTSTRAP_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: policy-system-authentik-api-token
+            key: PS_AUTHENTIK_API_TOKEN
   server:
+    env:
+      - name: AUTHENTIK_BOOTSTRAP_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: policy-system-authentik-api-token
+            key: PS_AUTHENTIK_API_TOKEN
     # Local-test/kind default: NodePort with a fixed port, so deploy/kind/cluster.yaml's
     # extraPortMappings can map it through to the LAN (issue #160). ClusterIP (upstream
     # default) is explicitly restored in values-prod.yaml — prod exposes Authentik via
@@ -239,6 +277,10 @@ authentik:
       # the sub-chart's default) so this value and deploy/kind/cluster.yaml's third
       # extraPortMappings entry have one obvious, co-located source of truth.
       nodePortHttp: 30080
+      # HTTPS NodePort (issue #165): the only Authentik port deploy/kind/cluster.yaml maps to the
+      # host. Passkeys need a secure context, so evaluator login goes over TLS on this port; the
+      # plain-HTTP port above stays reachable only inside the node (blueprint wait, port-forward).
+      nodePortHttps: 30443
   authentik:
     # The upstream `authentik` dependency has no alias, so this chart's own
     # top-level `authentik:` key IS the entire subchart values context --

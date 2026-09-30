@@ -1,4 +1,4 @@
-"""Authentik's own Ingress object for `scripts/deploy-ps.sh` (S5, PLAN.md §3 as superseded by
+"""Authentik's own Ingress object for `scripts/deploy-ps-prod.sh` (S5, PLAN.md §3 as superseded by
 CHANGES.md row F1; #129).
 
 F1 rejected PLAN.md §0.6's original dual-hostname/dual-DNS-label design (infeasible: one Azure
@@ -20,13 +20,15 @@ same `secretName`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+
+import yaml
 
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors scripts/deploy-ps.sh's own S18/S16/S17/S5(#129) literals -- hardcoded here rather than
-# parsed from the script, same precedent as every other deploy_ps test module.
+# Mirrors scripts/deploy-ps-prod.sh's own S18/S16/S17/S5(#129) literals -- hardcoded here
+# rather than parsed from the script, same precedent as every other deploy_ps test module.
 PS_SERVICE_NAME = "policy-system-ps-service"
 AUTHENTIK_SERVICE_NAME = "policy-system-authentik-server"
 CLUSTER_ISSUER_NAME = "letsencrypt-prod"
@@ -46,7 +48,30 @@ def _extract_host(manifest: str) -> str | None:
     return None
 
 
-def test_ingress_manifest_exists_and_routes_auth_path_prefix_to_authentik_service(
+# Issue #165: the public Ingress routes ONLY what an end user's browser and ps-cli need to log in
+# and enroll (the 8 issue paths). The admin UI (`/auth/if/admin/`), the admin API and the
+# invitation API stay cluster-internal (PS Service reaches the latter in-cluster, OD-1 = B).
+ALLOWED_PATHS = (
+    "/auth/application/o/",
+    "/auth/device",
+    "/auth/flows/-/default/",
+    "/auth/if/flow/",
+    "/auth/api/v3/flows/executor/",
+    "/auth/api/v3/root/config/",
+    "/auth/api/v3/core/brands/current/",
+    "/auth/static/",
+)
+
+
+def _paths(manifest: str) -> list[str]:
+    return [
+        line.strip().removeprefix("- ").removeprefix("path:").strip()
+        for line in manifest.splitlines()
+        if line.strip().removeprefix("- ").startswith("path:")
+    ]
+
+
+def test_ingress_manifest_exists_and_routes_exactly_the_allowlisted_paths_to_authentik(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
     _seed(deploy_ps_fixture)
@@ -55,11 +80,64 @@ def test_ingress_manifest_exists_and_routes_auth_path_prefix_to_authentik_servic
 
     manifest = deploy_ps_fixture.read_kubectl_applied("Ingress", AUTHENTIK_SERVICE_NAME)
     assert manifest is not None, "kubectl apply -f - was never called for the Authentik Ingress"
-    assert "path: /auth" in manifest
-    assert "pathType: Prefix" in manifest
-    assert f"name: {AUTHENTIK_SERVICE_NAME}" in manifest
-    assert "name: http" in manifest
+    assert _paths(manifest) == list(ALLOWED_PATHS)
+    assert manifest.count("pathType: Prefix") == len(ALLOWED_PATHS)
+    assert manifest.count(f"name: {AUTHENTIK_SERVICE_NAME}") == len(ALLOWED_PATHS) + 1
+    assert manifest.count("name: http") == len(ALLOWED_PATHS)
     assert f"ingressClassName: {INGRESS_CLASS}" in manifest
+
+
+def test_ingress_manifest_is_valid_yaml_with_one_backend_per_allowlisted_path(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """The rendered manifest must parse (a stray heredoc terminator would corrupt it) and each
+    allowlisted path must point at Authentik's `http` port.
+    """
+    _seed(deploy_ps_fixture)
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    manifest = deploy_ps_fixture.read_kubectl_applied("Ingress", AUTHENTIK_SERVICE_NAME)
+    assert manifest is not None
+    document = cast("dict[str, Any]", yaml.safe_load(manifest))
+    paths = document["spec"]["rules"][0]["http"]["paths"]
+    assert [p["path"] for p in paths] == list(ALLOWED_PATHS)
+    for entry in paths:
+        assert entry["pathType"] == "Prefix"
+        assert entry["backend"]["service"] == {
+            "name": AUTHENTIK_SERVICE_NAME,
+            "port": {"name": "http"},
+        }
+
+
+def test_ingress_never_routes_the_admin_ui_admin_api_or_a_bare_auth_prefix(
+    deploy_ps_fixture: DeployPsFixture,
+) -> None:
+    """AC-BI-019 (manifest half): nothing that would serve `/auth/if/admin/` or the admin,
+    core-users or invitation APIs -- and no bare `/auth` or `/auth/api/v3/` catch-all.
+    """
+    _seed(deploy_ps_fixture)
+
+    deploy_ps_fixture.run_deploy("--yes", expect=0)
+
+    manifest = deploy_ps_fixture.read_kubectl_applied("Ingress", AUTHENTIK_SERVICE_NAME)
+    assert manifest is not None
+    paths = _paths(manifest)
+    for forbidden in (
+        "/auth",
+        "/auth/",
+        "/auth/if",
+        "/auth/if/",
+        "/auth/if/admin/",
+        "/auth/if/user/",
+        "/auth/api/v3/",
+        "/auth/api/v3/core/",
+        "/auth/api/v3/core/users/",
+        "/auth/api/v3/admin/",
+        "/auth/api/v3/stages/invitation/invitations/",
+    ):
+        assert forbidden not in paths, forbidden
+    assert not any(p.startswith(("/auth/if/admin", "/auth/api/v3/core/users")) for p in paths)
 
 
 def test_ingress_shares_ps_services_hostname_not_a_distinct_one(

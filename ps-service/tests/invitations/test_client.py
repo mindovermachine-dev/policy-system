@@ -26,7 +26,7 @@ _BASE_URL = "https://authentik.example.com"
 _EMAIL = "target@example.com"
 
 
-def _config() -> ServiceConfig:
+def _config(authentik_public_url: str | None = None) -> ServiceConfig:
     return ServiceConfig(
         host="127.0.0.1",
         port=8000,
@@ -35,6 +35,7 @@ def _config() -> ServiceConfig:
         is_local_test_bypass_active=True,
         authentik_api_token=_TOKEN,
         authentik_base_url=_BASE_URL,
+        authentik_public_url=authentik_public_url,
     )
 
 
@@ -115,6 +116,17 @@ def test_create_invitation_returns_itoken_and_invite_url_from_response_pk() -> N
         itoken="abc123",
         invite_url=f"{_BASE_URL}/if/flow/ps-invite-enrollment/?itoken=abc123",
     )
+
+
+def test_create_invitation_builds_link_from_public_url_when_set() -> None:
+    """Issue #165 OD-1=B: link uses the public URL, the API call still goes to the base URL."""
+    public_url = "https://ps.example.com/auth"
+    transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
+
+    result = create_invitation(_config(public_url), _EMAIL, transport=transport)
+
+    assert transport.requests[0].full_url == f"{_BASE_URL}/api/v3/stages/invitation/invitations/"
+    assert result.invite_url == f"{public_url}/if/flow/ps-invite-enrollment/?itoken=abc123"
 
 
 def test_create_invitation_wraps_http_error_naming_status_never_the_token() -> None:

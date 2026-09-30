@@ -2,10 +2,17 @@
 # Provisions a full customer-managed Azure deployment of Policy System.
 #
 # Usage:
-#   scripts/deploy-ps.sh [--yes]
-#   scripts/deploy-ps.sh --rotate-key
+#   scripts/deploy-ps-prod.sh [--yes] [--owner-email <address>]
+#   scripts/deploy-ps-prod.sh --rotate-key
 #
 #   --yes         Skip the "Proceed with these values? [Y/n]" prompt (the table still prints).
+#                 The owner email is then never prompted for: pass --owner-email (or set
+#                 AUTHZ_OWNER_EMAIL in scripts/ps-defaults.conf).
+#   --owner-email The first SystemOwner (issue #165). Prompted for when neither this flag nor
+#                 AUTHZ_OWNER_EMAIL gives one. The address becomes an Authentik administrator
+#                 (username == email, no password) and the OIDC `sub` PS Service expects, so the
+#                 deploy sets the whole bootstrap identity in one pass; a single-use passkey
+#                 enrolment link is printed at the end. Re-running is the owner-recovery path.
 #   --rotate-key  Rotate the Azure Cognitive Services API key currently NOT stored in Key Vault
 #                 (the "inactive" slot) and write its new value back. Branches immediately after
 #                 flag parsing -- skips config validation, the confirmation table, RBAC
@@ -23,6 +30,7 @@
 #
 # Exit codes: 2 usage error, 1 validation/preflight/business failure, 0 success -- including
 # the evaluator declining at the confirmation prompt and a fully-idempotent no-op rerun.
+# shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
 # Every hard-stop failure message goes through print_error (below), which is red only when
@@ -40,6 +48,10 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/deploy-llm-common.sh
 source "${SCRIPT_DIR}/lib/deploy-llm-common.sh"
+# Shared with scripts/deploy-ps-eval.sh (issue #165): creates the first Authentik owner and
+# issues the passkey-enrolment link.
+# shellcheck source=lib/authentik-owner.sh
+source "${SCRIPT_DIR}/lib/authentik-owner.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
@@ -50,10 +62,18 @@ readonly POSITIVE_INTEGER_PATTERN='^[1-9][0-9]*$'
 # Matches scripts/deploy-llm.sh's own AZURE_API_VERSION_LITERAL (issue #105) -- not evaluator-
 # tunable there either; the API version is a platform constant, not a per-subscription choice.
 readonly AZURE_API_VERSION_LITERAL="preview"
-readonly USAGE="usage: $(basename "$0") [--yes] [--rotate-key]"
+USAGE="usage: $(basename "$0") [--yes] [--owner-email <address>] [--rotate-key]"
+readonly USAGE
 
 skip_confirmation=false
 rotate_key=false
+# Read by lib/authentik-owner.sh (issue #165): the owner's email, the --yes switch that turns its
+# prompt off, and the API/link bases + curl arguments for the owner-creation calls.
+OWNER_EMAIL=""
+SKIP_OWNER_PROMPT=false
+AUTHENTIK_API_BASE=""
+AUTHENTIK_LINK_BASE=""
+AUTHENTIK_CURL_ARGS=()
 # account_endpoint / made_changes are process-wide state written by ensure_account/ensure_*
 # below (S9). Set via plain assignment inside functions that are always called as a plain
 # statement, never wrapped in a `$(...)` command substitution -- that would fork a subshell
@@ -77,6 +97,14 @@ parse_args() {
     case "$1" in
       --yes) skip_confirmation=true ;;
       --rotate-key) rotate_key=true ;;
+      --owner-email)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          print_error '--owner-email needs a value\n%s\n' "$USAGE"
+          exit "$EXIT_USAGE"
+        fi
+        OWNER_EMAIL="$2"
+        shift
+        ;;
       *)
         print_error 'unknown flag: %s\n%s\n' "$1" "$USAGE"
         exit "$EXIT_USAGE"
@@ -94,9 +122,10 @@ load_config() {
   fi
   # shellcheck source=ps-defaults.conf
   source "$CONFIG_FILE"
-  # A config predating issue #161 has neither field; default both blank so the prompt (rather than
-  # `set -u`'s unbound-variable error) is what an operator with an older file sees.
-  : "${AUTHZ_BOOTSTRAP_OWNER_SUBJECT:=}" "${AUTHZ_BOOTSTRAP_OWNER_ISSUER:=}"
+  # A config predating issue #165 has no AUTHZ_OWNER_EMAIL (the retired AUTHZ_BOOTSTRAP_OWNER_*
+  # pair is ignored); default it blank so the prompt (rather than `set -u`'s unbound-variable
+  # error) is what an operator with an older file sees.
+  : "${AUTHZ_OWNER_EMAIL:=}"
 }
 
 # print_error <format> [args...]: like `printf <format> >&2`, wrapped in COLOR_RED/COLOR_RESET
@@ -105,6 +134,7 @@ load_config() {
 print_error() {
   local format="$1"
   shift
+  # shellcheck disable=SC2059 # the caller's format is deliberately wrapped in the colour codes
   printf "${COLOR_RED}${format}${COLOR_RESET}" "$@" >&2
 }
 
@@ -210,23 +240,18 @@ prompt_for_tls_contact_email() {
   read -r TLS_CONTACT_EMAIL || true
 }
 
-# prompt_for_authz_bootstrap_owner: interactively asks for AUTHZ_BOOTSTRAP_OWNER_SUBJECT/_ISSUER
-# when the config file left either blank -- like TLS_CONTACT_EMAIL, there is no sensible value to
-# bake into a checked-in file: it is the operator's own Authentik `sub`/`iss`, which cannot be
-# known before their first login (issue #161). The chart's fail() guard rejects any
-# localTestBypass.enabled=false render without both, so this script must never silently omit them.
-# Enter a placeholder guaranteed not to match any real principal (installation-guide.md's
-# "SystemOwner bootstrap" section) on a first deploy, then rerun with the real values. Skipped
-# per-field when already set, so a fully pre-filled config never blocks on stdin.
-prompt_for_authz_bootstrap_owner() {
-  if [[ -z "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT" ]]; then
-    printf 'Expected first SystemOwner subject (`sub` claim; AUTHZ_BOOTSTRAP_OWNER_SUBJECT): '
-    read -r AUTHZ_BOOTSTRAP_OWNER_SUBJECT || true
+# resolve_owner_email: the owner email (issue #165) comes from --owner-email, else the config's
+# AUTHZ_OWNER_EMAIL, else an interactive prompt (never with --yes) -- like TLS_CONTACT_EMAIL there
+# is no sensible value to bake into a checked-in file. The address is validated up front, before any
+# `az` call. It is both the Authentik username and the `sub` PS Service's bootstrap expects
+# (`sub_mode: user_username`), so no first login is needed to learn it (the retired
+# placeholder-identity two-deploy flow).
+resolve_owner_email() {
+  if [[ -z "$OWNER_EMAIL" ]]; then
+    OWNER_EMAIL="$AUTHZ_OWNER_EMAIL"
   fi
-  if [[ -z "$AUTHZ_BOOTSTRAP_OWNER_ISSUER" ]]; then
-    printf 'Expected first SystemOwner issuer (`iss` claim; AUTHZ_BOOTSTRAP_OWNER_ISSUER): '
-    read -r AUTHZ_BOOTSTRAP_OWNER_ISSUER || true
-  fi
+  SKIP_OWNER_PROMPT="$skip_confirmation"
+  prompt_owner_email || exit "$EXIT_FAILURE"
 }
 
 # validate_config: runs every config validation rule against the loaded config, in order.
@@ -243,8 +268,6 @@ validate_config() {
   validate_non_empty "LLM_EMBED_MODEL_SKU" "$LLM_EMBED_MODEL_SKU"
   validate_positive_integer "LLM_EMBED_MODEL_CAPACITY" "$LLM_EMBED_MODEL_CAPACITY"
   validate_non_empty "TLS_CONTACT_EMAIL" "$TLS_CONTACT_EMAIL"
-  validate_non_empty "AUTHZ_BOOTSTRAP_OWNER_SUBJECT" "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT"
-  validate_non_empty "AUTHZ_BOOTSTRAP_OWNER_ISSUER" "$AUTHZ_BOOTSTRAP_OWNER_ISSUER"
 }
 
 # fetch_subscription_id: prints the signed-in az session's subscription id. Called exactly once
@@ -401,7 +424,9 @@ readonly AKS_RBAC_ADMIN_ROLE="Azure Kubernetes Service RBAC Cluster Admin"
 # published OCI chart (charts/policy-system, published to ghcr.io); HELM_RELEASE_NAME is the Helm
 # release name ensure_release below installs/upgrades.
 readonly LLM_SECRET_NAME="policy-system-llm-credentials"
-readonly CHART_REF="oci://ghcr.io/mindovermachine-dev/charts/policy-system"
+# PS_CHART_REF (a chart path or OCI ref) overrides the published chart, e.g. to deploy an
+# unreleased local chart (issue #165's live verification); unset, the published chart is used.
+readonly CHART_REF="${PS_CHART_REF:-oci://ghcr.io/mindovermachine-dev/charts/policy-system}"
 readonly HELM_RELEASE_NAME="policy-system"
 # PS Service Ingress name (S18) -- matches the chart's own rendered Service name exactly
 # ("{{ include "policy-system.fullname" . }}-ps-service", charts/policy-system/templates/
@@ -419,9 +444,18 @@ readonly PS_SERVICE_NAME="${HELM_RELEASE_NAME}-ps-service"
 # its `authentik.server.fullname` template appends "-server" to that -- see IMPL_SLICE_5.md for
 # the full derivation and the exact `helm template` output this was read from.
 readonly AUTHENTIK_SERVICE_NAME="${HELM_RELEASE_NAME}-authentik-server"
+# Issue #165. PS Service calls Authentik in-cluster: the Ingress routes only the login/enrolment
+# paths (AUTHENTIK_PUBLIC_PATHS below), so the invitation API PS Service needs for `invite_user`
+# is reachable only through the Service. `/auth` is Authentik's web path (AUTHENTIK_WEB__PATH in
+# values-prod.yaml); the Service's port 80 is the default and needs no port here.
+readonly AUTHENTIK_IN_CLUSTER_BASE_URL="http://${AUTHENTIK_SERVICE_NAME}/auth"
+# The Secret holding the one shared API token (chart-generated: templates/authentik-api-token-
+# secret.yaml) that Authentik also reads as its bootstrap token.
+readonly AUTHENTIK_API_TOKEN_SECRET_NAME="${HELM_RELEASE_NAME}-authentik-api-token"
+readonly AUTHENTIK_ROLLOUT_TIMEOUT="${AUTHENTIK_ROLLOUT_TIMEOUT:-900s}"
 # Resolves the REAL chart file directly (S14, AC-BI-013 script-half) -- reads
 # charts/policy-system/values-prod.yaml from the repo's actual chart directory, never a local
-# copy that could silently drift from it. This script (scripts/deploy-ps.sh) lives ONE directory
+# copy that could silently drift from it. This script (scripts/deploy-ps-prod.sh) lives ONE directory
 # below the repo root (scripts/), so one "../" from SCRIPT_DIR is correct here -- verified by
 # resolving the path against this script's own real SCRIPT_DIR before choosing this literal
 # (independently re-confirmed by IMPL_SLICE_14.md's own path-existence test, which reads this
@@ -460,9 +494,9 @@ ensure_providers_registered() {
     az provider register --namespace "$ns" >/dev/null
   done
 
-  local attempt
+  local _attempt
   for ns in "${unregistered[@]}"; do
-    for attempt in $(seq 1 "$PROVIDER_REGISTRATION_WAIT_ATTEMPTS"); do
+    for _attempt in $(seq 1 "$PROVIDER_REGISTRATION_WAIT_ATTEMPTS"); do
       provider_registered "$ns" && continue 2
       sleep "$PROVIDER_REGISTRATION_WAIT_INTERVAL_SECONDS"
     done
@@ -1040,30 +1074,38 @@ ensure_llm_secret() {
   return 0
 }
 
-# release_values_json <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>:
-# prints the JSON shape of the --set values this script passes to `helm upgrade --install`, in the
-# same structure `helm get values -o json` returns -- lets ensure_release compare desired vs.
-# deployed. Exactly 7 leaf fields: llm.existingSecret, psService.auth.{issuer,audience,
-# cliClientId,scopes}, and (issue #161) psService.authzBootstrapOwner.{subject,issuer}.
+# release_values_json <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
+# <authentik_base_url> <authentik_public_url>: prints the JSON shape of the --set values this
+# script passes to `helm upgrade --install`, in the same structure `helm get values -o json`
+# returns -- lets ensure_release compare desired vs. deployed. Exactly 9 leaf fields:
+# llm.existingSecret, psService.auth.{issuer,audience,cliClientId,scopes}, (issues #161/#165)
+# psService.authzBootstrapOwner.{subject,issuer} -- the owner's email and the issuer, both known
+# before Authentik exists -- and (issue #165, OD-1 = B) psService.authentik.{baseUrl,publicUrl}:
+# the in-cluster API address PS Service calls, and the public address used only for the
+# invitee-facing link.
 release_values_json() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4" owner_subject="$5" owner_issuer="$6"
+  local authentik_base_url="$7" authentik_public_url="$8"
   jq -n --arg secret "$LLM_SECRET_NAME" --arg issuer "$issuer" --arg audience "$audience" \
     --arg cli "$cli_client_id" --arg scopes "$scopes" \
     --arg owner_subject "$owner_subject" --arg owner_issuer "$owner_issuer" \
+    --arg base "$authentik_base_url" --arg public "$authentik_public_url" \
     '{llm: {existingSecret: $secret},
       psService: {auth: {issuer: $issuer, audience: $audience, cliClientId: $cli, scopes: $scopes},
-        authzBootstrapOwner: {subject: $owner_subject, issuer: $owner_issuer}}}'
+        authzBootstrapOwner: {subject: $owner_subject, issuer: $owner_issuer},
+        authentik: {baseUrl: $base, publicUrl: $public}}}'
 }
 
-# ensure_release <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>:
+# ensure_release <issuer> <audience> <cli_client_id> <scopes> <owner_subject> <owner_issuer>
+# <authentik_base_url> <authentik_public_url>:
 # write-if-changed against the currently deployed release's values (`helm get values`), since
 # plain `helm upgrade --install` has no built-in no-op detection of its own -- it creates a new
 # revision even when nothing changed. <audience> is the fixed Authentik application slug
-# (issue #129), same literal as <cli_client_id>. <owner_subject>/<owner_issuer> are the
-# operator-supplied expected first-SystemOwner identity (issue #161): rerunning with the same
-# pair is a no-op here, and ps_service's own "grantable once" bootstrap is unaffected either way.
+# (issue #129), same literal as <cli_client_id>. <owner_subject> is the owner's email and
+# <owner_issuer> the issuer (issue #165): rerunning with the same values is a no-op here, and
+# ps_service's own "grantable once" bootstrap is unaffected either way.
 #
-# Compares only the 7 fields release_values_json sets, extracted from `helm get values`'s output
+# Compares only the 9 fields release_values_json sets, extracted from `helm get values`'s output
 # via the same jq shape, rather than the whole object -- `helm get values` also echoes back
 # everything from `-f values-prod.yaml` (falkordb.*, llm.provider, psService.service.type), which
 # this script never sets itself via --set and doesn't need to compare; a whole-object comparison
@@ -1072,10 +1114,10 @@ release_values_json() {
 # and causing `helm upgrade` to run on every rerun regardless of whether anything changed.
 ensure_release() {
   local issuer="$1" audience="$2" cli_client_id="$3" scopes="$4"
-  local owner_subject="$5" owner_issuer="$6"
+  local owner_subject="$5" owner_issuer="$6" authentik_base_url="$7" authentik_public_url="$8"
   local desired_json
   desired_json="$(release_values_json "$issuer" "$audience" "$cli_client_id" "$scopes" \
-    "$owner_subject" "$owner_issuer")"
+    "$owner_subject" "$owner_issuer" "$authentik_base_url" "$authentik_public_url")"
   if helm status "$HELM_RELEASE_NAME" >/dev/null 2>&1; then
     local current_json current_subset_json
     current_json="$(helm get values "$HELM_RELEASE_NAME" -o json)"
@@ -1084,7 +1126,9 @@ ensure_release() {
         psService: {auth: {issuer: .psService.auth.issuer, audience: .psService.auth.audience,
           cliClientId: .psService.auth.cliClientId, scopes: .psService.auth.scopes},
           authzBootstrapOwner: {subject: .psService.authzBootstrapOwner.subject,
-            issuer: .psService.authzBootstrapOwner.issuer}}}' \
+            issuer: .psService.authzBootstrapOwner.issuer},
+          authentik: {baseUrl: .psService.authentik.baseUrl,
+            publicUrl: .psService.authentik.publicUrl}}}' \
       <<< "$current_json")"
     if [[ "$(jq -S . <<< "$current_subset_json")" == "$(jq -S . <<< "$desired_json")" ]]; then
       return 0
@@ -1097,7 +1141,9 @@ ensure_release() {
     --set psService.auth.cliClientId="$cli_client_id" \
     --set psService.auth.scopes="$scopes" \
     --set psService.authzBootstrapOwner.subject="$owner_subject" \
-    --set psService.authzBootstrapOwner.issuer="$owner_issuer" >/dev/null
+    --set psService.authzBootstrapOwner.issuer="$owner_issuer" \
+    --set psService.authentik.baseUrl="$authentik_base_url" \
+    --set psService.authentik.publicUrl="$authentik_public_url" >/dev/null
   made_changes=true
 }
 
@@ -1301,6 +1347,23 @@ EOF
   return 0
 }
 
+# The only Authentik paths the public Ingress routes (issue #165): what an end user's browser and
+# ps-cli need to log in and enroll -- OIDC discovery/authorize/token under /application/o/, the
+# device-code entry, the default flows, the flow UI and its executor/config/brand endpoints, and
+# static assets. Everything else -- the admin UI (/auth/if/admin/), the admin and core APIs, the
+# invitation API PS Service calls in-cluster -- is simply not routed: PS Service's own catch-all
+# Ingress answers those, never Authentik. One list, rendered into the manifest below.
+readonly AUTHENTIK_PUBLIC_PATHS=(
+  /auth/application/o/
+  /auth/device
+  /auth/flows/-/default/
+  /auth/if/flow/
+  /auth/api/v3/flows/executor/
+  /auth/api/v3/root/config/
+  /auth/api/v3/core/brands/current/
+  /auth/static/
+)
+
 # ensure_authentik_ingress <hostname>: create-if-absent a SECOND Ingress object exposing
 # Authentik's own server Service at the SAME <hostname> ensure_ps_service_ingress already resolved
 # for PS Service -- S5, #129, per CHANGES.md row F1 (this supersedes PLAN.md §0.6/§5's original
@@ -1308,10 +1371,12 @@ EOF
 # exactly one `dnsSettings.domainNameLabel`, so a second `ensure_dns_label` call would steal PS
 # Service's own label rather than add a second hostname).
 #
-# Routes only the `/auth` path prefix to $AUTHENTIK_SERVICE_NAME (the upstream `authentik`
-# dependency chart's own rendered server Service, confirmed via `helm template` -- see this
-# script's own AUTHENTIK_SERVICE_NAME comment and IMPL_SLICE_5.md), leaving PS Service's existing
-# Ingress (ensure_ps_service_ingress) to keep handling every other path on the same host.
+# Routes only the AUTHENTIK_PUBLIC_PATHS prefixes to $AUTHENTIK_SERVICE_NAME (the upstream
+# `authentik` dependency chart's own rendered server Service, confirmed via `helm template` -- see
+# this script's own AUTHENTIK_SERVICE_NAME comment and IMPL_SLICE_5.md), leaving PS Service's
+# existing Ingress (ensure_ps_service_ingress) to keep handling every other path on the same host.
+# Since issue #165 that is an allowlist, not the whole `/auth` prefix: the admin UI and admin API
+# stay cluster-internal (an administrator reaches them with `kubectl port-forward`).
 #
 # Deliberately carries NO `tls:` block and NO `cert-manager.io/cluster-issuer` annotation:
 # ensure_ps_service_ingress's own Ingress for this exact same $hostname already provisions the one
@@ -1322,7 +1387,17 @@ EOF
 #
 # Idempotent via the same apply_output_changed detection ensure_ps_service_ingress uses.
 ensure_authentik_ingress() {
-  local hostname="$1" apply_output
+  local hostname="$1" apply_output path paths_yaml="" newline=$'\n'
+  for path in "${AUTHENTIK_PUBLIC_PATHS[@]}"; do
+    paths_yaml+="          - path: ${path}
+            pathType: Prefix
+            backend:
+              service:
+                name: ${AUTHENTIK_SERVICE_NAME}
+                port:
+                  name: http
+"
+  done
   apply_output="$(kubectl apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -1334,17 +1409,44 @@ spec:
     - host: ${hostname}
       http:
         paths:
-          - path: /auth
-            pathType: Prefix
-            backend:
-              service:
-                name: ${AUTHENTIK_SERVICE_NAME}
-                port:
-                  name: http
+${paths_yaml%"$newline"}
 EOF
 )"
   apply_output_changed "$apply_output" && made_changes=true
   return 0
+}
+
+# wait_for_authentik: blocks until Authentik's server Deployment is Ready -- the owner-creation
+# step below talks to its API. A first install pulls large images, hence the generous default.
+wait_for_authentik() {
+  if ! kubectl rollout status "deployment/${AUTHENTIK_SERVICE_NAME}" \
+      --timeout="$AUTHENTIK_ROLLOUT_TIMEOUT" >/dev/null; then
+    print_error 'deployment/%s did not become Ready within %s. Fix: look at the pod events (kubectl get pods; kubectl describe pod ...; kubectl logs deploy/%s), then re-run.\n' \
+      "$AUTHENTIK_SERVICE_NAME" "$AUTHENTIK_ROLLOUT_TIMEOUT" "$AUTHENTIK_SERVICE_NAME"
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+# provision_authentik_owner <hostname>: creates the owner in Authentik and issues the enrolment
+# link (issue #165, via lib/authentik-owner.sh). The admin API is deliberately NOT on the public
+# Ingress, so the calls go through a loopback `kubectl port-forward` to the Authentik Service; the
+# link Authentik returns names that loopback address, so the lib rewrites it onto the public
+# `https://<hostname>/auth` authority (OD-2). Nothing is created on any failure (AC-BI-016).
+provision_authentik_owner() {
+  local hostname="$1" kube_namespace
+  kube_namespace="$(current_kube_namespace)"
+  read_bootstrap_token "$kube_namespace" "$AUTHENTIK_API_TOKEN_SECRET_NAME" \
+    || exit "$EXIT_FAILURE"
+  start_authentik_port_forward "$kube_namespace" "$AUTHENTIK_SERVICE_NAME" 80 \
+    || exit "$EXIT_FAILURE"
+  AUTHENTIK_API_BASE="http://127.0.0.1:${AUTHENTIK_PF_LOCAL_PORT}/auth"
+  AUTHENTIK_LINK_BASE="https://${hostname}/auth"
+  AUTHENTIK_CURL_ARGS=()
+  if ! provision_owner "$OWNER_EMAIL"; then
+    stop_authentik_port_forward
+    exit "$EXIT_FAILURE"
+  fi
+  stop_authentik_port_forward
 }
 
 # print_provisioning_summary: evaluator-visible closing message (S18) -- names which secrets now
@@ -1366,6 +1468,8 @@ print_provisioning_summary() {
   if [[ -n "$TLS_CONTACT_EMAIL" ]]; then
     printf 'TLS contact email: %s\n' "$TLS_CONTACT_EMAIL"
   fi
+  # The enrolment link is a single-use credential-equivalent: printed here, once, last.
+  print_owner_link_message
 }
 
 # require_account_exists <account_name>: fails clearly if the AIServices account has not been
@@ -1376,7 +1480,7 @@ require_account_exists() {
   local account_name="$1"
   if ! az cognitiveservices account show --name "$account_name" \
       --resource-group "$RESOURCE_GROUP_NAME" >/dev/null 2>&1; then
-    print_error 'Azure AIServices account %s not found. Run scripts/deploy-ps.sh first (without --rotate-key).\n' \
+    print_error 'Azure AIServices account %s not found. Run scripts/deploy-ps-prod.sh first (without --rotate-key).\n' \
       "$account_name"
     exit "$EXIT_FAILURE"
   fi
@@ -1388,7 +1492,7 @@ require_account_exists() {
 require_keyvault_exists() {
   local vault_name="$1" flag_name="$2"
   if ! keyvault_exists "$vault_name"; then
-    print_error 'Key Vault %s not found. Run scripts/deploy-ps.sh first (without %s).\n' \
+    print_error 'Key Vault %s not found. Run scripts/deploy-ps-prod.sh first (without %s).\n' \
       "$vault_name" "$flag_name"
     exit "$EXIT_FAILURE"
   fi
@@ -1467,12 +1571,12 @@ main() {
     return
   fi
 
-  check_required_tools kubectl helm
+  check_required_tools kubectl helm curl
 
   log_step "Loading and validating $CONFIG_FILE_DISPLAY_PATH"
   load_config
   prompt_for_tls_contact_email
-  prompt_for_authz_bootstrap_owner
+  resolve_owner_email
   validate_config
 
   local subscription_id
@@ -1573,7 +1677,7 @@ main() {
   local issuer
   issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
   ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \
-    "$AUTHZ_BOOTSTRAP_OWNER_SUBJECT" "$AUTHZ_BOOTSTRAP_OWNER_ISSUER"
+    "$OWNER_EMAIL" "$issuer" "$AUTHENTIK_IN_CLUSTER_BASE_URL" "https://${public_hostname}/auth"
 
   log_step "Installing cert-manager"
   ensure_cert_manager
@@ -1589,6 +1693,14 @@ main() {
   # ensure_ps_service_ingress.
   log_step "Ensuring the Authentik Ingress"
   ensure_authentik_ingress "$public_hostname"
+
+  # Issue #165: the owner (an Authentik admin, username == email, no password) and the
+  # single-use passkey-enrolment link. The port-forward is killed however the script ends.
+  trap stop_authentik_port_forward EXIT
+  log_step "Waiting for Authentik to become Ready"
+  wait_for_authentik
+  log_step "Creating the owner and issuing the passkey-enrolment link"
+  provision_authentik_owner "$public_hostname"
 
   print_provisioning_summary
 

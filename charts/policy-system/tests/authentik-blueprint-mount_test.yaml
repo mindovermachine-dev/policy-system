@@ -1,0 +1,47 @@
+suite: authentik blueprint ConfigMap mounted on the worker, default profile (issue #165 Slice 1A)
+set:
+  authentik.enabled: true
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+templates:
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  # Upstream applies blueprints in the WORKER only (the server Deployment has no blueprint
+  # volume); the worker mount is the load-bearing one.
+  - it: worker Deployment mounts the ps-cli blueprint ConfigMap
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: blueprints-cm-policy-system-authentik-blueprint
+            configMap:
+              name: policy-system-authentik-blueprint
+---
+suite: authentik blueprint ConfigMap mounted on the worker, prod profile (issue #165 Slice 1A)
+values:
+  - ../values-prod.yaml
+set:
+  llm.provider: azure
+  llm.azure.apiKey: test-azure-key
+  llm.azure.apiBase: https://example-test.openai.azure.com/
+  psService.auth.issuer: https://example-issuer.test
+  psService.auth.audience: ps-service
+  psService.authzBootstrapOwner.subject: first-owner-subject
+  psService.authzBootstrapOwner.issuer: https://example-issuer.test
+templates:
+  - charts/authentik/templates/worker/deployment.yaml
+  - charts/authentik/templates/secret.yaml
+tests:
+  # Upstream applies blueprints in the WORKER only (the server Deployment has no blueprint
+  # volume); the worker mount is the load-bearing one.
+  - it: worker Deployment mounts the ps-cli blueprint ConfigMap
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: blueprints-cm-policy-system-authentik-blueprint
+            configMap:
+              name: policy-system-authentik-blueprint

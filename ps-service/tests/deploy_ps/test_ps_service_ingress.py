@@ -1,6 +1,6 @@
-"""PS Service Ingress for `scripts/deploy-ps.sh` (AC-BI-015 completion; PLAN.md §5/S18).
+"""PS Service Ingress for `scripts/deploy-ps-prod.sh` (AC-BI-015 completion; PLAN.md §5/S18).
 
-`ensure_ps_service_ingress` is ported verbatim from `spikes/deploy-ps-azure/deploy-ps.sh`'s own
+`ensure_ps_service_ingress` is ported verbatim from `spikes/deploy-ps-azure/deploy-ps-prod.sh`'s own
 equivalent (the trusted empirical reference): a TLS-terminated `Ingress` targeting the chart's
 own rendered PS Service `Service` (name/port confirmed by reading `charts/policy-system/
 templates/ps-service-service.yaml` before writing this slice: `{{ include
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from conftest import DeployPsFixture
 
-# Mirrors scripts/deploy-ps.sh's own S18/S16/S17 literals -- hardcoded here rather than parsed
+# Mirrors scripts/deploy-ps-prod.sh's own S18/S16/S17 literals -- hardcoded here rather than parsed
 # from the script, same precedent as every other deploy_ps test module.
 PS_SERVICE_NAME = "policy-system-ps-service"
 CLUSTER_ISSUER_NAME = "letsencrypt-prod"
