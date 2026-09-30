@@ -13,7 +13,7 @@ that walkthrough, step 6 onward.
 - [Example: `helm upgrade`](#example-helm-upgrade)
 - [Ollama values](#ollama-values)
 - [Azure values](#azure-values)
-- [Passkey Signing Postgres values](#passkey-signing-postgres-values)
+- [PS Postgres values](#ps-postgres-values)
 - [Authentik credentials values](#authentik-credentials-values)
 
 ## Core values
@@ -187,39 +187,50 @@ curl -s http://127.0.0.1:8000/ready
 as a pre-flight and stop with `LLM Interface is unavailable.` while `llm_interface` is
 listed.
 
-## Passkey Signing Postgres values
+## PS Postgres values
 
-The Passkey Signing component (issue #131) stores pending merge approvals and enrolled
-WebAuthn signing credentials in its own, hand-rolled PostgreSQL instance — **distinct
-from FalkorDB and from Authentik's own bundled Postgres** (AC-BI-006): its own
-Deployment/Service/PVC/NetworkPolicy/Secret, never a shared PVC, NetworkPolicy selector,
-or credential Secret with either. Unlike `authentik.*` (opt-in via `authentik.enabled`),
-this instance is always deployed — it backs a core near-miss-merge-approval code path,
-the same "always-on" posture as `falkordb.*`.
+PS Service keeps its durable state in one PostgreSQL server (issue #130) holding two
+databases, each with its own least-privilege role: `ps_state` (audit events, authz,
+runtime configuration) and `ps_signing` (Passkey Signing: pending merge approvals and
+enrolled WebAuthn credentials). It is **distinct from FalkorDB and from Authentik's own
+bundled Postgres** (AC-BI-006): its own Deployment/Service/PVC/NetworkPolicy/Secrets,
+never a shared PVC, NetworkPolicy selector, or credential Secret with either. Unlike
+`authentik.*` (opt-in via `authentik.enabled`), it is always deployed, the same
+"always-on" posture as `falkordb.*`.
+
+On first start (empty data directory only) `files/ps-postgres-init.sh` creates both roles
+and databases, revokes `CONNECT` on both databases from `PUBLIC`, grants it only to each
+database's own role, and revokes `CREATE` on schema `public` from `PUBLIC` in each. The
+Postgres image does not re-run it against an existing volume, and changing a Secret later
+does not change an existing role's password (run `ALTER ROLE` by hand).
 
 | Key | Default (local-test) | Purpose |
 | --- | --- | --- |
-| `psServiceSigning.postgres.image.repository` / `psServiceSigning.postgres.image.tag` | `postgres` / `16-alpine` | Signing Postgres image — same version family as `.devcontainer/docker-compose.yml`'s local dev `postgres` service. |
-| `psServiceSigning.postgres.database` | `ps_service_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` — the database name, injected into `ps-service`'s own Deployment as a plain (non-secret) env var. |
-| `psServiceSigning.postgres.user` | `ps_service` | `PS_PASSKEYSIGNING_POSTGRES_USER` — same non-secret env-var wiring as `database` above. |
-| **`psServiceSigning.postgres.existingSecret`** | `""` | **(AC-BI-002/AC-BI-007, issue #159)** When unset (the default in both profiles), the chart generates and persists `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` itself via a `lookup`+`randAlphaNum` idiom (`templates/signing-postgres-secret.yaml`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead — same `existingSecret`-or-render convention as `llm.existingSecret`. |
-| `psServiceSigning.postgres.persistence.size` | `10Gi` | PVC storage request for the signing Postgres data volume. |
-| `psServiceSigning.postgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
-| `psServiceSigning.postgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
+| `psPostgres.image.repository` / `psPostgres.image.tag` | `postgres` / `16-alpine` | Image — same version family as `.devcontainer/docker-compose.yml`'s local dev `postgres` service. |
+| `psPostgres.admin.user` | `postgres_admin` | Superuser that runs the init script. Its Secret is consumed only by the Postgres container; the `ps-service` pod never references it. |
+| `psPostgres.state.database` / `psPostgres.state.user` | `ps_state` / `ps_state` | `PS_STATE_POSTGRES_DATABASE` / `PS_STATE_POSTGRES_USER` — plain (non-secret) env vars on `ps-service`, and the names the init script creates. |
+| `psPostgres.signing.database` / `psPostgres.signing.user` | `ps_signing` / `ps_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` / `PS_PASSKEYSIGNING_POSTGRES_USER` — same wiring for Passkey Signing. |
+| **`psPostgres.admin.existingSecret`** / **`psPostgres.state.existingSecret`** / **`psPostgres.signing.existingSecret`** | `""` | **(AC-BI-002/AC-BI-007, issue #159)** When a value is unset (the default in both profiles), the chart generates and persists that credential itself via a `lookup`+`randAlphaNum` idiom (`templates/ps-postgres-secret.yaml`; Secrets `<fullname>-ps-postgres-{admin,state,signing}-credentials`, e.g. `policy-system-ps-postgres-{admin,state,signing}-credentials` for release `policy-system`; `<fullname>` is the release name when it already contains `policy-system`, else `<release>-policy-system`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead; each value suppresses only its own Secret. Required keys: `POSTGRES_PASSWORD` (admin), `PS_STATE_POSTGRES_PASSWORD` (state), `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` (signing). |
+| `psPostgres.persistence.size` | `10Gi` | PVC storage request for the data volume. |
+| `psPostgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
+| `psPostgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
 
-`ps-service`'s Deployment consumes this instance via five env vars —
-`PS_PASSKEYSIGNING_POSTGRES_HOST` (the chart's own rendered Service name, never a pod IP),
-`_PORT` (fixed `5432`), `_DATABASE`, `_USER` (both plain values above), and `_PASSWORD`
-(always sourced from the Secret named by `existingSecret`, or the chart-rendered one when
-that's empty — never a plain env value). These map directly onto `ServiceConfig`'s
-`passkey_signing_postgres_host`/`_port`/`_database`/`_user`/`_password` fields.
+`ps-service`'s Deployment consumes the server via ten env vars, five per database:
+`PS_STATE_POSTGRES_*` and `PS_PASSKEYSIGNING_POSTGRES_*` — `_HOST` (the chart's own
+rendered Service name, identical for both, never a pod IP), `_PORT` (fixed `5432`),
+`_DATABASE`, `_USER` (plain values above), and `_PASSWORD` (always from that role's own
+Secret, never a plain env value). These map onto `ServiceConfig`'s `state_postgres_*` and
+`passkey_signing_postgres_*` fields.
 
 ```bash
-# Example: point the chart at an operator-managed Secret instead of the local-test default
-kubectl create secret generic my-signing-postgres-secret \
+# Example: point the chart at operator-managed Secrets instead of the local-test default
+kubectl create secret generic my-ps-state-secret \
+  --from-literal=PS_STATE_POSTGRES_PASSWORD="$STATE_POSTGRES_PASSWORD"
+kubectl create secret generic my-ps-signing-secret \
   --from-literal=PS_PASSKEYSIGNING_POSTGRES_PASSWORD="$SIGNING_POSTGRES_PASSWORD"
 helm upgrade policy-system ./charts/policy-system \
-  --set psServiceSigning.postgres.existingSecret=my-signing-postgres-secret \
+  --set psPostgres.state.existingSecret=my-ps-state-secret \
+  --set psPostgres.signing.existingSecret=my-ps-signing-secret \
   --wait
 ```
 

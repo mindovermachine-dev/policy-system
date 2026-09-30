@@ -1,0 +1,111 @@
+suite: ps postgres init script (issue #130 Slice 5, AC-BI-013)
+templates:
+  - ps-postgres-init-configmap.yaml
+  - ps-postgres-deployment.yaml
+set:
+  psService.localTestBypass.enabled: true
+tests:
+  - it: renders one ConfigMap carrying the init script
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-ps-postgres-init
+      - exists:
+          path: data["10-ps-init.sh"]
+
+  - it: init creates ps_state and ps_signing databases and two distinct roles
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'CREATE ROLE :"state_user"'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'CREATE ROLE :"signing_user"'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'CREATE DATABASE :"state_db"'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'CREATE DATABASE :"signing_db"'
+
+  - it: init ConfigMap revokes CONNECT from PUBLIC on both databases and grants CONNECT only to own role
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'REVOKE CONNECT ON DATABASE :"state_db" FROM PUBLIC'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'REVOKE CONNECT ON DATABASE :"signing_db" FROM PUBLIC'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'GRANT CONNECT ON DATABASE :"state_db" TO :"state_user"'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'GRANT CONNECT ON DATABASE :"signing_db" TO :"signing_user"'
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'GRANT CONNECT ON DATABASE :"state_db" TO :"signing_user"'
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'GRANT CONNECT ON DATABASE :"signing_db" TO :"state_user"'
+
+  - it: init ConfigMap revokes CREATE on schema public from PUBLIC in both databases
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "\\\\connect :\"state_db\"\\s+REVOKE CREATE ON SCHEMA public FROM PUBLIC"
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "\\\\connect :\"signing_db\"\\s+REVOKE CREATE ON SCHEMA public FROM PUBLIC"
+
+  - it: init script never echoes passwords and never enables shell tracing
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "set -[a-zA-Z]*x"
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "echo[^\\n]*PASSWORD"
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "ON_ERROR_STOP=1"
+
+  - it: Deployment mounts the init ConfigMap into docker-entrypoint-initdb.d, executable
+    template: ps-postgres-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.name=="ps-postgres-init")].mountPath
+          value: /docker-entrypoint-initdb.d
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="ps-postgres-init")].configMap.name
+          value: RELEASE-NAME-policy-system-ps-postgres-init
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="ps-postgres-init")].configMap.defaultMode
+          value: 365
+
+  - it: Deployment passes both roles' passwords from their own Secrets and drops POSTGRES_DB
+    template: ps-postgres-deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_DB")]
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-ps-postgres-state-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-ps-postgres-signing-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_DATABASE")].value
+          value: ps_state
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_SIGNING_DATABASE")].value
+          value: ps_signing

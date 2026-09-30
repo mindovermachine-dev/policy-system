@@ -32,6 +32,7 @@ from ps_service.api.dependencies import (
     require_access_role,
 )
 from ps_service.api.errors import (
+    CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     MergeApprovalRequiresAuthenticatedCallerError,
     PendingApprovalNotFoundError,
@@ -90,6 +91,7 @@ from ps_service.passkey_signing.service import check_pending_approval, create_me
 from ps_service.passkey_signing.store import (
     PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
+from ps_service.runtime_config import RuntimeConfigError
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
@@ -229,9 +231,9 @@ async def list_curated_catalog(
     This is **not** CELEX-filtered -- it reflects the full ``catalog.json``
     listing so ``ps-cli catalog list`` sees internal-source instruments too.
     Since issue #125, the listing is fetched at runtime from the *effective*
-    curated-content source: a persisted FalkorDB override when one exists,
-    else ``config.curated_source_base_url`` (default: the public Policy
-    System GitHub repo, AC-BI-001; overridable with no code change,
+    curated-content source: a persisted override (issue #130: a ``runtime_config`` row in the
+    PS state Postgres) when one exists, else ``config.curated_source_base_url``
+    (default: the public Policy System GitHub repo, AC-BI-001; overridable with no code change,
     AC-BI-002), resolved on every call via the injected
     ``dependencies.resolve_effective_source`` (AC-BI-013) before fetching via
     ``dependencies.fetch_catalog`` (AC-BI-003) -- no longer read from the
@@ -239,10 +241,10 @@ async def list_curated_catalog(
     dispatched off the event loop via ``run_in_threadpool``, mirroring
     ``create_change_check``'s own async/blocking-call pattern. Depends on no
     FalkorDB/LLM fixture at all -- a ``TestClient`` call against an app with
-    neither wired still succeeds (AC-BI-011's "no LLM provider configured"):
-    a FalkorDB outage during the override check falls open to
-    ``config.curated_source_base_url`` rather than failing the request
-    (D-FAILOPEN, ``ps_service.curated_source.resolve.resolve_effective_source``).
+    neither wired still succeeds (AC-BI-011's "no LLM provider configured").
+    Fails closed when the override cannot be read (issue #130, AC-BI-010, D-FAILCLOSED,
+    ``ps_service.curated_source.resolve.resolve_effective_source``): the request is not
+    served from ``config.curated_source_base_url`` in its place.
 
     ``principal`` (issue #58, AC-BI-005) is the representative route this
     plan proves the ``get_principal`` dependency against end to end: the
@@ -264,12 +266,17 @@ async def list_curated_catalog(
         A :class:`CuratedCatalogResponse` listing every curated entry.
 
     Raises:
+        CatalogSourceOverrideUnavailableError: The override could not be read (AC-BI-010) --
+            HTTP 503, never a silent fallback to the env-var/default source.
         CuratedSourceUnavailableError: The configured source is unreachable,
             or its response is missing/malformed (AC-BI-006) -- HTTP 502,
             never a silent fallback to stale data.
     """
     del principal  # unused on this representative route; see docstring above
-    effective_source = await run_in_threadpool(dependencies.resolve_effective_source, config)
+    try:
+        effective_source = await run_in_threadpool(dependencies.resolve_effective_source, config)
+    except RuntimeConfigError as exc:
+        raise CatalogSourceOverrideUnavailableError from exc
     try:
         entries = await run_in_threadpool(dependencies.fetch_catalog, effective_source.url)
     except CuratedSourceFetchError as exc:

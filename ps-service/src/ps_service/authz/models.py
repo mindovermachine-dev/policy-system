@@ -62,7 +62,7 @@ class AccessRoleAssignmentRow:
 
 @dataclass(frozen=True, slots=True)
 class AccessRoleGrantEvent:
-    """One row of the permanent, insert-only `access_role_grant_events` audit trail (§1.2)."""
+    """One row of the permanent, insert-only grant/revoke audit event (an `audit_events` row)."""
 
     id: str
     event_type: Literal["bootstrap", "grant", "revoke", "bootstrap_rejected"]

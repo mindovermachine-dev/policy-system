@@ -28,3 +28,19 @@ tests:
       - equal:
           path: spec.ports[?(@.name=="http")].nodePort
           value: 30080
+
+  # Regression (found during #130 kind verification): the evaluator profile deployed with
+  # `authentik.enabled=true` and default values never mounted this chart's blueprint
+  # ConfigMap (only values-prod.yaml did), so the fixed ps-cli OAuth2 application never
+  # existed, OIDC discovery returned 404 and ps-service crash-looped.
+  - it: authentik enabled on the local-test/kind default profile mounts the ps-cli blueprint ConfigMap into the worker
+    set:
+      authentik.enabled: true
+    template: charts/authentik/templates/worker/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: blueprints-cm-policy-system-authentik-blueprint
+            configMap:
+              name: policy-system-authentik-blueprint

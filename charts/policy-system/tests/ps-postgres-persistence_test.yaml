@@ -1,63 +1,67 @@
-suite: signing postgres persistence
+suite: ps postgres persistence
 templates:
-  - signing-postgres-deployment.yaml
-  - signing-postgres-pvc.yaml
+  - ps-postgres-deployment.yaml
+  - ps-postgres-pvc.yaml
 tests:
   - it: default values render a PVC and use it as the Deployment's volume source
     asserts:
       - equal:
           path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
-          value: RELEASE-NAME-policy-system-signing-postgres-data
-        template: signing-postgres-deployment.yaml
+          value: RELEASE-NAME-policy-system-ps-postgres-data
+        template: ps-postgres-deployment.yaml
       - notExists:
           path: spec.template.spec.volumes[0].emptyDir
-        template: signing-postgres-deployment.yaml
+        template: ps-postgres-deployment.yaml
       - hasDocuments:
           count: 1
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
       - isKind:
           of: PersistentVolumeClaim
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
       - equal:
           path: spec.accessModes
           value:
             - ReadWriteOnce
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
       - notExists:
           path: spec.storageClassName
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
 
   - it: renders a single-replica Deployment mounting the PVC on the Postgres data path
     asserts:
       - equal:
           path: spec.replicas
           value: 1
-        template: signing-postgres-deployment.yaml
+        template: ps-postgres-deployment.yaml
       - equal:
           path: spec.template.spec.containers[0].volumeMounts[0].name
-          value: signing-postgres-data
-        template: signing-postgres-deployment.yaml
+          value: ps-postgres-data
+        template: ps-postgres-deployment.yaml
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 5432
-        template: signing-postgres-deployment.yaml
+        template: ps-postgres-deployment.yaml
 
-  - it: POSTGRES_PASSWORD is sourced from the signing postgres credentials Secret, not a plain value
+  - it: POSTGRES_PASSWORD is sourced from the admin Secret only, and POSTGRES_USER is the admin role
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
-          value: RELEASE-NAME-policy-system-signing-postgres-credentials
-        template: signing-postgres-deployment.yaml
+          value: RELEASE-NAME-policy-system-ps-postgres-admin-credentials
+        template: ps-postgres-deployment.yaml
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_PASSWORD")].valueFrom.secretKeyRef.key
-          value: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
-        template: signing-postgres-deployment.yaml
+          value: POSTGRES_PASSWORD
+        template: ps-postgres-deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_USER")].value
+          value: postgres_admin
+        template: ps-postgres-deployment.yaml
 
-  - it: existingSecret set points POSTGRES_PASSWORD at the operator-managed Secret name instead
+  - it: admin existingSecret points POSTGRES_PASSWORD at the operator-managed Secret name instead
     set:
-      psServiceSigning.postgres.existingSecret: my-signing-postgres-secret
+      psPostgres.admin.existingSecret: my-admin-secret
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
-          value: my-signing-postgres-secret
-        template: signing-postgres-deployment.yaml
+          value: my-admin-secret
+        template: ps-postgres-deployment.yaml

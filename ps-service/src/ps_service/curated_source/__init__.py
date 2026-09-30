@@ -9,10 +9,15 @@ previously served unconditionally. Domain path: `ps.service.curatedsource`
 Re-exports `CuratedSourceConfigurationError`/`CuratedSourceFetchError`
 (`ps_service.curated_source.errors`), matching the `ps_service.restore`/
 `ps_service.export` package front doors' own re-export convention.
+
+The runtime override of the source URL lives in `ps_service.runtime_config` (issue #130);
+importing `ps_service.curated_source.config_key` below registers its key, so the key is
+registered whenever any part of this component is used.
 """
 
 from __future__ import annotations
 
+import ps_service.curated_source.config_key  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import: registers the catalog-source runtime-config key
 from ps_service.curated_source.errors import (
     CuratedSourceConfigurationError,
     CuratedSourceFetchError,

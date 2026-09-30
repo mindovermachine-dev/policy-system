@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "policy-system.fullname" . }}-ps-postgres
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "policy-system.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ps-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ps-postgres
+    spec:
+      containers:
+        - name: ps-postgres
+          image: "{{ .Values.psPostgres.image.repository }}:{{ .Values.psPostgres.image.tag }}"
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            # A dedicated PGDATA subdirectory avoids the well-known
+            # "initdb: directory not empty" failure some CSI drivers trigger
+            # by pre-seeding the PVC root (e.g. lost+found) -- mirrors
+            # authentik-postgres-deployment.yaml's own PGDATA choice exactly.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # No POSTGRES_DB: the init script (files/ps-postgres-init.sh) creates
+            # ps_state and ps_signing itself. The image runs it ONLY on an empty
+            # PGDATA, so a Secret password rotation never reaches existing roles
+            # (manual ALTER ROLE needed).
+            - name: POSTGRES_USER
+              value: {{ .Values.psPostgres.admin.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  # Admin (superuser) Secret: consumed ONLY here, never by the
+                  # ps-service pod, so the application never holds a superuser
+                  # credential.
+                  name: {{ include "policy-system.psPostgresAdminSecretName" . }}
+                  key: POSTGRES_PASSWORD
+            # Init-script inputs: database/role names and each role's own password
+            # from its own Secret. Read by the init script via psql -v variables.
+            - name: PS_STATE_DATABASE
+              value: {{ .Values.psPostgres.state.database | quote }}
+            - name: PS_STATE_USER
+              value: {{ .Values.psPostgres.state.user | quote }}
+            - name: PS_STATE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "policy-system.psPostgresStateSecretName" . }}
+                  key: PS_STATE_POSTGRES_PASSWORD
+            - name: PS_SIGNING_DATABASE
+              value: {{ .Values.psPostgres.signing.database | quote }}
+            - name: PS_SIGNING_USER
+              value: {{ .Values.psPostgres.signing.user | quote }}
+            - name: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "policy-system.psPostgresSigningSecretName" . }}
+                  key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+          volumeMounts:
+            - name: ps-postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: ps-postgres-init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: ps-postgres-data
+          persistentVolumeClaim:
+            claimName: {{ include "policy-system.fullname" . }}-ps-postgres-data
+        - name: ps-postgres-init
+          configMap:
+            name: {{ include "policy-system.fullname" . }}-ps-postgres-init
+            defaultMode: 0555

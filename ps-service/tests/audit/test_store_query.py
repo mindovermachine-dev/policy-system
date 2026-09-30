@@ -7,7 +7,7 @@ the AC-BI-011 no-leak guarantee actually hold can only be proven against a
 real Postgres instance.
 
 Deselected by default (BASELINE.md's tier gating) -- run explicitly with
-`uv run pytest -m postgres_live` against a reachable `PS_AUTHZ_POSTGRES_*`
+`uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
 
@@ -21,15 +21,23 @@ from typing import TYPE_CHECKING
 import pytest
 
 import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers access_role.* actions/`"principal"` resource type
+from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.models import AuditQueryFilters
 from ps_service.audit.store import AuditStore, PsycopgAuditStore
-from ps_service.authz.migration_runner import apply_pending_migrations
-from ps_service.authz.store import connect_from_config
+from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import load_config
+from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+
+# Mirrors the source list `ps_service.main` passes to the runner at startup.
+STATE_MIGRATION_SOURCES = [
+    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
+    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
+]
 
 _ACTOR_ISSUER = "https://issuer.example.com/"
 # A small, deliberate delay between seeded inserts (each its own transaction,
@@ -41,8 +49,8 @@ _SEED_DELAY_SECONDS = 0.02
 
 def _require_configured_postgres() -> None:
     config = load_config()
-    assert config.authz_postgres_host is not None, (
-        "postgres_live requires PS_AUTHZ_POSTGRES_HOST to be set"
+    assert config.state_postgres_host is not None, (
+        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
     )
 
 
@@ -83,7 +91,7 @@ def test_query_returns_matching_events_newest_first_and_paginates_without_gaps_o
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
     store: AuditStore = PsycopgAuditStore(config)
 
     marker_actor = f"query-actor-{uuid.uuid4().hex[:10]}"
@@ -176,7 +184,7 @@ def test_query_time_range_filter_excludes_events_outside_the_bound() -> None:
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
     store: AuditStore = PsycopgAuditStore(config)
 
     marker_actor = f"query-time-actor-{uuid.uuid4().hex[:10]}"
@@ -231,7 +239,7 @@ def test_query_connection_failure_leaks_no_host_or_port_or_driver_detail() -> No
     unreachable_host = "127.0.0.1"
     unreachable_port = 59999
     broken_config = dataclasses.replace(
-        config, authz_postgres_host=unreachable_host, authz_postgres_port=unreachable_port
+        config, state_postgres_host=unreachable_host, state_postgres_port=unreachable_port
     )
     store: AuditStore = PsycopgAuditStore(broken_config)
 

@@ -8,7 +8,7 @@ parallel gating mechanisms.
 
 Every function below raises `AuthorizationStoreUnavailableError` (never
 silently returns an empty/default result) whenever the underlying store
-raises `AccessRolePostgresConnectionError`/`AccessRoleAssignmentPersistenceError`
+raises `StatePostgresConnectionError`/`AccessRoleAssignmentPersistenceError`
 -- the single place AC-BI-011's fail-closed contract is actually enforced,
 so no call site can forget it.
 """
@@ -35,13 +35,13 @@ from ps_service.audit.errors import (
 from ps_service.audit.models import is_known_resource_type, resolve_details_model
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
-    AccessRolePostgresConnectionError,
     AccessRoleSystemOwnerFloorRaceError,
 )
 from ps_service.authz.models import AccessRole
 from ps_service.authz.rules import AccessRuleContext, block_self_target, enforce_system_owner_floor
 from ps_service.logging.errors import LoggingLifecycleError
 from ps_service.logging.facade import emit_log_entry
+from ps_service.persistence import StatePostgresConnectionError
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -227,7 +227,7 @@ def _record_rejected_or_raise_unavailable(
 
     Design decision (PLAN.md §4 Slice 3, CHANGES.md item 3): if the audit
     write itself fails (`AuditPostgresUnavailableError`/
-    `AuditPersistenceError` -- e.g. the authz Postgres is unreachable), the
+    `AuditPersistenceError` -- e.g. the PS state Postgres is unreachable), the
     *original* denial is never returned to the caller as-is. A denial that
     cannot be proven to have been durably logged is not a safe "denied"
     response (AC-BI-011's fail-closed contract applied in reverse): this
@@ -281,13 +281,13 @@ def resolve_active_roles(
     """
     try:
         existing = store.active_roles_for(principal)
-    except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     if existing:
         return existing | {AccessRole.AUTHENTICATED_USER}
     try:
         bootstrapped = store.bootstrap_first_owner(principal)
-    except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     if AccessRole.SYSTEM_OWNER in bootstrapped:
         # This call won the once-ever bootstrap race -- the resulting active
@@ -353,7 +353,7 @@ def list_assignments(
     try:
         assignments = store.list_all_assignments()
         active_system_owners = store.count_active_system_owners()
-    except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     _maybe_log_system_owner_floor_warning("list_assignments", active_system_owners)
     return ListAssignmentsResult(
@@ -445,7 +445,7 @@ def grant_role(
     try:
         store.grant(actor=actor, target=target, access_role=role)
         active_system_owners = store.count_active_system_owners()
-    except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     _maybe_log_system_owner_floor_warning("grant_role", active_system_owners)
     return GrantResult(system_owner_floor_warning=active_system_owners == 1)
@@ -542,7 +542,7 @@ def revoke_role(
     if role is AccessRole.SYSTEM_OWNER:
         try:
             active_system_owner_count = store.count_active_system_owners()
-        except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+        except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
             raise AuthorizationStoreUnavailableError(
                 _AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE
             ) from exc
@@ -578,7 +578,7 @@ def revoke_role(
             reason_code="system_owner_floor_violation",
         )
         raise SystemOwnerFloorViolationError(_SYSTEM_OWNER_FLOOR_VIOLATION_MESSAGE) from exc
-    except (AccessRolePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
+    except (StatePostgresConnectionError, AccessRoleAssignmentPersistenceError) as exc:
         raise AuthorizationStoreUnavailableError(_AUTHORIZATION_STORE_UNAVAILABLE_MESSAGE) from exc
     _maybe_log_system_owner_floor_warning("revoke_role", active_system_owners)
     return RevokeResult(system_owner_floor_warning=active_system_owners == 1)
@@ -649,7 +649,7 @@ def list_audit_events(
             invalid (AC-BI-008) -- named in the message.
         AuthorizationStoreUnavailableError: propagated from `require_role`
             (AC-BI-011), or from `audit_store.query` failing to reach the
-            authz Postgres.
+            PS state Postgres.
     """
     require_role(principal, minimum=AccessRole.SYSTEM_ADMIN, store=access_role_store)
     _validate_audit_query_filters(filters, page_size=page_size)

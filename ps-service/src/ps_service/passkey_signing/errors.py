@@ -15,7 +15,7 @@ class PendingApprovalPersistenceError(Exception):
     Raised by :class:`ps_service.passkey_signing.store.PsycopgPendingApprovalStore`
     when the underlying `psycopg` call raises -- wraps the driver-level
     `psycopg.Error` into a domain-specific type, mirroring
-    `CuratedSourceOverridePersistenceError`'s/`CompanyMergePersistenceError`'s
+    `RuntimeConfigPersistenceError`'s/`CompanyMergePersistenceError`'s
     own "wrap the driver exception" convention. Callers never see a raw
     `psycopg` exception cross this component's boundary.
     """

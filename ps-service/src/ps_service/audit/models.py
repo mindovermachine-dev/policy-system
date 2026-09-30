@@ -5,8 +5,8 @@ payload subclasses; `register_audit_action`/`resolve_details_model` form a
 plain module-level registry, not a closed enum, so a new action can be
 registered later from another module entirely -- e.g. #134's policy-lifecycle
 actions, #136's supersede-fork action, #140's `user.invite` action -- without
-ever editing this file (this issue's own `ps_service.authz.audit_actions`
-registers its four `access_role.*` actions the same way). Mirrors
+ever editing this file (the access-role component registers its four `access_role.*`
+actions the same way). Mirrors
 `ps_service.mcp_interface.mcp_server`'s own "module import triggers
 registration" idiom for `@server.tool()`.
 
@@ -17,8 +17,8 @@ registered/known set to check against).
 
 `AuditEventRow`/`AuditQueryFilters`/`AuditQueryPage` (Slice 4) are the shapes
 `AuditStore.query` accepts/returns -- plain frozen dataclasses, not
-pydantic, mirroring `ps_service.authz.models.AccessRoleAssignmentRow`'s own
-"plain frozen dataclass, not LLM/API-boundary Pydantic" convention.
+pydantic, mirroring the other `ps_service` components' own "plain frozen
+dataclass, not LLM/API-boundary Pydantic" convention.
 """
 
 from __future__ import annotations
@@ -52,9 +52,9 @@ _RESOURCE_TYPES: set[str] = set()
 def register_audit_action(action: str, details_model: type[AuditDetails]) -> None:
     """Register `details_model` as the one typed shape `action`'s `details` must match.
 
-    Called once, at import time, by the component that emits `action` (this
-    issue's own `ps_service.authz.audit_actions`; future components register
-    their own the same way) -- a plain module-level dict, never a closed
+    Called once, at import time, by the component that emits `action` (the
+    access-role component's own audit-actions module; future components
+    register their own the same way) -- a plain module-level dict, never a closed
     enum, so a new action never requires editing this module.
 
     Raises:
@@ -79,8 +79,8 @@ def register_audit_resource_type(resource_type: str) -> None:
     module-level set, never a closed enum, so a new resource type never
     requires editing this module. Unlike `register_audit_action`, silently
     accepts re-registering the same name (multiple actions from the same
-    component may share one resource type, e.g. this issue's own four
-    `access_role.*` actions all use `"principal"` -- there is nothing to
+    component may share one resource type, e.g. the four `access_role.*` actions
+    all use `"principal"` -- there is nothing to
     defend against by rejecting that).
     """
     _RESOURCE_TYPES.add(resource_type)
@@ -95,8 +95,8 @@ def is_known_resource_type(resource_type: str) -> bool:
 class AuditEventRow:
     """One `audit_events` row, as returned by `AuditStore.query` (issue #147, Slice 4).
 
-    Mirrors `ps_service.authz.models.AccessRoleAssignmentRow`'s own "plain
-    frozen dataclass, not LLM/API-boundary Pydantic" convention.
+    Mirrors the other `ps_service` components' own "plain frozen
+    dataclass, not LLM/API-boundary Pydantic" convention.
     """
 
     id: str

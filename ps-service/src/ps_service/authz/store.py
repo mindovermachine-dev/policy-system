@@ -1,11 +1,11 @@
-"""PostgreSQL persistence for `access_role_assignments`/`access_role_grant_events` (issue #133).
+"""PostgreSQL persistence for `access_role_assignments` and its audit trail (issue #133).
 
 `AccessRoleStore` is the `Protocol` `ps_service.authz.service` depends on --
 `PsycopgAccessRoleStore` is the real implementation. Mirrors
 `ps_service.passkey_signing.store`'s shape exactly (PLAN.md §0.3/§2.2), with
 its own tables, own config surface, own migration-tracking table, and one
 deliberate divergence: every method here fails closed (raises
-`AccessRolePostgresConnectionError`) when `config.authz_postgres_host` is
+`StatePostgresConnectionError`) when `config.state_postgres_host` is
 unset, rather than no-op'ing -- every `AccessRoleStore` caller has a caller
 that must fail closed (PLAN.md §0.11), unlike passkey_signing's own
 connectivity probe, which has no such caller.
@@ -31,18 +31,15 @@ import psycopg
 import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers this component's own audit actions (issue #147) before any grant/revoke/bootstrap call can reach AuditStore.record
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
-    AccessRolePostgresConnectionError,
     AccessRoleSystemOwnerFloorRaceError,
 )
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow
-from ps_service.dependency_health import AUTHZ_POSTGRES, mark_healthy, mark_unhealthy
+from ps_service.persistence import connect_from_config
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
     from typing import NoReturn
-
-    from psycopg.rows import TupleRow
 
     from ps_service.audit.store import AuditStore
     from ps_service.config import ServiceConfig
@@ -59,7 +56,7 @@ _SYSTEM_OWNER_FLOOR = 1
 
 
 class AccessRoleStore(Protocol):
-    """Persistence seam for `access_role_assignments`/`access_role_grant_events` rows.
+    """Persistence seam for `access_role_assignments` rows and their audit events.
 
     Constructor-injected wherever it is needed (no DI framework, L2's "plain
     constructor injection" rule) -- `ps_service.authz.service` depends on
@@ -172,8 +169,6 @@ class AccessRoleStore(Protocol):
 __all__ = [
     "AccessRoleStore",
     "PsycopgAccessRoleStore",
-    "check_connectivity_from_config",
-    "connect_from_config",
 ]
 
 _INSERT_ASSIGNMENT = """
@@ -219,61 +214,6 @@ def _raise_system_owner_floor_race() -> NoReturn:
     raise AccessRoleSystemOwnerFloorRaceError(
         "revoking this SystemOwner would leave zero active SystemOwners (concurrent-revoke race)"
     )
-
-
-def connect_from_config(config: ServiceConfig) -> psycopg.Connection[TupleRow]:
-    """Open a fresh `psycopg` connection from `config.authz_postgres_*`.
-
-    Mirrors `ps_service.passkey_signing.store.connect_from_config`'s
-    per-call-connection idiom, with one deliberate divergence (PLAN.md
-    §0.11): raises `AccessRolePostgresConnectionError` immediately when
-    `config.authz_postgres_host` is `None`, without attempting a doomed
-    `psycopg.connect(host=None, ...)` call -- every `AccessRoleStore` caller
-    must fail closed rather than silently no-op.
-    """
-    if config.authz_postgres_host is None:
-        raise AccessRolePostgresConnectionError(
-            "Authz Postgres is not configured (PS_AUTHZ_POSTGRES_HOST is unset); "
-            "every role-gated action fails closed until it is configured."
-        )
-    return psycopg.connect(
-        host=config.authz_postgres_host,
-        port=config.authz_postgres_port,
-        dbname=config.authz_postgres_database,
-        user=config.authz_postgres_user,
-        password=config.authz_postgres_password,
-    )
-
-
-def check_connectivity_from_config(config: ServiceConfig) -> None:
-    """Probe the Authz Postgres instance.
-
-    Unlike `ps_service.passkey_signing.store.check_connectivity_from_config`
-    (a no-op when unconfigured), an unconfigured Authz Postgres is treated
-    as unreachable too (PLAN.md §0.11/§2.2): every role-gated action must
-    fail closed when this store cannot be reached, so "unconfigured" is not
-    a healthy "not applicable" state here -- it is the store being down.
-
-    Raises:
-        AccessRolePostgresConnectionError: unconfigured, or configured but
-            unreachable (connection failure or the round-trip query itself
-            fails); the outcome is also recorded in
-            `ps_service.dependency_health`.
-    """
-    try:
-        with connect_from_config(config) as conn, conn.cursor() as cur:
-            cur.execute("SELECT 1")
-    except AccessRolePostgresConnectionError as exc:
-        mark_unhealthy(AUTHZ_POSTGRES, error=exc)
-        raise
-    except psycopg.Error as exc:
-        mark_unhealthy(AUTHZ_POSTGRES, error=exc)
-        raise AccessRolePostgresConnectionError(
-            "Authz Postgres connection failed at "
-            f"{config.authz_postgres_host}:{config.authz_postgres_port}. "
-            f"Is Postgres running? Error: {exc}"
-        ) from exc
-    mark_healthy(AUTHZ_POSTGRES)
 
 
 def _row_from_record(record: Sequence[object]) -> AccessRoleAssignmentRow:

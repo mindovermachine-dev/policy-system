@@ -16,15 +16,22 @@ services:
       # and FalkorDB on one network and pass PS_FALKORDB_HOST explicitly.
       - PS_FALKORDB_HOST=falkordb
       - PS_FALKORDB_PORT=6379
-      # Passkey Signing's own, distinct Postgres instance (issue #131,
-      # PLAN.md §0.6) -- never shared with FalkorDB or (in a deployed
-      # topology) Authentik's own Postgres. Same "resolved by compose service
-      # name" shape as PS_FALKORDB_HOST above.
+      # The single PS Postgres server (issue #130): two databases on one
+      # instance, each with its own role -- ps_state (audit, authz, runtime
+      # config) and ps_signing (Passkey Signing). Never shared with FalkorDB or
+      # (in a deployed topology) Authentik's own Postgres. Same "resolved by
+      # compose service name" shape as PS_FALKORDB_HOST above. The `postgres`
+      # service below creates both via the chart's own init script.
+      - PS_STATE_POSTGRES_HOST=postgres
+      - PS_STATE_POSTGRES_PORT=5432
+      - PS_STATE_POSTGRES_DATABASE=ps_state
+      - PS_STATE_POSTGRES_USER=ps_state
+      - PS_STATE_POSTGRES_PASSWORD=ps_state_dev_password
       - PS_PASSKEYSIGNING_POSTGRES_HOST=postgres
       - PS_PASSKEYSIGNING_POSTGRES_PORT=5432
-      - PS_PASSKEYSIGNING_POSTGRES_DATABASE=ps_service_signing
-      - PS_PASSKEYSIGNING_POSTGRES_USER=ps_service
-      - PS_PASSKEYSIGNING_POSTGRES_PASSWORD=ps_service_dev_password
+      - PS_PASSKEYSIGNING_POSTGRES_DATABASE=ps_signing
+      - PS_PASSKEYSIGNING_POSTGRES_USER=ps_signing
+      - PS_PASSKEYSIGNING_POSTGRES_PASSWORD=ps_signing_dev_password
 
   falkordb:
     image: falkordb/falkordb:latest
@@ -44,19 +51,27 @@ services:
     restart: unless-stopped
 
   postgres:
-    # Passkey Signing's own PostgreSQL instance (issue #131, PLAN.md §0.6) --
-    # distinct from FalkorDB and from Authentik's own hand-rolled Postgres in
-    # a deployed topology (`charts/policy-system/values.yaml`). Image matches
-    # that same Helm chart's already-chosen `postgres:16-alpine`, so the
-    # local dev image and the deployed image are the same version family.
-    # Own network namespace, same rationale as `falkordb` above.
+    # The single PS Postgres server (issue #130) -- distinct from FalkorDB and
+    # from Authentik's own hand-rolled Postgres in a deployed topology
+    # (`charts/policy-system/values.yaml`). Image matches that same Helm chart's
+    # `postgres:16-alpine`. Own network namespace, same rationale as `falkordb`
+    # above.
+    #
+    # First start runs the SAME init script the chart ships
+    # (charts/policy-system/files/ps-postgres-init.sh): it creates the ps_state and
+    # ps_signing databases and their two roles and isolates them. The image runs
+    # it only on an EMPTY data directory, so an existing ../.postgres-data from
+    # the pre-#130 single-database layout must be deleted once (`rm -rf
+    # .postgres-data`) before rebuilding the container.
     image: postgres:16-alpine
     ports:
       - "5432:5432"
     volumes:
       - ../.postgres-data:/var/lib/postgresql/data
+      - ../charts/policy-system/files/ps-postgres-init.sh:/docker-entrypoint-initdb.d/10-ps-init.sh:ro
     environment:
-      - POSTGRES_USER=ps_service
-      - POSTGRES_PASSWORD=ps_service_dev_password
-      - POSTGRES_DB=ps_service_signing
+      - POSTGRES_USER=postgres_admin
+      - POSTGRES_PASSWORD=postgres_admin_dev_password
+      - PS_STATE_POSTGRES_PASSWORD=ps_state_dev_password
+      - PS_PASSKEYSIGNING_POSTGRES_PASSWORD=ps_signing_dev_password
     restart: unless-stopped

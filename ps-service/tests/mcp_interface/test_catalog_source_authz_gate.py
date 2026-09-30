@@ -16,10 +16,11 @@ tool's body actually runs.
 `test_near_miss_tools.py:168-201`'s own helpers, already re-established a
 second time by `test_access_role_tools.py` (PLAN.md §3.3 names this exact
 pattern as the one to reuse, "no new test infrastructure needs
-inventing"). Graph fakes (`_FakeSingletonGraph`/`_install_graph`, plus
-`_DEFAULT_URL`/`_OVERRIDE_URL`) are imported directly from
-`test_catalog_source_skills.py` rather than re-declared, so this file can
-never silently drift from that file's own fixture shapes.
+inventing"). The runtime-config store fake (`_install_store`, plus `_DEFAULT_URL`/
+`_OVERRIDE_URL`) is imported directly from `test_catalog_source_skills.py` rather than
+re-declared, so this file can never silently drift from that file's own fixture shapes
+(issue #130 moved the override from FalkorDB to `runtime_config`; only the fixture changed
+here, no gate assertion).
 """
 
 from __future__ import annotations
@@ -42,8 +43,7 @@ from mcp.types import CallToolResult, TextContent
 from mcp_interface.test_catalog_source_skills import (
     _DEFAULT_URL,  # pyright: ignore[reportPrivateUsage]  -- reuse this issue's own "zero changes to that file" fixtures verbatim rather than re-declaring them, mirrors `test_near_miss_tools.py`'s own cross-module private-import convention
     _OVERRIDE_URL,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _FakeSingletonGraph,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _install_graph,  # pyright: ignore[reportPrivateUsage]  -- same reuse
+    _install_store,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.authz.models import AccessRole
 from ps_service.logging import configure
@@ -138,15 +138,14 @@ def test_authenticated_user_only_caller_is_denied(
     configure()
     store = _seeded_store()
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store_of_overrides = _install_store(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call(tool, args)
 
     assert result.is_error is False
     assert _text(result) == _ACCESS_DENIED_MESSAGE
-    assert graph.url is None  # the gate rejected before any FalkorDB mutation
+    assert store_of_overrides.rows == {}  # the gate rejected before any mutation
 
 
 @pytest.mark.parametrize(
@@ -178,8 +177,7 @@ def test_system_admin_caller_succeeds_exactly_as_documented(
         access_role=AccessRole.SYSTEM_ADMIN,
     )
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    _install_store(monkeypatch)
 
     with _verified_actor(sub=_NEW_SYSTEM_ADMIN_SUBJECT):
         result = _call(tool, args)
@@ -202,15 +200,14 @@ def test_store_outage_fails_closed_instead_of_defaulting_or_succeeding(
     monkeypatch.setattr(
         mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(RaisingAccessRoleStore())
     )
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store_of_overrides = _install_store(monkeypatch)
 
     with _verified_actor(sub=_NON_ADMIN_SUBJECT):
         result = _call(tool, args)
 
     assert result.is_error is False
     assert _text(result) == "error: The authorization store is temporarily unavailable."
-    assert graph.url is None  # the gate rejected before any FalkorDB mutation
+    assert store_of_overrides.rows == {}  # the gate rejected before any mutation
 
 
 def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
@@ -225,8 +222,7 @@ def test_sole_bootstrapped_system_owner_also_satisfies_the_system_admin_gate(
     configure()
     store = FakeAccessRoleStore(expected_owner=(_SYSTEM_OWNER_SUBJECT, _CALLER_ISSUER))
     monkeypatch.setattr(mcp_server, "PsycopgAccessRoleStore", _fake_store_factory(store))
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    _install_store(monkeypatch)
 
     with _verified_actor(sub=_SYSTEM_OWNER_SUBJECT):
         result = _call("set-catalog-source", {"url": _OVERRIDE_URL})

@@ -79,7 +79,7 @@ psService:
     # #140) -- never a caller-supplied token. Unlike auth.*/authzBootstrapOwner.*
     # above, `require_authentik_credential_configured` (CHANGES.md #140 Row 2)
     # enforces both fields below UNCONDITIONALLY at startup, with no
-    # localTestBypass exemption -- so, mirroring psServiceSigning.postgres.
+    # localTestBypass exemption -- so, mirroring psPostgres.
     # password's own "non-empty dev default, read only when existingSecret is
     # empty" shape (never auth.issuer's empty-default-plus-fail()-guard shape),
     # apiToken/baseUrl below always carry a non-empty dev-default placeholder,
@@ -87,7 +87,7 @@ psService:
     # no real Authentik exists) still starts cleanly.
     apiToken: "ps-service-authentik-dev-token"
     # Set to reuse an operator-managed Secret name instead of the plain
-    # apiToken value above -- mirrors psServiceSigning.postgres.existingSecret's
+    # apiToken value above -- mirrors psPostgres.state.existingSecret's
     # convention exactly.
     existingSecret: ""
     baseUrl: "https://authentik.example.com"
@@ -129,37 +129,46 @@ llm:
   ollama:
     apiBase: "http://host.containers.internal:11434"
 
-psServiceSigning:
-  # The Passkey Signing component's own hand-rolled Postgres (AC-BI-006,
-  # issue #131 Slice 1) -- a THIRD, fully independent Postgres instance,
-  # storing pending merge approvals and enrolled WebAuthn signing
-  # credentials. Mirrors authentik.postgres.* below in shape (image,
-  # persistence, durable StorageClass) but is always deployed (unlike
-  # Authentik, which is opt-in via authentik.enabled) since it backs a
-  # core near-miss-merge-approval code path, not an optional bundled
-  # broker -- same "always-on" posture as falkordb.* above. Never shares
-  # FalkorDB's or Authentik's PVC, NetworkPolicy selector, or credential
-  # Secret (AC-BI-006's "distinct" framing extended to infra isolation).
-  postgres:
-    image:
-      repository: postgres
-      tag: "16-alpine"
-    database: ps_service_signing
-    user: ps_service
-    # Set to reuse an operator-managed Secret name instead of letting the
-    # chart generate and persist its own random password (issue #159) --
-    # signing-postgres-secret.yaml renders no Secret of its own when this is
-    # set. Mirrors llm.existingSecret's convention exactly.
+psPostgres:
+  # The single PS Postgres server (issue #130): one instance holding two
+  # databases, each with its own least-privilege role -- `state` (audit, authz,
+  # runtime config) and `signing` (Passkey Signing: pending approvals, enrolled
+  # WebAuthn credentials). Created on first start by files/ps-postgres-init.sh,
+  # which revokes CONNECT from PUBLIC on both databases and grants it only to the
+  # database's own role. Distinct from Authentik's Postgres below. Always
+  # deployed (unlike Authentik, which is opt-in), same "always-on" posture as
+  # falkordb.* above. Never shares FalkorDB's or Authentik's PVC, NetworkPolicy
+  # selector, or credential Secrets.
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  # Superuser used only by the Postgres container itself to run the init script;
+  # its Secret is never referenced by the ps-service pod.
+  admin:
+    user: postgres_admin
+    # Set to reuse an operator-managed Secret (key POSTGRES_PASSWORD) instead of
+    # letting the chart generate and persist its own random password (issue #159);
+    # ps-postgres-secret.yaml renders no admin Secret when this is set.
     existingSecret: ""
-    persistence:
-      size: 10Gi
-      storageClassName: ""
-      durableStorageClass:
-        # Off by default (local-test/kind), mirroring
-        # authentik.postgres.persistence.durableStorageClass below exactly.
-        # See values-prod.yaml — Premium SSD, Retain-reclaim StorageClass for
-        # this Postgres volume (AC-BI-006).
-        enabled: false
+  state:
+    database: ps_state
+    user: ps_state
+    # Operator-managed Secret (key PS_STATE_POSTGRES_PASSWORD); empty = chart-generated.
+    existingSecret: ""
+  signing:
+    database: ps_signing
+    user: ps_signing
+    # Operator-managed Secret (key PS_PASSKEYSIGNING_POSTGRES_PASSWORD); empty = chart-generated.
+    existingSecret: ""
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+    durableStorageClass:
+      # Off by default (local-test/kind), mirroring
+      # authentik.postgres.persistence.durableStorageClass below exactly.
+      # See values-prod.yaml -- Premium SSD, Retain-reclaim StorageClass for
+      # this Postgres volume (AC-BI-006).
+      enabled: false
 
 authentik:
   # Off by default (local-test/kind). See values-prod.yaml — bundled as the
@@ -168,7 +177,7 @@ authentik:
   enabled: false
   # Set to reuse an operator-managed Secret name instead of this chart generating
   # its own Authentik credentials Secret (issue #159) -- mirrors
-  # psServiceSigning.postgres.existingSecret's convention, but is a SEPARATE value
+  # psPostgres.state.existingSecret's convention, but is a SEPARATE value
   # from authentik.authentik.existingSecret.secretName below (the upstream
   # sub-chart's own routing switch): that value must always carry a non-empty
   # name (see its own comment), so it cannot double as this chart's own
@@ -209,6 +218,13 @@ authentik:
     # dependency's own nested Bitnami Postgres subchart so it never runs
     # alongside authentik.postgres.* above (PLAN.md §0.3, #129 S3).
     enabled: false
+  # Mount this chart's own blueprint ConfigMap (authentik-blueprint-configmap.yaml: the fixed
+  # ps-cli OAuth2 Provider + Application, enrollment flow) on the evaluator/kind profile too --
+  # without it OIDC discovery for psService.auth.issuer returns 404 and ps-service never starts.
+  # Same literal as values-prod.yaml (Helm never templates values files; the release name is fixed).
+  blueprints:
+    configMaps:
+      - "policy-system-authentik-blueprint"
   server:
     # Local-test/kind default: NodePort with a fixed port, so deploy/kind/cluster.yaml's
     # extraPortMappings can map it through to the LAN (issue #160). ClusterIP (upstream

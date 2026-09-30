@@ -292,10 +292,20 @@ _LOG_FILE_IN_IMAGE = "/var/log/ps-service/ps-service.jsonl"
 _FALKORDB_DEPENDENCY = "falkordb"
 _BARRIER_DEPENDENCY = "llm_interface"
 
-# Issue #133: Authz Postgres is unconditionally probed and never no-ops when unconfigured
-# (unlike Passkey Signing Postgres), so it always shows unhealthy in this smoke-test container,
-# which never sets `PS_AUTHZ_POSTGRES_HOST`.
-_AUTHZ_POSTGRES_DEPENDENCY = "authz_postgres"
+# Issue #133: PS state Postgres is unconditionally probed and never no-ops when unconfigured
+# (unlike Passkey Signing Postgres), so it always shows unhealthy in the smoke-test container,
+# which never sets `PS_STATE_POSTGRES_HOST`. Since issue #130 it also gates `/ready`.
+_STATE_POSTGRES_DEPENDENCY = "state_postgres"
+
+# Issue #130: `GET /catalog` reads the catalog-source override from the PS state Postgres and
+# fails closed without one, so the catalog smoke test runs against a real Postgres sidecar.
+_POSTGRES_IMAGE = "postgres:16-alpine"
+_STATE_POSTGRES_SMOKE_ENV = {
+    "POSTGRES_USER": "ps_state",
+    "POSTGRES_PASSWORD": "ps-smoke-state-password",
+    "POSTGRES_DB": "ps_state",
+}
+_STATE_POSTGRES_DEADLINE_SECONDS = 90.0
 
 # RFC 2606 reserves `.invalid`, so this name cannot resolve on any runner -- the negative
 # control's unreachability is guaranteed rather than merely likely.
@@ -421,6 +431,41 @@ def _wait_for_falkordb(cli: str, container: str) -> None:
         time.sleep(_POLL_INTERVAL_SECONDS)
     pytest.fail(
         f"{_FALKORDB_IMAGE} did not answer PING within {_FALKORDB_DEADLINE_SECONDS}s:\n"
+        f"{_container_logs(cli, container)}"
+    )
+
+
+def _wait_for_state_postgres(cli: str, container: str) -> None:
+    """Block until the sidecar Postgres accepts TCP connections, so the service can migrate.
+
+    Checks `127.0.0.1` (TCP), not the default unix socket: the official image starts a
+    socket-only temporary server while it runs its init scripts, so a socket check can pass
+    before the real server is up -- and the service treats a failed startup migration as fatal.
+    """
+    deadline = time.monotonic() + _STATE_POSTGRES_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
+        result = _run_container_cli(
+            cli,
+            [
+                "exec",
+                container,
+                "pg_isready",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "ps_state",
+                "-d",
+                "ps_state",
+            ],
+            timeout=_INSPECT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+        time.sleep(_POLL_INTERVAL_SECONDS)
+    pytest.fail(
+        f"{_POSTGRES_IMAGE} did not accept connections within "
+        f"{_STATE_POSTGRES_DEADLINE_SECONDS}s:\n"
         f"{_container_logs(cli, container)}"
     )
 
@@ -640,7 +685,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     )
     assert response.json() == {
         "status": "not_ready",
-        "unhealthy_dependencies": [_BARRIER_DEPENDENCY, _AUTHZ_POSTGRES_DEPENDENCY],
+        "unhealthy_dependencies": [_BARRIER_DEPENDENCY, _STATE_POSTGRES_DEPENDENCY],
     }
 
 
@@ -706,16 +751,49 @@ def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
 
 
 @pytest.fixture(scope="module")
-def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_RunningService]:
-    """Start the image under test standalone -- no FalkorDB network at all.
+def state_postgres_hostname(container_cli: str, smoke_network: str) -> Iterator[str]:
+    """Run a PS state Postgres sidecar on the smoke network and return its resolvable hostname."""
+    name = _unique("ps-smoke-state-pg")
+    result = _run_container_cli(
+        container_cli,
+        [
+            "run",
+            "--detach",
+            "--name",
+            name,
+            "--network",
+            smoke_network,
+            *_env_flags(_STATE_POSTGRES_SMOKE_ENV),
+            _POSTGRES_IMAGE,
+        ],
+        timeout=_PULL_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"starting {_POSTGRES_IMAGE} failed (exit {result.returncode}):\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    try:
+        _wait_for_state_postgres(container_cli, name)
+        yield name
+    finally:
+        _remove_container(container_cli, name)
+
+
+@pytest.fixture(scope="module")
+def catalog_only_service(
+    container_cli: str, image_ref: str, smoke_network: str, state_postgres_hostname: str
+) -> Iterator[_RunningService]:
+    """Start the image under test with no FalkorDB at all, against a PS state Postgres sidecar.
 
     New Slice 6.8: `GET /catalog` (AC-BI-011) is provably FalkorDB/LLM-free,
     so this deliberately does *not* reuse `smoke_service` (which wires a
-    FalkorDB container) -- a bare, single-container start is the whole point
-    of the proof: the route answers with real content with no dependency
-    stack running at all. Bound to loopback with the local-test bypass, same
-    reasoning as `_start_service` (issue #58, AC-BI-002). Also needs `REQUIRED_STARTUP_ENV`,
-    for the same reason `_start_service` does (issue #148).
+    FalkorDB container) -- the route answers with real content with no graph
+    database running at all. Since issue #130 the catalog-source override lives in the PS state
+    Postgres and a failed read fails closed, so this container is given a real Postgres sidecar
+    (the service applies its migrations at startup) instead of none. Bound to loopback with the
+    local-test bypass, same reasoning as `_start_service` (issue #58, AC-BI-002). Also needs
+    `REQUIRED_STARTUP_ENV`, for the same reason `_start_service` does (issue #148).
     """
     name = _unique("ps-smoke-catalog")
     result = _run_container_cli(
@@ -725,10 +803,20 @@ def catalog_only_service(container_cli: str, image_ref: str) -> Iterator[_Runnin
             "--detach",
             "--name",
             name,
+            "--network",
+            smoke_network,
             "--env",
             "PS_SERVICE_HOST=127.0.0.1",
             "--env",
             "PS_SERVICE_LOCAL_TEST_BYPASS=true",
+            "--env",
+            f"PS_STATE_POSTGRES_HOST={state_postgres_hostname}",
+            "--env",
+            "PS_STATE_POSTGRES_DATABASE=ps_state",
+            "--env",
+            f"PS_STATE_POSTGRES_USER={_STATE_POSTGRES_SMOKE_ENV['POSTGRES_USER']}",
+            "--env",
+            f"PS_STATE_POSTGRES_PASSWORD={_STATE_POSTGRES_SMOKE_ENV['POSTGRES_PASSWORD']}",
             *_env_flags(REQUIRED_STARTUP_ENV),
             image_ref,
         ],
@@ -818,7 +906,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
             "unhealthy_dependencies": [
                 _FALKORDB_DEPENDENCY,
                 _BARRIER_DEPENDENCY,
-                _AUTHZ_POSTGRES_DEPENDENCY,
+                _STATE_POSTGRES_DEPENDENCY,
             ],
         }
     finally:

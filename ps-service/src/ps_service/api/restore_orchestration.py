@@ -44,17 +44,20 @@ from ps_service.api.error_handlers import (
     is_safe_verbatim,
 )
 from ps_service.api.errors import (
+    CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     RestoreArtifactRejectedError,
     RestoreStageFailedError,
 )
 from ps_service.api.models import RestorationAcceptedResponse, RestorationStageOutcome
+from ps_service.audit import PsycopgAuditStore
 from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_artifact
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.export.models import InstrumentManifest
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
+from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -69,7 +72,6 @@ if TYPE_CHECKING:
         RestorationRequest,
     )
     from ps_service.config import ServiceConfig
-    from ps_service.curated_source.store import GraphHandle
     from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreOutcome
 
@@ -159,7 +161,7 @@ class CatalogRestoreInfra:
     these three (issue #163 Slice E) -- never ``restore`` itself.
 
     Bundles ``fetch_artifact`` (the curated-content HTTP fetch), ``resolve_effective_source``
-    (the FalkorDB-override-check-then-config-fallback resolution), and ``open_db`` (the
+    (the runtime-config-override-then-config-fallback resolution, fail closed), and ``open_db`` (the
     FalkorDB client construction) -- mirrors ``ingestion_orchestration.GraphOpeners``'s own
     "bundle every true infra boundary a factory has under one approved accessor" shape,
     generalised here to a mixed HTTP+FalkorDB set of boundaries rather than ``GraphOpeners``'s
@@ -340,12 +342,12 @@ def run_restoration_from_catalog_source(
     Issue #125, ``POST /restorations/from-catalog`` (D-NEW-ROUTE) --
     restores via the same delegate :func:`run_restoration` (the upload
     path) uses. Since Slice 3, the source fetched from is the *effective*
-    curated-content source: a persisted FalkorDB override when one exists,
-    else ``config.curated_source_base_url``, resolved on every call via
+    curated-content source: a persisted override (a ``runtime_config`` row, issue #130) when
+    one exists, else ``config.curated_source_base_url``, resolved on every call via
     ``dependencies.resolve_effective_source`` (AC-BI-013) before
-    ``dependencies.fetch_artifact`` is called -- a FalkorDB outage during
-    that check falls open to ``config.curated_source_base_url`` rather than
-    failing the request (D-FAILOPEN). The fetched artifact is passed to the
+    ``dependencies.fetch_artifact`` is called -- an override read failure fails the request
+    closed (``CatalogSourceOverrideUnavailableError``, AC-BI-010) rather than falling back
+    to ``config.curated_source_base_url``. The fetched artifact is passed to the
     injected ``restore`` delegate unmodified -- the exact same D9 checksum /
     D10 schema_version verification :func:`run_restoration` relies on runs
     first and unconditionally inside that one shared delegate (never
@@ -371,6 +373,8 @@ def run_restoration_from_catalog_source(
         A :class:`RestorationAcceptedResponse` naming the completed stages.
 
     Raises:
+        CatalogSourceOverrideUnavailableError: The override could not be read (AC-BI-010) --
+            503, nothing fetched or restored.
         CuratedSourceUnavailableError: The configured source is unreachable,
             or the fetched artifact is missing/malformed (AC-BI-004/006) --
             502, naming the source and instrument.
@@ -379,7 +383,10 @@ def run_restoration_from_catalog_source(
         RestoreStageFailedError: Any other restore failure, including a
             missing similarity-threshold configuration value (502).
     """
-    effective_source = dependencies.resolve_effective_source(config)
+    try:
+        effective_source = dependencies.resolve_effective_source(config)
+    except RuntimeConfigError as exc:
+        raise CatalogSourceOverrideUnavailableError from exc
     try:
         fetched = dependencies.fetch_artifact(effective_source.url, request_body.instrument_id)
     except CuratedSourceFetchError as exc:
@@ -455,25 +462,13 @@ def build_default_restore_dependencies() -> RestoreDependencies:
 
 
 def _default_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
-    """Resolve the effective curated-content source (issue #125, Slice 3, AC-BI-013).
+    """Resolve the effective curated-content source (issue #125, AC-BI-013; #130, AC-BI-010).
 
-    ``ps_service.company_merge.falkordb_client`` is imported
-    **function-locally**, exactly like :func:`_default_open_db` (M6 --
-    ``ps_service.main`` never transitively loads ``ps_service.company_merge``
-    at module load). The graph opened is the same single-tenant
-    ``policy_system`` graph :func:`_default_open_db`/
-    :func:`_default_single_tenant_graph_name` already resolve against.
+    Reads the override from the PS state Postgres's ``runtime_config`` table -- no FalkorDB
+    involved. A failed read raises (fail closed) rather than falling back to the default.
     """
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
-        connect_from_config,
-        select_graph,
-        single_tenant_graph_name,
-    )
-
-    def _open_graph() -> GraphHandle:
-        return select_graph(connect_from_config(config), single_tenant_graph_name())
-
-    return resolve_effective_source(config, open_graph=_open_graph)
+    store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
+    return resolve_effective_source(config, store=store)
 
 
 def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:

@@ -1,11 +1,11 @@
-{{- if .Values.psServiceSigning.postgres.persistence.durableStorageClass.enabled }}
+{{- if .Values.psPostgres.persistence.durableStorageClass.enabled }}
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {{ include "policy-system.signingPostgresStorageClassName" . }}
+  name: {{ include "policy-system.psPostgresStorageClassName" . }}
   labels:
     {{- include "policy-system.labels" . | nindent 4 }}
-    app.kubernetes.io/component: signing-postgres
+    app.kubernetes.io/component: ps-postgres
 provisioner: disk.csi.azure.com
 parameters:
   skuName: Premium_LRS

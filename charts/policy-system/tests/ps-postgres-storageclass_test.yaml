@@ -1,86 +1,86 @@
-suite: signing postgres durable storage class
+suite: ps postgres durable storage class
 templates:
-  - signing-postgres-storageclass.yaml
-  - signing-postgres-pvc.yaml
+  - ps-postgres-storageclass.yaml
+  - ps-postgres-pvc.yaml
 tests:
   - it: durableStorageClass disabled (default, local-test/kind) renders no StorageClass resource
     asserts:
       - hasDocuments:
           count: 0
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
 
   - it: durableStorageClass enabled renders a StorageClass with reclaimPolicy Retain
     set:
-      psServiceSigning.postgres.persistence.durableStorageClass.enabled: true
+      psPostgres.persistence.durableStorageClass.enabled: true
     asserts:
       - hasDocuments:
           count: 1
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
       - isKind:
           of: StorageClass
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
       - equal:
           path: reclaimPolicy
           value: Retain
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
       - equal:
           path: provisioner
           value: disk.csi.azure.com
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
       - equal:
           path: volumeBindingMode
           value: WaitForFirstConsumer
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
 
   - it: durableStorageClass enabled renders Premium_LRS skuName parameter
     set:
-      psServiceSigning.postgres.persistence.durableStorageClass.enabled: true
+      psPostgres.persistence.durableStorageClass.enabled: true
     asserts:
       - equal:
           path: parameters.skuName
           value: Premium_LRS
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
 
   - it: durableStorageClass enabled makes the PVC reference the same computed StorageClass name
     set:
-      psServiceSigning.postgres.persistence.durableStorageClass.enabled: true
+      psPostgres.persistence.durableStorageClass.enabled: true
     asserts:
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-policy-system-signing-postgres-durable
-        template: signing-postgres-storageclass.yaml
+          value: RELEASE-NAME-policy-system-ps-postgres-durable
+        template: ps-postgres-storageclass.yaml
       - equal:
           path: spec.storageClassName
-          value: RELEASE-NAME-policy-system-signing-postgres-durable
-        template: signing-postgres-pvc.yaml
+          value: RELEASE-NAME-policy-system-ps-postgres-durable
+        template: ps-postgres-pvc.yaml
 
   - it: durableStorageClass disabled and storageClassName set falls back to the plain string (local-cluster override, e.g. kind)
     set:
-      psServiceSigning.postgres.persistence.storageClassName: my-plain-storage-class
+      psPostgres.persistence.storageClassName: my-plain-storage-class
     asserts:
       - equal:
           path: spec.storageClassName
           value: my-plain-storage-class
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
       - hasDocuments:
           count: 0
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
 
   - it: durableStorageClass disabled and storageClassName unset omits storageClassName entirely (lets the cluster default provisioner bind it, e.g. kind's local-path-provisioner)
     asserts:
       - notExists:
           path: spec.storageClassName
-        template: signing-postgres-pvc.yaml
+        template: ps-postgres-pvc.yaml
 
   - it: this StorageClass name never collides with FalkorDB's or Authentik's own durable StorageClass names
     set:
-      psServiceSigning.postgres.persistence.durableStorageClass.enabled: true
+      psPostgres.persistence.durableStorageClass.enabled: true
     asserts:
       - notEqual:
           path: metadata.name
           value: RELEASE-NAME-policy-system-falkordb-durable
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml
       - notEqual:
           path: metadata.name
           value: RELEASE-NAME-policy-system-authentik-postgres-durable
-        template: signing-postgres-storageclass.yaml
+        template: ps-postgres-storageclass.yaml

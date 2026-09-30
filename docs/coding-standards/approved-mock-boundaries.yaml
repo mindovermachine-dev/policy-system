@@ -61,18 +61,19 @@ falkordb:
 
 postgres:
   - ps_service.authz.store.PsycopgAccessRoleStore
-  - ps_service.authz.store.connect_from_config
-  - ps_service.audit.store.connect_from_config       # re-exported import of authz.store.connect_from_config;
-                                                       # listed separately because mock.patch targets the
+  - ps_service.persistence.connection.connect_from_config
+  - ps_service.authz.store.connect_from_config       # re-exported import of persistence.connection.connect_from_config;
+  - ps_service.audit.store.connect_from_config       # listed separately because mock.patch targets the
                                                        # name where it is looked up, not where it is defined
-                                                       # (ps_service/audit/store.py:53 imports it from authz.store)
+                                                       # (authz/store.py and audit/store.py import it from ps_service.persistence)
   - ps_service.audit.store.PsycopgAuditStore
+  - ps_service.runtime_config.store.PsycopgRuntimeConfigStore
   - ps_service.passkey_signing.store.PsycopgPendingApprovalStore
   - ps_service.passkey_signing.store.connect_from_config
   - ps_service.passkey_signing.signing_credential_store.PsycopgSigningCredentialStore
   # Gap 3 (issue #163 interstitial fix, Slice P find, IMPL_SLICE_15.md) — main.py import aliases
   # (see the `falkordb:` section's identical note above for the full explanation):
-  - ps_service.main.check_authz_postgres_connectivity
+  - ps_service.main.check_state_postgres_connectivity
   - ps_service.main.check_passkey_signing_postgres_connectivity
 
 llm:

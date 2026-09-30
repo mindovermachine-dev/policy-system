@@ -2,24 +2,20 @@
 
 `AuditStore` is the `Protocol` every `ps_service` component that emits audit
 events depends on -- `PsycopgAuditStore` is the real implementation. Not
-nested under `ps_service.authz`, even though `audit_events` lives in the
-same Postgres instance authz already owns (`ps_service.authz` and
-`ps_service.passkey_signing` are already two independent components that
-each own their own tables in what may be the same physical instance,
-`ps_service.authz.store`'s own docstring: "own tables, own config surface,
-own migration-tracking table"). This component reuses
-`ps_service.authz.store.connect_from_config`/`check_connectivity_from_config`
-directly for its own connection lifecycle (`record_standalone`/`query`)
-rather than duplicating a parallel `PS_AUDIT_POSTGRES_*` config surface,
-since `audit_events` is created by `ps_service.authz`'s own migration runner
-in the same database.
+nested under any one consumer component, even though `audit_events` lives in
+the PS state Postgres instance that several components share. This
+component reuses `ps_service.persistence.connect_from_config` directly for
+its own connection lifecycle (`record_standalone`/`query`) rather than
+duplicating a parallel `PS_AUDIT_POSTGRES_*` config surface; the table
+itself is created by this component's own migration directory, applied by
+the shared `ps_service.persistence` runner.
 
 Slice 1 shipped `record` only -- the cursor-scoped write every in-transaction
-caller (Slice 2's `ps_service.authz.store` repoint) needs. Slice 3 added
+caller (Slice 2's store repoint) needs. Slice 3 added
 `record_standalone`: the denial-recording write with no surrounding
 state-changing transaction to join (access-denied / self-grant-or-revoke-
 blocked / SystemOwner-floor-violation -- these are raised in
-`ps_service.authz.service` *before* `store.grant`/`store.revoke` is ever
+the calling service *before* any state-changing store method is ever
 called, so there is no open cursor for a `record` call to reuse). Slice 4
 adds `query` below: the `list-audit-events` read path -- newest-first,
 keyset-paginated, filtered.
@@ -49,9 +45,8 @@ from ps_service.audit.errors import (
     AuditUnknownActionError,
 )
 from ps_service.audit.models import AuditEventRow, AuditQueryPage, resolve_details_model
-from ps_service.authz.errors import AccessRolePostgresConnectionError
-from ps_service.authz.store import connect_from_config
-from ps_service.dependency_health import AUTHZ_POSTGRES, mark_healthy, mark_unhealthy
+from ps_service.dependency_health import STATE_POSTGRES, mark_healthy, mark_unhealthy
+from ps_service.persistence import StatePostgresConnectionError, connect_from_config
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -167,9 +162,9 @@ def _build_query_conditions(
 def _row_from_record(record: Sequence[object]) -> AuditEventRow:
     """Map one raw `psycopg` result row (fixed column order, `_SELECT_AUDIT_EVENTS_COLUMNS`).
 
-    `cast()` at this one boundary mirrors `ps_service.authz.store`'s own
-    `_row_from_record` (L2's `cast()` policy) -- every column's expected
-    Python type is fixed by `migrations/0004_audit_events.sql`'s own schema.
+    `cast()` at this one boundary mirrors the other `psycopg`-backed
+    stores' own `_row_from_record` (L2's `cast()` policy) -- every column's expected
+    Python type is fixed by `migrations/0001_audit_events.sql`'s own schema.
     `id` is converted with `str()`, not `cast()`, since `psycopg` returns a
     `uuid.UUID` object for a `uuid` column, mirroring
     `ps_service.passkey_signing.store`'s own `id=str(row_id)` convention.
@@ -202,8 +197,8 @@ class AuditStore(Protocol):
     """Persistence seam for `audit_events` rows.
 
     Constructor-injected wherever it is needed (no DI framework, L2's "plain
-    constructor injection" rule) -- a future caller (Slice 2's
-    `ps_service.authz.store`) depends on this `Protocol`, never on
+    constructor injection" rule) -- every consumer store (e.g. the
+    access-role store) depends on this `Protocol`, never on
     `PsycopgAuditStore` directly, so a test can substitute an in-memory fake.
     """
 
@@ -228,7 +223,7 @@ class AuditStore(Protocol):
         Deliberately does not catch `psycopg.Error` itself (it owns no
         transaction to roll back) -- propagates verbatim to the caller's own
         `except psycopg.Error` block, mirroring how every
-        `PsycopgAccessRoleStore` method already relies on its own `with
+        consumer store method already relies on its own `with
         connect_from_config(...) as conn:` rollback-on-exception behavior.
 
         Raises:
@@ -255,8 +250,8 @@ class AuditStore(Protocol):
         For a denial that has no surrounding state-changing transaction to
         join (access-denied / self-grant-or-revoke-blocked /
         SystemOwner-floor-violation, AC-BI-012's three RBAC/rule denials --
-        raised in `ps_service.authz.service` *before* `store.grant`/
-        `store.revoke` is ever called, so nothing else is being written and
+        raised by the calling service *before* any state-changing store
+        method is ever called, so nothing else is being written and
         there is no cursor-scoped transaction for `record` to join).
 
         Raises:
@@ -282,7 +277,7 @@ class AuditStore(Protocol):
         `AND`; every unset (`None`) field is omitted from the `WHERE`
         clause entirely. Filter *validity* (unknown action/resource type,
         `occurred_from > occurred_to`, `page_size` over the maximum) is the
-        caller's (`ps_service.authz.service.list_audit_events`) own
+        caller's own
         responsibility, checked before `query` is ever called (AC-BI-008) --
         `query` itself does not re-validate `filters`.
 
@@ -300,15 +295,15 @@ class PsycopgAuditStore:
 
     `record` never opens its own connection (uses the caller's cursor), but
     `record_standalone` (Slice 3) and `query` (Slice 4) do, via
-    `ps_service.authz.store.connect_from_config` -- the *same* authz
-    Postgres instance/config (`config.authz_postgres_*`), reused directly
+    `ps_service.persistence.connect_from_config` -- the *same* PS state
+    Postgres instance/config (`config.state_postgres_*`), reused directly
     rather than introducing a parallel `PS_AUDIT_POSTGRES_*` config surface,
-    since `audit_events` is created by `ps_service.authz`'s own migration
-    runner in that same database (PLAN.md §3.3).
+    since `audit_events` is created by this component's own migration
+    directory in that same database (PLAN.md §3.3).
     """
 
     def __init__(self, config: ServiceConfig) -> None:
-        """Store `config`; no connection is opened (mirrors `PsycopgAccessRoleStore.__init__`)."""
+        """Store `config`; no connection is opened (mirrors the other stores' `__init__`)."""
         self._config = config
 
     def record(
@@ -327,8 +322,8 @@ class PsycopgAuditStore:
 
         See `AuditStore.record`'s docstring for the full contract. Stored
         `details` omits any field left at its `None` default (e.g.
-        `access_role.grant`'s `reason_code` on the `outcome='applied'` path,
-        per `ps_service.authz.audit_actions`'s own field docstrings) rather
+        a `reason_code` on the `outcome='applied'` path, per the emitting
+        component's own field docstrings) rather
         than persisting an explicit `null` -- "absent" and "declared but
         unset" are the same fact for this table's typed, per-action shapes.
         """
@@ -380,8 +375,8 @@ class PsycopgAuditStore:
         """
         try:
             conn = connect_from_config(self._config)
-        except (AccessRolePostgresConnectionError, psycopg.Error) as exc:
-            mark_unhealthy(AUTHZ_POSTGRES, error=exc)
+        except (StatePostgresConnectionError, psycopg.Error) as exc:
+            mark_unhealthy(STATE_POSTGRES, error=exc)
             raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
         try:
             with conn, conn.cursor() as cur:
@@ -399,10 +394,10 @@ class PsycopgAuditStore:
         except AuditUnknownActionError, AuditInvalidDetailsError:
             raise
         except psycopg.Error as exc:
-            mark_unhealthy(AUTHZ_POSTGRES, error=exc)
+            mark_unhealthy(STATE_POSTGRES, error=exc)
             message = f"failed to record standalone audit event {action!r}: {exc}"
             raise AuditPersistenceError(message) from exc
-        mark_healthy(AUTHZ_POSTGRES)
+        mark_healthy(STATE_POSTGRES)
 
     def query(
         self, *, filters: AuditQueryFilters, cursor: str | None, page_size: int
@@ -430,8 +425,8 @@ class PsycopgAuditStore:
 
         try:
             conn = connect_from_config(self._config)
-        except (AccessRolePostgresConnectionError, psycopg.Error) as exc:
-            mark_unhealthy(AUTHZ_POSTGRES, error=exc)
+        except (StatePostgresConnectionError, psycopg.Error) as exc:
+            mark_unhealthy(STATE_POSTGRES, error=exc)
             raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
         try:
             with conn, conn.cursor() as cur:
@@ -447,9 +442,9 @@ class PsycopgAuditStore:
                 cur.execute(cast("LiteralString", select_sql), params)
                 records = cur.fetchall()
         except psycopg.Error as exc:
-            mark_unhealthy(AUTHZ_POSTGRES, error=exc)
+            mark_unhealthy(STATE_POSTGRES, error=exc)
             raise AuditPostgresUnavailableError(_AUDIT_STORE_UNAVAILABLE_MESSAGE) from exc
-        mark_healthy(AUTHZ_POSTGRES)
+        mark_healthy(STATE_POSTGRES)
 
         has_more = len(records) > page_size
         page_records = records[:page_size]

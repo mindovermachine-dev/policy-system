@@ -7,7 +7,7 @@ whether an error genuinely precedes any `cur.execute` call, can only be
 proven end-to-end against a real Postgres instance plus a cursor spy.
 
 Deselected by default (BASELINE.md's tier gating) -- run explicitly with
-`uv run pytest -m postgres_live` against a reachable `PS_AUTHZ_POSTGRES_*`
+`uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
 
@@ -18,15 +18,23 @@ from typing import TYPE_CHECKING
 import pytest
 
 import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers access_role.* actions
+from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit.errors import AuditInvalidDetailsError, AuditUnknownActionError
 from ps_service.audit.store import AuditStore, PsycopgAuditStore
-from ps_service.authz.migration_runner import apply_pending_migrations
-from ps_service.authz.store import connect_from_config
+from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import load_config
+from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
     import psycopg
     from psycopg.rows import TupleRow
+
+
+# Mirrors the source list `ps_service.main` passes to the runner at startup.
+STATE_MIGRATION_SOURCES = [
+    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
+    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
+]
 
 
 class _ExecuteSpyCursor:
@@ -49,8 +57,8 @@ class _ExecuteSpyCursor:
 
 def _require_configured_postgres() -> None:
     config = load_config()
-    assert config.authz_postgres_host is not None, (
-        "postgres_live requires PS_AUTHZ_POSTGRES_HOST to be set"
+    assert config.state_postgres_host is not None, (
+        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
     )
 
 
@@ -62,7 +70,7 @@ def test_record_with_valid_details_inserts_exactly_one_row_with_correct_fields()
     store: AuditStore = PsycopgAuditStore(config)
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as cur:
             cur.execute("DELETE FROM audit_events")  # isolate this test from prior runs' rows
             store.record(
@@ -103,7 +111,7 @@ def test_record_with_unregistered_action_raises_before_any_insert() -> None:
     store: AuditStore = PsycopgAuditStore(config)
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as real_cur:
             spy_cur = _ExecuteSpyCursor(real_cur)
             with pytest.raises(AuditUnknownActionError):
@@ -130,7 +138,7 @@ def test_record_with_undeclared_extra_field_in_details_raises_before_any_insert(
     store: AuditStore = PsycopgAuditStore(config)
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as real_cur:
             spy_cur = _ExecuteSpyCursor(real_cur)
             with pytest.raises(AuditInvalidDetailsError):
@@ -157,7 +165,7 @@ def test_record_with_details_missing_a_required_field_raises_before_any_insert()
     store: AuditStore = PsycopgAuditStore(config)
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as real_cur:
             spy_cur = _ExecuteSpyCursor(real_cur)
             with pytest.raises(AuditInvalidDetailsError):
@@ -191,7 +199,7 @@ def test_a_rolled_back_transaction_after_record_leaves_no_partial_row() -> None:
     store: AuditStore = PsycopgAuditStore(config)
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as cur:
             cur.execute("DELETE FROM audit_events")
         conn.commit()

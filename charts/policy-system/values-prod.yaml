@@ -31,20 +31,20 @@ llm:
   # supplied at install time via --set/existingSecret, never committed here.
   provider: azure
 
-psServiceSigning:
+psPostgres:
   # existingSecret is intentionally NOT overridden here (issue #159) -- the
-  # chart self-provisions policy-system-signing-postgres-credentials in prod
-  # too, via signing-postgres-secret.yaml's lookup+randAlphaNum idiom, the
-  # same as local-test/kind. No Key Vault or other external call required.
-  postgres:
-    persistence:
-      durableStorageClass:
-        # Prod-active path: Premium SSD, Retain-reclaim StorageClass for this
-        # Postgres volume (AC-BI-006), matching falkordb's and Authentik's own
-        # prod override immediately below. Local-test/kind default
-        # (values.yaml) is false — falls back to the cluster's own default
-        # StorageClass.
-        enabled: true
+  # chart self-provisions its three PS Postgres credentials Secrets
+  # (ps-postgres-{admin,state,signing}-credentials) in prod too, via
+  # ps-postgres-secret.yaml's lookup+randAlphaNum idiom, the same as
+  # local-test/kind. No Key Vault or other external call required.
+  persistence:
+    durableStorageClass:
+      # Prod-active path: Premium SSD, Retain-reclaim StorageClass for this
+      # Postgres volume (AC-BI-006), matching falkordb's and Authentik's own
+      # prod override immediately below. Local-test/kind default
+      # (values.yaml) is false -- falls back to the cluster's own default
+      # StorageClass.
+      enabled: true
 
 authentik:
   # Prod-active path: bundled as the production auth broker (invite-only

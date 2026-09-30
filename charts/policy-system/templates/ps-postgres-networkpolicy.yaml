@@ -1,14 +1,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "policy-system.fullname" . }}-signing-postgres
+  name: {{ include "policy-system.fullname" . }}-ps-postgres
   labels:
     {{- include "policy-system.labels" . | nindent 4 }}
-    app.kubernetes.io/component: signing-postgres
+    app.kubernetes.io/component: ps-postgres
 spec:
-  # Restricts inbound connections to the Passkey Signing component's own
-  # hand-rolled Postgres to PS Service's pods only (AC-BI-006's isolation
-  # extended to network policy), on the Postgres protocol port only. Own
+  # Restricts inbound connections to the single PS Postgres server (databases
+  # ps_state and ps_signing, issue #130) to PS Service's pods only (AC-BI-006's
+  # isolation extended to network policy), on the Postgres protocol port only. Own
   # podSelector/name -- never shares falkordb-networkpolicy.yaml's or
   # authentik-postgres-networkpolicy.yaml's selector or resource name. No
   # values gate: rendering it under `kind`/local-test is harmless, since
@@ -17,7 +17,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "policy-system.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: signing-postgres
+      app.kubernetes.io/component: ps-postgres
   policyTypes:
     - Ingress
   ingress:

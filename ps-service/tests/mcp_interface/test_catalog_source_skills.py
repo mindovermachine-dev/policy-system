@@ -1,41 +1,45 @@
 """Tests for the `set-catalog-source`/`reset-catalog-source`/`get-catalog-source`
-MCP tools (issue #125, Slice 3): AC-BI-012 (set validates + persists, no
-restart), AC-BI-013 (precedence on every `GET /catalog` call, including a
-simulated restart), AC-BI-014 (reset clears), AC-BI-015 (get reports
-effective url + override/default), plus D-FAILOPEN (a FalkorDB outage during
-the override check never breaks `get-catalog-source`/`GET /catalog`).
+MCP tools (issues #125, #130): the tools keep their names and contracts while the override now
+lives in `runtime_config` (a hand-written `InMemoryRuntimeConfigStore` stands in for
+`PsycopgRuntimeConfigStore` at the persistence boundary; it still applies the catalog key's
+real type check and validator). AC-BI-006 (the shared validator rejects), AC-BI-007/008
+(set/get/reset round trips and REST parity), AC-BI-010/011 (fail closed / named errors), and
+CHANGES F4 (the local-test bypass records a sentinel actor).
 
 `pytest-asyncio` is not installed; tool coroutines are driven with bare
 `asyncio.run(...)`, exactly like `test_cypher_tool.py`/`test_near_miss_tools.py`.
-Hand-written structural fakes throughout -- no `unittest.mock`, mirroring
-this test suite's own established convention.
+Hand-written structural fakes throughout -- no `unittest.mock`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, NoReturn, cast
 
+import pytest
 from api._fakes import FakeCuratedSourceTransport, build_fake_curated_catalog_dependencies
+from curated_source._fakes import InMemoryRuntimeConfigStore
 from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 
 from ps_service.api.dependencies import provide_curated_catalog_dependencies
 from ps_service.config import ServiceConfig
+from ps_service.curated_source.config_key import CATALOG_SOURCE_KEY
+from ps_service.curated_source.errors import CuratedSourceConfigurationError
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
+from ps_service.curated_source.source_url import validate_source_url
 from ps_service.logging import configure
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
-
-if TYPE_CHECKING:
-    import pytest
-
+from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 _DEFAULT_URL = (
     "https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/curated-content"
 )
 _OVERRIDE_URL = "https://example.com/operator-override"
+_LOCAL_TEST_BYPASS_ACTOR = ("system:local-test-bypass", "system:local-test-bypass")
+_STORE_UNAVAILABLE_ERROR = "error: The runtime configuration store is temporarily unavailable."
+_WRITE_FAILED_ERROR = "error: The runtime configuration write failed and was not applied."
 
 _CANNED_ENTRIES = [
     {
@@ -50,74 +54,21 @@ _CANNED_ENTRIES = [
 ]
 
 
-class _FakeQueryResult:
-    def __init__(self, result_set: list[object]) -> None:
-        self._result_set = result_set
+def _install_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryRuntimeConfigStore:
+    """Wire `mcp_server.PsycopgRuntimeConfigStore` to one shared in-memory store.
 
-    @property
-    def result_set(self) -> list[object]:
-        return self._result_set
-
-
-class _FakeSingletonGraph:
-    """An in-memory fake implementing `store.py`'s three exact query shapes.
-
-    Shared, across a test, between the MCP tools (via `_install_graph`
-    below) and a `CuratedCatalogDependencies.resolve_effective_source`
-    (via `resolve_effective_source(config, open_graph=lambda: this)`) so a
-    test can prove the two surfaces actually see the same persisted state --
-    the closest thing to a real FalkorDB round trip a hermetic test can
-    exercise for the MCP<->REST integration proof (PLAN.md Slice 3 test 2/3).
+    Each tool body calls `PsycopgRuntimeConfigStore(config, audit_store=...)`, so the factory
+    accepts (and ignores) the audit store and hands back the same store bound to the
+    `config` that call resolved -- so a test can also inspect or script it afterwards.
     """
+    store = InMemoryRuntimeConfigStore(_app_config())
 
-    def __init__(self) -> None:
-        self.url: str | None = None
+    def _factory(config: ServiceConfig, **_kwargs: object) -> InMemoryRuntimeConfigStore:
+        store.config = config
+        return store
 
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        params = params or {}
-        if "RETURN o.url" in q:
-            return _FakeQueryResult([[self.url]] if self.url is not None else [])
-        if q.startswith("MERGE"):
-            self.url = cast("str", params["url"])
-            return _FakeQueryResult([])
-        if "DELETE o" in q:
-            self.url = None
-            return _FakeQueryResult([])
-        message = f"unscripted query: {q!r}"
-        raise AssertionError(message)
-
-
-class _FakeFalkorDB:
-    """Stands in for the eager `falkordb.FalkorDB` client -- mirrors `test_cypher_tool.py`."""
-
-    def __init__(self, handle: _FakeSingletonGraph) -> None:
-        self._handle = handle
-
-    def select_graph(self, name: str) -> _FakeSingletonGraph:
-        _ = name
-        return self._handle
-
-
-def _install_graph(monkeypatch: pytest.MonkeyPatch, graph: _FakeSingletonGraph) -> None:
-    """Wire `mcp_server.connect_from_config` to a fake FalkorDB wrapping `graph`.
-
-    Mirrors `test_cypher_tool.py::_install_graph` exactly.
-    """
-    fake_db = _FakeFalkorDB(graph)
-
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        return fake_db
-
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
-
-
-def _install_raising_graph(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
-    """Wire `mcp_server.connect_from_config` to always raise -- simulates FalkorDB unreachable."""
-
-    def _connect_from_config(_config: object) -> _FakeFalkorDB:
-        raise error
-
-    monkeypatch.setattr(mcp_server, "connect_from_config", _connect_from_config)
+    monkeypatch.setattr(mcp_server, "PsycopgRuntimeConfigStore", _factory)
+    return store
 
 
 def _text(result: CallToolResult) -> str:
@@ -145,17 +96,21 @@ def _app_config() -> ServiceConfig:
     )
 
 
-# --- set-catalog-source (AC-BI-012) -----------------------------------------
+def _shared_validator_message(url: str) -> str:
+    """What `validate_source_url` itself says about `url` (`set-catalog-source` must echo it)."""
+    with pytest.raises(CuratedSourceConfigurationError) as exc_info:
+        validate_source_url(url, allow_insecure_http=False)
+    return str(exc_info.value)
 
 
-def test_set_catalog_source_persists_override_and_get_reports_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AC-BI-012/AC-BI-015: a valid `set-catalog-source` call is immediately visible to `get`."""
+# --- set-catalog-source -----------------------------------------------------
+
+
+def test_set_then_get_round_trip_uses_runtime_config_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-BI-007: a valid `set-catalog-source` call is persisted and visible to `get` at once."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
 
     set_result = _call("set-catalog-source", {"url": _OVERRIDE_URL})
     assert set_result.is_error is False
@@ -164,70 +119,104 @@ def test_set_catalog_source_persists_override_and_get_reports_it(
     get_result = _call("get-catalog-source")
     assert get_result.is_error is False
     assert json.loads(_text(get_result)) == {"url": _OVERRIDE_URL, "source": "override"}
+    assert store.rows == {CATALOG_SOURCE_KEY: _OVERRIDE_URL}
 
 
-def test_set_catalog_source_rejects_file_scheme_and_persists_nothing(
+def test_set_catalog_source_rejects_file_scheme_and_plain_http_via_shared_validator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-008 (runtime half): `file://` is rejected, no persisted change."""
+    """AC-BI-006: rejected exactly as before -- same validator, same message, nothing written."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
 
-    result = _call("set-catalog-source", {"url": "file:///etc/passwd"})
+    for url in ("file:///etc/passwd", "http://example.com/insecure"):
+        result = _call("set-catalog-source", {"url": url})
 
-    assert result.is_error is False
-    assert _text(result).startswith("error: ")
-    assert graph.url is None
+        assert result.is_error is False
+        assert _text(result) == f"error: {_shared_validator_message(url)}"
+    assert store.rows == {}
+    assert store.writes == []
 
 
-def test_set_catalog_source_rejects_plain_http_without_allow_flag(
+def test_set_catalog_source_under_local_test_bypass_records_sentinel_actor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-010 (runtime half): plain `http://` needs the same opt-in startup config does."""
+    """CHANGES F4: audit rows need an actor, and the bypass has no real one."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
 
-    result = _call("set-catalog-source", {"url": "http://example.com/insecure"})
+    _call("set-catalog-source", {"url": _OVERRIDE_URL})
 
-    assert result.is_error is False
-    assert _text(result).startswith("error: ")
-    assert graph.url is None
-
-
-def test_set_catalog_source_graph_unavailable_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """D-SANITIZE-UNEXPECTED: an unreachable FalkorDB sanitises to the fixed message."""
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    _install_raising_graph(monkeypatch, ConnectionError("connection refused to 10.0.0.1:6379"))
-
-    result = _call("set-catalog-source", {"url": _OVERRIDE_URL})
-
-    assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
+    assert [(write.action, write.actor) for write in store.writes] == [
+        ("set", _LOCAL_TEST_BYPASS_ACTOR)
+    ]
 
 
-# --- reset-catalog-source (AC-BI-014) ---------------------------------------
-
-
-def test_reset_catalog_source_clears_override_and_get_reverts_to_default(
+def test_reset_catalog_source_under_local_test_bypass_records_sentinel_actor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    graph.url = _OVERRIDE_URL
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
+
+    _call("reset-catalog-source")
+
+    assert [(write.action, write.actor) for write in store.writes] == [
+        ("reset", _LOCAL_TEST_BYPASS_ACTOR)
+    ]
+
+
+def test_set_and_reset_return_named_error_string_when_config_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-011: a failed write (or its audit insert) is a named `error:` string, no change."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _install_store(monkeypatch)
+    store.rows[CATALOG_SOURCE_KEY] = "https://example.com/existing"
+    store.fail_writes = True
+
+    set_result = _call("set-catalog-source", {"url": _OVERRIDE_URL})
+    reset_result = _call("reset-catalog-source")
+
+    assert _text(set_result) == _WRITE_FAILED_ERROR
+    assert _text(reset_result) == _WRITE_FAILED_ERROR
+    assert store.rows == {CATALOG_SOURCE_KEY: "https://example.com/existing"}
+
+
+def test_set_and_reset_return_the_store_unavailable_error_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+
+    def _unreachable(_config: object, **_kwargs: object) -> object:
+        raise RuntimeConfigUnavailableError(
+            "The runtime configuration store is temporarily unavailable."
+        )
+
+    monkeypatch.setattr(mcp_server, "PsycopgRuntimeConfigStore", _unreachable)
+
+    assert _text(_call("set-catalog-source", {"url": _OVERRIDE_URL})) == _STORE_UNAVAILABLE_ERROR
+    assert _text(_call("reset-catalog-source")) == _STORE_UNAVAILABLE_ERROR
+
+
+# --- reset-catalog-source ---------------------------------------------------
+
+
+def test_reset_then_get_returns_default_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-BI-008."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _install_store(monkeypatch)
+    store.rows[CATALOG_SOURCE_KEY] = _OVERRIDE_URL
 
     reset_result = _call("reset-catalog-source")
     assert reset_result.is_error is False
     assert json.loads(_text(reset_result)) == {"url": _DEFAULT_URL, "source": "default"}
-    assert graph.url is None
+    assert store.rows == {}
 
     get_result = _call("get-catalog-source")
     assert json.loads(_text(get_result)) == {"url": _DEFAULT_URL, "source": "default"}
@@ -238,8 +227,7 @@ def test_reset_catalog_source_is_a_no_op_when_nothing_was_persisted(
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    _install_store(monkeypatch)
 
     result = _call("reset-catalog-source")
 
@@ -247,20 +235,7 @@ def test_reset_catalog_source_is_a_no_op_when_nothing_was_persisted(
     assert json.loads(_text(result)) == {"url": _DEFAULT_URL, "source": "default"}
 
 
-def test_reset_catalog_source_graph_unavailable_returns_named_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
-    configure()
-    _install_raising_graph(monkeypatch, ConnectionError("connection refused to 10.0.0.1:6379"))
-
-    result = _call("reset-catalog-source")
-
-    assert result.is_error is False
-    assert _text(result) == "error: the policy graph database is not reachable"
-
-
-# --- get-catalog-source (AC-BI-015), including D-FAILOPEN -------------------
+# --- get-catalog-source, fail closed ---------------------------------------
 
 
 def test_get_catalog_source_reports_default_when_no_override(
@@ -268,8 +243,7 @@ def test_get_catalog_source_reports_default_when_no_override(
 ) -> None:
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    _install_store(monkeypatch)
 
     result = _call("get-catalog-source")
 
@@ -277,112 +251,108 @@ def test_get_catalog_source_reports_default_when_no_override(
     assert json.loads(_text(result)) == {"url": _DEFAULT_URL, "source": "default"}
 
 
-def test_get_catalog_source_falls_open_to_default_when_graph_unavailable(
+def test_get_catalog_source_returns_error_string_when_override_read_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-FAILOPEN via the MCP surface: `get-catalog-source` never errors on a FalkorDB outage."""
+    """AC-BI-010: no fall back to the default source, and no host/port/driver detail."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    _install_raising_graph(monkeypatch, ConnectionError("connection refused to 10.0.0.1:6379"))
+    store = _install_store(monkeypatch)
+    store.fail_reads = True
 
     result = _call("get-catalog-source")
 
     assert result.is_error is False
-    assert json.loads(_text(result)) == {"url": _DEFAULT_URL, "source": "default"}
+    assert _text(result) == _STORE_UNAVAILABLE_ERROR
+    assert _DEFAULT_URL not in _text(result)
+
+
+def test_get_catalog_source_returns_error_string_when_stored_value_no_longer_validates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _install_store(monkeypatch)
+    store.rows[CATALOG_SOURCE_KEY] = "file:///etc/passwd"
+
+    result = _call("get-catalog-source")
+
+    assert _text(result) == _STORE_UNAVAILABLE_ERROR
+
+
+def test_catalog_source_tools_are_exactly_three_and_names_unchanged() -> None:
+    """AC-BI-001: no new tool (in particular no generic `set-config`) was added."""
+    tools = asyncio.run(mcp_server.server.list_tools())
+    names = {tool.name for tool in tools}
+
+    assert {name for name in names if "catalog-source" in name} == {
+        "set-catalog-source",
+        "get-catalog-source",
+        "reset-catalog-source",
+    }
+    assert [name for name in names if "config" in name] == []
 
 
 # --- MCP <-> REST integration: precedence takes effect with no restart -----
 
 
-def _client_with_graph_and_transport(
-    app_config: ServiceConfig, graph: _FakeSingletonGraph
-) -> TestClient:
-    """A `TestClient` whose `GET /catalog` resolves the override through `graph`."""
+def _client_with_store_and_transport(
+    app_config: ServiceConfig, store: InMemoryRuntimeConfigStore
+) -> tuple[TestClient, FakeCuratedSourceTransport]:
+    """A `TestClient` whose `GET /catalog` resolves the override through `store`."""
     app = create_app(app_config)
     transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
 
     def _resolve(config: ServiceConfig) -> EffectiveCatalogSource:
-        return resolve_effective_source(config, open_graph=lambda: graph)
+        return resolve_effective_source(config, store=store)
 
     app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
         build_fake_curated_catalog_dependencies(transport, resolve_effective_source=_resolve)
     )
-    return TestClient(app)
+    return TestClient(app), transport
 
 
 def test_get_catalog_uses_the_override_set_via_mcp_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """AC-BI-013: `set-catalog-source` takes effect on the very next `GET /catalog` call.
-
-    No process restart is involved -- the same persisted state (`graph`) is
-    read by both the MCP tool and a fresh dependency resolution for the REST
-    route, exactly as PLAN.md's own "no restart needed to prove the point"
-    wording describes.
-    """
+    """AC-BI-007: `set-catalog-source` takes effect on the very next `GET /catalog` call."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
+    _call("set-catalog-source", {"url": _OVERRIDE_URL})
 
-    set_result = _call("set-catalog-source", {"url": _OVERRIDE_URL})
-    assert set_result.is_error is False
-
-    client = _client_with_graph_and_transport(_app_config(), graph)
+    client, transport = _client_with_store_and_transport(_app_config(), store)
     response = client.get("/catalog")
 
     assert response.status_code == 200
-    body = response.json()
-    assert {item["instrument_id"] for item in body["instruments"]} == {"CRA-1.0"}
+    assert {item["instrument_id"] for item in response.json()["instruments"]} == {"CRA-1.0"}
+    assert [request.full_url for request in transport.requests] == [f"{_OVERRIDE_URL}/catalog.json"]
 
 
 def test_get_catalog_reverts_to_default_after_reset_catalog_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-014, end to end: `reset-catalog-source` makes `GET /catalog` use the default again."""
+    """AC-BI-008, end to end: `reset-catalog-source` makes `GET /catalog` use the default again."""
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    graph = _FakeSingletonGraph()
-    _install_graph(monkeypatch, graph)
+    store = _install_store(monkeypatch)
     _call("set-catalog-source", {"url": _OVERRIDE_URL})
+    _call("reset-catalog-source")
 
-    reset_result = _call("reset-catalog-source")
-    assert reset_result.is_error is False
-
-    client = _client_with_graph_and_transport(_app_config(), graph)
-    response = client.get("/catalog")
-
-    assert response.status_code == 200  # the fake transport still serves the same canned body
-    # The proof that the DEFAULT url (not the override) is what was resolved
-    # lives at the `resolve_effective_source` level -- confirmed directly:
-    assert resolve_effective_source(
-        _app_config(), open_graph=lambda: graph
-    ) == EffectiveCatalogSource(url=_DEFAULT_URL, is_override=False)
-
-
-def test_get_catalog_falls_open_to_default_source_when_falkordb_override_check_fails() -> None:
-    """D-FAILOPEN via `GET /catalog`: an unreachable FalkorDB during the override check
-    falls back to the env-var/default rather than 502ing (re-verifies Slice 1's
-    "no FalkorDB fixture needed" guarantee now that the override check is wired in).
-    """
-    configure()  # fetch_catalog/the fallback log; the bare TestClient below never enters lifespan
-
-    def _raising_open_graph() -> NoReturn:
-        message = "connection refused"
-        raise ConnectionError(message)
-
-    app_config = _app_config()
-    transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
-
-    def _resolve(config: ServiceConfig) -> EffectiveCatalogSource:
-        return resolve_effective_source(config, open_graph=_raising_open_graph)
-
-    app = create_app(app_config)
-    app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
-        build_fake_curated_catalog_dependencies(transport, resolve_effective_source=_resolve)
+    assert resolve_effective_source(_app_config(), store=store) == EffectiveCatalogSource(
+        url=_DEFAULT_URL, is_override=False
     )
-    client = TestClient(app)
+    client, transport = _client_with_store_and_transport(_app_config(), store)
+    assert client.get("/catalog").status_code == 200
+    assert [request.full_url for request in transport.requests] == [f"{_DEFAULT_URL}/catalog.json"]
 
+
+def test_get_catalog_fails_closed_when_the_override_read_fails() -> None:
+    """AC-BI-010 via `GET /catalog`: named 503, never the env-var/default source."""
+    configure()
+    store = InMemoryRuntimeConfigStore(_app_config(), fail_reads=True)
+
+    client, transport = _client_with_store_and_transport(_app_config(), store)
     response = client.get("/catalog")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert {item["instrument_id"] for item in body["instruments"]} == {"CRA-1.0"}
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "catalog_source_override_unavailable"
+    assert transport.requests == []

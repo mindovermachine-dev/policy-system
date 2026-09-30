@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "policy-system.fullname" . }}-ps-postgres-init
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-postgres
+data:
+  # Mounted at /docker-entrypoint-initdb.d; the postgres image runs it once, on
+  # first start against an empty PGDATA. The same file is executed by the
+  # postgres_live isolation tests (ps-service/tests/persistence).
+  10-ps-init.sh: |-
+    {{- .Files.Get "files/ps-postgres-init.sh" | nindent 4 }}

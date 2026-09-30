@@ -14,6 +14,7 @@ byte-for-byte unchanged.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -36,6 +37,7 @@ from ps_service.curated_source.resolve import EffectiveCatalogSource
 from ps_service.main import create_app
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreOutcome
+from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 if TYPE_CHECKING:
     import urllib.request
@@ -391,3 +393,30 @@ def test_restorations_upload_path_is_unaffected_by_this_route(configured_logging
     # a 422 here proves routing dispatched to the real, still-registered upload handler,
     # not a 404 (which would mean this new route had displaced it).
     assert upload_response.status_code == 422
+
+
+def test_restore_from_catalog_fails_closed_when_override_read_fails() -> None:
+    """AC-BI-010: an override-read failure is a named 503 and nothing is fetched or restored."""
+    transport = _valid_transport()
+    stage = _FakeCatalogRestoreStage()
+
+    def _failing_resolve(config: ServiceConfig) -> EffectiveCatalogSource:
+        del config
+        raise RuntimeConfigUnavailableError(
+            "The runtime configuration store is temporarily unavailable."
+        )
+
+    dependencies = dataclasses.replace(
+        _fake_dependencies(transport, stage), resolve_effective_source=_failing_resolve
+    )
+    app = create_app(_app_config())
+    app.dependency_overrides[provide_restore_from_catalog_dependencies] = lambda: dependencies
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID}
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "catalog_source_override_unavailable"
+    assert stage.calls == []
+    assert transport.requests == []

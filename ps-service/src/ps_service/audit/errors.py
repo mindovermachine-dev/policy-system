@@ -3,17 +3,17 @@
 One exception type per distinct failure boundary this component owns, never
 a generic `Exception`/`ValueError` (L1/L2 Error Handling) -- mirrors the
 shape of every other `ps_service` component's `errors.py` module (e.g.
-`ps_service.authz.errors`, `ps_service.passkey_signing.errors`).
+`ps_service.passkey_signing.errors`).
 
 Slice 1 shipped the two `AuditStore.record`-boundary errors. Slice 3 added the
 two `record_standalone`-boundary errors below (mirroring
-`AccessRolePostgresConnectionError`/`AccessRoleAssignmentPersistenceError`'s
-own split): `AuditPostgresUnavailableError` for a connection that could not
+the access-role store's own connection/persistence error split):
+`AuditPostgresUnavailableError` for a connection that could not
 be opened at all (AC-BI-011 -- fail closed, no host/port/driver detail in
 the message), `AuditPersistenceError` for a connection that opened fine but
 whose `INSERT` itself then failed. `query`'s own connectivity error (Slice 4)
 reuses `AuditPostgresUnavailableError` rather than adding a third type, since
-it is the same failure boundary (the authz Postgres instance is
+it is the same failure boundary (the PS state Postgres instance is
 unreachable), just reached from a different method. Slice 4 adds
 `AuditInvalidCursorError` below, `query`'s own malformed-`cursor` boundary.
 """
@@ -43,11 +43,11 @@ class AuditInvalidDetailsError(Exception):
 
 
 class AuditPostgresUnavailableError(Exception):
-    """The authz Postgres instance (`audit_events`'s own store) could not be reached (AC-BI-011).
+    """The PS state Postgres instance (`audit_events`'s own store) could not be reached (AC-BI-011).
 
     Raised by :meth:`ps_service.audit.store.PsycopgAuditStore.record_standalone`
     (and, in a later slice, `query`) when `connect_from_config` fails --
-    either unconfigured (`AccessRolePostgresConnectionError`) or a genuine
+    either unconfigured (`StatePostgresConnectionError`) or a genuine
     connection failure (`psycopg.Error`). The message is a fixed, generic
     string carrying no host/port/driver detail, mirroring
     `AuthorizationStoreUnavailableError`'s own "fail closed, never leak
@@ -64,8 +64,7 @@ class AuditPersistenceError(Exception):
     when the underlying `psycopg` call raises once past the connection step
     (distinct from `AuditPostgresUnavailableError`, which covers the
     connection step itself) -- wraps the driver-level `psycopg.Error`, mirroring
-    `AccessRoleAssignmentPersistenceError`'s own "wrap the driver exception"
-    convention.
+    the other stores' own "wrap the driver exception" convention.
     """
 
 

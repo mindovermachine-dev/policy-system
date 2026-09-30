@@ -1,0 +1,133 @@
+suite: ps postgres topology (issue #130 Slice 5, AC-BI-013)
+templates:
+  - ps-postgres-deployment.yaml
+  - ps-postgres-service.yaml
+  - ps-postgres-networkpolicy.yaml
+  - ps-postgres-pvc.yaml
+  - authentik-postgres-deployment.yaml
+  - ps-service-deployment.yaml
+set:
+  psService.localTestBypass.enabled: true
+tests:
+  - it: default render contains exactly one PS Postgres Deployment named ps-postgres
+    template: ps-postgres-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-ps-postgres
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: ps-postgres
+
+  - it: PS Postgres Service selects the ps-postgres component
+    template: ps-postgres-service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-ps-postgres
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: ps-postgres
+
+  - it: default render has no Authentik Postgres Deployment (authentik disabled)
+    template: authentik-postgres-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: authentik enabled adds exactly one further, separate Authentik Postgres Deployment
+    template: authentik-postgres-deployment.yaml
+    set:
+      authentik.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-authentik-postgres
+      - notEqual:
+          path: metadata.name
+          value: RELEASE-NAME-policy-system-ps-postgres
+
+  - it: ps-service pod has env for both databases with the same host and distinct database and user
+    template: ps-service-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_HOST")].value
+          value: RELEASE-NAME-policy-system-ps-postgres
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
+          value: RELEASE-NAME-policy-system-ps-postgres
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PORT")].value
+          value: "5432"
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_DATABASE")].value
+          value: ps_state
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_DATABASE")].value
+          value: ps_signing
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_USER")].value
+          value: ps_state
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_USER")].value
+          value: ps_signing
+
+  - it: ps-service env names are exactly the PS_STATE_POSTGRES_{HOST,PORT,DATABASE,USER,PASSWORD} names config.py reads
+    template: ps-service-deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_HOST")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PORT")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_DATABASE")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_USER")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")]
+
+  - it: state and signing passwords come from distinct Secrets, each keyed by its own env var name
+    template: ps-service-deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")].value
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-ps-postgres-state-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.key
+          value: PS_STATE_POSTGRES_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-policy-system-ps-postgres-signing-credentials
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.key
+          value: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
+
+  - it: ps-service pod never references the admin Secret or a superuser credential
+    template: ps-service-deployment.yaml
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          pattern: admin
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="POSTGRES_PASSWORD")]
+      - notEqual:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_USER")].value
+          value: postgres_admin
+
+  - it: NetworkPolicy still admits only ps-service pods on 5432 to ps-postgres
+    template: ps-postgres-networkpolicy.yaml
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: ps-postgres
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: ps-service

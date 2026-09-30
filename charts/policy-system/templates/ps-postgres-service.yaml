@@ -1,15 +1,15 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "policy-system.fullname" . }}-signing-postgres
+  name: {{ include "policy-system.fullname" . }}-ps-postgres
   labels:
     {{- include "policy-system.labels" . | nindent 4 }}
-    app.kubernetes.io/component: signing-postgres
+    app.kubernetes.io/component: ps-postgres
 spec:
   type: ClusterIP
   selector:
     {{- include "policy-system.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: signing-postgres
+    app.kubernetes.io/component: ps-postgres
   ports:
     - name: postgres
       port: 5432

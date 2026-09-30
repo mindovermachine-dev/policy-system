@@ -91,23 +91,38 @@ spec:
               value: {{ printf "%s-falkordb" (include "policy-system.fullname" .) }}
             - name: PS_FALKORDB_PORT
               value: "6379"
-            # Passkey Signing's own, distinct Postgres (issue #131, AC-BI-006) --
-            # reached via its own Service DNS name, same "resolved by Service
-            # name, never a pod IP" shape as PS_FALKORDB_HOST above. Own
-            # instance/PVC/NetworkPolicy/Secret -- never shares FalkorDB's or
-            # Authentik's (templates/signing-postgres-*.yaml).
+            # The single PS Postgres server (issue #130) -- reached via its own Service
+            # DNS name, same "resolved by Service name, never a pod IP" shape as
+            # PS_FALKORDB_HOST above. Two databases on it, each with its own role and
+            # its own password Secret: ps_state (PS_STATE_POSTGRES_*: audit, authz,
+            # runtime config) and ps_signing (PS_PASSKEYSIGNING_POSTGRES_*: Passkey
+            # Signing). Never shares FalkorDB's or Authentik's Postgres
+            # (templates/ps-postgres-*.yaml). No superuser credential reaches this pod.
+            - name: PS_STATE_POSTGRES_HOST
+              value: {{ printf "%s-ps-postgres" (include "policy-system.fullname" .) }}
+            - name: PS_STATE_POSTGRES_PORT
+              value: "5432"
+            - name: PS_STATE_POSTGRES_DATABASE
+              value: {{ .Values.psPostgres.state.database | quote }}
+            - name: PS_STATE_POSTGRES_USER
+              value: {{ .Values.psPostgres.state.user | quote }}
+            - name: PS_STATE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "policy-system.psPostgresStateSecretName" . }}
+                  key: PS_STATE_POSTGRES_PASSWORD
             - name: PS_PASSKEYSIGNING_POSTGRES_HOST
-              value: {{ printf "%s-signing-postgres" (include "policy-system.fullname" .) }}
+              value: {{ printf "%s-ps-postgres" (include "policy-system.fullname" .) }}
             - name: PS_PASSKEYSIGNING_POSTGRES_PORT
               value: "5432"
             - name: PS_PASSKEYSIGNING_POSTGRES_DATABASE
-              value: {{ .Values.psServiceSigning.postgres.database | quote }}
+              value: {{ .Values.psPostgres.signing.database | quote }}
             - name: PS_PASSKEYSIGNING_POSTGRES_USER
-              value: {{ .Values.psServiceSigning.postgres.user | quote }}
+              value: {{ .Values.psPostgres.signing.user | quote }}
             - name: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "policy-system.signingPostgresCredentialsSecretName" . }}
+                  name: {{ include "policy-system.psPostgresSigningSecretName" . }}
                   key: PS_PASSKEYSIGNING_POSTGRES_PASSWORD
             # PS Service's own service credential for calling Authentik's
             # invitation-stage API (issue #140) -- rendered unconditionally

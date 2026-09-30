@@ -225,11 +225,12 @@ brew install helm
 Find the kind node container's own IP address:
 
 ```bash
-podman inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'
+podman inspect policy-system-control-plane --format '{{ (index .NetworkSettings.Networks "kind").IPAddress }}'
 ```
 
 (`docker inspect policy-system-control-plane --format '{{ .NetworkSettings.IPAddress }}'`
-if you're running kind under Docker instead of Podman.) PS Service's pod must resolve your
+if you're running kind under Docker instead of Podman. Podman leaves the top-level
+`.NetworkSettings.IPAddress` empty because the node sits on kind's own `kind` network.) PS Service's pod must resolve your
 chosen Authentik hostname to this address, so its OIDC issuer validation reaches the exact
 same Authentik instance a browser reaches via the NodePort mapping in
 `deploy/kind/cluster.yaml`.

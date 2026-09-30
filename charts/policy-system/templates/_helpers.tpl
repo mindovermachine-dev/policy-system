@@ -95,7 +95,7 @@ policy-system.generateOrReuseSecretValue) whenever
 `authentik.credentialsExistingSecret` is unset -- the escape hatch, when set,
 points this helper (and therefore the rendered Secret name) at an
 operator-managed Secret instead. Mirrors
-policy-system.signingPostgresCredentialsSecretName's exact
+policy-system.psPostgresSigningSecretName's exact
 "operator-managed-name-or-chart-generates" shape.
 
 IMPORTANT: this helper's output cannot be embedded as live `{{ }}` template
@@ -118,49 +118,47 @@ fail() guard, issue #159, for the safety net when the two disagree).
 {{- end }}
 
 {{/*
-Name of the durable (Premium SSD, Retain) StorageClass for the Passkey
-Signing component's own hand-rolled Postgres PVC (AC-BI-006, issue #131
-Slice 1). Mirrors policy-system.authentikPostgresStorageClassName exactly,
-so signing-postgres-storageclass.yaml and signing-postgres-pvc.yaml never
-duplicate the literal name string.
+Name of the durable (Premium SSD, Retain) StorageClass for the single PS
+Postgres server's PVC (AC-BI-006/AC-BI-008, issues #131/#130 Slice 5). Mirrors
+policy-system.authentikPostgresStorageClassName exactly, so
+ps-postgres-storageclass.yaml and ps-postgres-pvc.yaml never duplicate the
+literal name string.
 */}}
-{{- define "policy-system.signingPostgresStorageClassName" -}}
-{{- printf "%s-signing-postgres-durable" (include "policy-system.fullname" .) -}}
+{{- define "policy-system.psPostgresStorageClassName" -}}
+{{- printf "%s-ps-postgres-durable" (include "policy-system.fullname" .) -}}
 {{- end }}
 
 {{/*
-Name of the Secret carrying PS_PASSKEYSIGNING_POSTGRES_PASSWORD (AC-BI-007,
-issue #131 Slice 1) -- consumed both by the signing Postgres container's own
-POSTGRES_PASSWORD and by ps-service-deployment.yaml's
-PS_PASSKEYSIGNING_POSTGRES_PASSWORD env var, so the two are guaranteed to
-agree. Mirrors llm.existingSecret's own "operator-managed name, or the chart
-renders one from a plain value" convention (values.yaml llm.existingSecret /
-templates/secret.yaml) -- deliberately NOT authentik's own
-kubectl-apply-only, no-values-fallback shape, since (unlike the upstream
-`authentik` dependency's all-or-nothing existingSecret) nothing here forces
-every other value to be Secret-sourced too. When existingSecret is unset (the
-default in both values.yaml and values-prod.yaml as of issue #159),
-signing-postgres-secret.yaml generates and persists this Secret's own
-password itself via policy-system.generateOrReuseSecretValue -- no external
-(Key Vault or otherwise) call required -- own Secret, never appended to
-policy-system.authentikCredentialsSecretName's Secret (AC-BI-006's isolation
-extended to credentials).
+Names of the three PS Postgres credentials Secrets (issue #130 Slice 5):
+admin (superuser; consumed only by the Postgres container), state role, signing
+role. Each is "operator-managed name if psPostgres.<role>.existingSecret is
+set, else the chart generates its own Secret" (ps-postgres-secret.yaml, issue
+#159 lookup+randAlphaNum idiom) -- own Secret per role, never appended to
+Authentik's or FalkorDB's (AC-BI-006's isolation extended to credentials).
 */}}
-{{- define "policy-system.signingPostgresCredentialsSecretName" -}}
-{{- .Values.psServiceSigning.postgres.existingSecret | default (printf "%s-signing-postgres-credentials" (include "policy-system.fullname" .)) -}}
+{{- define "policy-system.psPostgresAdminSecretName" -}}
+{{- .Values.psPostgres.admin.existingSecret | default (printf "%s-ps-postgres-admin-credentials" (include "policy-system.fullname" .)) -}}
+{{- end }}
+
+{{- define "policy-system.psPostgresStateSecretName" -}}
+{{- .Values.psPostgres.state.existingSecret | default (printf "%s-ps-postgres-state-credentials" (include "policy-system.fullname" .)) -}}
+{{- end }}
+
+{{- define "policy-system.psPostgresSigningSecretName" -}}
+{{- .Values.psPostgres.signing.existingSecret | default (printf "%s-ps-postgres-signing-credentials" (include "policy-system.fullname" .)) -}}
 {{- end }}
 
 {{/*
 Name of the Secret carrying PS_AUTHENTIK_API_TOKEN (issue #140) -- PS
 Service's own service credential for calling Authentik's invitation-stage
 API, consumed by ps-service-deployment.yaml's PS_AUTHENTIK_API_TOKEN env var.
-Mirrors policy-system.signingPostgresCredentialsSecretName's exact shape
+Mirrors policy-system.psPostgresSigningSecretName's exact shape
 ("operator-managed name, or the chart renders one from a plain value") --
 deliberately NOT policy-system.authentikCredentialsSecretName above, which is
 a different Secret entirely (the upstream `authentik` dependency's own
 consume-only credentials, provisioned externally by scripts/deploy-ps.sh) --
 this chart generates and owns this Secret's contents itself, same as
-signing-postgres-secret.yaml does for Passkey Signing.
+ps-postgres-secret.yaml does for Passkey Signing.
 */}}
 {{- define "policy-system.authentikApiTokenSecretName" -}}
 {{- .Values.psService.authentik.existingSecret | default (printf "%s-authentik-api-token" (include "policy-system.fullname" .)) -}}

@@ -20,22 +20,6 @@ class AccessRoleAssignmentPersistenceError(Exception):
     """
 
 
-class AccessRolePostgresConnectionError(Exception):
-    """The Authz Postgres instance is unreachable, or unconfigured (PLAN.md §0.11).
-
-    Raised by :func:`ps_service.authz.store.connect_from_config` immediately
-    when `config.authz_postgres_host` is `None` (never a doomed
-    `psycopg.connect(host=None, ...)` attempt) and by
-    :func:`ps_service.authz.store.check_connectivity_from_config` when the
-    instance is configured but unreachable. Unlike
-    `ps_service.passkey_signing.store.check_connectivity_from_config`'s own
-    "no-op when unset" contract, every `AccessRoleStore` caller must fail
-    closed -- an unconfigured store means every role-gated action is
-    permanently rejected for everyone, the correct, conservative,
-    deny-by-default outcome (AC-BI-011).
-    """
-
-
 class AccessRoleSystemOwnerFloorRaceError(Exception):
     """A concurrent revoke race would drop active `SystemOwner`s to zero (PLAN.md §0.10).
 
@@ -48,17 +32,8 @@ class AccessRoleSystemOwnerFloorRaceError(Exception):
     callers' floor checks (defensive, second-layer; `service.py`'s own
     pre-mutation check is the primary guard). Caught by `revoke_role` and
     re-raised as the API-boundary `SystemOwnerFloorViolationError`, mirroring
-    how `AccessRolePostgresConnectionError`/`AccessRoleAssignmentPersistenceError`
-    are translated there.
-    """
-
-
-class AccessRoleMigrationApplyError(Exception):
-    """A `.sql` migration file under `authz/migrations/` failed to apply.
-
-    Raised by :func:`ps_service.authz.migration_runner.apply_pending_migrations`;
-    wraps the underlying `psycopg.Error`. The failing migration's filename is
-    named in the message so an operator can find and fix it directly.
+    how `ps_service.persistence.StatePostgresConnectionError`/
+    `AccessRoleAssignmentPersistenceError` are translated there.
     """
 
 

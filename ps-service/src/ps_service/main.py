@@ -27,25 +27,20 @@ from ps_service.api.error_handlers import (
 )
 from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.routes import build_api_router
+from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.auth.middleware import RestAuthMiddleware
 from ps_service.auth.protected_resource import protected_resource_metadata
 from ps_service.auth.startup import resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
-from ps_service.authz.migration_runner import apply_pending_migrations as apply_authz_migrations
+from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.authz.startup import require_bootstrap_owner_configured
-from ps_service.authz.store import (
-    check_connectivity_from_config as check_authz_postgres_connectivity,
-)
-from ps_service.authz.store import (
-    connect_from_config as connect_authz_postgres_from_config,
-)
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
-    AUTHZ_POSTGRES,
     CELLAR_ELI,
     FALKORDB,
     LLM_INTERFACE,
     PASSKEY_SIGNING_POSTGRES,
+    STATE_POSTGRES,
     all_healthy,
     is_healthy,
 )
@@ -69,6 +64,19 @@ from ps_service.passkey_signing.store import (
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
+from ps_service.persistence import (
+    MigrationSource,
+)
+from ps_service.persistence import (
+    apply_pending_migrations as apply_state_migrations,
+)
+from ps_service.persistence import (
+    check_connectivity_from_config as check_state_postgres_connectivity,
+)
+from ps_service.persistence import (
+    connect_from_config as connect_state_postgres_from_config,
+)
+from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -136,24 +144,23 @@ _READY_DEPENDENCIES = (
     LLM_INTERFACE,
     CELLAR_ELI,
     PASSKEY_SIGNING_POSTGRES,
-    AUTHZ_POSTGRES,
+    STATE_POSTGRES,
 )
 
 # Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only
-# being named in `unhealthy_dependencies` (issue #75). A single-element tuple today
-# (FalkorDB only), but `_check_dependencies_at_startup`/`_retry_gating_dependencies`
-# below are written against this set, not against FalkorDB by name, so a future
-# gating dependency (e.g. an identity provider) is added here and inherits both
-# functions' behavior unchanged (issue #124). Passkey Signing Postgres (issue #131)
-# is deliberately NOT added here (PLAN.md §0.8): an outage of this optional,
-# pilot-scope instance must never block `/ready` for the rest of the system --
-# only the one gated merge path degrades. Authz Postgres (issue #133) is
-# likewise deliberately NOT added here (issue #133 PLAN.md §0.11): AC-BI-011's
-# "fails closed for every role-gated action" is a per-action requirement, not
-# a `/ready` requirement -- an unconfigured/unreachable Authz Postgres instead
-# means every role-gated action is rejected for everyone, enforced at each
-# action's own call site, never by blocking process-wide readiness.
-_GATING_DEPENDENCIES = (FALKORDB,)
+# being named in `unhealthy_dependencies` (issue #75). FalkorDB and PS state Postgres gate;
+# `_check_dependencies_at_startup`/`_retry_gating_dependencies` below are written against this
+# set, not against any dependency by name, so a future gating dependency (e.g. an identity
+# provider) is added here and inherits both functions' behavior unchanged (issue #124).
+# PS state Postgres gates since issue #130: it backs every privileged read and write (access
+# roles, the audit trail, runtime config incl. the catalog-source override), so a pod with no
+# usable state store must not enter Service rotation -- and a first `helm install` must not
+# report ready before the store is provisioned. (Before #130 an unreachable state store was
+# only enforced per action, at each call site's own fail-closed check; that check stays.)
+# Passkey Signing Postgres (issue #131) is deliberately NOT added here (PLAN.md §0.8): an outage
+# of this optional, pilot-scope instance must never block `/ready` for the rest of the system --
+# only the one gated merge path degrades.
+_GATING_DEPENDENCIES = (FALKORDB, STATE_POSTGRES)
 
 
 class LocalTestBypassBindRefusedError(Exception):
@@ -203,7 +210,7 @@ def _all_dependency_probes(
     """The fixed (name, probe) pairs for the five tracked dependencies.
 
     Covers FalkorDB, LLM Interface, Cellar/ELI, Passkey Signing Postgres, and
-    (issue #133) Authz Postgres.
+    (issue #133) PS state Postgres.
 
     The single source of truth both `_check_dependencies_at_startup` (probes
     all five, unconditionally) and `_retry_gating_dependencies` (re-probes
@@ -213,13 +220,13 @@ def _all_dependency_probes(
     no-op when `config.passkey_signing_postgres_host` is unset (issue #131,
     PLAN.md §0.8) -- unconditionally listed here regardless, mirroring how
     LLM Interface/Cellar/ELI are also always probed even though a deployment
-    may leave either unconfigured. Authz Postgres's own probe
-    (`check_authz_postgres_connectivity`) deliberately does NOT no-op when
-    `config.authz_postgres_host` is unset (issue #133, PLAN.md §0.11) --
-    unlike Passkey Signing, an unconfigured Authz Postgres raises there too,
-    so an unconfigured deployment logs a startup warning here (never gating
-    `/ready`, since `AUTHZ_POSTGRES` is not in `_GATING_DEPENDENCIES`) rather
-    than silently appearing healthy.
+    may leave either unconfigured. PS state Postgres's own probe
+    (`check_state_postgres_connectivity`) deliberately does NOT no-op when
+    `config.state_postgres_host` is unset (issue #133, PLAN.md §0.11) --
+    unlike Passkey Signing, an unconfigured PS state Postgres raises there too,
+    so an unconfigured deployment logs a startup warning here and, since
+    `STATE_POSTGRES` is a gating dependency (issue #130), stays `not_ready`
+    rather than silently appearing healthy.
     """
     return (
         (FALKORDB, lambda: check_falkordb_connectivity(config)),
@@ -229,7 +236,7 @@ def _all_dependency_probes(
             PASSKEY_SIGNING_POSTGRES,
             lambda: check_passkey_signing_postgres_connectivity(config),
         ),
-        (AUTHZ_POSTGRES, lambda: check_authz_postgres_connectivity(config)),
+        (STATE_POSTGRES, lambda: check_state_postgres_connectivity(config)),
     )
 
 
@@ -259,31 +266,41 @@ def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
         )
 
 
-def _apply_authz_migrations_at_startup(config: ServiceConfig) -> None:
-    """Apply any pending Authz Postgres migrations once at startup (issue #133).
+def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
+    """Apply any pending PS state Postgres migrations once at startup (issues #133, #130).
 
-    Gated on `config.authz_postgres_host` being configured, mirroring
-    `_apply_passkey_signing_migrations_at_startup`'s own shape exactly:
-    Authz Postgres is optional at *config-load* time (PLAN.md §1.4), so an
-    environment that never configures it skips this step entirely rather
-    than attempting a doomed connection. Deliberately never raises (mirrors
-    `_check_dependencies_at_startup` below): a migration failure is logged as
-    a warning and only degrades role-gated actions (which already fail
-    closed on an unreachable store, PLAN.md §0.11), never the whole
-    process's startup.
+    Skipped, without a connection attempt, when `config.state_postgres_host` is unset: PS state
+    Postgres is optional at *config-load* time (PLAN.md §1.4), and an unconfigured store keeps
+    the process up but out of `/ready` (its connectivity probe raises when unconfigured and
+    `STATE_POSTGRES` is a gating dependency).
+
+    With a host configured, a failure to connect or to apply a migration is FATAL (issue #130):
+    it is logged (exception class only, never its text) and re-raised out of startup, so the
+    process exits and the orchestrator restarts it -- a service that cannot bring its own schema
+    up to date must never come up looking healthy. This deliberately differs from
+    `_apply_passkey_signing_migrations_at_startup`, whose store is optional pilot-scope
+    infrastructure whose failure only degrades one gated merge path.
     """
-    if config.authz_postgres_host is None:
+    if config.state_postgres_host is None:
         return
     try:
-        with connect_authz_postgres_from_config(config) as conn:
-            apply_authz_migrations(conn)
-    except Exception as exc:  # noqa: BLE001 - a migration failure must never crash the process (see docstring)
+        with connect_state_postgres_from_config(config) as conn:
+            apply_state_migrations(
+                conn,
+                sources=[
+                    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
+                    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
+                    MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
+                ],
+            )
+    except Exception as exc:
         emit_log_entry(
             component="entrypoint",
             action="startup",
-            outcome="warning",
-            extra={"dependency": AUTHZ_POSTGRES, "error": str(exc)},
+            outcome="failure",
+            extra={"dependency": STATE_POSTGRES, "reason": type(exc).__name__},
         )
+        raise
 
 
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:
@@ -531,7 +548,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
             )
         app.state.config_complete = not missing_config
         _apply_passkey_signing_migrations_at_startup(config)
-        _apply_authz_migrations_at_startup(config)
+        _apply_state_migrations_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield

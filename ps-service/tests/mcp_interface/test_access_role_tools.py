@@ -233,7 +233,7 @@ def test_authz_store_outage_fails_closed_instead_of_defaulting_or_bootstrapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC-BI-011 (bootstrap-path half): a simulated
-    `AccessRolePostgresConnectionError` from the store makes
+    `StatePostgresConnectionError` from the store makes
     `list-access-roles` return the distinct `authorization_store_unavailable`
     error, never a silent default/bootstrap/success.
     """

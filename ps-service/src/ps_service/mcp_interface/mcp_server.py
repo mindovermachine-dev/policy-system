@@ -44,6 +44,7 @@ from ps_service.api.errors import (
     AccessDeniedError,
     AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
+    CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     IngestionConfigIncompleteError,
     InvalidAccessRoleError,
@@ -102,12 +103,8 @@ from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfigurationError, load_config
 from ps_service.curated_source import store as catalog_source_store
 from ps_service.curated_source.catalog_client import build_default_curated_catalog_dependencies
-from ps_service.curated_source.errors import (
-    CuratedSourceConfigurationError,
-    CuratedSourceFetchError,
-)
+from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import resolve_effective_source
-from ps_service.curated_source.source_url import validate_source_url
 from ps_service.invitations.client import create_invitation
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.logging import (
@@ -187,6 +184,13 @@ from ps_service.query_engine.falkordb_client import (
     GraphHandle,
     connect_from_config,
     select_graph,
+)
+from ps_service.runtime_config import (
+    PsycopgRuntimeConfigStore,
+    RuntimeConfigError,
+    RuntimeConfigInvalidValueError,
+    RuntimeConfigPersistenceError,
+    RuntimeConfigUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -1093,6 +1097,25 @@ def near_misses_check_approval(
     return _run_mcp_action("near_misses_check_approval", principal, _body)
 
 
+# issue #130: the actor `set-catalog-source`/`reset-catalog-source` record on their audit row when
+# no real caller identity exists. `_resolve_authz_actor` deliberately returns `None` under the
+# local-test bypass, and `audit_events` actors are NOT NULL, so a fixed sentinel (which can never
+# collide with an IdP-issued `sub`, precedent `ps_service.authz.store`'s `system:bootstrap`)
+# stands in.
+_LOCAL_TEST_BYPASS_AUDIT_ACTOR = "system:local-test-bypass"
+
+# Fixed, detail-free strings for the catalog-source tools' read failures (AC-BI-010): never
+# host, port, driver text or the (possibly credential-bearing) override URL.
+_RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
+    "error: The runtime configuration store is temporarily unavailable."
+)
+
+
+def _catalog_source_audit_actor(actor: tuple[str, str] | None) -> tuple[str, str]:
+    """The `(subject, issuer)` a catalog-source write is audited as (issue #130)."""
+    return actor or (_LOCAL_TEST_BYPASS_AUDIT_ACTOR, _LOCAL_TEST_BYPASS_AUDIT_ACTOR)
+
+
 @server.tool(name="set-catalog-source")
 def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, object] | str:
     """SetCatalogSource: override the effective curated-content source (issue #125, AC-BI-012).
@@ -1102,11 +1125,12 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
     validate_source_url` -- AC-BI-008/010): only `http(s)://` schemes are
     accepted, and a plain `http://` URL is rejected unless
     `PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP` is set for this process. On
-    success, persists `url` in FalkorDB as the effective curated-content
-    source -- no restart required -- and it takes precedence over
-    `PS_CURATEDSOURCE_URL`/the public default on every subsequent
-    `GET /catalog` and artifact fetch (AC-BI-013), until `reset-catalog-source`
-    is called.
+    success, persists `url` in the PS state database as the effective
+    curated-content source (issue #130) and writes one audit event for the
+    change in the same transaction -- no restart required -- and it takes
+    precedence over `PS_CURATEDSOURCE_URL`/the public default on every
+    subsequent `GET /catalog` and artifact fetch (AC-BI-013), until
+    `reset-catalog-source` is called.
 
     Since issue #133, requires the caller hold `SystemAdmin` or above
     (`ps_service.authz.service.require_role`) -- skipped entirely under the
@@ -1115,8 +1139,9 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
 
     On success, returns `{"url": <the validated url>, "source": "override"}`.
     Returns a string beginning `error: ` when the caller lacks the required
-    access role, when `url` fails validation, when the policy graph database
-    cannot be reached, or (this tool's own residual safety net) on any other
+    access role, when `url` fails validation, when the runtime configuration
+    store cannot be reached or the write could not be applied (nothing is
+    changed), or (this tool's own residual safety net) on any other
     unexpected failure.
     """
     config = load_config()
@@ -1136,17 +1161,19 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
         try:
-            validated_url = validate_source_url(
-                url, allow_insecure_http=config.curated_source_allow_insecure_http
+            catalog_source_store.set_override(
+                PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
+                url,
+                actor=_catalog_source_audit_actor(actor),
             )
-        except CuratedSourceConfigurationError as exc:
+        except (
+            RuntimeConfigInvalidValueError,
+            RuntimeConfigUnavailableError,
+            RuntimeConfigPersistenceError,
+        ) as exc:
+            # The validator's own message (unchanged from before #130) or a fixed store message.
             return f"error: {exc}"
-        try:
-            graph = _resolve_graph(config)
-            catalog_source_store.set_override(graph, validated_url)
-        except McpGraphUnavailableError:
-            return _GRAPH_UNAVAILABLE_MESSAGE
-        return {"url": validated_url, "source": "override"}
+        return {"url": url, "source": "override"}
 
     return _run_mcp_action("set_catalog_source", principal, _body)
 
@@ -1155,8 +1182,9 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
 def reset_catalog_source() -> dict[str, object] | str:
     """ResetCatalogSource: clear the persisted curated-content source override (AC-BI-014).
 
-    Takes no parameters. On success, deletes the persisted FalkorDB override
-    (a no-op if none was set) -- the effective source immediately reverts to
+    Takes no parameters. On success, deletes the persisted override from the PS state
+    database (a no-op if none was set) and writes one audit event in the same transaction --
+    the effective source immediately reverts to
     `PS_CURATEDSOURCE_URL`/the public default on every subsequent
     `GET /catalog` and artifact fetch, no restart required.
 
@@ -1167,8 +1195,9 @@ def reset_catalog_source() -> dict[str, object] | str:
 
     On success, returns `{"url": <the env-var/default url>, "source": "default"}`.
     Returns a string beginning `error: ` when the caller lacks the required
-    access role, when the policy graph database cannot be reached, or (this
-    tool's own residual safety net) on any other unexpected failure.
+    access role, when the runtime configuration store cannot be reached or the
+    write could not be applied (nothing is changed), or (this tool's own
+    residual safety net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1187,10 +1216,12 @@ def reset_catalog_source() -> dict[str, object] | str:
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
         try:
-            graph = _resolve_graph(config)
-            catalog_source_store.reset_override(graph)
-        except McpGraphUnavailableError:
-            return _GRAPH_UNAVAILABLE_MESSAGE
+            catalog_source_store.reset_override(
+                PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
+                actor=_catalog_source_audit_actor(actor),
+            )
+        except (RuntimeConfigUnavailableError, RuntimeConfigPersistenceError) as exc:
+            return f"error: {exc}"
         return {"url": config.curated_source_base_url, "source": "default"}
 
     return _run_mcp_action("reset_catalog_source", principal, _body)
@@ -1200,11 +1231,11 @@ def reset_catalog_source() -> dict[str, object] | str:
 def get_catalog_source() -> dict[str, object] | str:
     """GetCatalogSource: report the currently effective curated-content source (AC-BI-015).
 
-    Takes no parameters. Checks for a persisted FalkorDB override first,
-    falling back to `PS_CURATEDSOURCE_URL`/the public default when none is
-    set, OR when the policy graph database is unreachable for that check
-    (D-FAILOPEN) -- this tool never fails on a FalkorDB outage; it simply
-    reports the fallback source.
+    Takes no parameters. Checks for a persisted override in the PS state database first,
+    falling back to `PS_CURATEDSOURCE_URL`/the public default only when the store answered
+    and holds no override. Fails closed (issue #130): when the runtime configuration store
+    cannot be read this tool returns an error and never reports the default source, since
+    the operator's override may point elsewhere on purpose.
 
     Since issue #133, requires the caller hold `SystemAdmin` or above
     (`ps_service.authz.service.require_role`) -- skipped entirely under the
@@ -1214,9 +1245,8 @@ def get_catalog_source() -> dict[str, object] | str:
     On success, returns `{"url": <the effective url>, "source": "override"}`
     when a persisted override is in effect, or `{"url": ..., "source":
     "default"}` otherwise. Returns a string beginning `error: ` when the
-    caller lacks the required access role, or (this tool's own residual
-    safety net) on any other unexpected failure unrelated to the FalkorDB
-    override check, which always fails open rather than erroring.
+    caller lacks the required access role, when the override cannot be read,
+    or (this tool's own residual safety net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1234,7 +1264,13 @@ def get_catalog_source() -> dict[str, object] | str:
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
-        effective = resolve_effective_source(config, open_graph=lambda: _resolve_graph(config))
+        try:
+            effective = resolve_effective_source(
+                config,
+                store=PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
+            )
+        except RuntimeConfigError:
+            return _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE
         return {"url": effective.url, "source": "override" if effective.is_override else "default"}
 
     return _run_mcp_action("get_catalog_source", principal, _body)
@@ -1343,28 +1379,32 @@ def get_catalog_listing() -> dict[str, object] | str:
     -- there is no separate orchestration module for this route to delegate
     to, so this tool replicates `list_curated_catalog`'s own two-call
     sequence and response mapping inline): resolves the effective
-    curated-content source (a persisted FalkorDB override when one exists,
-    else the configured env-var/default -- D-FAILOPEN, so this tool never
-    fails on a FalkorDB outage during that check), then fetches and parses
-    `catalog.json` from it. Takes zero parameters -- there is no
-    client-supplied input to validate, so AC-BI-005's format-validation
-    surface does not apply here, a deliberate absence mirroring
+    curated-content source (a persisted override when one exists, else the
+    configured env-var/default -- fail closed, issue #130: when the override
+    cannot be read this tool returns an error rather than listing the
+    default source), then fetches and parses `catalog.json` from it. Takes
+    zero parameters -- there is no client-supplied input to validate, so
+    AC-BI-005's format-validation surface does not apply here, a deliberate absence mirroring
     `check_regulations`/`near_misses_list`.
 
     On success, returns the same structured listing `GET /catalog` returns:
     an `instruments` list, one entry per curated instrument (external and
     internal, unfiltered), each carrying `instrument_id`, `title`,
     `source_type`, and `jurisdiction` (`None` for an internal-source entry).
-    Returns a string beginning `error: ` when the configured curated-content
-    source is unreachable or returns a missing/malformed `catalog.json`, or
-    (this tool's own residual safety net) on any other unexpected failure.
+    Returns a string beginning `error: ` when the override cannot be read,
+    when the configured curated-content source is unreachable or returns a
+    missing/malformed `catalog.json`, or (this tool's own residual safety
+    net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
 
     def _body() -> dict[str, object] | str:
         dependencies: CuratedCatalogDependencies = build_default_curated_catalog_dependencies()
-        effective_source = dependencies.resolve_effective_source(config)
+        try:
+            effective_source = dependencies.resolve_effective_source(config)
+        except RuntimeConfigError:
+            return _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE
         try:
             entries = dependencies.fetch_catalog(effective_source.url)
         except CuratedSourceFetchError as exc:
@@ -1397,7 +1437,7 @@ def restore_instrument(
     Runs in-process, exactly like `POST /restorations/from-catalog` does
     (D-RESTORE-DELEGATE): fetches `instrument_id`'s manifest/baseline/native
     artifact from the effective curated-content source (a persisted
-    FalkorDB override when one exists, else the configured env-var/default),
+    override when one exists, else the configured env-var/default),
     then restores it into the policy graph -- delegating directly to
     `run_restoration_from_catalog_source`, the exact same function the REST
     route calls, never reimplemented. `instrument_id` is validated against
@@ -1446,6 +1486,7 @@ def restore_instrument(
                 dependencies=dependencies,
             )
         except (
+            CatalogSourceOverrideUnavailableError,
             CuratedSourceUnavailableError,
             RestoreArtifactRejectedError,
             RestoreStageFailedError,

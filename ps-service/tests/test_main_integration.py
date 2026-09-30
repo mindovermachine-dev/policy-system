@@ -57,6 +57,7 @@ import socket
 import subprocess
 import sys
 import time
+from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -244,7 +245,7 @@ class TestSharedServer:
         response = _wait_until_healthy()
 
         assert response.status_code == 200
-        assert response.json() == {"status": "alive"}
+        assert response.json() == {"status": "alive", "version": installed_version("ps-service")}
         assert running_server.poll() is None  # still running, not exited
 
     @pytest.mark.integration
@@ -394,7 +395,7 @@ def test_ps_service_port_env_override_serves_health_on_overridden_port(tmp_path:
         response = _wait_until_healthy(url=f"http://{_HOST}:{_OVERRIDE_PORT}/health")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "alive"}
+        assert response.json() == {"status": "alive", "version": installed_version("ps-service")}
     finally:
         _terminate(proc)
 
@@ -500,6 +501,14 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(tmp_path: Pa
     on a different machine" claim, matching the exact proxy this file's own
     AC-BI-004/005 subprocess tests above already rely on.
     """
+    # `/ready` gates on state Postgres (issue #130 F1), so the spawned process (which inherits
+    # this environment) needs `PS_STATE_POSTGRES_*` pointing at a reachable, provisioned server,
+    # like the `postgres_live` tests. Fail loudly on the missing precondition rather than
+    # letting `_wait_until_healthy` time out on an opaque 503.
+    assert os.environ.get("PS_STATE_POSTGRES_HOST"), (
+        "this test needs /ready 200, which requires PS_STATE_POSTGRES_HOST (and the rest of "
+        "PS_STATE_POSTGRES_*) to point at a live state Postgres"
+    )
     port = _OVERRIDE_PORT
     proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(port)})
     try:

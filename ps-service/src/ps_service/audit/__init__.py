@@ -4,11 +4,12 @@ Shared, insert-only audit trail for every PS Service component that needs to
 record who did what to what, and when. Domain path: `ps.service.audit`
 (`docs/architecture/ps-solution-architecture.md`).
 
-Deliberately not nested under `ps_service.authz`, even though `audit_events`
-lives in the same Postgres instance authz already owns: #134 (policy
-lifecycle), #136 (supersede-fork), and #140 (`user.invite`) are not authz
-concerns, and each registers its own typed `details` models against this
-component's extensible action registry rather than editing this package.
+Deliberately a standalone component, not nested under any one consumer, even
+though `audit_events` lives in the PS state Postgres instance that several
+components share: #134 (policy lifecycle), #136 (supersede-fork), and #140
+(`user.invite`) are not access-control concerns, and each registers its own
+typed `details` models against this component's extensible action registry
+rather than editing this package.
 
 This slice (Slice 1, PLAN.md/CHANGES.md Appendix A1) ships the `audit_events`
 schema, the `AuditDetails` base type, the extensible action registry, and
@@ -17,11 +18,13 @@ callers (#133's `store.py`, repointed in Slice 2) will use. Nothing in
 `ps_service` calls this package yet.
 
 Re-exports the store/model front door and its domain-specific errors,
-matching `ps_service.authz`/`ps_service.passkey_signing`'s own package
+matching `ps_service.passkey_signing`'s own package
 front-door convention.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from ps_service.audit.errors import (
     AuditInvalidCursorError,
@@ -42,7 +45,11 @@ from ps_service.audit.models import (
 )
 from ps_service.audit.store import AuditStore, PsycopgAuditStore
 
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+"""This component's own migration directory, listed by the composition root (`ps_service.main`)."""
+
 __all__ = [
+    "MIGRATIONS_DIR",
     "AuditDetails",
     "AuditEventRow",
     "AuditInvalidCursorError",

@@ -34,14 +34,14 @@ tests:
 
   # --- issue #131 Slice 1: Passkey Signing's own, distinct Postgres env wiring (AC-BI-006) ---
 
-  - it: PS_PASSKEYSIGNING_POSTGRES_HOST is the exact signing postgres Service name, never an IP, and distinct from FalkorDB's
+  - it: PS_PASSKEYSIGNING_POSTGRES_HOST is the exact PS Postgres Service name, never an IP, and distinct from FalkorDB's
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
           pattern: "^[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*$"
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
-          value: RELEASE-NAME-policy-system-signing-postgres
+          value: RELEASE-NAME-policy-system-ps-postgres
       - notEqual:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_HOST")].value
           value: RELEASE-NAME-policy-system-falkordb
@@ -56,10 +56,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_DATABASE")].value
-          value: ps_service_signing
+          value: ps_signing
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_USER")].value
-          value: ps_service
+          value: ps_signing
 
   - it: PS_PASSKEYSIGNING_POSTGRES_PASSWORD is sourced from its own Secret, never a plain value or Authentik's Secret
     asserts:
@@ -67,7 +67,7 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].value
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
-          value: RELEASE-NAME-policy-system-signing-postgres-credentials
+          value: RELEASE-NAME-policy-system-ps-postgres-signing-credentials
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_PASSKEYSIGNING_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.key
           value: PS_PASSKEYSIGNING_POSTGRES_PASSWORD

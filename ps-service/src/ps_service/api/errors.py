@@ -214,6 +214,26 @@ class CuratedSourceUnavailableError(ApiError):
     """
 
 
+class CatalogSourceOverrideUnavailableError(ApiError):
+    """The catalog-source override could not be read (issue #130, AC-BI-010).
+
+    The API-boundary translation of ``ps_service.runtime_config``'s read failures -- raised by
+    ``GET /catalog`` and ``POST /restorations/from-catalog`` when resolving the effective
+    curated-content source fails (the PS state Postgres is unreachable, or the stored value no
+    longer validates). Fail closed: the env-var/default source is never served in its place,
+    because the operator's override may point somewhere else on purpose. The message is fixed
+    and carries no host, port or driver detail. Handled as HTTP 503; ``str(exc)`` is safe to
+    surface verbatim.
+    """
+
+    def __init__(self) -> None:
+        """Set the one fixed, detail-free message."""
+        super().__init__(
+            "The catalog source configuration could not be read; "
+            "the request was not served from any source."
+        )
+
+
 class AccessDeniedError(ApiError):
     """A caller's active `AccessRole` set does not satisfy a role-gated action's minimum.
 
@@ -285,11 +305,11 @@ class InvalidAuditQueryFilterError(ApiError):
 
 
 class AuthorizationStoreUnavailableError(ApiError):
-    """The Authz Postgres store could not be reached for a role-gated action (issue #133).
+    """The PS state Postgres store could not be reached for a role-gated action (issue #133).
 
     Raised by ``ps_service.authz.service``'s functions when the underlying
     ``ps_service.authz.store`` raises
-    ``AccessRolePostgresConnectionError``/``AccessRoleAssignmentPersistenceError``
+    ``StatePostgresConnectionError``/``AccessRoleAssignmentPersistenceError``
     -- the store is unconfigured or unreachable, so the action fails closed
     rather than falling open (PLAN.md §0.11, AC-BI-011). A fixed message
     baked into the raise site. Handled as HTTP 503; ``str(exc)`` is safe to

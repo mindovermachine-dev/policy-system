@@ -14,10 +14,10 @@
 #                 before a first successful deploy (require_account_exists/require_keyvault_exists
 #                 below).
 #
-# Issue #159: Authentik's own Django `secret_key`/Postgres password and the Passkey Signing
-# Postgres password are no longer generated or synced by this script -- the Helm chart itself
-# now generates and persists them (a `lookup`+`randAlphaNum` idiom in
-# charts/policy-system/templates/authentik-credentials-secret.yaml/signing-postgres-secret.yaml),
+# Issue #159: Authentik's own Django `secret_key`/Postgres password and the PS Postgres
+# (admin/state/signing) passwords are no longer generated or synced by this script -- the
+# Helm chart itself now generates and persists them (a `lookup`+`randAlphaNum` idiom in
+# charts/policy-system/templates/authentik-credentials-secret.yaml/ps-postgres-secret.yaml),
 # created/updated as ordinary chart-rendered resources by `helm upgrade --install` (below, in
 # ensure_release). This script makes no Key Vault or kubectl calls for either secret.
 #

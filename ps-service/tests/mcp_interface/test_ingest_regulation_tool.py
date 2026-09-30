@@ -1472,7 +1472,7 @@ def _grant_compliance_officer(
     authorization) -- without this, the newly-added gate now denies them
     (or, in the LLM-unhealthy case, denies with the wrong error string)
     since the token's own subject holds no grant on the real store, which
-    itself is unreachable in this test environment (`PS_AUTHZ_POSTGRES_HOST`
+    itself is unreachable in this test environment (`PS_STATE_POSTGRES_HOST`
     unset) and would otherwise fail closed. Mirrors
     `test_catalog_source_authz_gate.py`'s own `_fake_store_factory` pattern.
     """

@@ -21,16 +21,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ps_service.api.catalog import CuratedInstrumentEntry
+from ps_service.audit import PsycopgAuditStore
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.http_fetch import CuratedSourceTransport, fetch_bytes
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.logging.facade import emit_log_entry
+from ps_service.runtime_config import PsycopgRuntimeConfigStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from ps_service.config import ServiceConfig
-    from ps_service.curated_source.store import GraphHandle
     from ps_service.logging import LogEmitter
 
 _CATALOG_FILENAME = "catalog.json"
@@ -209,24 +210,6 @@ class CuratedCatalogDependencies:
     resolve_effective_source: ResolveEffectiveSourceCall
 
 
-def _default_open_graph(config: ServiceConfig) -> GraphHandle:
-    """Open the real single-tenant `policy_system` graph the override lives in.
-
-    `ps_service.company_merge.falkordb_client` is imported **function-locally**
-    so that importing `ps_service.main` never transitively loads
-    `ps_service.company_merge` at module load (M6 / the Process Harness
-    decoupling guarantee) -- mirrors `restore_orchestration._default_open_db`
-    exactly.
-    """
-    from ps_service.company_merge.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Company Merge at import
-        connect_from_config,
-        select_graph,
-        single_tenant_graph_name,
-    )
-
-    return select_graph(connect_from_config(config), single_tenant_graph_name())
-
-
 def build_default_curated_catalog_dependencies() -> CuratedCatalogDependencies:
     """Wire the real :func:`fetch_catalog`/:func:`resolve_effective_source` into a bundle.
 
@@ -234,12 +217,13 @@ def build_default_curated_catalog_dependencies() -> CuratedCatalogDependencies:
         A `CuratedCatalogDependencies` bound to the production `fetch_catalog`
         (the real HTTP transport, `http_fetch.fetch_bytes`'s own default) and
         the production `resolve_effective_source`, checking the persisted
-        override against the real single-tenant `policy_system` graph
-        (issue #125, Slice 3).
+        override in the PS state Postgres's `runtime_config` table (issue #130;
+        a failed read raises rather than falling back to the default source).
     """
 
     def _resolve_effective_source(config: ServiceConfig) -> EffectiveCatalogSource:
-        return resolve_effective_source(config, open_graph=lambda: _default_open_graph(config))
+        store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
+        return resolve_effective_source(config, store=store)
 
     return CuratedCatalogDependencies(
         fetch_catalog=fetch_catalog, resolve_effective_source=_resolve_effective_source

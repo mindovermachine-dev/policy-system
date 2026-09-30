@@ -711,3 +711,70 @@ def test_service_config_repr_never_includes_authentik_api_token() -> None:
     )
 
     assert "distinctive-authentik-token-value" not in repr(config)
+
+
+_STATE_POSTGRES_ENV_VARS = (
+    "PS_STATE_POSTGRES_HOST",
+    "PS_STATE_POSTGRES_PORT",
+    "PS_STATE_POSTGRES_DATABASE",
+    "PS_STATE_POSTGRES_USER",
+    "PS_STATE_POSTGRES_PASSWORD",
+)
+
+
+def test_load_config_reads_ps_state_postgres_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #130 AC-BI-004: the PS state Postgres connection is read from `PS_STATE_POSTGRES_*`."""
+    monkeypatch.setenv("PS_STATE_POSTGRES_HOST", "state-db.example.com")
+    monkeypatch.setenv("PS_STATE_POSTGRES_PORT", "5433")
+    monkeypatch.setenv("PS_STATE_POSTGRES_DATABASE", "ps_state")
+    monkeypatch.setenv("PS_STATE_POSTGRES_USER", "ps_state_user")
+    monkeypatch.setenv("PS_STATE_POSTGRES_PASSWORD", "s3cret")
+
+    config = load_config()
+
+    assert (
+        config.state_postgres_host,
+        config.state_postgres_port,
+        config.state_postgres_database,
+        config.state_postgres_user,
+        config.state_postgres_password,
+    ) == ("state-db.example.com", 5433, "ps_state", "ps_state_user", "s3cret")
+
+
+@pytest.mark.parametrize("invalid_port", ["not-a-number", "", "5432.5"])
+def test_load_config_rejects_non_integer_ps_state_postgres_port(
+    monkeypatch: pytest.MonkeyPatch, invalid_port: str
+) -> None:
+    """A non-integer `PS_STATE_POSTGRES_PORT` fails closed at load time, naming the variable."""
+    monkeypatch.setenv("PS_STATE_POSTGRES_PORT", invalid_port)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_STATE_POSTGRES_PORT"):
+        load_config()
+
+
+@pytest.mark.parametrize("out_of_range_port", ["0", "65536", "-1"])
+def test_load_config_rejects_out_of_range_ps_state_postgres_port(
+    monkeypatch: pytest.MonkeyPatch, out_of_range_port: str
+) -> None:
+    """An out-of-range `PS_STATE_POSTGRES_PORT` fails closed at load time, naming the variable."""
+    monkeypatch.setenv("PS_STATE_POSTGRES_PORT", out_of_range_port)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_STATE_POSTGRES_PORT"):
+        load_config()
+
+
+def test_load_config_ignores_retired_env_var_names_for_the_state_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #130 AC-BI-004: no shim -- the retired env var names leave the store unset."""
+    for name in _STATE_POSTGRES_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # Split literal: the retired prefix must not appear contiguously in the tree (AC-BI-004 search).
+    retired_store = "AUTHZ"
+    retired_prefix = f"PS_{retired_store}_POSTGRES"
+    monkeypatch.setenv(f"{retired_prefix}_HOST", "legacy-db.example.com")
+    monkeypatch.setenv(f"{retired_prefix}_PORT", "5433")
+
+    config = load_config()
+
+    assert config.state_postgres_host is None

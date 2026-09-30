@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING
 
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.models import AuditQueryPage
-from ps_service.authz.errors import AccessRolePostgresConnectionError
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow, AccessRoleGrantEvent
+from ps_service.persistence import StatePostgresConnectionError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -270,11 +270,11 @@ class RaisingAfterGateAccessRoleStore(FakeAccessRoleStore):
 
     def list_all_assignments(self) -> tuple[AccessRoleAssignmentRow, ...]:
         """Always raise, simulating an outage discovered only after the RBAC gate passed."""
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def count_active_system_owners(self) -> int:
         """Always raise, simulating an outage discovered only after the RBAC gate passed."""
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
 
 @dataclass
@@ -318,7 +318,7 @@ class RaisingAuditOnRejectAccessRoleStore(FakeAccessRoleStore):
 class RaisingAccessRoleStore:
     """An `AccessRoleStore`-shaped fake whose every method raises a connection error.
 
-    Simulates an unreachable Authz Postgres instance (AC-BI-011) -- narrower
+    Simulates an unreachable PS state Postgres instance (AC-BI-011) -- narrower
     than the full `Protocol` (only the methods Slice 1's own call sites
     reach need to raise), mirroring `test_near_miss_tools.py`'s own
     deliberately-narrower-than-the-Protocol `_RaisingStore` fake.
@@ -327,30 +327,30 @@ class RaisingAccessRoleStore:
     def bootstrap_first_owner(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
         """Always raise, simulating an unreachable store."""
         del principal
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def active_roles_for(self, principal: tuple[str, str]) -> frozenset[AccessRole]:
         """Always raise, simulating an unreachable store."""
         del principal
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def grant(
         self, *, actor: tuple[str, str], target: tuple[str, str], access_role: AccessRole
     ) -> None:
         """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
         del actor, target, access_role
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def revoke(
         self, *, actor: tuple[str, str], target: tuple[str, str], access_role: AccessRole
     ) -> None:
         """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
         del actor, target, access_role
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def list_all_assignments(self) -> tuple[AccessRoleAssignmentRow, ...]:
         """Always raise, simulating an unreachable store."""
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def record_grant_rejected(
         self,
@@ -362,7 +362,7 @@ class RaisingAccessRoleStore:
     ) -> None:
         """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
         del actor, target, access_role, reason_code
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def record_revoke_rejected(
         self,
@@ -374,11 +374,11 @@ class RaisingAccessRoleStore:
     ) -> None:
         """Not exercised by this fake's own tests -- present only for `Protocol` conformance."""
         del actor, target, access_role, reason_code
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
     def count_active_system_owners(self) -> int:
         """Always raise, simulating an unreachable store."""
-        raise AccessRolePostgresConnectionError("simulated Authz Postgres outage")
+        raise StatePostgresConnectionError("simulated PS state Postgres outage")
 
 
 @dataclass

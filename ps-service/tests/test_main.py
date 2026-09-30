@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import Mock
 
+import psycopg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -37,6 +38,10 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
+from ps_service.persistence import (
+    check_connectivity_from_config as check_state_postgres_connectivity,
+)
+from ps_service.persistence import connect_from_config as connect_state_postgres_from_config
 from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
@@ -81,15 +86,15 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     never-recorded dependency as healthy by default, and `conftest.py`'s
     autouse fixture resets it before every test.
 
-    `check_authz_postgres_connectivity` (issue #133) is stubbed here too --
+    `check_state_postgres_connectivity` (issue #133) is stubbed here too --
     unlike `check_passkey_signing_postgres_connectivity` (a genuine no-op
-    when unconfigured, so it never needed a stub), Authz Postgres's own
+    when unconfigured, so it never needed a stub), PS state Postgres's own
     connectivity check deliberately raises even when unconfigured (PLAN.md
     §0.11's fail-closed divergence from Passkey Signing's own precedent), so
     without this stub every test in this file that runs `lifespan` startup
-    would pick up a spurious `authz_postgres` entry in `unhealthy_dependencies`
+    would pick up a spurious `state_postgres` entry in `unhealthy_dependencies`
     and an extra startup warning log line, purely from `_complete_config()`
-    leaving `authz_postgres_host` at its `None` default -- unrelated to
+    leaving `state_postgres_host` at its `None` default -- unrelated to
     whatever readiness/logging behavior each test actually exercises.
     """
 
@@ -102,8 +107,8 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
     def stub_check_cellar_eli_connectivity() -> None:
         """No-op Cellar/ELI connectivity probe: a healthy dependency by default."""
 
-    def stub_check_authz_postgres_connectivity(config: ServiceConfig) -> None:
-        """No-op Authz Postgres connectivity probe: a healthy dependency by default."""
+    def stub_check_state_postgres_connectivity(config: ServiceConfig) -> None:
+        """No-op PS state Postgres connectivity probe: a healthy dependency by default."""
 
     monkeypatch.setattr(
         main_module, "check_falkordb_connectivity", stub_check_falkordb_connectivity
@@ -115,7 +120,7 @@ def _stub_dependency_checks_as_healthy(  # pyright: ignore[reportUnusedFunction]
         main_module, "check_cellar_eli_connectivity", stub_check_cellar_eli_connectivity
     )
     monkeypatch.setattr(
-        main_module, "check_authz_postgres_connectivity", stub_check_authz_postgres_connectivity
+        main_module, "check_state_postgres_connectivity", stub_check_state_postgres_connectivity
     )
 
 
@@ -1324,6 +1329,127 @@ def test_migration_runner_runs_at_startup_when_postgres_is_configured() -> None:
         recorded = cur.fetchone() is not None
 
     assert recorded is True
+
+
+# --- PS state Postgres readiness and fatal migration failure (issue #130, CHANGES F1) ---
+
+
+def test_state_postgres_is_ready_and_gating_dependency() -> None:
+    """Unlike Passkey Signing Postgres, PS state Postgres backs privileged state (roles, audit,
+    runtime config, the catalog override): without it the service cannot serve, so it gates
+    `/ready` (issue #130) -- a first `helm install` must not report ready with no usable store.
+    """
+    ready_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_READY_DEPENDENCIES"),  # noqa: B009 - see the passkey twin above
+    )
+    gating_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_GATING_DEPENDENCIES"),  # noqa: B009 - see the passkey twin above
+    )
+
+    assert dependency_health.STATE_POSTGRES in ready_dependencies
+    assert dependency_health.STATE_POSTGRES in gating_dependencies
+
+
+def test_ready_is_not_ready_when_state_postgres_check_fails(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    def failing_state_postgres_check(config: ServiceConfig) -> None:
+        error = ConnectionError("PS state Postgres connection failed")
+        dependency_health.mark_unhealthy(dependency_health.STATE_POSTGRES, error=error)
+        raise error
+
+    monkeypatch.setattr(
+        main_module, "check_state_postgres_connectivity", failing_state_postgres_check
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": ["state_postgres"],
+    }
+
+
+def test_startup_raises_when_state_migrations_cannot_be_applied_and_host_is_configured() -> None:
+    """A configured-but-unusable state store is fatal at startup (the process exits and the
+    orchestrator restarts it) rather than a warning: a service that cannot migrate its own
+    schema must never come up looking healthy.
+    """
+    config = _complete_config(
+        state_postgres_host="127.0.0.1",
+        state_postgres_port=59999,
+        state_postgres_database="ps_state",
+        state_postgres_user="ps_state",
+        state_postgres_password="unused",
+    )
+
+    with pytest.raises(psycopg.Error), TestClient(create_app(config)):
+        pass
+
+
+def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not_ready(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI
+) -> None:
+    """Host unset: no connection is even attempted at startup and the process stays up, but
+    `/ready` is `not_ready` via the (real) connectivity probe, which raises when unconfigured.
+    """
+
+    def fail_if_called(config: ServiceConfig) -> object:
+        message = "connect_from_config must not be called when the state Postgres is unconfigured"
+        raise AssertionError(message)
+
+    # detroit-exception: raise-if-called trap proving a never-called ordering guarantee (§2 case 3)
+    monkeypatch.setattr(main_module, "connect_state_postgres_from_config", fail_if_called)
+    # The autouse stub reports every dependency healthy; restore the real probe for this test.
+    monkeypatch.setattr(
+        main_module, "check_state_postgres_connectivity", check_state_postgres_connectivity
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": ["state_postgres"],
+    }
+
+
+@pytest.mark.postgres_live
+def test_state_migrations_run_at_startup_apply_every_component_baseline() -> None:
+    """Startup wires the real PS state connection to the runner for all three components.
+
+    `postgres_live`-marked, like the Passkey Signing twin above: runs the real
+    `create_app`/`lifespan` path against a reachable PS state Postgres, then reads back the
+    real `ps_schema_migrations` tracking rows (issue #130: audit, access roles, runtime config).
+    """
+    real_config = load_config()
+    assert real_config.state_postgres_host is not None, (
+        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
+    )
+    config = _complete_config(
+        state_postgres_host=real_config.state_postgres_host,
+        state_postgres_port=real_config.state_postgres_port,
+        state_postgres_database=real_config.state_postgres_database,
+        state_postgres_user=real_config.state_postgres_user,
+        state_postgres_password=real_config.state_postgres_password,
+    )
+
+    with TestClient(create_app(config)):
+        pass
+
+    with connect_state_postgres_from_config(config) as conn, conn.cursor() as cur:
+        cur.execute("SELECT component, filename FROM ps_schema_migrations")
+        tracked = {(row[0], row[1]) for row in cur.fetchall()}
+    assert {
+        ("audit", "0001_audit_events.sql"),
+        ("authz", "0001_access_role_assignments.sql"),
+        ("runtime_config", "0001_runtime_config.sql"),
+    } <= tracked
 
 
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(

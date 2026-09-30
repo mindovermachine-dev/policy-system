@@ -24,6 +24,7 @@ from ps_service.api.errors import (
     ApiError,
     AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
+    CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
@@ -99,6 +100,7 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     AccessDeniedError,
     AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
+    CatalogSourceOverrideUnavailableError,
     InternalSeedValidationError,
     IngestionConfigIncompleteError,
     RequestBodyTooLargeError,
@@ -208,6 +210,11 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
     (CatalogIdentifierNotFoundError, "catalog_identifier_not_found", status.HTTP_404_NOT_FOUND),
+    (
+        CatalogSourceOverrideUnavailableError,
+        "catalog_source_override_unavailable",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     (InternalSeedValidationError, "internal_seed_invalid", status.HTTP_422_UNPROCESSABLE_CONTENT),
     (
         IngestionConfigIncompleteError,
@@ -395,7 +402,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     (502), one for ``RequestValidationError`` (422), and a catch-all
     ``Exception`` handler (generic 500). Status map:
     ``AccessDeniedError`` 403, ``AuthorizationStoreUnavailableError`` 503,
-    ``CatalogIdentifierNotFoundError`` 404,
+    ``CatalogIdentifierNotFoundError`` 404, ``CatalogSourceOverrideUnavailableError`` 503,
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,

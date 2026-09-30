@@ -27,12 +27,14 @@ from api._fakes import (
 )
 from ps_service.api.dependencies import provide_curated_catalog_dependencies
 from ps_service.main import create_app
+from ps_service.runtime_config import RuntimeConfigUnavailableError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
+    from ps_service.curated_source.resolve import EffectiveCatalogSource
 
 _CUSTOM_URL = "https://example.com/operator-configured-catalog"
 
@@ -166,7 +168,7 @@ def test_get_catalog_returns_502_naming_the_source_when_unreachable(
 def test_get_catalog_succeeds_with_no_falkordb_or_llm_fixture_wired(
     app_config: ServiceConfig,
 ) -> None:
-    """AC-BI-011: no FalkorDB/LLM dependency -- proves D-SCOPE-1/D-FAILOPEN don't regress this.
+    """AC-BI-011: no FalkorDB/LLM dependency -- proves the #130 cutover doesn't regress this.
 
     Re-run of the existing guarantee, now backed by a fake transport rather
     than the build-time-packaged file (`lifespan` is never entered here
@@ -179,3 +181,39 @@ def test_get_catalog_succeeds_with_no_falkordb_or_llm_fixture_wired(
     response = client.get("/catalog")
 
     assert response.status_code == 200
+
+
+def test_get_catalog_returns_named_503_when_override_read_fails_and_never_uses_default(
+    app_config: ServiceConfig,
+) -> None:
+    """AC-BI-010: an override-read failure is a named 503, never a silent env-var/default fetch.
+
+    The fake transport records every request, so `requests == []` proves the default source
+    was not fetched in the override's place; the body names neither host, port nor driver.
+    """
+    transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
+
+    def _failing_resolve(config: ServiceConfig) -> EffectiveCatalogSource:
+        del config
+        raise RuntimeConfigUnavailableError(
+            "The runtime configuration store is temporarily unavailable."
+        )
+
+    app = create_app(app_config)
+    app.dependency_overrides[provide_curated_catalog_dependencies] = lambda: (
+        build_fake_curated_catalog_dependencies(
+            transport, resolve_effective_source=_failing_resolve
+        )
+    )
+
+    response = TestClient(app).get("/catalog")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["code"] == "catalog_source_override_unavailable"
+    assert transport.requests == []
+    assert "instruments" not in body
+    text = response.text.lower()
+    assert "psycopg" not in text
+    assert "5432" not in text
+    assert "postgres" not in text

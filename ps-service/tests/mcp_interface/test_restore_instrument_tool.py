@@ -94,6 +94,7 @@ from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
 )
+from ps_service.runtime_config import RuntimeConfigUnavailableError
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
@@ -614,6 +615,7 @@ def _use_fake_restore_infra(
     *,
     open_db: Callable[[ServiceConfig], FalkorDB] | None = None,
     fetch_artifact_override: FetchArtifactCall | None = None,
+    resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource] | None = None,
 ) -> None:
     """Patch only the narrowed fetch/resolve/open_db boundary; the real factory wires the
     real `restore_instrument` business logic.
@@ -632,7 +634,7 @@ def _use_fake_restore_infra(
     """
     infra = CatalogRestoreInfra(
         fetch_artifact=fetch_artifact_override or _fetch_artifact_through(transport),
-        resolve_effective_source=_resolve_effective_source_stub,
+        resolve_effective_source=resolve_effective_source or _resolve_effective_source_stub,
         open_db=open_db or _default_open_db_stub,
     )
     monkeypatch.setattr(
@@ -917,7 +919,7 @@ def _grant_compliance_officer(
     was written to prove principal/actor threading, not authorization) --
     without this, the newly-added gate now denies it, since the token's own
     subject holds no grant on the real store, which itself is unreachable in
-    this test environment (`PS_AUTHZ_POSTGRES_HOST` unset) and would
+    this test environment (`PS_STATE_POSTGRES_HOST` unset) and would
     otherwise fail closed. Mirrors `test_catalog_source_authz_gate.py`'s own
     `_fake_store_factory` pattern.
     """
@@ -1054,6 +1056,43 @@ def test_curated_source_unreachable_returns_named_error_and_never_calls_the_dele
     text = _text(result)
     assert text.startswith("error: ")
     assert text != "error: an unexpected error occurred"
+    assert open_db_calls == []
+
+
+def test_override_read_failure_returns_named_error_and_never_fetches_or_opens_the_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-010: `CatalogSourceOverrideUnavailableError` (the fail-closed override read) is
+    returned as its fixed `error:` string -- neither the default source nor FalkorDB is used.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    open_db_calls: list[object] = []
+    transport = _transport_with()
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    def _failing_resolve(config: ServiceConfig) -> EffectiveCatalogSource:
+        del config
+        raise RuntimeConfigUnavailableError("driver said: 10.0.0.5:5432 refused")
+
+    _use_fake_restore_infra(
+        monkeypatch,
+        transport,
+        open_db=_counting_open_db,
+        resolve_effective_source=_failing_resolve,
+    )
+
+    result = _call_restore_instrument()
+
+    assert result.is_error is False
+    assert _text(result).startswith("error: ")
+    assert "5432" not in _text(result)
+    assert _text(result) != "error: an unexpected error occurred"
+    assert transport.requests == []
     assert open_db_calls == []
 
 

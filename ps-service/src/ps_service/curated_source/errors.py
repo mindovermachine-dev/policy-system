@@ -31,20 +31,3 @@ class CuratedSourceFetchError(Exception):
     Always names the source URL and the specific failure (AC-BI-006) -- the
     caller never falls back to stale data on this error.
     """
-
-
-class CuratedSourceOverridePersistenceError(Exception):
-    """A write to the persisted curated-content source override failed (issue #125, Slice 3).
-
-    Raised by :func:`ps_service.curated_source.store.set_override`/
-    :func:`~ps_service.curated_source.store.reset_override` when the
-    underlying FalkorDB write fails -- mirrors `ps_service.company_merge.
-    pending_review`'s own `CompanyMergePersistenceError` shape (own copy, not
-    a shared import, D-PERSISTENCE). Never raised by
-    :func:`~ps_service.curated_source.store.get_override` (a plain read, no
-    wrapper -- mirrors `pending_review.list_pending_reviews`'s own
-    "reads are unwrapped" convention) nor by
-    :func:`ps_service.curated_source.resolve.resolve_effective_source`,
-    which treats this (like any other override-check failure) as
-    "no override" rather than letting it propagate (D-FAILOPEN).
-    """

@@ -17,11 +17,11 @@ matching `ps_service.passkey_signing`'s own package front-door convention.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
     AccessRoleBootstrapConfigurationError,
-    AccessRoleMigrationApplyError,
-    AccessRolePostgresConnectionError,
     AccessRoleSystemOwnerFloorRaceError,
 )
 from ps_service.authz.models import AccessRole, AccessRoleAssignmentRow, AccessRoleGrantEvent
@@ -47,18 +47,18 @@ from ps_service.authz.startup import require_bootstrap_owner_configured
 from ps_service.authz.store import (
     AccessRoleStore,
     PsycopgAccessRoleStore,
-    check_connectivity_from_config,
-    connect_from_config,
 )
 
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+"""This component's own migration directory, listed by the composition root (`ps_service.main`)."""
+
 __all__ = [
+    "MIGRATIONS_DIR",
     "AccessRole",
     "AccessRoleAssignmentPersistenceError",
     "AccessRoleAssignmentRow",
     "AccessRoleBootstrapConfigurationError",
     "AccessRoleGrantEvent",
-    "AccessRoleMigrationApplyError",
-    "AccessRolePostgresConnectionError",
     "AccessRoleStore",
     "AccessRoleSystemOwnerFloorRaceError",
     "AccessRule",
@@ -69,8 +69,6 @@ __all__ = [
     "PsycopgAccessRoleStore",
     "RevokeResult",
     "block_self_target",
-    "check_connectivity_from_config",
-    "connect_from_config",
     "enforce_system_owner_floor",
     "grant_role",
     "list_assignments",

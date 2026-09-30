@@ -54,6 +54,7 @@ from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
     build_streamable_http_app,
 )
+from ps_service.runtime_config import RuntimeConfigUnavailableError
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
@@ -64,6 +65,8 @@ if TYPE_CHECKING:
 
     import pytest
 
+    from ps_service.config import ServiceConfig
+    from ps_service.curated_source.resolve import EffectiveCatalogSource
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
@@ -190,6 +193,34 @@ def test_source_unreachable_returns_named_error_naming_the_source(
     assert text.startswith("error: ")
     assert text != "error: an unexpected error occurred"
     assert "catalog.json" in text
+
+
+def test_get_catalog_listing_returns_error_string_when_override_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-010: an override-read failure is a named `error:` string with no connection
+    detail -- the default source is never fetched in the override's place.
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    transport = FakeCuratedSourceTransport(json.dumps(_CANNED_ENTRIES).encode("utf-8"))
+
+    def _failing_resolve(config: ServiceConfig) -> EffectiveCatalogSource:
+        del config
+        raise RuntimeConfigUnavailableError("driver said: connection to 10.0.0.5:5432 refused")
+
+    fake_dependencies = build_fake_curated_catalog_dependencies(
+        transport, resolve_effective_source=_failing_resolve
+    )
+    monkeypatch.setattr(
+        mcp_server, "build_default_curated_catalog_dependencies", lambda: fake_dependencies
+    )
+
+    result = _call_get_catalog_listing()
+
+    assert result.is_error is False
+    assert _text(result) == "error: The runtime configuration store is temporarily unavailable."
+    assert transport.requests == []
 
 
 def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(

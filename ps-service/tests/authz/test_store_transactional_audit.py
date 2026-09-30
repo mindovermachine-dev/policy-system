@@ -6,8 +6,8 @@ change, in the *same* Postgres transaction (so a failure in either half rolls
 back both), can only be proven against a real Postgres instance.
 
 PLAN.md/CHANGES.md Appendix A1's Slice 2 boundary: this is the slice that
-repoints `ps_service.authz.store` off `access_role_grant_events` (dropped by
-migration `0005`, `tests/authz/test_migration_runner.py`) and onto
+repoints `ps_service.authz.store` off the retired `access_role_grant_events`
+table (absent from the baseline schema, `tests/persistence/test_migration_runner.py`) and onto
 `AuditStore.record`, in the same cursor/transaction as the state-changing
 `INSERT`/`DELETE` -- AC-BI-006 ("exactly one `audit_events` row... and no
 code path writes to `access_role_grant_events`") and AC-BI-010 (an
@@ -23,7 +23,7 @@ call directly against `AuditStore`. Plus CHANGES.md item 3's leak-check: a
 `record_standalone` connection failure never leaks host/port/driver detail.
 
 Deselected by default (BASELINE.md's tier gating) -- run explicitly with
-`uv run pytest -m postgres_live` against a reachable `PS_AUTHZ_POSTGRES_*`
+`uv run pytest -m postgres_live` against a reachable `PS_STATE_POSTGRES_*`
 instance.
 """
 
@@ -41,14 +41,16 @@ from ps_service.api.errors import (
     SelfGrantOrRevokeBlockedError,
     SystemOwnerFloorViolationError,
 )
+from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.store import PsycopgAuditStore
+from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.authz.errors import AccessRoleAssignmentPersistenceError
-from ps_service.authz.migration_runner import apply_pending_migrations
 from ps_service.authz.models import AccessRole
 from ps_service.authz.service import grant_role, revoke_role
-from ps_service.authz.store import PsycopgAccessRoleStore, connect_from_config
+from ps_service.authz.store import PsycopgAccessRoleStore
 from ps_service.config import load_config
+from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -58,13 +60,20 @@ if TYPE_CHECKING:
 
     from ps_service.audit.models import AuditQueryFilters, AuditQueryPage
 
+
+# Mirrors the source list `ps_service.main` passes to the runner at startup.
+STATE_MIGRATION_SOURCES = [
+    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
+    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
+]
+
 _ACTOR_ISSUER = "https://issuer.example.com/"
 
 
 def _require_configured_postgres() -> None:
     config = load_config()
-    assert config.authz_postgres_host is not None, (
-        "postgres_live requires PS_AUTHZ_POSTGRES_HOST to be set"
+    assert config.state_postgres_host is not None, (
+        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
     )
 
 
@@ -153,15 +162,12 @@ def _active_roles_for(conn: psycopg.Connection[TupleRow], *, subject: str) -> se
 
 @pytest.mark.postgres_live
 def test_no_code_path_writes_to_the_dropped_access_role_grant_events_table() -> None:
-    """AC-BI-006's second half: the table migration `0005` drops no longer exists at all --
-    reachable regardless of which `postgres_live` test happens to run first, since every
-    `apply_pending_migrations` call cascades all the way to `0005`.
-    """
+    """AC-BI-006's second half: the retired grant-events table is absent."""
     _require_configured_postgres()
     config = load_config()
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM information_schema.tables WHERE table_name = "
@@ -180,7 +186,7 @@ def test_grant_produces_exactly_one_applied_audit_event_alongside_the_assignment
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("grant-actor")
     target_subject = _unique_subject("grant-target")
@@ -211,7 +217,7 @@ def test_revoke_produces_exactly_one_applied_audit_event_and_removes_the_assignm
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("revoke-actor")
     target_subject = _unique_subject("revoke-target")
@@ -247,7 +253,7 @@ def test_revoke_of_system_owner_produces_exactly_one_applied_audit_event() -> No
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("owner-revoke-actor")
     first_owner = _unique_subject("owner-a")
@@ -313,7 +319,7 @@ def test_bootstrap_first_owner_produces_exactly_one_applied_bootstrap_audit_even
         cur.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
         cur.execute(cast("LiteralString", f'SET search_path TO "{schema}"'))
     setup_conn.commit()
-    apply_pending_migrations(setup_conn)
+    apply_pending_migrations(setup_conn, sources=STATE_MIGRATION_SOURCES)
 
     def _isolated_connect_from_config(cfg: object) -> psycopg.Connection[TupleRow]:
         del cfg
@@ -354,7 +360,7 @@ def test_audit_store_record_failure_during_grant_rolls_back_the_assignment_inser
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("failing-grant-actor")
     target_subject = _unique_subject("failing-grant-target")
@@ -386,7 +392,7 @@ def test_audit_store_record_failure_during_revoke_rolls_back_the_assignment_dele
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("failing-revoke-actor")
     target_subject = _unique_subject("failing-revoke-target")
@@ -430,7 +436,7 @@ def test_record_grant_rejected_writes_exactly_one_rejected_audit_event() -> None
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("rejected-grant-actor")
     target_subject = _unique_subject("rejected-grant-target")
@@ -468,7 +474,7 @@ def test_record_revoke_rejected_writes_exactly_one_rejected_audit_event() -> Non
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("rejected-revoke-actor")
     target_subject = _unique_subject("rejected-revoke-target")
@@ -505,7 +511,7 @@ def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("denied-grant-actor")
     target_subject = _unique_subject("denied-grant-target")
@@ -543,7 +549,7 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
     _require_configured_postgres()
     config = load_config()
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn)
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
 
     actor_subject = _unique_subject("self-revoke-actor")
     store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
@@ -606,7 +612,7 @@ def test_denied_system_owner_floor_revoke_produces_exactly_one_rejected_audit_ev
         cur.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
         cur.execute(cast("LiteralString", f'SET search_path TO "{schema}"'))
     setup_conn.commit()
-    apply_pending_migrations(setup_conn)
+    apply_pending_migrations(setup_conn, sources=STATE_MIGRATION_SOURCES)
 
     def _isolated_connect_from_config(cfg: object) -> psycopg.Connection[TupleRow]:
         del cfg
@@ -683,7 +689,7 @@ def test_bootstrap_identity_mismatch_produces_exactly_one_rejected_bootstrap_aud
         cur.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
         cur.execute(cast("LiteralString", f'SET search_path TO "{schema}"'))
     setup_conn.commit()
-    apply_pending_migrations(setup_conn)
+    apply_pending_migrations(setup_conn, sources=STATE_MIGRATION_SOURCES)
 
     def _isolated_connect_from_config(cfg: object) -> psycopg.Connection[TupleRow]:
         del cfg
@@ -741,7 +747,7 @@ def test_record_standalone_connection_failure_leaks_no_host_or_port_or_driver_de
     unreachable_host = "127.0.0.1"
     unreachable_port = 59999
     broken_config = dataclasses.replace(
-        config, authz_postgres_host=unreachable_host, authz_postgres_port=unreachable_port
+        config, state_postgres_host=unreachable_host, state_postgres_port=unreachable_port
     )
     audit_store = PsycopgAuditStore(broken_config)
 
@@ -771,7 +777,7 @@ def test_denial_recording_connection_failure_surfaces_with_no_leak() -> None:
     _require_configured_postgres()
     config = load_config()
     broken_config = dataclasses.replace(
-        config, authz_postgres_host="127.0.0.1", authz_postgres_port=59999
+        config, state_postgres_host="127.0.0.1", state_postgres_port=59999
     )
     store = PsycopgAccessRoleStore(broken_config, audit_store=PsycopgAuditStore(broken_config))
 

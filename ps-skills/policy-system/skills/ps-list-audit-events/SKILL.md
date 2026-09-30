@@ -111,7 +111,7 @@ one selected here.
 - The skill reaches PS Service exclusively through a recognised MCP
   connector — `policy-system-graph` or `policy-system-graph-local` — never
   a direct Postgres connection, a repo-local script, or a spawned external
-  binary. This tool never reads the authz Postgres directly.
+  binary. This tool never reads the PS state Postgres directly.
 - Never call `list-audit-events` with a fabricated or guessed `cursor` —
   only ever a `next_cursor` value returned by a prior call on the same
   filter set.
