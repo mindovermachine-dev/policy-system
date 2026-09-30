@@ -27,12 +27,20 @@
    - [Export](#export)
    - [Restore](#restore)
    - [Curated Source](#curated-source)
+   - [Invitations](#invitations)
    - [Query Engine](#query-engine)
    - [MCP Interface](#mcp-interface)
+   - [Authentication](#authentication)
+   - [Authorization](#authorization)
+   - [Policy Lifecycle](#policy-lifecycle)
    - [Regulatory Change Monitor](#regulatory-change-monitor)
    - [LLM Interface](#llm-interface)
    - [Logging](#logging)
    - [Dependency Health](#dependency-health)
+   - [Passkey Signing](#passkey-signing)
+   - [Audit](#audit)
+   - [Persistence](#persistence)
+   - [Runtime Config](#runtime-config)
    - [Process Harness](#process-harness)
 4. [Use Case Coverage Mapping](#use-case-coverage-mapping)
 5. [NFR Implementation](#nfr-implementation)
@@ -77,6 +85,7 @@ graph TB
         LLMProvider{{LLM Provider}}
         PSSkill{{PS Question Skill}}
         CuratedContentSource{{Curated Content Source}}
+        Authentik{{Authentik}}
     end
 
     subgraph PSService["PS Service"]
@@ -97,14 +106,30 @@ graph TB
             MCPInterface[MCP Interface]
         end
 
+        subgraph AccessControl["Access Control"]
+            Authentication[Authentication]
+            Authorization[Authorization]
+            PasskeySigning[Passkey Signing]
+            Invitations[Invitations]
+        end
+
+        subgraph Governance["Governance"]
+            PolicyLifecycle[Policy Lifecycle]
+            Audit[Audit]
+            Persistence[Persistence]
+            RuntimeConfig[Runtime Config]
+        end
+
         ChangeMonitor[Regulatory Change Monitor]
         LLMInterface[LLM Interface]
         Logging[Logging]
         LogFiles[(logs/)]
+        DependencyHealth[Dependency Health]
+        ProcessHarness[Process Harness]
     end
 
     FalkorDB[(FalkorDB)]
-    PSPostgres[(PS Postgres: ps_state)]
+    PSPostgres[(PS Postgres: ps_state, ps_signing)]
 
     Cellar -->|"regulation text, structure, ELI citations"| Ingestion
     ChangeMonitor -->|"poll for amendments"| Cellar
@@ -122,7 +147,7 @@ graph TB
     Restore -->|"write {short}_native / {short}_baseline / policy_system"| FalkorDB
 
     CuratedContentSource -->|"catalog.json; manifest/baseline/native.json"| CuratedSource
-    CuratedSource -->|"read/write runtime_config"| PSPostgres
+    CuratedSource -->|"get/set/reset override"| RuntimeConfig
     CuratedSource -->|"fetched, unverified artifact"| Restore
     MCPInterface -->|"delegates to"| CuratedSource
 
@@ -134,6 +159,53 @@ graph TB
     QueryEngine -->|"read"| FalkorDB
     MCPInterface -->|"delegates to"| QueryEngine
     PSSkill -->|"MCP: submit query"| MCPInterface
+
+    MCPInterface -->|"verify bearer token"| Authentication
+    Authentication -->|"OIDC discovery, JWKS"| Authentik
+    Authentication -->|"log entries"| Logging
+
+    MCPInterface -->|"grant/revoke/list access roles; require_role checks"| Authorization
+    CuratedSource -->|"SystemAdmin check"| Authorization
+    Authorization -->|"read/write access_role_assignments (ps_state)"| PSPostgres
+    Authorization -->|"record/query audit_events"| Audit
+    Authorization -->|"log entries"| Logging
+
+    MCPInterface -->|"create/propose/approve/reject/revert/edit policy drafts"| PolicyLifecycle
+    PolicyLifecycle -->|"read/write Policy/Standard/Control tree (policy_system)"| FalkorDB
+    PolicyLifecycle -->|"record policy.* audit events"| Audit
+    PolicyLifecycle -->|"require_role / resolve_active_roles"| Authorization
+
+    MCPInterface -->|"near_misses_resolve (merge): create/check pending approval"| PasskeySigning
+    PasskeySigning -->|"read/write pending_approvals, signing_credentials (ps_signing)"| PSPostgres
+    PasskeySigning -->|"execute near-miss merge on signed assertion"| CompanyMerge
+    PasskeySigning -->|"log entries"| Logging
+
+    MCPInterface -->|"invite_user: create Authentik invitation"| Invitations
+    Invitations -->|"POST invitation (service credential)"| Authentik
+
+    RuntimeConfig -->|"record runtime_config.* audit events"| Audit
+    RuntimeConfig -->|"read/write runtime_config (ps_state)"| PSPostgres
+    Audit -->|"read/write audit_events (ps_state)"| PSPostgres
+
+    ProcessHarness -->|"apply_pending_migrations (audit, authz, runtime_config)"| Persistence
+    Persistence -->|"connect / migrate (ps_state)"| PSPostgres
+    Persistence -->|"log entries"| Logging
+
+    Ingestion -->|"record health"| DependencyHealth
+    LLMInterface -->|"record health"| DependencyHealth
+    Persistence -->|"record health (ps_state)"| DependencyHealth
+    Audit -->|"record health (ps_state)"| DependencyHealth
+    RuntimeConfig -->|"record health (ps_state)"| DependencyHealth
+    PasskeySigning -->|"record health (ps_signing)"| DependencyHealth
+    DependencyHealth -->|"read for /ready"| ProcessHarness
+
+    ProcessHarness -->|"startup CheckConnectivity"| FalkorDB
+    ProcessHarness -->|"startup CheckConnectivity"| LLMInterface
+    ProcessHarness -->|"startup CheckConnectivity"| Cellar
+    ProcessHarness -->|"resolve_auth_context (startup)"| Authentication
+    ProcessHarness -->|"require_bootstrap_owner_configured (startup)"| Authorization
+    ProcessHarness -->|"require_authentik_credential_configured (startup)"| Invitations
+    ProcessHarness -->|"log entries"| Logging
 
     Ingestion -->|"log entries"| Logging
     DomainMapper -->|"log entries"| Logging
@@ -151,6 +223,7 @@ graph TB
     style LLMProvider fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style PSSkill fill:#90CAF9,stroke:#333,stroke-width:2px,color:#333
     style CuratedContentSource fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
+    style Authentik fill:#FFD54F,stroke:#333,stroke-width:2px,color:#333
     style FalkorDB fill:#81C784,stroke:#333,stroke-width:2px,color:#333
     style PSPostgres fill:#81C784,stroke:#333,stroke-width:2px,color:#333
     style LogFiles fill:#CFD8DC,stroke:#333,stroke-width:2px,color:#333
@@ -161,19 +234,29 @@ graph TB
     style Export fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Restore fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style CuratedSource fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style PolicyLifecycle fill:#4DB6AC,stroke:#333,stroke-width:2px,color:#FFFFFF
     style QueryEngine fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style MCPInterface fill:#64B5F6,stroke:#333,stroke-width:2px,color:#FFFFFF
     style ChangeMonitor fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style LLMInterface fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Authentication fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Authorization fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style PasskeySigning fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Invitations fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Audit fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style Persistence fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style RuntimeConfig fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style DependencyHealth fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style ProcessHarness fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Logging fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
 ```
 
 **Diagram Legend:**
 - **Hexagon shapes (yellow/blue):** External systems and clients
 - **Cylinder (green):** Data store
-- **Teal:** Ingestion pipeline components
+- **Teal:** Ingestion pipeline and policy-lifecycle components (core internal domain writes)
 - **Blue:** Query surface components
-- **Purple:** Support components
+- **Purple:** Support components (access control, audit/persistence/config, dependency health, process harness)
 
 ### C4 Component Overview
 
@@ -185,6 +268,7 @@ graph TB
 | Export | `ps.service.export` | Serialize an already-ingested instrument's `{short}_baseline`/`{short}_native` graphs into a curated, checksummed, schema-versioned artifact for `curated-content/`; backfill Capability/Policy embeddings onto the source baseline graph so restore never needs a live LLM call |
 | Restore | `ps.service.restore` | Verify a curated artifact's checksum and `schema_version`, then load it into a target deployment: baseline via an offline replay of Company Merge's own dedup/convergence, native as a straight load, both atomically |
 | Curated Source | `ps.service.curatedsource` | Fetch the curated catalog listing and, on demand, one instrument's artifact (manifest/baseline/native) from a configurable HTTP(S) source at runtime; keep a runtime override of that source as a registered key in Runtime Config, taking precedence over the env-var/default when present; fails closed when the override cannot be read |
+| Invitations | `ps.service.invitations` | Create single-use Authentik enrollment invites on behalf of the `invite_user` MCP tool, calling Authentik's invitation-stage API (`POST /api/v3/stages/invitation/invitations/`) with PS Service's own configured service credential (`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) — never a caller-supplied token; fails closed at process startup when either credential is unset |
 | Query Engine | `ps.service.queryengine` | Execute read-only Cypher queries against the graph |
 | MCP Interface | `ps.service.mcpinterface` | Expose Query Engine to PS Question Skill via MCP |
 | Authentication | `ps.service.auth` | Validate OIDC bearer tokens for both REST and MCP Interface via one shared verifier; fail closed at startup when auth config and the local-test bypass are both absent |
@@ -669,6 +753,44 @@ None — the persisted source override is operational configuration, not a PS Co
 
 ---
 
+### Invitations
+
+#### Domain Concepts
+
+None — the created invitation is an Authentik-side resource (an invitation-stage `Invitation` object), not a PS Conceptual Model domain concept; mirrors Curated Source's own "introduces no new domain concept" posture.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`urllib.request` HTTP POST, injectable transport) | Python 3.14 | `ps-service/src/ps_service/invitations/` | `ps_service.invitations` |
+
+**Implementation Guidance:**
+- Owns exactly one responsibility: creating a single-use Authentik enrollment invite on behalf of the `invite_user` MCP tool, using PS Service's own configured service credential (`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`) — never a caller-supplied token. Named for what this component does (creates invitations), not the vendor it calls.
+- Calls `POST {PS_AUTHENTIK_BASE_URL}/api/v3/stages/invitation/invitations/` with a bearer-token `Authorization` header and a JSON body `{"name": "ps-invite-<random>", "single_use": true, "fixed_data": {"email": <invitee>}}` — `name` carries a random suffix rather than the raw email, since Authentik requires `name` unique and a repeat invite to the same address must not collide with a still-pending one.
+- Fails closed at process startup, unconditionally (no local-test-bypass carve-out, unlike Authorization's own bootstrap-owner check): if either `PS_AUTHENTIK_API_TOKEN` or `PS_AUTHENTIK_BASE_URL` is unset, `create_app` never returns an app.
+- The invitation redemption URL is constructed client-side from the returned `pk` (`{base_url}/if/flow/ps-invite-enrollment/?itoken=<pk>`) — no separate lookup call.
+- Error messages never echo the raw exception object or the configured token — only the HTTP status code or exception type name, since (unlike Curated Source's own fetch errors, which are safe to echo raw) the outbound request itself carries a bearer credential whose surrounding transport exception text could echo request internals.
+- The gating MCP tool (`invite-user`) requires the caller hold `SystemAdmin` or above via the shared `ps.service.authz` component, skipped entirely under the local-test bypass, mirroring `set-catalog-source`'s exact gate (issue #133) — this component itself performs no authorization check of its own.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/invitations/__init__.py` | Package front door — re-exports `create_invitation`, `InvitationResult`, `AuthentikTransport`, `require_authentik_credential_configured`, and this component's errors | — |
+| `ps-service/src/ps_service/invitations/client.py` | `create_invitation` — builds and sends the Authentik invitation-stage POST, injectable-transport (`AuthentikTransport` Protocol, defaults to `urllib.request.urlopen`); `InvitationResult(itoken, invite_url)` | CreateInvitation |
+| `ps-service/src/ps_service/invitations/startup.py` | `require_authentik_credential_configured` — fail-closed presence check for `PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL`, called once from `create_app`, unconditionally (no local-test-bypass carve-out) | RequireAuthentikCredentialConfigured |
+| `ps-service/src/ps_service/invitations/errors.py` | `AuthentikCredentialConfigurationError`, `AuthentikInvitationError` | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RequireAuthentikCredentialConfigured | Fail closed at process startup unless both `PS_AUTHENTIK_API_TOKEN` and `PS_AUTHENTIK_BASE_URL` are configured | No (startup-only, internal) | n/a | `create_app` is being constructed | Returns `None` when both are set | None | None | Once per process start | Yes (idempotent given the same config) | Raises `AuthentikCredentialConfigurationError` naming exactly which variable(s) are unset; unlike Authentication's/Authorization's own startup checks, this one has no local-test-bypass carve-out — it always runs |
+| CreateInvitation | Create a single-use Authentik enrollment invite for a target email, on behalf of the `invite_user` MCP tool | No (internal call — the gating `invite-user` MCP tool's own `SystemAdmin`-or-above check, via the shared `ps.service.authz` component, happens before this is ever called) | n/a (enforced by the calling MCP tool, not this component) | `RequireAuthentikCredentialConfigured` succeeded at startup | Returns an `InvitationResult(itoken, invite_url)` | One `POST` to Authentik's invitation-stage API, using PS Service's own service credential — no local state written | Authentik | Bounded by a 30-second request timeout; no target set | No (each call mints a new invitation `name`/`pk`, even for the same email) | Any failure (DNS, connection refused, timeout, a non-2xx HTTP status) raises `AuthentikInvitationError`, naming only the HTTP status code or exception type — never the token, never the raw response body |
+
+---
+
 ### Query Engine
 
 #### Domain Concepts
@@ -791,6 +913,141 @@ None — shared infrastructure component, like Logging.
 | ResolveAuthContext | Resolve auth configuration into a usable `AuthContext` at process startup, or refuse to start | No (startup-only, internal) | n/a | `create_app` is being constructed | Returns an `AuthContext` (issuer, audience, JWKS URI, allowed algorithms), or `None` when the local-test bypass is active | One OIDC discovery fetch against the issuer | The configured OIDC issuer (discovery endpoint) | Once per process start | Yes (idempotent given the same config) | Missing config (bypass inactive) raises `AuthConfigurationError` naming the missing variable(s); a failed/incomplete discovery response raises `AuthDiscoveryError` naming the issuer — both propagate out of `create_app`, refusing process startup |
 | VerifyToken | Validate a presented bearer token's signature, issuer, audience, expiry and algorithm; called by both `RestAuthMiddleware` and `MCPServer(token_verifier=...)` | n/a (this action is the authentication mechanism itself) | Audience validation only — no role/scope enforcement | An `AuthContext` was resolved at startup (bypass inactive) | Valid token: a `Principal`-bearing result (`sub`, `iss`). Invalid/missing token: rejection, no downstream handler invoked | On an unrecognized key id, one JWKS refetch before rejecting | The issuer's JWKS endpoint (cached, refetched on cache miss) | Dominated by JWKS fetch on cache miss; cached-path verification is CPU-only | Yes | Every outcome is logged (`sub`+`iss` on success; `outcome=unauthenticated` + a fixed reason category — `missing`/`expired`/`wrong_audience`/`wrong_issuer`/`bad_alg`/`invalid_signature` — on failure); the presented token and library-internal error detail never appear in a response body or log entry |
 | PublishProtectedResourceMetadata | Serve RFC 9728 protected-resource metadata at `GET /.well-known/oauth-protected-resource`, unauthenticated | No (this endpoint is itself part of the discovery contract) | n/a | REST app is constructed | Returns JSON: `resource`, `authorization_servers: [issuer]`, `scopes_supported`, plus `ps_cli_client_id` when `PS_AUTH_CLI_CLIENT_ID` is set | None | None | < 10ms | Yes | n/a (static, config-derived response) |
+
+---
+
+### Authorization
+
+#### Domain Concepts
+
+##### AccessRole assignment
+
+Deliberately named apart from `ps-domain-concepts.md`'s `Role` node (a regulatory, RegulatoryInstrument-scoped compliance-spine concept) — this component's types are operational access-control data only: never a FalkorDB graph node, never exposed via Cypher, never referenced from `ps-domain-concepts.md`.
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Closed role set | `AuthenticatedUser` \| `SystemOwner` \| `SystemAdmin` \| `PolicyManager` \| `ComplianceOfficer` — an unrecognized role name is rejected before any store call |
+| `AuthenticatedUser` implicit | Every already-authenticated caller has it; only ever persisted as an explicit row for the bootstrap principal (`system:bootstrap`) |
+| Once-ever bootstrap | The first-ever principal to resolve its roles against an empty `access_role_assignments` table is granted `SystemOwner` + `AuthenticatedUser`, gated by an advisory lock and an operator-configured expected identity (`PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`_ISSUER`); every other principal against an empty table defaults to `AuthenticatedUser` alone, recorded as a distinct `access_role.bootstrap_rejected` audit event |
+| SystemOwner floor | Revoking the last active `SystemOwner` is blocked — a pre-mutation rule check, and an advisory-locked recount immediately before the delete that defends against a genuine concurrent-revoke race |
+| Self-grant/revoke blocked | A caller may never grant or revoke their own access roles |
+| `SystemAdmin` hierarchy | A `SystemAdmin` minimum gate is also satisfied by `SystemOwner` (never the reverse), so the sole bootstrapped owner is never locked out of a `SystemAdmin`-gated action |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `principal_subject` | The principal's OIDC `sub` | string | — | — | Required |
+| `principal_issuer` | The principal's OIDC `iss` | string | — | — | Required; the same `subject` under a different `issuer` is a different principal |
+| `access_role` | One of the closed `AccessRole` set | enum | — | — | Required |
+| `granted_at` | When this assignment was created | datetime | — | — | Required |
+| `granted_by_subject` / `granted_by_issuer` | The granting actor's identity, or the bootstrap sentinel `system:bootstrap` | string | — | — | Required |
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`psycopg[binary]`) | Python 3.14 | `ps-service/src/ps_service/authz/` | `ps_service.authz` |
+
+**Implementation Guidance:**
+- One shared enforcement implementation (`ps_service.authz.service`) — both MCP tools and the REST dependency call the exact same functions, never two parallel gating mechanisms; mirrors Passkey Signing's own single-role pattern.
+- Owns its own role-assignment table (`access_role_assignments`) in the PS state Postgres, via `PsycopgAccessRoleStore` — one short-lived `psycopg.connect(...)` per call, no pool.
+- `resolve_active_roles` implicitly bootstraps the very first caller of any identity, per the constraint above; the winning call's resulting `SystemOwner` count is deterministically 1.
+- `grant_role`/`revoke_role` each resolve the requested role against a fixed grant/revoke RBAC table (which roles the actor must already hold to grant/revoke each), run `block_self_target` (and, for revoking `SystemOwner`, `enforce_system_owner_floor`), then mutate the store — every denial records an `outcome="rejected"` `audit_events` row (via the shared Audit component) before the caller-visible error is raised, and every successful mutation records its own `outcome="applied"` row in the same Postgres transaction as the state change.
+- Fails closed everywhere: any store read/write failure raises `AuthorizationStoreUnavailableError`, never silently returning a default/empty result — including when the failure occurs while trying to record a denial's own audit event (a denial that cannot be proven durably logged is never returned as-is).
+- `list_audit_events` (the shared Audit component's read path) is gated behind this component's own `SystemAdmin`-or-above `require_role` check before any query runs, and validates every filter (unknown `action`/`resource_type`, an inverted time range, an over-limit `page_size`) before ever calling `AuditStore.query`.
+- Emits a `component="authz"` warning log entry whenever a grant/revoke/list/bootstrap call leaves exactly one active `SystemOwner`, surfacing the same condition the tool's own response payload reports as `system_owner_floor_warning`.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/authz/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/authz/models.py` | `AccessRole`, `AccessRoleAssignmentRow`, `AccessRoleGrantEvent` | — |
+| `ps-service/src/ps_service/authz/rules.py` | `AccessRuleContext`, `AccessRuleResult`, `block_self_target`, `enforce_system_owner_floor` — the ABAC extension point, generic over the context type | — |
+| `ps-service/src/ps_service/authz/service.py` | `resolve_active_roles`, `require_role`, `list_assignments`, `grant_role`, `revoke_role`, `list_audit_events` — the one shared enforcement implementation | ResolveActiveRoles, RequireRole, ListAssignments, GrantRole, RevokeRole, ListAuditEvents |
+| `ps-service/src/ps_service/authz/store.py` | `AccessRoleStore` Protocol; `PsycopgAccessRoleStore` — the real Postgres-backed implementation, incl. the advisory-locked bootstrap and SystemOwner-floor revoke paths | — |
+| `ps-service/src/ps_service/authz/audit_actions.py` | Typed `details` models for `access_role.bootstrap`/`.bootstrap_rejected`/`.grant`/`.revoke`, registered with the shared Audit component | — |
+| `ps-service/src/ps_service/authz/errors.py` | `AccessRoleAssignmentPersistenceError`, `AccessRoleSystemOwnerFloorRaceError`, `AccessRoleBootstrapConfigurationError` | — |
+| `ps-service/src/ps_service/authz/startup.py` | `require_bootstrap_owner_configured` — fail-closed presence check for the bootstrap-owner identity, called once from `create_app` | RequireBootstrapOwnerConfigured |
+| `ps-service/src/ps_service/authz/migrations/0001_access_role_assignments.sql` | `access_role_assignments` table schema | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RequireBootstrapOwnerConfigured | Fail closed at process startup unless the RBAC bootstrap-owner identity is configured, or the local-test bypass is active | No (startup-only, internal) | n/a | `create_app` is being constructed | Returns `None` when the bypass is active, or both `PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`_ISSUER` are set | None | None | Once per process start | Yes (idempotent given the same config) | Raises `AccessRoleBootstrapConfigurationError` naming exactly which variable(s) are unset and the bypass as the local-only alternative |
+| ResolveActiveRoles | Resolve a principal's current active `AccessRole` set, implicitly bootstrapping the very first-ever caller | No (internal call) | n/a | None | Returns the principal's role set, unioned with `AuthenticatedUser`; the first-ever call against an empty store either bootstraps `SystemOwner` or defaults to `AuthenticatedUser` alone | On the winning bootstrap call only: inserts `SystemOwner`+`AuthenticatedUser` rows and one `access_role.bootstrap` audit event; on an identity mismatch against an empty store, one `access_role.bootstrap_rejected` audit event | PS state Postgres, shared Audit component | Not yet set — bounded by one or two Postgres round trips | Yes | Never falls open on a store failure — raises `AuthorizationStoreUnavailableError` |
+| RequireRole | Raise unless a principal's active roles satisfy a minimum `AccessRole`, with `SystemAdmin` also satisfied by `SystemOwner` | No (internal call) | Whatever minimum the caller specifies | None | Returns normally if satisfied | None (read-only) | PS state Postgres (via ResolveActiveRoles) | Not yet set — bounded by ResolveActiveRoles's own cost | Yes | Raises `AccessDeniedError` when unsatisfied; propagates `AuthorizationStoreUnavailableError` from ResolveActiveRoles |
+| ListAssignments | Return every `access_role_assignments` row plus the SystemOwner-floor warning | No (internal call — gated by its own RequireRole check) | `SystemAdmin`-or-above | None | Full roster plus `system_owner_floor_warning: bool` | None (read-only) | PS state Postgres | Not yet set — bounded by one or two Postgres reads | Yes | `AccessDeniedError`/`AuthorizationStoreUnavailableError` |
+| GrantRole | Grant one of `SystemOwner`/`SystemAdmin`/`PolicyManager`/`ComplianceOfficer` to a target principal | No (internal call — the calling MCP tool/REST dependency resolves the caller's verified identity first) | Per the fixed grant RBAC table (e.g. granting `SystemAdmin`/`SystemOwner` requires the actor already hold `SystemOwner`) | `access_role` names a role this flow manages; actor is not the target | Idempotent insert into `access_role_assignments`; one `outcome="applied"` `access_role.grant` audit event in the same transaction | Writes `access_role_assignments` + `audit_events` (PS state Postgres) | PS state Postgres, shared Audit component | Not yet set — bounded by one or two Postgres round trips | Yes (re-granting an already-held role is a no-op insert; the audit event is still appended) | `InvalidAccessRoleError`/`AccessDeniedError`/`SelfGrantOrRevokeBlockedError`/`AuthorizationStoreUnavailableError` — a denial's own audit write failing raises `AuthorizationStoreUnavailableError` instead of returning the original denial |
+| RevokeRole | Revoke one of the four roles from a target principal, enforcing the SystemOwner floor | No (internal call) | Per the fixed revoke RBAC table; revoking `SystemOwner` requires `SystemOwner` or `SystemAdmin` | Actor is not the target; revoking `SystemOwner` must not leave zero active `SystemOwner`s | Delete (no-op if absent) + one `outcome="applied"` `access_role.revoke` audit event in the same transaction | Writes `access_role_assignments` + `audit_events` | PS state Postgres, shared Audit component | Not yet set — bounded by one or two Postgres round trips | Yes | `InvalidAccessRoleError`/`AccessDeniedError`/`SelfGrantOrRevokeBlockedError`/`SystemOwnerFloorViolationError`/`AuthorizationStoreUnavailableError`; a genuine concurrent-revoke race is caught by the store's own advisory-locked recount (`AccessRoleSystemOwnerFloorRaceError`, translated to the same `SystemOwnerFloorViolationError`) |
+| ListAuditEvents | Return one filtered, newest-first, paginated page of `audit_events`, gated at this component's own `SystemAdmin`-or-above check | No (internal call) | `SystemAdmin`-or-above | Every filter/`page_size`/`cursor` valid | One page of events plus `next_cursor` | None (read-only) | PS state Postgres, shared Audit component | Not yet set — bounded by one Postgres read | Yes | `AccessDeniedError`/`InvalidAuditQueryFilterError` (naming the specific invalid filter)/`AuthorizationStoreUnavailableError` |
+
+---
+
+### Policy Lifecycle
+
+#### Domain Concepts
+
+##### Policy / Standard / Control lifecycle status
+
+See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping) — Policy Lifecycle owns the human-authored creation path and the draft → proposed → approved → deprecated status-transition workflow for Policy/Standard/Control. Policy's own attribute table is documented once, under [Company Merge](#company-merge); Standard's and Control's attribute tables are documented once, under [Domain Mapper](#domain-mapper) — this component introduces no new attribute beyond what those sections already define; it owns transition behavior (valid transitions, ownership/RBAC gates, cascading), not new schema.
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Four-state workflow | `draft` → `proposed` → `approved` → `deprecated`, plus `proposed` → `draft` (reject or owner-revert) and `approved` → `deprecated` (auto-deprecation only, never a direct caller action) |
+| Cascading | Every transition of a Policy cascades atomically, in one Cypher statement, to every Standard/Control in its tree — a Standard/Control never holds a status independent of its Policy's own transition |
+| Owner-authored content, elevated-gated governance | Only the Policy's own owner may create it, edit its draft content, `propose`, or `revert` it; only a `PolicyManager` (or above) who is NOT the owner may `approve`/`reject` — self-approval is always blocked |
+| Draft visibility restricted | A Draft Policy is visible only to its owner or a `SystemOwner`/`SystemAdmin`; a Proposed/Approved/Deprecated Policy is readable by any authenticated caller |
+| Amendment via fork, not in-place edit | Amending an `approved` Policy mints a brand-new successor draft (`create-policy-draft` with `supersedes_policy_id`) that forks the prior tree's current content as new, independently-editable nodes, linked by a single Policy-level `SUPERSEDED_BY` edge — the prior tree's own nodes are never mutated |
+| Auto-deprecation on approval | Approving a successor that supersedes an already-`approved` prior automatically cascades that prior's own tree to `deprecated`, as a second, separate audit event — never folded into the successor's own `policy.approve` event |
+| Completeness gate | A Policy cannot be proposed with zero Standards attached (a Standard with zero Controls is never checked) |
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`redis.exceptions` for FalkorDB error translation) | Python 3.14 | `ps-service/src/ps_service/policy_lifecycle/` | `ps_service.policy_lifecycle` |
+
+**Implementation Guidance:**
+- Every top-level action authored here writes into the same single-tenant `policy_system` FalkorDB graph that Company Merge merges into — never a per-regulation baseline graph of its own.
+- Reuses the shared `ps_service.authz` RBAC machinery directly (`require_role`, `resolve_active_roles`) for the `PolicyManager` approve/reject gate and the `SystemOwner`/`SystemAdmin` draft-visibility override — never a second, parallel gating mechanism; defines its own ABAC rules (`require_owner`, `require_status`, `block_self_approval`, in `ps_service.policy_lifecycle.rules`) only for the ownership/status checks genuinely specific to this component.
+- Every state-changing action (create, and the four status transitions) records its own `policy.*` audit event via the shared Audit component's `record_standalone` — `applied` BEFORE the graph write, and a follow-up `failed` event if the write then fails; a rejected gate check (ownership/status/self-approval/completeness) instead records its own `outcome="rejected"` event and raises, before any graph write is attempted. The six draft-content PATCH/add tools (issue #136) are the one deliberate exception: they record no audit event at all, relying entirely on MCP Interface's own generic started/succeeded/failed log triad.
+- A graph write failure after its own `applied` audit event was already recorded raises `PolicyLifecycleGraphUnavailableError`, wrapping the underlying `redis.exceptions.RedisError` — the original driver exception is never leaked to the caller.
+- `create-policy-draft`'s supersede-fork path (`supersedes_policy_id`) requires the named prior Policy to exist and currently be `approved`; the successor's `version` is `str(int(prior_version) + 1)`, and its Standard/Control children are forked read-only copies of the prior tree's current content, never the caller-supplied `standards` argument (silently ignored on a fork).
+- The six draft-content PATCH/add tools (`update-policy-draft`, `add-standard-to-draft`, `update-standard-draft`, `add-control-to-draft`, `update-control-draft`) each apply exactly the caller-supplied fields to an already-`draft`-status node, gated by the same owner-or-`SystemOwner`/`SystemAdmin` + must-be-draft check (`_authorize_draft_edit`) — an omitted field keeps its existing value, an explicitly-`None` value clears it.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/policy_lifecycle/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/policy_lifecycle/service.py` | `create_policy_draft`, `get_policy`, `propose_policy`, `approve_policy`, `reject_policy`, `revert_policy_to_draft`, `update_policy_draft`, `add_standard_to_draft`, `update_standard_draft`, `add_control_to_draft`, `update_control_draft` — every public action this component exposes | CreatePolicyDraft, GetPolicy, ProposePolicy, ApprovePolicy, RejectPolicy, RevertPolicyToDraft, UpdatePolicyDraft, AddStandardToDraft, UpdateStandardDraft, AddControlToDraft, UpdateControlDraft |
+| `ps-service/src/ps_service/policy_lifecycle/graph_writer.py` | `create_policy_draft`, `read_policy_tree`, `read_policy_tree_for_fork`, `cascade_status`, `find_approved_prior`, `backfill_governance_status`, `update_policy_fields`, `add_standard_to_policy`, `update_standard_fields`, `add_control_to_standard`, `update_control_fields` — the FalkorDB read/write layer | (all of the above) |
+| `ps-service/src/ps_service/policy_lifecycle/rules.py` | `PolicyLifecycleRuleContext`, `require_status`, `require_owner`, `block_self_approval` — the ABAC rules specific to this component | — |
+| `ps-service/src/ps_service/policy_lifecycle/audit_actions.py` | Typed `details` models for `policy.create_draft`/`.propose`/`.approve`/`.reject`/`.revert`/`.auto_deprecate`, registered with the shared Audit component | — |
+| `ps-service/src/ps_service/policy_lifecycle/errors.py` | `PolicyNotFoundError`, `PolicyDraftAccessDeniedError`, `PolicyTitleAlreadyExistsError`, `PolicyStandardNotFoundError`, `PolicyControlNotFoundError`, `PolicyIncompleteForProposalError`, `PolicyInvalidStatusTransitionError`, `PolicySelfApprovalBlockedError`, `PolicySupersedePriorNotApprovedError`, `PolicyLifecycleGraphUnavailableError` | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CreatePolicyDraft | Mint a new draft Policy (optionally with Standard/Control children), owned by the caller; or, given `supersedes_policy_id`, fork a successor draft from an already-`approved` prior | No (internal call — the `create-policy-draft` MCP tool resolves the caller's verified identity first) | Any authenticated caller (becomes the new Policy's owner) | For a fork: `supersedes_policy_id` names an existing, currently-`approved` Policy | New Policy (`status="draft"`) plus any Standard/Control children exist; a fork's children are forked copies of the prior tree, never the caller-supplied `standards` | Writes FalkorDB (`policy_system`); records one `policy.create_draft` audit event, before the write on success, or after a title-collision rejection with no write attempted | FalkorDB, shared Audit component | Not yet set | No (a title collision leaves no partial write; re-attempting the same title always collides) | `PolicyTitleAlreadyExistsError` (a rejected audit event is recorded first, no write attempted); `PolicyNotFoundError`/`PolicySupersedePriorNotApprovedError` for a bad fork target; `PolicyLifecycleGraphUnavailableError` on a write failure after the audit event was already recorded |
+| GetPolicy | Read a Policy plus its full Standard/Control tree | No (internal call) | Any authenticated caller for a non-Draft Policy; owner or `SystemOwner`/`SystemAdmin` for a Draft | None | Returns the Policy's fields and tree | None (read-only; self-heals a pre-existing node's missing `status`/`version` via `backfill_governance_status`) | FalkorDB | Not yet set | Yes | `PolicyNotFoundError`; `PolicyDraftAccessDeniedError` for an unauthorized Draft read (no audit event — reads are not audited) |
+| ProposePolicy | Propose a draft Policy, cascading its whole tree to `proposed` | No (internal call) | Owner only | Policy is `draft`; ≥1 Standard attached | Policy and tree now `proposed` | Writes FalkorDB; records one `policy.propose` audit event (`applied` or `rejected`) | FalkorDB, shared Audit component | Not yet set | Yes (gate checks are read-only; a repeat call while still `draft` just re-evaluates the same gates) | `PolicyNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyIncompleteForProposalError`/`PolicyLifecycleGraphUnavailableError` |
+| ApprovePolicy | Approve a proposed Policy, cascading its whole tree to `approved`; auto-deprecates an approved prior this Policy supersedes | No (internal call) | `PolicyManager` or above, and NOT the owner | Policy is `proposed` | Policy and tree now `approved`; a superseded, still-`approved` prior (if any) now `deprecated` | Writes FalkorDB (up to two cascades); records `policy.approve` and, if applicable, a separate `policy.auto_deprecate` audit event | FalkorDB, shared Authorization component, shared Audit component | Not yet set | Yes | `AccessDeniedError` (raised directly by the RBAC gate, no extra audit wrapping)/`PolicyNotFoundError`/`PolicySelfApprovalBlockedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| RejectPolicy | Reject a proposed Policy, cascading its whole tree back to `draft` | No (internal call) | `PolicyManager` or above, and NOT the owner | Policy is `proposed` | Policy and tree back to `draft` | Writes FalkorDB; records one `policy.reject` audit event | FalkorDB, shared Authorization component, shared Audit component | Not yet set | Yes | Same error set as ApprovePolicy, minus auto-deprecation |
+| RevertPolicyToDraft | Owner-only withdrawal of a proposed Policy back to `draft`, with no RBAC gate at all | No (internal call) | Owner only (a non-owner `PolicyManager` is rejected the same as anyone else) | Policy is `proposed` | Policy and tree back to `draft` | Writes FalkorDB; records one `policy.revert` audit event | FalkorDB, shared Audit component | Not yet set | Yes | `PolicyNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| UpdatePolicyDraft | PATCH a subset of a draft Policy's own content fields | No (internal call) | Owner or `SystemOwner`/`SystemAdmin` | Policy is `draft` | Named fields updated; omitted fields unchanged, explicit `None` clears | Writes FalkorDB; no audit event | FalkorDB | Not yet set | Yes (re-applying the same fields is a no-op write) | `PolicyNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| AddStandardToDraft | Add a new Standard under a draft Policy | No (internal call) | Owner or `SystemOwner`/`SystemAdmin` of the parent Policy | Parent Policy is `draft` | New Standard (`status="draft"`) exists, `SUPPORTED_BY`-linked | Writes FalkorDB; no audit event | FalkorDB | Not yet set | No (each call mints a new Standard, even with the same title) | `PolicyNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| UpdateStandardDraft | PATCH a subset of a draft Standard's own content fields | No (internal call) | Owner (of the root Policy) or `SystemOwner`/`SystemAdmin` | The Standard itself is `draft` | Named fields updated | Writes FalkorDB; no audit event | FalkorDB | Not yet set | Yes | `PolicyStandardNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| AddControlToDraft | Add a new Control under a draft Standard | No (internal call) | Owner (of the root Policy) or `SystemOwner`/`SystemAdmin` | Parent Standard is `draft` | New Control (`status="draft"`, `implementation_status="planned"`) exists, `IMPLEMENTED_BY`-linked | Writes FalkorDB; no audit event | FalkorDB | Not yet set | No (each call mints a new Control) | `PolicyStandardNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
+| UpdateControlDraft | PATCH a subset of a draft Control's own content fields | No (internal call) | Owner (of the root Policy) or `SystemOwner`/`SystemAdmin` | The Control itself is `draft` | Named fields updated | Writes FalkorDB; no audit event | FalkorDB | Not yet set | Yes | `PolicyControlNotFoundError`/`PolicyDraftAccessDeniedError`/`PolicyInvalidStatusTransitionError`/`PolicyLifecycleGraphUnavailableError` |
 
 ---
 
@@ -947,6 +1204,258 @@ None — shared infrastructure utility.
 | MarkDependencyHealthy | Record that a named dependency's most recent call succeeded | No (internal call) | n/a | None | That dependency reads as healthy | None | None | < 1ms | Yes | n/a |
 | MarkDependencyUnhealthy | Record that a named dependency's most recent call failed | No (internal call) | n/a | None | That dependency reads as unhealthy until the next MarkDependencyHealthy | None | None | < 1ms | Yes | n/a |
 | IsDependencyHealthy | Report whether one (or every) named dependency's most recent recorded outcome was a success | No (internal call) | n/a | None | None | None | None | < 1ms | Yes | n/a |
+
+---
+
+### Passkey Signing
+
+#### Domain Concepts
+
+##### Signing credential / Pending approval
+
+These are PS Service's own operational security records, not PS Conceptual Model domain concepts — never a FalkorDB graph node, never exposed via Cypher.
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Independent relying party | A separate WebAuthn relying party from Authentik's login-time WebAuthn — its own RP id (PS Service's own hostname, derived per-request from the `Host` header, never Authentik's issuer path), its own credential type, its own storage (`signing_credentials`) |
+| Separate database | Both tables live in the `ps_signing` database of the PS Postgres server — a database distinct from `ps_state` (Authorization/Audit/Runtime Config), with its own least-privilege role |
+| Opaque capability code | A pending approval's high-entropy code is returned to the caller exactly once, at creation; only its `sha256` digest (`code_hash`) is ever persisted — the raw code never reaches storage or a log entry |
+| Time-boxed, single-use | A pending approval expires 15 minutes after creation and is consumed exactly once — the `pending` → `signed` transition is an atomic, single-winner compare-and-swap (`UPDATE ... WHERE status = 'pending'`), never a read-then-write |
+| No stored challenge | Neither the enrollment nor the signing WebAuthn challenge is ever persisted as its own column — both are deterministically recomputed, at both the `/options` and `/verify` step, from the row's own already-persisted fields (`id`/`nonce` for enrollment; `tool_name`/`normalized_args`/`actor_subject`/`actor_issuer`/`nonce` for signing) |
+| Actor-bound | A signing assertion's resolved credential must belong to the same `(actor_subject, actor_issuer)` as the pending approval itself — checked before any cryptographic verification runs |
+| Uniform rejection | Every distinct failure mode of the companion-browser ceremony (unknown id, wrong/tampered code, expired, already-consumed, wrong-actor credential, a lost CAS race, a malformed or cryptographically-invalid WebAuthn payload) surfaces as the identical generic error to the caller; the real reason is recorded server-side only |
+
+###### Attributes (`pending_approvals`)
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `id` | Row identity | string | — | — | Required |
+| `code_hash` | `sha256` digest of the one-time capability code | bytes | — | — | Required; the raw code itself is never persisted |
+| `tool_name` | The MCP tool this approval was created for (currently always `near_misses_resolve`) | string | — | — | Required |
+| `normalized_args` | The tool call's own arguments (e.g. `review_id`, `decision`), canonical-JSON-encoded for the signing challenge | object | — | — | Required |
+| `actor_subject` / `actor_issuer` | The requesting caller's verified identity | string | — | — | Required |
+| `nonce` | Fresh random bytes, domain-separating this row's challenges from any other | bytes | — | — | Required |
+| `display_summary` | The WYSIWYS summary shown to the signer before they approve | object | — | — | Required |
+| `status` | `pending` \| `signed` | enum | — | — | Required; `expired` is derived live from `expires_at`, never itself stored |
+| `outcome` | The executed action's result (e.g. `winner_id`/`loser_id`), or a safe error message | object | — | — | Optional; set only once `status="signed"` |
+| `created_at` / `expires_at` | Creation time and its 15-minutes-later expiry | datetime | — | — | Required |
+
+###### Attributes (`signing_credentials`)
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `id` | Row identity | string | — | — | Required |
+| `actor_subject` / `actor_issuer` | The enrolling caller's verified identity | string | — | — | Required |
+| `credential_id` | The WebAuthn authenticator's own credential id | bytes | — | — | Required |
+| `public_key` | The COSE public key from registration | bytes | — | — | Required; no private key, biometric data, or attestation blob is ever stored |
+| `sign_count` | The authenticator's own monotonic signature counter, bumped on every successful signing assertion | integer | — | — | Required |
+| `created_at` | Enrollment time | datetime | — | — | Required |
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | `webauthn`, FastAPI (companion-browser router) | Python 3.14 | `ps-service/src/ps_service/passkey_signing/` | `ps_service.passkey_signing` |
+
+**Implementation Guidance:**
+- Exists to add a second, independent factor to one specific irreversible action: merging two entities via `near_misses_resolve(..., "merge")` — a verified WebAuthn signature is required before the merge write actually executes.
+- The companion-browser ceremony (`GET /approvals/{id}`, `POST /approvals/{id}/{summary,enroll/options,enroll/verify,sign/options,sign/verify}`) is mounted on the same FastAPI app as the REST API router, but sits under the auth middleware's own exemption for this path prefix — unauthenticated at the bearer-token layer by design, with the per-approval opaque code (carried only in the client's request body, or, before that, the approval link's URL *fragment* — never the path or a `Referer` header) as the sole per-request authorization, verified inside this router.
+- The MCP tool (`near_misses_resolve`) and the REST route (`POST /near-misses/{review_id}/resolve`) both call the exact same `create_merge_pending_approval` function to create a pending approval — never two parallel gating mechanisms; likewise `check_pending_approval` backs both `near_misses_check_approval` (MCP) and `GET /near-misses/approvals/{id}` (REST).
+- The signing ceremony's post-signature step (`post_sign_verify`) delegates the actual merge write to the exact same `run_resolve_near_miss` function `POST /near-misses/{review_id}/resolve` and `near_misses_resolve`'s own keep-separate path call — the signature's validity is never contingent on the merge write's own success; a since-gone-stale review reference is recorded as a safe error message on the now-`signed` row, never re-raised.
+- Enrollment and signing challenges are always recomputed fresh from already-persisted row fields, never read back from a separately stored value — this is deliberate, not an oversight, and applies identically to both ceremonies.
+- Every method on both stores opens, uses, and closes its own connection (`connect_from_config`/no pool) — a separate connection helper and migration runner from the shared `ps_service.persistence` component, because this data lives in a different database (`ps_signing`) with its own credentials.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/passkey_signing/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/passkey_signing/models.py` | `PendingApprovalRow`, `SigningCredentialRow` | — |
+| `ps-service/src/ps_service/passkey_signing/service.py` | `create_merge_pending_approval`, `check_pending_approval` — the shared MCP/REST gating logic; `_require_pending_and_unexpired`, `_compute_sign_challenge` — shared companion-browser-router helpers | CreateMergePendingApproval, CheckPendingApproval |
+| `ps-service/src/ps_service/passkey_signing/webauthn_rp.py` | `rp_id_and_origin`, `enrollment_challenge`, `build_registration_options`, `verify_registration`, `build_authentication_options`, `verify_authentication` — PS Service's own WebAuthn relying party | — |
+| `ps-service/src/ps_service/passkey_signing/router.py` | `build_passkey_signing_router` — the companion-browser ceremony's `APIRouter`: `GET /approvals/{id}`, `POST /approvals/{id}/summary`, `.../enroll/options`, `.../enroll/verify`, `.../sign/options`, `.../sign/verify` | GetApprovalShell, PostApprovalSummary, PostEnrollOptions, PostEnrollVerify, PostSignOptions, PostSignVerify |
+| `ps-service/src/ps_service/passkey_signing/error_handlers.py` | `reject`, `reject_on_webauthn_failure` — maps every router failure mode to the identical generic rejection, logging the real reason server-side only | — |
+| `ps-service/src/ps_service/passkey_signing/store.py` | `PendingApprovalStore` Protocol; `PsycopgPendingApprovalStore`; `connect_from_config`/`check_connectivity_from_config` for the `ps_signing` database | CheckConnectivity (Passkey Signing Postgres) |
+| `ps-service/src/ps_service/passkey_signing/signing_credential_store.py` | `SigningCredentialStore` Protocol; `PsycopgSigningCredentialStore` | — |
+| `ps-service/src/ps_service/passkey_signing/migration_runner.py` | This component's own hand-rolled migration runner, applied against `ps_signing` (separate from the shared `ps_service.persistence` runner) | — |
+| `ps-service/src/ps_service/passkey_signing/errors.py` | `PendingApprovalPersistenceError`, `PasskeySigningPostgresConnectionError`, `MigrationApplyError`, `SigningCredentialPersistenceError` | — |
+| `ps-service/src/ps_service/passkey_signing/migrations/` | `pending_approvals`/`signing_credentials` table schemas | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CreateMergePendingApproval | Create a `pending_approvals` row for one `near_misses_resolve(..., "merge")` call, returning the approval link | No (internal call — the calling MCP tool/REST route resolves the caller's verified identity first) | Any authenticated caller (becomes the approval's own actor) | `review_id` names a currently-unresolved `PendingReview` | New `pending_approvals` row (`status="pending"`, expires in 15 minutes); returns `{pending_approval_id, approval_url, expires_at}` | Writes `pending_approvals` (`ps_signing`) | Passkey Signing Postgres | Not yet set | No (each call mints a new row, even for the same `review_id`) | `PendingReviewNotFoundError` — no Postgres row is created on this path |
+| CheckPendingApproval | Poll a caller's own pending approval's live status | No (internal call) | The caller must be the approval's own actor | None | Returns the approval's live status (`pending`/`expired`/`signed`) plus, once signed, the outcome; returns nothing distinguishable from "not found" for a different actor's approval | None (read-only) | Passkey Signing Postgres | Not yet set | Yes | Never distinguishes "unknown id" from "belongs to a different actor" (leak-nothing) |
+| GetApprovalShell | Serve the generic companion-browser HTML shell for an approval link | No (unauthenticated by design; the per-approval code is the authorization) | n/a | None | Byte-identical HTML regardless of the approval's real state — the handler never looks the row up | `Referrer-Policy: no-referrer` response header | None | < 10ms | Yes | n/a (static content, no lookup) |
+| PostApprovalSummary | Verify the opaque code and return the WYSIWYS summary for display | No (unauthenticated; the code is the authorization) | n/a | `code` matches the row's `code_hash`; row is `pending` and unexpired | Returns `{status, display_summary, needs_enrollment}` | None (read-only) | Passkey Signing Postgres | Not yet set | Yes | `PendingApprovalInvalidOrExpiredError` for any unknown id, wrong code, or expired/consumed row — generic body, real reason logged server-side only |
+| PostEnrollOptions | Generate WebAuthn registration ("create") options for a new signing credential | No (unauthenticated; the code is the authorization) | n/a | Code verified; row `pending` and unexpired | Returns `PublicKeyCredentialCreationOptions` (JSON) | None | Passkey Signing Postgres | Not yet set | Yes | `PendingApprovalInvalidOrExpiredError` |
+| PostEnrollVerify | Verify a WebAuthn registration response and persist the new signing credential | No (unauthenticated; the code is the authorization) | n/a | Code and pending/unexpired guard re-verified independently of PostEnrollOptions | Returns `{status: "enrolled"}`; a new `signing_credentials` row exists for this approval's actor | Writes `signing_credentials` (`ps_signing`) | Passkey Signing Postgres | Not yet set | No (each successful call enrolls a new credential) | `PendingApprovalInvalidOrExpiredError` — covers a malformed WebAuthn payload or a genuine verification failure too, never left to the app-wide generic 500 handler |
+| PostSignOptions | Generate WebAuthn authentication ("get") options for the signing ceremony | No (unauthenticated; the code is the authorization) | n/a | Code verified; row `pending` and unexpired | Returns `PublicKeyCredentialRequestOptions` (JSON), scoped to the approval's own actor's enrolled credentials | None | Passkey Signing Postgres | Not yet set | Yes | `PendingApprovalInvalidOrExpiredError` |
+| PostSignVerify | Verify a WebAuthn assertion and, on success, execute the near-miss merge | No (unauthenticated; the code is the authorization) | n/a | Code verified; the assertion's credential belongs to the approval's own actor; cryptographic verification succeeds; the `pending`→`signed` compare-and-swap wins | Row flips to `status="signed"`; the credential's `sign_count` is bumped; the near-miss merge executes (or a safe error is recorded) exactly once | Writes `pending_approvals`/`signing_credentials` (`ps_signing`); delegates to Company Merge's own pending-review write path (FalkorDB) | Passkey Signing Postgres, Company Merge, FalkorDB | Not yet set | No (the signature and the merge each execute at most once per approval) | `PendingApprovalInvalidOrExpiredError` for every failure mode (unknown id, wrong/expired code, wrong-actor credential, malformed or cryptographically-invalid assertion, a lost compare-and-swap race) — the real reason is recorded server-side only; a since-gone-stale `review_id` at merge time is recorded as a safe error on the outcome, never re-raised (the signature stays consumed regardless) |
+| CheckConnectivity (Passkey Signing Postgres) | Confirm the `ps_signing` database is reachable | No (internal call) | n/a | None | Records the outcome in Dependency Health | One round-trip query — no write | Passkey Signing Postgres | Cheapest real round-trip available; no target set | Yes | Raises `PasskeySigningPostgresConnectionError` on failure |
+
+---
+
+### Audit
+
+#### Domain Concepts
+
+##### Audit event
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Insert-only | `AuditStore` never defines an `UPDATE`/`DELETE` method — enforced by omission, not yet a DB privilege/trigger |
+| Typed `details` per action | Every `action` string must be registered (via `register_audit_action`) with a Pydantic model that forbids extra fields; `details` is validated against that model before any row is written |
+| Same-transaction write | `record` uses the caller's own already-open cursor/transaction — the audit row commits or rolls back atomically together with the state change it documents |
+| Standalone write for pre-mutation denials | `record_standalone` opens its own connection/transaction for a denial recorded before any state-changing store method is ever called (e.g. an access-denied grant/revoke) |
+| Newest-first, keyset-paginated reads | `query` orders by `(occurred_at, id) DESC` and paginates via an opaque cursor encoding the last row's own `(occurred_at, id)` — never `OFFSET`, whose cost grows with an ever-growing, never-pruned table |
+| Extensible registries, not closed enums | Both the action→`details`-model registry and the known-resource-type set are plain module-level registries a new component registers into at import time — never edited here |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `id` | Row identity | UUID | — | — | Required |
+| `occurred_at` | When the event was recorded | datetime | — | — | Required |
+| `actor_subject` / `actor_issuer` | The acting principal's identity, or a fixed sentinel (e.g. `system:bootstrap`) for a system-originated event | string | — | — | Required |
+| `action` | A registered action name (e.g. `access_role.grant`, `policy.approve`) | string | — | — | Required; must be registered with a typed `details` model |
+| `resource_type` | A registered resource type (e.g. `principal`, `policy`) | string | — | — | Required; must be registered |
+| `resource_id` | The affected resource's own id | string | — | — | Required |
+| `outcome` | `applied` \| `rejected` \| `failed` | enum | — | — | Required |
+| `details` | The action's own typed payload | object | — | — | Required; validated against `action`'s registered model, extra fields forbidden, `None`-valued fields omitted rather than stored as `null` |
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`psycopg[binary]`, `pydantic`) | Python 3.14 | `ps-service/src/ps_service/audit/` | `ps_service.audit` |
+
+**Implementation Guidance:**
+- Deliberately a standalone component, not nested under any one consumer, even though `audit_events` lives in the PS state Postgres instance several components share — Authorization, Policy Lifecycle, and Runtime Config each register their own typed `details` models against this component's extensible registry rather than editing this package.
+- Reuses `ps_service.persistence.connect_from_config` directly for its own connection lifecycle (`record_standalone`/`query`), rather than a parallel config surface — the `audit_events` table itself is created by this component's own migration directory, applied by the shared `ps_service.persistence` runner.
+- `record` never opens its own connection — it always runs on the caller's own already-open cursor, so the audit row and the state change it documents share one transaction and commit or roll back together.
+- `query`'s pagination cursor is an opaque, base64-encoded `"{occurred_at_iso}|{id}"` token — callers must never rely on or document its internal shape, only that it round-trips.
+- Feeds Dependency Health on every real Postgres call (`record_standalone`/`query`), marking the shared PS state Postgres instance unhealthy on failure and healthy again on the next success — the same signal Authorization's and Runtime Config's own stores feed.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/audit/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/audit/models.py` | `AuditDetails` (base Pydantic type, `extra="forbid"`), `register_audit_action`/`resolve_details_model`, `register_audit_resource_type`/`is_known_resource_type`, `AuditEventRow`/`AuditQueryFilters`/`AuditQueryPage` | — |
+| `ps-service/src/ps_service/audit/store.py` | `AuditStore` Protocol; `PsycopgAuditStore` — `record` (cursor-scoped), `record_standalone` (own connection), `query` (keyset-paginated read) | Record, RecordStandalone, Query |
+| `ps-service/src/ps_service/audit/errors.py` | `AuditUnknownActionError`, `AuditInvalidDetailsError`, `AuditPostgresUnavailableError`, `AuditPersistenceError`, `AuditInvalidCursorError` | — |
+| `ps-service/src/ps_service/audit/migrations/0001_audit_events.sql` | `audit_events` table schema | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Record | Validate `details` against `action`'s registered model, then insert one `audit_events` row on the caller's own open cursor/transaction | No (internal call — the caller has already authenticated/authorized its own action) | n/a (this component enforces no access control of its own) | `action` is registered with a typed `details` model; caller already holds an open cursor/transaction | One row inserted, uncommitted (commits with the caller's own transaction) | Writes `audit_events` (PS state Postgres), within the caller's transaction | None beyond the caller's own connection | < 5ms | No (each call appends a new row; never idempotent by design — insert-only) | `AuditUnknownActionError` for an unregistered `action`; `AuditInvalidDetailsError` for `details` that fails validation — both raised before any `INSERT` |
+| RecordStandalone | Open its own connection/transaction, call Record, commit | No (internal call) | n/a | Same as Record | Same as Record, committed in its own transaction | Writes `audit_events` (PS state Postgres), opens/commits its own connection | PS state Postgres | Not yet set — bounded by one Postgres round trip | No (insert-only) | `AuditPostgresUnavailableError` (connection could not be opened) vs. `AuditPersistenceError` (connection opened, insert failed) — distinct failure phases; `AuditUnknownActionError`/`AuditInvalidDetailsError` propagate unchanged |
+| Query | Return one filtered, newest-first, paginated page of `audit_events` | No (internal call — gated by the calling component's own access check, e.g. Authorization's `ListAuditEvents`) | n/a (this component enforces no access control of its own — filter *validity* is the caller's responsibility) | `cursor`, if given, decodes to a well-formed pagination token | One page of events (≤ `page_size`) plus `next_cursor` (`None` once no further page remains) | None (read-only) | PS state Postgres | Not yet set — bounded by one Postgres read | Yes | `AuditPostgresUnavailableError`; `AuditInvalidCursorError` for a malformed `cursor` |
+
+---
+
+### Persistence
+
+#### Domain Concepts
+
+None — shared infrastructure utility, like Logging; owns the PS state Postgres connection surface and migration application, not a domain concept of its own.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`psycopg[binary]`) | Python 3.14 | `ps-service/src/ps_service/persistence/` | `ps_service.persistence` |
+
+**Implementation Guidance:**
+- Owns the PS state Postgres connection helper and its connectivity probe; consumer components (Audit, Authorization, Runtime Config) own their own tables and migration directories, wired to this component's runner by the composition root (`ps_service.main`).
+- One short-lived `psycopg.connect(...)` per call via `connect_from_config` — no pool, no cached connection held across calls, mirroring Passkey Signing's own per-call-connection idiom for its separate `ps_signing` database.
+- Fails closed on an unconfigured store: unlike Passkey Signing's own connectivity probe (a no-op when unset, since it has no caller that must fail closed), `connect_from_config` raises `StatePostgresConnectionError` immediately when `PS_STATE_POSTGRES_HOST` is unset, without attempting a doomed connection — every state-store caller (Authorization, Audit, Runtime Config) must fail closed rather than silently no-op, since an unconfigured store would otherwise mean every role-gated action silently passes or silently fails open.
+- The migration runner is component-agnostic: the composition root passes explicit `MigrationSource(component, directory)` entries (currently `audit`, `authz`, `runtime_config`) — this package never imports a consumer component package. Each source's `.sql` files are applied in filename order, skipping any not yet recorded for that `(component, filename)` pair, each inside its own transaction; a second run applies nothing new.
+- Migrations are append-only from the first deployment onward — never edit, renumber, or delete an applied migration file; add a new, higher-numbered file instead. The runner records each applied file by `(component, filename)` and never re-checks its contents, so an edited already-applied file silently diverges from every database that already ran it.
+- Tracked in its own `ps_schema_migrations` table, keyed `(component, filename)` — deliberately not the bare `schema_migrations` name Passkey Signing's own separate runner uses, so the two runners can never silently collide even if ever pointed at the same physical Postgres instance/database.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/persistence/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/persistence/connection.py` | `connect_from_config`, `check_connectivity_from_config` — the PS state Postgres connection helper and its connectivity probe | CheckConnectivity (PS state Postgres) |
+| `ps-service/src/ps_service/persistence/migration_runner.py` | `MigrationSource`, `apply_pending_migrations` — the component-agnostic SQL migration runner, tracked via `ps_schema_migrations` | ApplyPendingMigrations |
+| `ps-service/src/ps_service/persistence/errors.py` | `StatePostgresConnectionError`, `StatePostgresMigrationApplyError` | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CheckConnectivity (PS state Postgres) | Confirm the PS state Postgres instance is reachable — Process Harness's `/ready` startup probe | No (internal call) | n/a | None | Records the outcome in Dependency Health | One round-trip query (`SELECT 1`) — no write | PS state Postgres | Cheapest real round-trip available; no target set | Yes | Raises `StatePostgresConnectionError` for both an unconfigured store and a configured-but-unreachable one — unconfigured is treated as unhealthy, not a healthy "not applicable" state |
+| ApplyPendingMigrations | Apply every not-yet-recorded `.sql` migration file of every registered component's migration directory, in list then filename order | No (startup-only, internal) | n/a | `PS_STATE_POSTGRES_HOST` is configured (gated by the composition root; a no-op call is never made when it isn't) | Every pending file applied and recorded in `ps_schema_migrations`; returns the filenames actually applied this call (empty on an already-up-to-date database) | Writes DDL plus `ps_schema_migrations` bookkeeping rows, one file's statements + its tracking row per transaction | PS state Postgres | Not yet set — bounded by the pending migrations' own DDL cost | Yes (a repeat run applies nothing new) | `StatePostgresMigrationApplyError` names the failing `component/filename`; a mid-file failure rolls back that file's own transaction, never leaving it half-applied-but-unrecorded |
+
+---
+
+### Runtime Config
+
+#### Domain Concepts
+
+##### Runtime config key
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Registry-gated, not free-form | Each runtime-mutable value is declared once, in code, as a typed `RuntimeConfigKey` (name, value type, validator, audit projection) — the store rejects an unregistered key, or a value that fails its type check or validator, before any write |
+| Re-validated on read | A stored value is re-validated against its key's own validator on every read, not just on write — a row hand-edited out of band to an invalid shape never reaches a caller; it is instead treated as if no value were stored |
+| Same-transaction audit | `set`/`reset` write their row and their `runtime_config.*` audit event in one transaction, advisory-locked on the key — either both apply or neither does |
+| Always-audited, even no-ops | A `reset` of a key with no row, and a `set` of a value identical to what's already stored, each still write exactly one audit row |
+| Projected audit values only | An audit row's `details` may only ever carry what a key's own `audit_value` projection allows through (e.g. a URL with credentials and query string stripped) — never the raw value, never an unvalidated stored blob |
+
+###### Attributes (`runtime_config` row)
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| `key` | The registered key's unique name (e.g. `curated_source.base_url`) | string | — | — | Required; must be registered |
+| `value` | The current value, JSON-encoded | jsonb | — | — | Required; must pass the key's own type check and validator |
+| `updated_at` | When this value was last written | datetime | — | — | Required |
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None (`psycopg[binary]`, `pydantic`) | Python 3.14 | `ps-service/src/ps_service/runtime_config/` | `ps_service.runtime_config` |
+
+**Implementation Guidance:**
+- Persists runtime-mutable config values in the `runtime_config` table of the PS state Postgres — the first registered key is Curated Source's own catalog-source override (`curated_source.base_url`); adding a new runtime-mutable value costs one `register_runtime_config_key` call, not a new storage pattern.
+- Depends on the shared Audit component one-way: it registers its own `runtime_config.set`/`runtime_config.reset` audit actions into Audit's extensible registry, and writes through Audit's public `AuditStore.record` on the same cursor as its own upsert/delete — Audit has no config-specific hook of its own.
+- `set`/`reset` take an advisory lock on the specific key (`pg_advisory_xact_lock(hashtext('ps_runtime_config:{key}'))`) before reading the old value, serializing concurrent writers on that same key even when it has no row yet.
+- Fails closed: connection or read failures raise `RuntimeConfigUnavailableError`; write/audit failures raise `RuntimeConfigPersistenceError` — both carry fixed messages, never host/port/driver text; log entries carry the key and the exception class name only, never the value itself.
+- Feeds Dependency Health on every real Postgres call, marking the shared PS state Postgres instance unhealthy on failure and healthy again on the next success — the same signal Authorization's and Audit's own stores feed.
+- Owns its own migration directory, applied by the shared `ps_service.persistence` runner alongside Audit's and Authorization's.
+
+#### Implementation Registration
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/runtime_config/__init__.py` | Package front door | — |
+| `ps-service/src/ps_service/runtime_config/registry.py` | `RuntimeConfigKey`, `define_runtime_config_key`, `register_runtime_config_key`/`resolve_runtime_config_key`/`require_runtime_config_key`, `prepare_runtime_config_value` — the typed key registry | — |
+| `ps-service/src/ps_service/runtime_config/store.py` | `RuntimeConfigStore` Protocol; `PsycopgRuntimeConfigStore` — `get`/`set`/`reset`, each in one transaction with the same-cursor audit write | Get, Set, Reset |
+| `ps-service/src/ps_service/runtime_config/audit_actions.py` | Typed `details` models for `runtime_config.set`/`.reset`, registered with the shared Audit component | — |
+| `ps-service/src/ps_service/runtime_config/errors.py` | `RuntimeConfigError` (base), `RuntimeConfigUnknownKeyError`, `RuntimeConfigInvalidValueError`, `RuntimeConfigUnavailableError`, `RuntimeConfigPersistenceError` | — |
+| `ps-service/src/ps_service/runtime_config/migrations/` | `runtime_config` table schema | — |
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Get | Read and re-validate the stored value for a registered key | No (internal call — the caller, e.g. Curated Source, enforces its own access check where one applies) | n/a (this component enforces no access control of its own) | `key` is registered | Returns the re-validated value, or `None` if no row exists | None (read-only) | PS state Postgres | Not yet set — bounded by one Postgres read | Yes | `RuntimeConfigUnknownKeyError`; `RuntimeConfigUnavailableError`; `RuntimeConfigInvalidValueError` if a stored row no longer validates |
+| Set | Validate a new value for a registered key, then upsert it and write one `runtime_config.set` audit row, in one transaction | No (internal call — the caller enforces its own access check, e.g. `SystemAdmin`-or-above via Authorization for `set-catalog-source`) | n/a (this component enforces no access control of its own) | `key` is registered; `value` passes the key's type check and validator | New value stored; one audit row recorded, `old_value` present when a prior value existed | Upserts `runtime_config`, writes `audit_events`, in one transaction | PS state Postgres, shared Audit component | Not yet set — bounded by one Postgres transaction | Yes (re-setting the same value is a no-op write; one audit row is still recorded) | `RuntimeConfigUnknownKeyError`/`RuntimeConfigInvalidValueError` rejected before any connection is opened; `RuntimeConfigUnavailableError`; `RuntimeConfigPersistenceError` (write or audit insert failed, rolled back) |
+| Reset | Delete a registered key's row (if any) and write one `runtime_config.reset` audit row, in one transaction | No (internal call — same posture as Set) | n/a (this component enforces no access control of its own) | `key` is registered | Row deleted if present (a no-op is not an error); one audit row recorded regardless | Deletes from `runtime_config`, writes `audit_events`, in one transaction | PS state Postgres, shared Audit component | Not yet set — bounded by one Postgres transaction | Yes | `RuntimeConfigUnknownKeyError`; `RuntimeConfigUnavailableError`; `RuntimeConfigPersistenceError` (delete or audit insert failed, rolled back) |
 
 ---
 
