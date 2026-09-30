@@ -59,7 +59,7 @@ psService:
     # optional for PS Service's own token validation, but load-bearing in
     # practice: ps-cli's device-flow login sends whatever PS Service advertises
     # in scopes_supported as the literal OAuth `scope` parameter, and most IdPs
-    # (Entra included) reject an empty scope outright. See
+    # reject an empty scope outright. See
     # docs/artifacts/idp-configuration-contract.md.
     issuer: ""
     audience: ""

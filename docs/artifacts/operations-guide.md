@@ -157,8 +157,7 @@ successful deploy.
 ### Start and stop the AKS cluster
 
 Stopping the cluster pauses node compute billing without deleting anything — the
-FalkorDB PVC (and its data), Key Vault, and the Entra app registrations are all
-untouched. PS Service and `ps-cli` are unreachable for the whole time the cluster
+FalkorDB PVC (and its data) and Key Vault are both untouched. PS Service and `ps-cli` are unreachable for the whole time the cluster
 is stopped, so avoid stopping while an ingestion job is running.
 
 ```bash
@@ -197,15 +196,7 @@ this guide:
    `Standard_D4as_v7` node size before ever calling `az aks create`, failing with
    the actual restriction reason or vCPU shortfall rather than a generic error. No
    operator action needed here.
-3. **Global Admin admin-consent fallback — remains manual.** If the signed-in
-   identity lacks Global Administrator / Privileged Role Administrator,
-   `deploy-ps.sh` prints the exact command for a colleague with that role to run:
-   ```bash
-   az ad app permission admin-consent --id <cli-app-id>
-   ```
-   (the real `<cli-app-id>` is printed inline). Re-run `scripts/deploy-ps.sh`
-   afterward — it detects the grant and continues past this step.
-4. **`kubectl rollout restart` FalkorDB startup-race workaround — remains
+3. **`kubectl rollout restart` FalkorDB startup-race workaround — remains
    manual.** If PS Service's pod isn't `Ready` shortly after first install, once
    FalkorDB is confirmed `Running`:
    ```bash
@@ -398,14 +389,6 @@ Nothing is torn down automatically:
 az group delete --name rg-policy-system --yes
 ```
 
-```bash
-az ad app delete --id $(az ad app list --display-name "Policy System API" --query "[0].appId" -o tsv)
-```
-
-```bash
-az ad app delete --id $(az ad app list --display-name "Policy System CLI" --query "[0].appId" -o tsv)
-```
-
 The resource group delete covers everything RG-scoped (AKS, the AIServices
-account, Key Vault, networking). The two Entra app registrations are tenant-level
-and survive an RG delete, so they need their own delete calls.
+account, Key Vault, networking); `deploy-ps.sh` creates nothing tenant-level, so
+there is nothing to clean up outside the resource group.

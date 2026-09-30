@@ -35,8 +35,8 @@ evaluator standing up just the LLM backend (`scripts/deploy-llm.sh`) for a local
 This document describes the separate, production/customer-tenant path: `scripts/deploy-ps.sh`,
 which provisions a **complete**, internet-reachable Policy System deployment in a customer's own
 Azure subscription — the LLM backend, a bundled Authentik instance PS-Cli and PS Service
-authenticate through (invite-only local-account signup by default, zero Entra app registrations
-required — see [Authentik](#authentik)), an AKS cluster, the Helm release itself, and public HTTPS
+authenticate through (invite-only local-account signup by default —
+see [Authentik](#authentik)), an AKS cluster, the Helm release itself, and public HTTPS
 exposure with a Let's Encrypt certificate. It is a new sibling script, not a wrapper around
 `deploy-llm.sh` — it
 carries its own copy of the LLM-provisioning logic (region/capacity/quota/account/deployment/
@@ -198,18 +198,16 @@ found that different SKUs have non-zero default quota on a fresh subscription th
 
 ### Authentik
 
-Production auth no longer requires any Entra app registration. Instead, `deploy-ps.sh` bundles
+Production auth needs no tenant-level app registration. `deploy-ps.sh` bundles
 [Authentik](https://goauthentik.io) (MIT-licensed) as PS Service's fixed, self-hosted identity
 broker, active only in the production Helm profile (`authentik.enabled: false` in `values.yaml`,
 `true` in `values-prod.yaml` — the same leaf-value gating mechanism every other profile-specific
 chart feature uses; there is no `.Values.profile` conditional anywhere in this chart). Default
 signup is invite-only local Authentik accounts — zero open self-registration, zero admin-consent
-step, zero Entra tenant dependency. A documented, low-key path to federate the bundled Authentik
-to a customer's own Entra tenant instead still exists — see
-`docs/artifacts/idp-configuration-contract.md`'s "optional: federate to Microsoft Entra ID"
-appendix (`#129 AC-BI-006`; AC-BI-\* numbering is per-issue, not global, so this is unrelated to
-any `AC-BI-006` used elsewhere in this repo) — and requires no `psService.auth.*` value change at
-all, since federation is configured entirely on Authentik's own side (a Source object).
+step, zero external-IdP dependency. A documented, low-key path to federate the bundled Authentik
+to an upstream IdP still exists — see `docs/artifacts/idp-configuration-contract.md`'s "Optional:
+federate to an upstream IdP" section — and requires no `psService.auth.*` value change at all,
+since federation is configured entirely on Authentik's own side (a Source object).
 
 **Bundled as a real Helm chart dependency**, not flat vendored templates — `Chart.yaml` declares
 `authentik` (chart `authentik`, `https://charts.goauthentik.io`, pinned `2026.8.3`, `condition:
@@ -233,8 +231,8 @@ startup/on change — a native Authentik feature, no custom code), covering:
 - A **Brand patch** pointing `flow_device_code` at Authentik's shipped default authentication
   flow — without it, PS-Cli's device-code `verification_uri` 404s (the silent-404 gap #128's
   spike flagged).
-- **One fixed OAuth2 Provider** (`client_id: ps-cli`) and Application (`slug: ps-cli`) — not two
-  Entra-style app registrations; Authentik's `aud` claim is always the bare Provider client ID, so
+- **One fixed OAuth2 Provider** (`client_id: ps-cli`) and Application (`slug: ps-cli`) — not a
+  separate API-app/CLI-app pair; Authentik's `aud` claim is always the bare Provider client ID, so
   `psService.auth.audience` and `psService.auth.cliClientId` are both the same fixed literal.
   `access_code_validity` is set to `minutes=5` (widening the `minutes=1` default, per #128's
   60-second device-code-window finding). Scope mappings include `offline_access` explicitly — a
@@ -353,12 +351,12 @@ charts/policy-system -f charts/policy-system/values-prod.yaml`, resolving the ch
 production values file directly (`VALUES_PROD_FILE`, no locally-copied duplicate that could
 drift), plus five explicit `--set` overrides: `llm.existingSecret`, `psService.auth.issuer`
 (`https://<hostname>/auth/application/o/ps-cli/` — the [Authentik](#authentik) blueprint's fixed
-Application slug under PS Service's own resolved hostname, never an Entra URL),
+Application slug under PS Service's own resolved hostname, never an external IdP's URL),
 `psService.auth.audience` and `psService.auth.cliClientId` (both the same fixed literal, `ps-cli`
 — Authentik's `aud` claim is always the bare OAuth2 Provider client ID, so there is no
-Entra-style API-app-vs-CLI-app split to compute here), and `psService.auth.scopes` (the fixed
+separate API-app/CLI-app split to compute here), and `psService.auth.scopes` (the fixed
 literal `openid profile email offline_access`, matching the blueprint's own scope mappings — not
-derived from any live API call). Unlike the removed Entra flow, none of these four values are
+derived from any live API call). None of these four values are
 fetched from an external API at deploy time; they are fixed script constants, computed once the
 hostname resolves. A rerun compares these same five fields, extracted from `helm get values -o
 json`, against the desired values — not the whole values object, which would also echo back
@@ -625,13 +623,6 @@ model-*availability* failure).
   final sign-off," and #129 did not close it either. A live dev AKS cluster
   (`aks-policy-system-4cda1ab1`/`rg-policy-system`) already exists and could be used directly for
   a follow-up measurement session.
-- **`docs/artifacts/installation-guide.md` and `docs/artifacts/operations-guide.md` now describe a
-  stale default flow** — both still document the two-Entra-app-registration setup this issue
-  removed from `deploy-ps.sh`'s default path. Per this issue's own Critique-stage resolution
-  (`CHANGES.md` row OQ-5), fixing those two docs was deliberately kept out of #129's own scope
-  rather than silently expanded into it; a follow-up issue filing their update is recommended
-  before an operator following either doc hits an app-registration step that the default flow no
-  longer performs.
 - **Single-use invite links are consumed by the first request that resolves them, not only by the
   intended user's own completed enrollment** — confirmed live during this issue's own end-to-end
   verification, where an exploratory `curl` probe (no persisted session) silently burned a

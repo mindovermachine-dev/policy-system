@@ -360,8 +360,8 @@ ask a question.
 > separate, self-contained script from `deploy-llm.sh` (used by [Evaluator
 > installation step 5](#5-provision-the-azure-llm-backend)) — the two are not the same
 > code path and both keep working independently. `deploy-ps.sh` provisions the LLM
-> backend, the Entra app registrations, an AKS cluster, the Helm release, and public
-> HTTPS exposure, all in one run.
+> backend, an AKS cluster, the Helm release with the bundled Authentik identity
+> provider, and public HTTPS exposure, all in one run.
 
 ### Prerequisites (Production)
 
@@ -410,20 +410,6 @@ This prints a confirmation table — region candidates, resource group, AIServic
 account, both model deployments, Key Vault, AKS cluster name, and public DNS label,
 all deterministically derived from your subscription id — and prompts
 `Proceed with these values? [Y/n]`. Pass `--yes` to skip the prompt.
-
-> [!NOTE]
-> **Global Admin admin-consent fallback.**
->
-> If the signed-in identity lacks Global
-> Administrator / Privileged Role Administrator, `deploy-ps.sh` prints the exact
-> command for a colleague with that role to run:
-> ```bash
-> az ad app permission admin-consent --id <cli-app-id>
-> ```
-> (the real `<cli-app-id>` is printed inline). Re-run `scripts/deploy-ps.sh`
-> afterward — it detects the grant and continues past this step. See [Operations
-> Guide](./operations-guide.md#manual-steps-and-operational-notes) item 3 for
-> more detail.
 
 Each phase prints a `==> <step>` progress line as it starts. The whole run is
 idempotent — re-running with nothing changed does no work and reports so. It ends
@@ -479,7 +465,7 @@ curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/m
 instance](./user-guide.md#point-ps-cli-at-your-instance) — use the URL [step
 3](#3-run-scriptsdeploy-pssh) printed (`https://<label>.<region>.cloudapp.azure.com`).
 Unlike the Evaluator's local-test instance, a production instance is deployed with
-Entra auth wired in (`deploy-ps.sh` sets this up — see [step 3](#3-run-scriptsdeploy-pssh)),
+the bundled Authentik identity provider wired in (`deploy-ps.sh` sets this up — see [step 3](#3-run-scriptsdeploy-pssh)),
 so logging in is required here.
 
 **Install the Policy System plugin.** Same as [Evaluator installation, step

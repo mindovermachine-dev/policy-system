@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Starts or stops the AKS cluster provisioned by scripts/deploy-ps.sh -- `az aks stop` pauses
-# node compute billing without deleting anything (the FalkorDB PVC, Key Vault, and Entra app
-# registrations are untouched); `az aks start` resumes it. See
+# node compute billing without deleting anything (the FalkorDB PVC and Key Vault are
+# untouched); `az aks start` resumes it. See
 # docs/artifacts/operations-guide.md#start-and-stop-the-aks-cluster for the manual command
 # sequence this wraps, and its caveats (PS Service/ps-cli unreachable while stopped, don't stop
 # mid-ingestion) -- this script doesn't check ingestion state, that's still the operator's call.

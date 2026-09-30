@@ -38,7 +38,7 @@ No CI/CD pipeline and no separate template repo are involved — both scripts ru
 
 This design intentionally mirrors an existing hand-built reference deployment (`policy-system-ingestion` / `rg-policy-system-ingestion` / `kv-psi-pjosemomcujec` in the `Cosmos4Biz-NONPRD` subscription) rather than inventing a new resource shape — the scripts automate what was previously done by hand for that resource.
 
-**See also:** for a full, customer-tenant production deployment — a complete AKS cluster, Entra app registrations, the Helm release, and public HTTPS exposure, not just the LLM backend — see `docs/architecture/customer-azure-deployment.md` (`scripts/deploy-ps.sh`).
+**See also:** for a full, customer-tenant production deployment — a complete AKS cluster, the bundled Authentik identity provider, the Helm release, and public HTTPS exposure, not just the LLM backend — see `docs/architecture/customer-azure-deployment.md` (`scripts/deploy-ps.sh`).
 
 ---
 

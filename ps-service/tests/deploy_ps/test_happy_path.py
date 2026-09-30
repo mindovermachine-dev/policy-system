@@ -15,8 +15,7 @@ so the sanctioned S19a/S19b fallback split was not needed.
 The true no-op proof (test 2) is broader than every earlier slice's own narrow idempotency
 check (S9/S13/S15/S16/S17/S18 each prove their own single call/field never re-fires): it scans
 the *entire* second-run delta of all three call logs (`az`, `kubectl`, `helm`) for any call whose
-own VERB is `create`/`register`/`regenerate`/`consent` (`admin-consent` is a single hyphenated
-token in the real invocation, matched via its `consent` substring) -- never by command family.
+own VERB is `create`/`register`/`regenerate`/`consent` -- never by command family.
 This is the exact distinction `IMPL_SLICE_18.md` flags: `keyvault set-policy` and
 `ad app permission add`/`list-grants` are NOT create calls and legitimately re-run every pass by
 design; a naive "zero calls of any kind" assertion would false-fail on those. Helm's own
@@ -43,9 +42,7 @@ CLUSTER_ISSUER_NAME = "letsencrypt-prod"
 PS_SERVICE_NAME = f"{HELM_RELEASE_NAME}-ps-service"
 
 # A call's own VERB (not its command family) that marks it as a mutating, non-idempotent-by-
-# rerun operation -- IMPL_SLICE_18's own resolved filter. `admin-consent` is a single hyphenated
-# argv token in the real `az ad app permission admin-consent --id ...` call, so it is matched via
-# its "consent" substring rather than the literal hyphenated string.
+# rerun operation -- IMPL_SLICE_18's own resolved filter.
 _DISALLOWED_VERB_SUBSTRINGS = ("create", "register", "regenerate", "consent")
 
 
@@ -135,13 +132,10 @@ def test_fresh_subscription_completes_end_to_end_provisioning_everything(
     for secret_name in ("AZURE-API-BASE", "AZURE-API-KEY", "AZURE-API-VERSION"):
         assert any(secret_name in line for line in secret_sets), f"{secret_name} was never set"
 
-    # AC-BI-001 (issue #129): zero Entra app registrations anywhere in the default production
+    # AC-BI-001 (issue #129): no tenant app registrations anywhere in the default production
     # flow -- no `az ad app`/`az ad sp` call of any kind appears in the mocked `az` call log.
-    # This is this AC's actual proof: S6 deleted every call site
-    # (`ensure_api_app_registration`/`ensure_cli_app_registration`/their service-principal and
-    # admin-consent helpers); S7/S8 replaced them with Authentik's own bundled secret
-    # provisioning and a fixed `ps-cli` OAuth2 Provider/Application, needing no Entra API call at
-    # all.
+    # This is this AC's actual proof: Authentik's own bundled secret
+    # provisioning and a fixed `ps-cli` OAuth2 Provider/Application need no `az ad` call at all.
     assert not _lines_starting_with(az_log, "ad app"), "an `az ad app` call was made (AC-BI-001)"
     assert not _lines_starting_with(az_log, "ad sp"), "an `az ad sp` call was made (AC-BI-001)"
 

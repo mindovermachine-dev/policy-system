@@ -367,7 +367,7 @@ readonly REQUIRED_PROVIDERS=(
   Microsoft.OperationalInsights Microsoft.Insights
 )
 # Bundled Authentik, as broker (issue #129) -- one fixed OAuth2 Provider + Application, both
-# named "ps-cli" (PLAN.md §0.5: no Entra-style API-app-vs-CLI-app split; S4's blueprint,
+# named "ps-cli" (PLAN.md §0.5: no separate API-app/CLI-app split; S4's blueprint,
 # charts/policy-system/files/authentik-blueprint.yaml, is the single source of truth for this
 # literal on the chart side). AUTHENTIK_SCOPES matches S4's blueprint's own actual
 # `property_mappings` (openid/profile/email/offline_access) -- confirmed via IMPL_SLICE_0B.md's
@@ -1564,12 +1564,12 @@ main() {
   log_step "Public hostname: $public_hostname"
 
   log_step "Reconciling the Helm release"
-  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: zero Entra
-  # app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
-  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, unlike the
-  # old Entra shape's two distinct app IDs. issuer is path-based under PS Service's own
+  # Fixed constants, never an `az ad app show`-derived value (issue #129, AC-BI-001: no
+  # tenant app registrations) -- S4's blueprint defines exactly one OAuth2 Provider/Application, both
+  # named "ps-cli" (PLAN.md §0.5), so audience and cliClientId are the SAME literal, not two
+  # distinct app IDs. issuer is path-based under PS Service's own
   # already-resolved $public_hostname (CHANGES.md row F1) -- never a second, Authentik-only
-  # hostname, never `login.microsoftonline.com`.
+  # hostname, never an external IdP's host.
   local issuer
   issuer="https://${public_hostname}/auth/application/o/${AUTHENTIK_APP_SLUG}/"
   ensure_release "$issuer" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_APP_SLUG" "$AUTHENTIK_SCOPES" \

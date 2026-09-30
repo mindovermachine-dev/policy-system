@@ -1,8 +1,8 @@
 """Helm release: Authentik-issuer wiring + narrow no-op comparison (AC-BI-001 completion,
 AC-BI-005, AC-BI-018; PLAN.md §5/S15, reworked for issue #129's S8).
 
-Issue #129 replaces the Entra-app-registration-derived `issuer`/`audience`/`cliClientId`/`scopes`
-computation with fixed constants pointed at the bundled Authentik instance instead (zero Entra
+Issue #129 replaces the app-registration-derived `issuer`/`audience`/`cliClientId`/`scopes`
+computation with fixed constants pointed at the bundled Authentik instance instead (no tenant
 app registrations, AC-BI-001) -- CHANGES.md row F1's path-based issuer shape
 (`https://<hostname>/auth/application/o/ps-cli/`, sharing PS Service's own already-resolved
 hostname, not a second Authentik-only hostname) and row F3 (S7/S8/S6 land as one combined unit,
@@ -13,11 +13,11 @@ existingSecret`, `psService.auth.{issuer,audience,cliClientId,scopes}` -- ground
 from `ensure_release`'s own shape (`release_values_json`), only the *values* fed into it changed.
 
 `psService.auth.audience`/`cliClientId` are now both the fixed literal `ps-cli` (S4's blueprint:
-one OAuth2 Provider, one Application, both named `ps-cli` -- PLAN.md §0.5, no Entra-style
-API-app-vs-CLI-app split). `scopes` is `openid profile email offline_access` -- S4's blueprint's
+one OAuth2 Provider, one Application, both named `ps-cli` -- PLAN.md §0.5, no separate
+API-app/CLI-app split). `scopes` is `openid profile email offline_access` -- S4's blueprint's
 own actual `property_mappings` (IMPL_SLICE_0B's Bug 3 finding: without an `offline_access` scope
 mapping bound to the Provider, Authentik never issues a `refresh_token`, breaking every ps-cli
-command after the first `auth login`), never Entra's `api://<id>/access_as_user` URI form.
+command after the first `auth login`), never an `api://<id>/access_as_user` URI form.
 """
 
 from __future__ import annotations
@@ -107,8 +107,8 @@ def test_issuer_is_path_based_under_ps_services_own_hostname_never_a_second_host
 ) -> None:
     """CHANGES.md row F1: rejects the original dual-hostname/dual-DNS-label design (infeasible --
     one Azure Public IP has exactly one `dnsSettings.domainNameLabel`). The issuer's hostname
-    must be the *exact same* hostname PS Service's own Ingress uses, never Entra's
-    `login.microsoftonline.com`, and never a distinct `auth-*` label.
+    must be the *exact same* hostname PS Service's own Ingress uses, never an external
+    IdP's host, and never a distinct `auth-*` label.
     """
     _seed(deploy_ps_fixture)
 
@@ -147,9 +147,9 @@ def test_scopes_includes_offline_access_so_ps_cli_ever_receives_a_refresh_token(
 def test_audience_and_cli_client_id_are_both_the_fixed_ps_cli_literal_not_an_entra_app_id(
     deploy_ps_fixture: DeployPsFixture,
 ) -> None:
-    """PLAN.md §0.5: one fixed OAuth2 Provider/Application (`ps-cli`), never an Entra-style
-    API-app-vs-CLI-app split -- `audience` and `cliClientId` are the SAME literal, unlike the old
-    Entra shape where they were two distinct app IDs.
+    """PLAN.md §0.5: one fixed OAuth2 Provider/Application (`ps-cli`), never a separate
+    API-app/CLI-app split -- `audience` and `cliClientId` are the SAME literal, not two distinct
+    app IDs.
     """
     _seed(deploy_ps_fixture)
 
@@ -195,7 +195,7 @@ def test_rerun_only_compares_the_five_script_set_fields_not_falkordb_or_llm_prov
 
     The exact issuer value must be read back from a first real run rather than hardcoded, since
     it is now derived from the fixture's own seeded public-IP/DNS-label state (S16), not a static
-    Entra tenant-id literal.
+    tenant-id literal.
     """
     _seed(deploy_ps_fixture)
     deploy_ps_fixture.run_deploy("--yes", expect=0)

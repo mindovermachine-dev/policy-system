@@ -10,11 +10,10 @@ documents what each value is, what IdP-side artifact it corresponds to, and a
 worked example for the bundled [Authentik](https://goauthentik.io) instance —
 PS Service's default, fixed production IdP as of issue #129 (`scripts/
 deploy-ps.sh`'s production profile bundles Authentik and points PS Service at
-it always; zero Entra app registrations are created by default). A customer
-wanting their own Entra tenant's identities to log in can additionally
-federate the bundled Authentik to Entra — see [Optional: federate to
-Microsoft Entra ID](#optional-federate-to-microsoft-entra-id) — without
-changing any `psService.auth.*` value at all.
+it always). A customer wanting their own upstream IdP's identities to log in can
+additionally federate the bundled Authentik to it — see [Optional: federate to
+an upstream IdP](#optional-federate-to-an-upstream-idp) — without changing any
+`psService.auth.*` value at all.
 
 If neither this configuration nor the local-test bypass
 (`PS_SERVICE_LOCAL_TEST_BYPASS=true`, evaluation only — never for a
@@ -25,9 +24,9 @@ network-reachable deployment) is present, PS Service refuses to start.
 | Value | Env var | Helm value | What it is |
 | --- | --- | --- | --- |
 | Issuer | `PS_AUTH_ISSUER` | `psService.auth.issuer` | The OIDC authorization server's base URL. PS Service fetches `<issuer>/.well-known/openid-configuration` from it at startup to discover the JWKS endpoint and the signing algorithms it trusts, and every presented token's `iss` claim must match this value exactly (character for character). |
-| Audience | `PS_AUTH_AUDIENCE` | `psService.auth.audience` | The identifier of PS Service itself as an OIDC *resource server* — for the bundled Authentik, the fixed OAuth2 Provider's own `client_id`; for Entra, the API app registration's own identifier, never the CLI client's. Every presented token's `aud` claim must match this value exactly. |
-| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** app registration/Provider that PS-Cli authenticates as (device-authorization flow, issue #57). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
-| Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. Authentik's own `openid profile email offline_access` scope mappings, or Entra's `access_as_user` delegated scope. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login (issue #57) sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs — Entra included (`AADSTS900144`) — reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
+| Audience | `PS_AUTH_AUDIENCE` | `psService.auth.audience` | The identifier of PS Service itself as an OIDC *resource server* — for the bundled Authentik, the fixed OAuth2 Provider's own `client_id`; Every presented token's `aud` claim must match this value exactly. |
+| CLI client id | `PS_AUTH_CLI_CLIENT_ID` | `psService.auth.cliClientId` | The **public client** Provider that PS-Cli authenticates as (device-authorization flow, issue #57). Optional: only needed so PS Service can advertise it in the `/.well-known/oauth-protected-resource` metadata as `ps_cli_client_id`, letting a client discover which client id to use without being told out of band. |
+| Scopes | `PS_AUTH_SCOPES` | `psService.auth.scopes` | The OAuth scope(s) (space- or comma-separated) that a client should request when logging in — e.g. Authentik's own `openid profile email offline_access` scope mappings. **Not used for token validation** (PS Service checks `aud`, not `scope`), but **required in practice**: PS-Cli's device-authorization login (issue #57) sources its OAuth `scope` request parameter directly from this value, via `/.well-known/oauth-protected-resource`'s `scopes_supported`. Leaving it unset makes PS Service advertise an empty scope list, which most IdPs reject outright, so `ps-cli auth login` fails against any deployment that omits it. |
 
 Only `issuer` and `audience` are required for PS Service to validate tokens at
 all; `cliClientId` is a convenience for client discovery. `scopes` is likewise
@@ -50,7 +49,7 @@ so someone pointing PS Service at an independently-run Authentik instance
 
 Authentik's blueprint (`charts/policy-system/files/authentik-blueprint.yaml`)
 defines exactly **one** OAuth2 Provider and one Application, both with the
-fixed literal name `ps-cli` — there is no Entra-style API-app-vs-CLI-app
+fixed literal name `ps-cli` — there is no separate API-app/CLI-app
 split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 `client_id` (confirmed live, #128's spike, AC-BI-002 row):
 
@@ -63,8 +62,7 @@ split, because Authentik's `aud` claim is always the bare OAuth2 Provider
 
 `scripts/deploy-ps.sh` sets all four via `ensure_release`'s `--set`
 overrides, as fixed script constants computed once the hostname resolves —
-never fetched from a live API call the way the old Entra flow's audience/
-scopes were. See `docs/architecture/customer-azure-deployment.md`'s [Helm
+never fetched from a live API call. See `docs/architecture/customer-azure-deployment.md`'s [Helm
 release and chart hardening
 profile](../architecture/customer-azure-deployment.md#helm-release-and-chart-hardening-profile)
 section for the exact `--set` list.
@@ -171,78 +169,13 @@ configuration beyond the four values above was involved.
   completed enrollment — see `docs/architecture/customer-azure-deployment.md`'s
   Open Risks for the full note on distribution-channel link-prefetching.
 
-## Optional: federate to Microsoft Entra ID
+## Optional: federate to an upstream IdP
 
-`#129 AC-BI-006` (AC-BI-\* numbering is per-issue, not global — unrelated to
-any other `AC-BI-006` used elsewhere in this repo's docs): a customer who
-wants their own Entra tenant's identities to log in, rather than (or in
-addition to) Authentik's own local invite-registered accounts, can federate
-the bundled Authentik to Entra. **This requires no `psService.auth.*` value
-change at all** — confirmed live during #128's spike (AC-BI-003 row): PS
-Service keeps validating tokens issued by the same fixed Authentik
-issuer/OAuth2 Provider throughout; only Authentik's own login page gains a
-"Sign in with Microsoft" option.
-
-This is architecturally different from this document's old Entra worked
-example (pre-#129): PS Service never trusts Entra directly, and there is no
-API-app/CLI-app split to create for PS Service's own sake. The only Entra-side
-artifact needed is a single app registration that Authentik itself uses as an
-inbound **Source** (Authentik's own term for an external identity provider it
-delegates to) — conceptually similar to registering any other application
-that supports "Sign in with Microsoft," not to this doc's old
-PS-Service-specific app registrations.
-
-### Step 1 — Create an Entra app registration for Authentik's Source
-
-1. **Microsoft Entra ID** → **App registrations** → **New registration**.
-2. Name: e.g. `PS Service Authentik Federation`.
-3. Supported account types: **Accounts in this organizational directory
-   only** (single tenant), the typical choice for a customer-tenant
-   deployment.
-4. Redirect URI: Authentik's own OAuth Source callback URL for the Source
-   you are about to create in Step 2 (Authentik displays this URL on the
-   Source's own creation/edit page — its exact path is an Authentik-side
-   detail, confirm it there rather than guessing it here).
-5. **Certificates & secrets** → **New client secret** — note the secret
-   value immediately; it is not retrievable again later.
-6. Note the **Application (client) ID**, the client secret from step 5, and
-   the tenant ID (**Microsoft Entra ID** → **Overview**).
-
-### Step 2 — Add an OIDC Source in Authentik
-
-In Authentik's own Admin UI (or API): **Directory** → **Federation & Social
-login** → **Create** → an Entra/Azure-AD-flavored OAuth Source, supplying the
-client ID/secret/tenant ID from Step 1. Confirmed live (#128's spike): adding
-this Source is a single, self-contained change — the OAuth2 Provider/
-Application PS-Cli and PS Service already point at is never touched, verified
-by re-reading it unchanged immediately after. The exact field names/flavor
-of Source Authentik offers for Entra are an Authentik-side configuration
-surface this repo does not script or blueprint (deliberately out of scope —
-see the issue's own "documented manual path only" framing); confirm them
-against Authentik's own [Sources
-documentation](https://docs.goauthentik.io/users-sources/sources/) at
-configuration time rather than assuming this doc's paraphrase is exact.
-
-### Step 3 — Verify
-
-Reload Authentik's login page — a "Sign in with Microsoft" (or the Source's
-configured display name) button should appear alongside the existing
-username/password/passkey form, with no Authentik restart and no PS Service
-redeploy. Confirmed live (#128's spike, AC-BI-004 row): a pre-existing local
-(invite-registered) account continued logging in via password/passkey with
-no disruption after the Source was added — adding Entra federation is
-additive, not a replacement for local accounts, unless separately configured
-to be.
-
-### Notes carried over from the pre-#129 Entra flow
-
-- **`AADSTS650052` ("lacks a service principal")**: if you script Step 1 via
-  Graph API/`az ad app create` instead of the Portal, `POST /applications`
-  creates only the **application** object, not its tenant **service
-  principal** — run `az ad sp create --id <app-id>` afterward, same as any
-  other Entra app registration created this way.
-- This appendix does **not** carry over the old worked example's
-  `aud`/`api://` audience-format pitfalls — those were specific to PS
-  Service trusting Entra tokens directly, which no longer happens by
-  default. Federation only ever produces Authentik-issued tokens for PS
-  Service to validate.
+The bundled Authentik can federate to an upstream identity provider such as
+Microsoft Entra ID, by adding an OAuth/OIDC Source in Authentik's own Admin UI
+(see Authentik's [Sources documentation](https://docs.goauthentik.io/users-sources/sources/)).
+**This requires no `psService.auth.*` value change:** PS Service never trusts
+Entra directly — it keeps validating tokens issued by the same fixed Authentik
+issuer/OAuth2 Provider, and only Authentik's login page gains a "Sign in with
+Microsoft" option. Federation is additive; local invite-registered accounts keep
+working. This repo does not script or blueprint the Source.

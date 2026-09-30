@@ -90,7 +90,7 @@ entries:
         ]
 
   # --- 2. One fixed OAuth2 Provider for PS-Cli's device-code login
-  # (PLAN.md §0.5 — one Provider, not an Entra-style API-app/CLI-app pair).
+  # (PLAN.md §0.5 — one Provider, not a separate API-app/CLI-app pair).
   # `client_id` is a blueprint-authored literal, "ps-cli", reused verbatim
   # as scripts/deploy-ps.sh's fixed AUTHENTIK_APP_SLUG constant (S8) and as
   # psService.auth.cliClientId/audience -- Authentik's `aud` claim is always

@@ -93,8 +93,8 @@ ps-cli auth login
 
 `auth login` runs an OIDC device-authorization flow: `ps-cli` prints a verification
 URL and code, you complete sign-in in a browser, and the resulting token is stored
-under the current context. Production instances are deployed with Entra auth wired
-in, so this step is required there.
+under the current context. Production instances are deployed with the bundled Authentik
+identity provider wired in, so this step is required there.
 
 Every subsequent `ps-cli` command, and the Claude Desktop plugin's
 `policy-system-graph` connector, uses whichever context is current. See the
