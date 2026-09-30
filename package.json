@@ -4,7 +4,7 @@
   "devDependencies": {
     "cspell": "10.2.0",
     "@cspell/dict-da-dk": "4.1.2",
-    "markdownlint-cli2": "0.23.2",
+    "markdownlint-cli2": "0.23.3",
     "prettier": "3.9.6"
   },
   "overrides": {
