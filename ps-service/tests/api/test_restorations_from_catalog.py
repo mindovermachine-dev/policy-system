@@ -28,8 +28,9 @@ from api._fakes import (
     install_compliance_officer_grant,
     install_no_principal,
 )
-from ps_service.api.dependencies import provide_restore_from_catalog_dependencies
+from ps_service.api.dependencies import get_principal, provide_restore_from_catalog_dependencies
 from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.curated_source.artifact_client import fetch_artifact
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
+    from fastapi import FastAPI
 
     from ps_service.curated_source.artifact_client import FetchArtifactCall, FetchedArtifact
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
@@ -114,6 +116,7 @@ class _FakeCatalogRestoreStage:
         actor: str,
         emitter: object | None = None,
         source: str | None = None,
+        owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         _ = (db, emitter)
         self.calls.append(
@@ -122,6 +125,7 @@ class _FakeCatalogRestoreStage:
                 "similarity_threshold": similarity_threshold,
                 "actor": actor,
                 "source": source,
+                "owner": owner,
             }
         )
         if self._error is not None:
@@ -420,3 +424,28 @@ def test_restore_from_catalog_fails_closed_when_override_read_fails() -> None:
     assert response.json()["error"]["code"] == "catalog_source_override_unavailable"
     assert stage.calls == []
     assert transport.requests == []
+
+
+def test_verified_caller_is_passed_to_the_delegate_as_the_owner_of_restored_drafts() -> None:
+    """Issue #183, AC-BI-001: the route hands the verified `(sub, iss)` to the restore as owner."""
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+    cast("FastAPI", client.app).dependency_overrides[get_principal] = lambda: Principal(
+        sub="alice@example.com", iss="https://idp.example/"
+    )
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 200
+    assert stage.calls[0]["owner"] == ("alice@example.com", "https://idp.example/")
+
+
+def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> None:
+    """With no verified principal the owner is `None`; the restore refuses Policy content then."""
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 200
+    assert stage.calls[0]["owner"] is None

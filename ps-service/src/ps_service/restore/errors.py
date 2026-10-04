@@ -27,6 +27,27 @@ class RestoreConcurrencyConflictError(Exception):
     """
 
 
+class RestoreOwnerRequiredError(Exception):
+    """An artifact carries Policy/Standard/Control content but no restoring owner was supplied.
+
+    Raised by `restore_instrument.restore_instrument` (and, as a backstop, by
+    `_run_baseline_merge`) when an internal-sourced artifact's baseline holds a
+    Policy and the caller's verified `(sub, iss)` identity was not passed
+    (issue #183). A restored tree is imported as `draft`, owned by whoever
+    restored it; an ownerless draft would be unreachable by the normal
+    propose/edit flow, so the restore is refused instead. For the restore
+    entry points this is raised before any staged key exists, so the graph is
+    untouched.
+    """
+
+    def __init__(self) -> None:
+        """Carry the one caller-safe message every raise site shares."""
+        super().__init__(
+            "restoring governance content (Policy/Standard/Control) requires the restoring "
+            "caller's verified identity, which becomes the owner of the imported drafts"
+        )
+
+
 class ArtifactContentRejectedError(Exception):
     """A parsed artifact's content is invalid or does not match its own manifest.
 

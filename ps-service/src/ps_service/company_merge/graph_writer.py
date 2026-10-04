@@ -100,9 +100,12 @@ from typing import TYPE_CHECKING, Literal, cast
 import redis.exceptions
 
 from ps_service.company_merge.errors import CompanyMergePersistenceError
+from ps_service.company_merge.models import GovernanceDraftCounts
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ps_service.company_merge.falkordb_client import GraphHandle, GraphQueryResult
     from ps_service.company_merge.models import (
         BareEdge,
@@ -117,6 +120,7 @@ __all__ = [
     "backfill_canonical_embeddings",
     "classification_write_counts",
     "persist_canonical_nodes",
+    "persist_governance_drafts",
     "persist_obligation_passthrough",
     "persist_practice_area_and_risk_path_passthrough",
     "persist_rewired_edges",
@@ -135,6 +139,7 @@ _STANDARD_LABEL = "Standard"
 _CONTROL_LABEL = "Control"
 _PRACTICE_AREA_LABEL = "PracticeArea"
 _RISK_PATH_LABEL = "RiskPath"
+_DRAFT_STATUS = "draft"
 
 # source_label, target_label per relationship_type -- the Edge Catalog shape
 # mirrored from domain_mapper.graph_writer.persist_obligation_and_capability_graph
@@ -380,6 +385,92 @@ def persist_standard_and_control_passthrough(
         _upsert_passthrough_node(
             single_tenant_graph, _CONTROL_LABEL, control.id, control.properties
         )
+
+
+def persist_governance_drafts(
+    single_tenant_graph: GraphHandle,
+    policy_nodes: tuple[BaselineNode, ...],
+    standard_nodes: tuple[BaselineNode, ...],
+    control_nodes: tuple[BaselineNode, ...],
+    *,
+    owner: tuple[str, str],
+    policy_embeddings: Mapping[str, tuple[float, ...]] | None,
+) -> GovernanceDraftCounts:
+    """Persist a restored instrument's Policy/Standard/Control tree as `draft` (issue #183).
+
+    The restore-path counterpart to `persist_canonical_nodes(kind="Policy")` +
+    `persist_standard_and_control_passthrough`, used instead of them: a
+    restored tree has not been through the customer's governance, so it
+    arrives `draft`, owned by the restoring caller (`owner` is their verified
+    `(sub, iss)` pair, stored as `owner_subject`/`owner_issuer` exactly as
+    `policy_lifecycle.create_policy_draft` stores them), and can only become
+    `approved` through the normal propose/approve flow.
+
+    No dedup of any kind: each node is keyed on its own content-hashed id. A
+    draft must never converge onto an existing canonical Policy, since the
+    draft Standards/Controls would then hang under a possibly-approved parent
+    and the whole-tree-moves-together rule would break. Near-duplicate
+    detection is the near-miss review flow's job, not restore's.
+
+    Every statement is `MERGE ... ON CREATE SET`, so a node that already
+    exists -- including one a user has since approved -- keeps its status,
+    owner and content; a re-restore is a structural no-op for it. `status` is
+    forced to `"draft"` after the artifact's own properties are spread, so an
+    artifact-authored `approved` never wins; each such override is counted in
+    the returned `GovernanceDraftCounts.status_overridden`. `version` defaults
+    to the lifecycle's string `"1"` when the artifact has none.
+
+    `policy_embeddings` carries the artifact-supplied Policy vectors (by id) so
+    later Policy convergence on ingest still has them; a Policy without one
+    gets no `embedding` key.
+    """
+    owner_subject, owner_issuer = owner
+    now = datetime.now(UTC).isoformat()
+    status_overridden = 0
+
+    for policy in policy_nodes:
+        properties: dict[str, object] = dict(policy.properties)
+        status_overridden += _status_override_count(properties)
+        properties["status"] = _DRAFT_STATUS
+        properties.setdefault("version", "1")
+        properties["owner_subject"] = owner_subject
+        properties["owner_issuer"] = owner_issuer
+        properties["created_at"] = now
+        embedding = (policy_embeddings or {}).get(policy.id)
+        if embedding is not None:
+            properties["embedding"] = list(embedding)
+        _upsert_draft_node(single_tenant_graph, _POLICY_LABEL, policy.id, properties)
+
+    for label, nodes in ((_STANDARD_LABEL, standard_nodes), (_CONTROL_LABEL, control_nodes)):
+        for node in nodes:
+            properties = dict(node.properties)
+            status_overridden += _status_override_count(properties)
+            properties["status"] = _DRAFT_STATUS
+            _upsert_draft_node(single_tenant_graph, label, node.id, properties)
+
+    return GovernanceDraftCounts(
+        policies=len(policy_nodes),
+        standards=len(standard_nodes),
+        controls=len(control_nodes),
+        status_overridden=status_overridden,
+    )
+
+
+def _status_override_count(properties: dict[str, object]) -> int:
+    """Return 1 when the artifact authored a `status` other than `draft`, else 0."""
+    authored = properties.get("status")
+    return 1 if authored is not None and authored != _DRAFT_STATUS else 0
+
+
+def _upsert_draft_node(
+    graph: GraphHandle, label: str, node_id: str, properties: dict[str, object]
+) -> None:
+    """Create one draft governance node, never touching an existing one."""
+    _execute_query(
+        graph,
+        f"MERGE (n:{label} {{id: $id}}) ON CREATE SET n += $properties",
+        params={"id": node_id, "properties": properties},
+    )
 
 
 def persist_practice_area_and_risk_path_passthrough(

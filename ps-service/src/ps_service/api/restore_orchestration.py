@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -55,6 +56,7 @@ from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_a
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.export.models import InstrumentManifest
+from ps_service.logging.facade import emit_log_entry
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
 from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigError
@@ -75,6 +77,8 @@ if TYPE_CHECKING:
     from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreOutcome
 
+_COMPONENT = "restore"
+_ACTION = "restore_instrument"
 _STAGE_REASON_MAX_LEN = 300
 _CONFIGURATION_STAGE = "configuration"
 _DEFAULT_STAGE = "restore"
@@ -92,6 +96,7 @@ class RestoreStage(Protocol):
         similarity_threshold: float,
         actor: str,
         emitter: LogEmitter | None = None,
+        owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         """Restore one curated instrument's artifact end to end."""
         ...
@@ -128,6 +133,7 @@ class CatalogRestoreStage(Protocol):
         actor: str,
         emitter: LogEmitter | None = None,
         source: str | None = None,
+        owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         """Restore one curated instrument's artifact end to end, recording ``source``."""
         ...
@@ -246,7 +252,9 @@ def _require_similarity_threshold(config: ServiceConfig) -> float:
 # --- failure classification -----------------------------------------------
 
 
-def _classify_restore_failure(exc: Exception) -> RestoreStageFailedError:
+def _classify_restore_failure(
+    exc: Exception, *, instrument_id: str, actor: str, emitter: LogEmitter | None
+) -> RestoreStageFailedError:
     """Classify a non-integrity/schema-version delegate failure into a ``RestoreStageFailedError``.
 
     Unlike ``ingestion_orchestration._classify_stage_failure``, the delegate
@@ -256,6 +264,12 @@ def _classify_restore_failure(exc: Exception) -> RestoreStageFailedError:
     not imported, so this module never needs a module-level dependency on
     ``ps_service.restore.errors``'s less-common types beyond the two already
     imported for the 422 path).
+
+    When the exception is NOT safe to surface (so the client only sees
+    ``"<stage> failed"``), its class, message and traceback are emitted
+    server-side with the instrument id and caller (issue #183, AC-BI-012) --
+    otherwise the real cause is unrecoverable from the service logs. The
+    client message is unchanged (AC-BI-013).
     """
     exc_type_name = type(exc).__name__
     stage = {
@@ -266,6 +280,20 @@ def _classify_restore_failure(exc: Exception) -> RestoreStageFailedError:
         reason = _scrub_text(f"{exc_type_name}: {exc}")[:_STAGE_REASON_MAX_LEN]
     else:
         reason = f"{stage} failed"
+        emit_log_entry(
+            component=_COMPONENT,
+            action=_ACTION,
+            entity_id=instrument_id,
+            outcome="failed",
+            extra={
+                "caller": actor,
+                "failing_stage": stage,
+                "exception_type": exc_type_name,
+                "detail": str(exc),
+                "traceback": "".join(traceback.format_exception(exc)),
+            },
+            emitter=emitter,
+        )
     return RestoreStageFailedError(stage=stage, reason=reason)
 
 
@@ -291,6 +319,8 @@ def run_restoration(
     config: ServiceConfig,
     actor: str,
     dependencies: RestoreDependencies,
+    owner: tuple[str, str] | None = None,
+    emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
     """Restore one curated instrument's artifact via the injected delegate.
 
@@ -301,6 +331,11 @@ def run_restoration(
             .run_catalog_ingestion_pipeline``'s ``caller`` derivation).
         dependencies: The injected restore dependency bundle (the production
             bundle in production; a fake in fast tests).
+        owner: The restoring caller's verified ``(sub, iss)`` pair (issue #183),
+            which becomes the owner of any imported draft Policy; ``None`` when
+            no verified identity exists, in which case an artifact carrying
+            Policy content is refused.
+        emitter: Optional log emitter for the server-side failure-detail entry.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
@@ -322,11 +357,14 @@ def run_restoration(
             single_tenant_graph_name=single_tenant_graph_name,
             similarity_threshold=threshold,
             actor=actor,
+            owner=owner,
         )
     except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
         raise RestoreArtifactRejectedError(str(exc)) from exc
     except Exception as exc:
-        raise _classify_restore_failure(exc) from exc
+        raise _classify_restore_failure(
+            exc, instrument_id=request_body.instrument_id, actor=actor, emitter=emitter
+        ) from exc
     return _to_accepted_response(outcome)
 
 
@@ -336,6 +374,8 @@ def run_restoration_from_catalog_source(
     config: ServiceConfig,
     actor: str,
     dependencies: CatalogRestoreDependencies,
+    owner: tuple[str, str] | None = None,
+    emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
     """Fetch and restore one curated instrument's artifact from the curated-content source.
 
@@ -368,6 +408,10 @@ def run_restoration_from_catalog_source(
             ``actor`` derivation).
         dependencies: The injected fetch-and-restore dependency bundle (the
             production bundle in production; a fake in fast tests).
+        owner: The restoring caller's verified ``(sub, iss)`` pair (issue #183),
+            the owner of any imported draft Policy; ``None`` when no verified
+            identity exists.
+        emitter: Optional log emitter for the server-side failure-detail entry.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
@@ -407,11 +451,14 @@ def run_restoration_from_catalog_source(
             similarity_threshold=threshold,
             actor=actor,
             source=effective_source.url,
+            owner=owner,
         )
     except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
         raise RestoreArtifactRejectedError(str(exc)) from exc
     except Exception as exc:
-        raise _classify_restore_failure(exc) from exc
+        raise _classify_restore_failure(
+            exc, instrument_id=request_body.instrument_id, actor=actor, emitter=emitter
+        ) from exc
     return _to_accepted_response(outcome)
 
 

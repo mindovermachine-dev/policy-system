@@ -120,6 +120,22 @@ class BaselineGraph:
 
 
 @dataclass(frozen=True, slots=True)
+class GovernanceDraftCounts:
+    """What `graph_writer.persist_governance_drafts` wrote for one restore (issue #183).
+
+    `status_overridden` counts nodes whose artifact carried a `status` other
+    than `"draft"` (a restore never imports an authored `approved`/`proposed`
+    status -- the customer's own governance decides that), so the audit entry
+    can show that an override happened.
+    """
+
+    policies: int
+    standards: int
+    controls: int
+    status_overridden: int
+
+
+@dataclass(frozen=True, slots=True)
 class ExistingCanonicalNode:
     """One Capability already present in the single-tenant graph.
 

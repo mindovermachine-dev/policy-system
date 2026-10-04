@@ -86,6 +86,13 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    On a named error state, report that state plainly instead — do not emit
    an Output block that implies a successful restore when none occurred.
 
+   When the restored instrument is internal (it carries Policy, Standard and
+   Control content, e.g. an engineering-practices instrument), add one line
+   after the Output block: its Policies were imported as `draft`, owned by
+   the caller, and become `approved` only when the owner proposes each one
+   and a different `PolicyManager` approves it (`ps-policy-lifecycle`). Say
+   nothing about drafts for an external instrument.
+
 ## Guardrails
 
 - The skill reaches PS Service exclusively through a recognised MCP

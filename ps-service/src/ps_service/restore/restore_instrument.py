@@ -36,6 +36,7 @@ sequence above completes), and `"failed"` (whenever anything after
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from ps_service.company_merge import graph_reader, graph_writer
@@ -52,6 +53,7 @@ from ps_service.restore.errors import (
     ArtifactContentRejectedError,
     ArtifactIntegrityError,
     ArtifactSchemaVersionMismatchError,
+    RestoreOwnerRequiredError,
 )
 from ps_service.restore.models import RestoreOutcome
 from ps_service.restore.staging import (
@@ -64,7 +66,7 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB
 
     from ps_service.company_merge.falkordb_client import GraphHandle
-    from ps_service.company_merge.models import BaselineGraph, DedupResult
+    from ps_service.company_merge.models import BaselineGraph, GovernanceDraftCounts
     from ps_service.export.models import SerializedGraph
     from ps_service.logging.emitter import LogEmitter
     from ps_service.restore.models import RestoreArtifact
@@ -233,52 +235,74 @@ def _policy_embeddings(baseline_graph: SerializedGraph) -> dict[str, tuple[float
     return _embeddings_by_label(baseline_graph, "Policy")
 
 
-def _run_offline_policy_pass(
+@dataclass(frozen=True, slots=True)
+class GovernanceImport:
+    """The restore-only inputs the draft-governance pass needs (issue #183).
+
+    `owner` is the restoring caller's verified `(sub, iss)` pair -- the owner of
+    every imported draft Policy (`None` when no verified identity exists, in
+    which case governance content is refused). `policy_embeddings` are the
+    artifact-supplied Policy vectors (by id), stored on the draft so later Policy
+    convergence on ingest still has them. Bundled so `_run_baseline_merge`
+    keeps a bounded parameter count.
+    """
+
+    owner: tuple[str, str] | None = None
+    policy_embeddings: dict[str, tuple[float, ...]] = field(default_factory=dict)
+
+
+def _run_draft_governance_pass(
     baseline: BaselineGraph,
     *,
     snapshot_graph: GraphHandle,
-    policy_incoming_embeddings: dict[str, tuple[float, ...]],
-    similarity_threshold: float,
-    emitter: LogEmitter | None,
+    governance: GovernanceImport,
     canonical_id_by_incoming_id: dict[str, str],
-) -> DedupResult | None:
-    """Issue #54, S6/B6's restore-path counterpart to `merge.py::_run_policy_pass`.
+) -> dict[str, int]:
+    """Issue #183: import a restored instrument's Policy/Standard/Control tree as `draft`.
 
-    A no-op (returns `None`, no calls of any kind) when `baseline.policy_nodes`
-    is empty -- an external-sourced restore, mirroring `merge.py`'s own
-    `if graph.policy_nodes:` guard. Otherwise: dedupe Policy nodes OFFLINE
-    (`resolve_capability_convergence_offline(..., kind="Policy", ...)`, the
-    same offline function already used for Capability above, just with its
-    `kind` widened), persist canonical Policy nodes, persist Standard/Control
-    as unconditional-`SET` passthrough nodes (weak entities, never deduped),
-    and fold the Policy resolutions into `canonical_id_by_incoming_id`
-    (mutated in place) so the caller's single `persist_rewired_edges` call
-    covers both Capability and Policy endpoints -- mirrors `merge.py`'s own
-    `_run_policy_pass` exactly, substituting the offline dedup function for
-    the live one (D6: never `route_embedding`, every embedding is either
-    artifact-supplied or already cached).
+    Replaces the earlier Policy *convergence* pass (issue #54, S6, AC-BI-021):
+    a restored tree has not been through the customer's governance, so it is
+    written `draft`, owned by `owner`, each node under its own content-hashed
+    id (`graph_writer.persist_governance_drafts`) -- never converged onto an
+    existing canonical Policy, whose draft Standards/Controls would otherwise
+    hang under a possibly-approved parent. The live ingestion-to-merge path
+    (`merge.py`) keeps its convergence; only restore changes.
+
+    A structural no-op (zero writes, all-zero counts) when `baseline` has no
+    governance content -- an external-sourced restore. Otherwise `owner` must be
+    set (`RestoreOwnerRequiredError`: an ownerless draft would be unreachable
+    by the propose/edit flow).
+
+    Each Policy maps onto itself in `canonical_id_by_incoming_id` (mutated in
+    place): `persist_rewired_edges` requires an entry for every Policy endpoint
+    of `GOVERNED_BY`/`SUPPORTED_BY`/`OWNS`, and here canonical == incoming.
+    Returns the four-key count dict folded into the `"succeeded"` audit entry
+    (issue #183, AC-BI-014).
     """
-    if not baseline.policy_nodes:
-        return None
-
-    policy_dedup = resolve_capability_convergence_offline(
+    if not (baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes):
+        return _governance_counts_dict(None)
+    if governance.owner is None:
+        raise RestoreOwnerRequiredError
+    counts = graph_writer.persist_governance_drafts(
+        snapshot_graph,
         baseline.policy_nodes,
-        incoming_embeddings=policy_incoming_embeddings,
-        single_tenant_graph=snapshot_graph,
-        threshold=similarity_threshold,
-        kind="Policy",
-        emitter=emitter,
+        baseline.standard_nodes,
+        baseline.control_nodes,
+        owner=governance.owner,
+        policy_embeddings=governance.policy_embeddings,
     )
-    graph_writer.persist_canonical_nodes(
-        snapshot_graph, baseline.policy_nodes, policy_dedup.resolutions, kind="Policy"
-    )
-    graph_writer.persist_standard_and_control_passthrough(
-        snapshot_graph, baseline.standard_nodes, baseline.control_nodes
-    )
-    canonical_id_by_incoming_id.update(
-        {resolution.incoming_id: resolution.canonical_id for resolution in policy_dedup.resolutions}
-    )
-    return policy_dedup
+    canonical_id_by_incoming_id.update({policy.id: policy.id for policy in baseline.policy_nodes})
+    return _governance_counts_dict(counts)
+
+
+def _governance_counts_dict(counts: GovernanceDraftCounts | None) -> dict[str, int]:
+    """The four audit-entry keys for `counts` (all zero when no governance content was restored)."""
+    return {
+        "governance_policies": counts.policies if counts else 0,
+        "governance_standards": counts.standards if counts else 0,
+        "governance_controls": counts.controls if counts else 0,
+        "governance_status_overridden": counts.status_overridden if counts else 0,
+    }
 
 
 def _run_baseline_merge(
@@ -289,7 +313,7 @@ def _run_baseline_merge(
     similarity_threshold: float,
     snapshot_name: str,
     emitter: LogEmitter | None,
-    policy_incoming_embeddings: dict[str, tuple[float, ...]] | None = None,
+    governance: GovernanceImport | None = None,
 ) -> dict[str, int]:
     """D8 step 5 / D6: dedupe and merge the staged baseline graph into `snapshot_name`.
 
@@ -306,9 +330,10 @@ def _run_baseline_merge(
     (regulatory-spine + governance), then Capability (and, if the Policy
     pass ran, Policy) embedding backfill.
 
-    `policy_incoming_embeddings` defaults to `None` (treated as `{}`) so
-    existing callers that never restore an internal-sourced instrument (no
-    Policy content in the artifact) need not pass it.
+    `governance` (issue #183) carries the restoring caller's `owner` and the
+    artifact-supplied Policy embeddings; it defaults to `None` (an empty
+    `GovernanceImport`) so callers that never restore an internal-sourced
+    instrument (no Policy content in the artifact) need not pass it.
 
     Issue #106: after the Policy pass, persists PracticeArea/RiskPath nodes
     (exact-identity passthrough, no dedup call of any kind) and validates
@@ -327,7 +352,15 @@ def _run_baseline_merge(
     WATCH-guarded retry attempts.
     """
     baseline_staged_graph = select_company_merge_graph(db, baseline_staged_name)
-    baseline = graph_reader.read_baseline_graph(baseline_staged_graph, regulatory_instrument_id)
+    baseline = graph_reader.read_baseline_graph(
+        baseline_staged_graph, regulatory_instrument_id, draft_governance=True
+    )
+    governance = governance or GovernanceImport()
+    if governance.owner is None and (
+        baseline.policy_nodes or baseline.standard_nodes or baseline.control_nodes
+    ):
+        # Backstop for direct callers: refuse BEFORE any snapshot read or write.
+        raise RestoreOwnerRequiredError
     if not baseline.regulatory_instrument_properties:
         # graph_reader._read_regulatory_instrument_properties looks up
         # `MATCH (n:RegulatoryInstrument {id: $regulatory_instrument_id})` and
@@ -381,17 +414,14 @@ def _run_baseline_merge(
         resolution.incoming_id: resolution.canonical_id for resolution in dedup_result.resolutions
     }
 
-    # issue #54, S6/B6 -- the Policy convergence + Standard/Control
-    # passthrough pass, a structural no-op for an external-sourced restore
-    # (empty baseline.policy_nodes): no Policy dedup read, no Policy/
-    # Standard/Control write, no Policy entries folded into the rewiring
-    # mapping. Mirrors merge.py's own live-path Policy pass exactly.
-    policy_dedup = _run_offline_policy_pass(
+    # issue #183 -- the draft-governance import: Policy/Standard/Control written `draft`,
+    # owned by the restoring caller, never converged (replaces issue #54 S6/B6's
+    # Policy convergence pass for restore). A structural no-op for an external-sourced
+    # restore (no governance content).
+    governance_counts = _run_draft_governance_pass(
         baseline,
         snapshot_graph=snapshot_graph,
-        policy_incoming_embeddings=policy_incoming_embeddings or {},
-        similarity_threshold=similarity_threshold,
-        emitter=emitter,
+        governance=governance,
         canonical_id_by_incoming_id=canonical_id_by_incoming_id,
     )
 
@@ -420,12 +450,14 @@ def _run_baseline_merge(
     graph_writer.backfill_canonical_embeddings(
         snapshot_graph, kind="Capability", embeddings=dedup_result.embedding_backfills
     )
-    if policy_dedup is not None:
-        graph_writer.backfill_canonical_embeddings(
-            snapshot_graph, kind="Policy", embeddings=policy_dedup.embedding_backfills
-        )
 
-    return graph_writer.classification_write_counts(baseline)
+    return {**graph_writer.classification_write_counts(baseline), **governance_counts}
+
+
+def _require_owner_for_governance(baseline_graph: SerializedGraph, owner: object | None) -> None:
+    """Fail fast, before any staged key exists: a restored Policy needs an owner (issue #183)."""
+    if owner is None and any(node.label == "Policy" for node in baseline_graph.nodes):
+        raise RestoreOwnerRequiredError
 
 
 def restore_instrument(
@@ -437,6 +469,7 @@ def restore_instrument(
     actor: str,
     emitter: LogEmitter | None = None,
     source: str | None = None,
+    owner: tuple[str, str] | None = None,
 ) -> RestoreOutcome:
     """Restore one curated instrument's artifact end to end (D8's full staged-write sequence).
 
@@ -464,6 +497,13 @@ def restore_instrument(
     catalog_source` passes the resolved effective curated-content source
     URL, which is folded into every emitted audit log entry's `"source"`
     key (AC-BI-011, mirrors #66 AC-BI-016).
+
+    `owner` (issue #183) is the restoring caller's verified `(sub, iss)` pair.
+    An internal-sourced artifact's Policy/Standard/Control tree is imported as
+    `draft`, owned by `owner` (`graph_writer.persist_governance_drafts`); an
+    artifact with a Policy and no `owner` raises `RestoreOwnerRequiredError`
+    before any staged key exists. An external-sourced artifact carries no such
+    content, so `owner` is never read and may be `None`.
     """
     _verify_checksums(artifact)
     _verify_schema_version(artifact)
@@ -500,6 +540,7 @@ def restore_instrument(
         native_graph = parse_serialized_graph_json(artifact.native_blob)
         baseline_graph = parse_serialized_graph_json(artifact.baseline_blob)
         _validate_content(native_graph, baseline_graph)
+        _require_owner_for_governance(baseline_graph, owner)
 
         native_staged_name = stage_graph(
             db,
@@ -530,7 +571,7 @@ def restore_instrument(
                 similarity_threshold,
                 snapshot_name,
                 emitter,
-                policy_incoming_embeddings,
+                GovernanceImport(owner=owner, policy_embeddings=policy_incoming_embeddings),
             )
 
         stage_and_finalize_policy_system_leg(

@@ -107,6 +107,17 @@ def test_is_safe_verbatim_covers_api_and_whitelisted_domain_errors() -> None:
     assert not is_safe_verbatim(PipelineStageError(stage="merge", reason="x"))
 
 
+def test_restore_owner_required_message_reaches_the_caller_verbatim() -> None:
+    """Issue #183: an owner-less internal restore tells the caller why, not just `restore failed`.
+
+    Whitelisted by class name only, like `ArtifactContentRejectedError`, so
+    `error_handlers.py` still never imports `ps_service.restore`.
+    """
+    fake_owner_required: type[Exception] = type("RestoreOwnerRequiredError", (Exception,), {})
+
+    assert is_safe_verbatim(fake_owner_required("requires the restoring caller's identity"))
+
+
 def test_error_handlers_module_never_imports_ps_service_restore() -> None:
     """GH #104 / AC-BI-008: whitelisting `ArtifactContentRejectedError` by class name must
     not add ANY `ps_service.restore` import to `error_handlers.py` -- top-level,

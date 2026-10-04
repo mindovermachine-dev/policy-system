@@ -29,8 +29,10 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from ps_service.api.dependencies import provide_restore_dependencies
+from api._fakes import install_compliance_officer_grant
+from ps_service.api.dependencies import get_principal, provide_restore_dependencies
 from ps_service.api.restore_orchestration import build_default_restore_dependencies
+from ps_service.auth.models import Principal
 from ps_service.company_merge.falkordb_client import connect_from_config
 from ps_service.config import load_config
 from ps_service.export import catalog_writer
@@ -50,6 +52,8 @@ _INSTRUMENT_ID = "ENGPRAC-1.0"
 _RESTORATIONS_ENDPOINT = "/restorations"
 _SIMILARITY_THRESHOLD = 0.9
 _EXPECTED_STAGES = ["verified", "staged", "merged_and_finalized"]
+_OWNER_SUBJECT = "restorer@example.com"
+_OWNER_ISSUER = "https://idp.example/"
 
 
 def _restoration_body(short_name: str) -> tuple[dict[str, object], bytes]:
@@ -93,8 +97,53 @@ def _delete_everything_created_for(db: FalkorDB, token: str, graph_names: tuple[
         db.connection.delete(*telemetry_keys)
 
 
+def _assert_governance_tree_is_draft_and_owned(
+    db: FalkorDB, single_tenant_graph_name: str, *, native_blob: bytes
+) -> None:
+    """Issue #183, AC-BI-001/003/006: counts match the artifact; every node is `draft`; owned."""
+    native = parse_serialized_graph_json(native_blob)
+    for label in ("Policy", "Standard", "Control"):
+        expected = sum(1 for node in native.nodes if node.label == label)
+        assert expected > 0  # sanity: the shipped artifact really carries this label
+        assert (
+            _count(db, single_tenant_graph_name, f"MATCH (n:{label}) RETURN count(n)") == expected
+        )
+        assert (
+            _count(
+                db,
+                single_tenant_graph_name,
+                f"MATCH (n:{label}) WHERE n.status = 'draft' RETURN count(n)",
+            )
+            == expected
+        ), f"every restored {label} must be draft"
+    policy_count = _count(db, single_tenant_graph_name, "MATCH (n:Policy) RETURN count(n)")
+    owned = _count(
+        db,
+        single_tenant_graph_name,
+        "MATCH (n:Policy) WHERE n.owner_subject = '"
+        + _OWNER_SUBJECT
+        + "' AND n.owner_issuer = '"
+        + _OWNER_ISSUER
+        + "' RETURN count(n)",
+    )
+    assert owned == policy_count
+    for relationship_type in ("GOVERNED_BY", "SUPPORTED_BY", "IMPLEMENTED_BY"):
+        expected_edges = sum(1 for e in native.edges if e.relationship_type == relationship_type)
+        assert expected_edges > 0
+        assert (
+            _count(
+                db,
+                single_tenant_graph_name,
+                f"MATCH ()-[r:{relationship_type}]->() RETURN count(r)",
+            )
+            == expected_edges
+        )
+
+
 @pytest.mark.usefixtures("configured_logging")
-def test_shipped_engprac_artifact_restores_with_every_stage_succeeded() -> None:
+def test_shipped_engprac_artifact_restores_with_every_stage_succeeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     token = uuid.uuid4().hex[:12]
     short_name = f"ENGPRAC_T{token}"
     native_target = f"{short_name.lower()}_native"
@@ -112,8 +161,12 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded() -> None:
             single_tenant_graph_name=_tokened_single_tenant_graph_name,
         )
 
+    install_compliance_officer_grant(monkeypatch, granted=True)
     app = create_app(config)
     app.dependency_overrides[provide_restore_dependencies] = _tokened_dependencies
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        sub=_OWNER_SUBJECT, iss=_OWNER_ISSUER
+    )
     client = TestClient(app, raise_server_exceptions=False)
     body, native_blob = _restoration_body(short_name)
 
@@ -133,8 +186,11 @@ def test_shipped_engprac_artifact_restores_with_every_stage_succeeded() -> None:
         assert _count(db, native_target, "MATCH (n) RETURN count(n)") == expected_native_nodes
         # The widened list let the classification layer through (not a shortcut).
         assert _count(db, baseline_target, "MATCH (n:PracticeArea) RETURN count(n)") > 0
-        # The internal Policy merge pass ran.
-        assert _count(db, single_tenant_graph_name, "MATCH (n:Policy) RETURN count(n)") > 0
+        # The internal draft-governance pass ran (issue #183): the whole Policy/Standard/
+        # Control tree lands as `draft`, Policy owned by the restoring caller.
+        _assert_governance_tree_is_draft_and_owned(
+            db, single_tenant_graph_name, native_blob=native_blob
+        )
 
         # AC-BI-004: the single-tenant graph carries the same PracticeArea/RiskPath node
         # counts and the same count of each classification edge type as the shipped

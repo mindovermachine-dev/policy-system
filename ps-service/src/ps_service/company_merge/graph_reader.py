@@ -119,6 +119,10 @@ _CONTROL_QUERY = (
     "MATCH (n:Control) WHERE n.status = 'approved' RETURN n.id, n.type, n.title, "
     "n.implementation_status, n.confidence, n.description"
 )
+# issue #183 -- restore's draft-governance read: every authored node, no `status` filter.
+_POLICY_ALL_QUERY = "MATCH (n:Policy) RETURN n"
+_STANDARD_ALL_QUERY = "MATCH (n:Standard) RETURN n"
+_CONTROL_ALL_QUERY = "MATCH (n:Control) RETURN n"
 _GOVERNED_BY_QUERY = "MATCH (s:Capability)-[:GOVERNED_BY]->(t:Policy) RETURN s.id, t.id"
 _SUPPORTED_BY_QUERY = "MATCH (s:Policy)-[:SUPPORTED_BY]->(t:Standard) RETURN s.id, t.id"
 _IMPLEMENTED_BY_QUERY = "MATCH (s:Standard)-[:IMPLEMENTED_BY]->(t:Control) RETURN s.id, t.id"
@@ -195,7 +199,10 @@ class _RegulatoryInstrumentNode(Protocol):
 
 
 def read_baseline_graph(
-    baseline_graph: GraphHandle, regulatory_instrument_id: str
+    baseline_graph: GraphHandle,
+    regulatory_instrument_id: str,
+    *,
+    draft_governance: bool = False,
 ) -> BaselineGraph:
     """Read one regulation's complete `{short}_baseline` graph.
 
@@ -210,6 +217,12 @@ def read_baseline_graph(
     case) returns empty tuples for those fields -- and empty tuples for
     every edge collection that would otherwise reference them -- with no
     exception raised.
+
+    `draft_governance` (issue #183, restore only) swaps the approved-only
+    Policy/Standard/Control reads (AC-BI-021, D-8 -- what the live
+    ingestion-to-merge path needs) for `_read_governance_nodes`, which reads
+    every authored node regardless of `status` and carries every property.
+    The default keeps the live-path behaviour byte-for-byte unchanged.
     """
     regulatory_instrument_properties = _read_regulatory_instrument_properties(
         baseline_graph, regulatory_instrument_id
@@ -220,9 +233,14 @@ def read_baseline_graph(
     capability_nodes = _read_capability_nodes(baseline_graph)
     provenance_edges = _read_provenance_edges(baseline_graph, regulatory_instrument_id)
     bare_edges = _read_bare_edges(baseline_graph)
-    policy_nodes = _read_policy_nodes(baseline_graph)
-    standard_nodes = _read_standard_nodes(baseline_graph)
-    control_nodes = _read_control_nodes(baseline_graph)
+    if draft_governance:
+        policy_nodes = _read_governance_nodes(baseline_graph, _POLICY_ALL_QUERY)
+        standard_nodes = _read_governance_nodes(baseline_graph, _STANDARD_ALL_QUERY)
+        control_nodes = _read_governance_nodes(baseline_graph, _CONTROL_ALL_QUERY)
+    else:
+        policy_nodes = _read_policy_nodes(baseline_graph)
+        standard_nodes = _read_standard_nodes(baseline_graph)
+        control_nodes = _read_control_nodes(baseline_graph)
     governance_edges = _read_governance_edges(baseline_graph)
     practice_area_nodes = _read_practice_area_nodes(baseline_graph)
     risk_path_nodes = _read_risk_path_nodes(baseline_graph)
@@ -532,6 +550,31 @@ def _read_control_nodes(baseline_graph: GraphHandle) -> tuple[BaselineNode, ...]
         if description is not None:
             properties["description"] = cast("str", description)
         nodes.append(BaselineNode(id=cast("str", node_id), properties=properties))
+    return tuple(nodes)
+
+
+def _read_governance_nodes(baseline_graph: GraphHandle, query: str) -> tuple[BaselineNode, ...]:
+    """Read every Policy/Standard/Control node `query` returns, whatever its `status` (issue #183).
+
+    Unlike `_read_policy_nodes`/`_read_standard_nodes`/`_read_control_nodes`
+    (the live path's approved-only, field-by-field reads), this returns each
+    node's full property map so a restored draft keeps its authored content.
+    `id` is the node identity and `embedding` is carried separately (restore
+    reads the artifact-supplied vectors off the parsed blob), so neither is
+    left in `properties`. Only scalar properties are kept -- the node
+    properties this reader maps are `str | float`.
+    """
+    result = baseline_graph.query(query)
+    rows = cast("list[list[_RegulatoryInstrumentNode]]", result.result_set)
+    nodes: list[BaselineNode] = []
+    for row in rows:
+        raw = row[0].properties
+        properties: dict[str, str | float] = {
+            key: value
+            for key, value in raw.items()
+            if key not in {"id", "embedding"} and isinstance(value, str | int | float)
+        }
+        nodes.append(BaselineNode(id=cast("str", raw["id"]), properties=properties))
     return tuple(nodes)
 
 

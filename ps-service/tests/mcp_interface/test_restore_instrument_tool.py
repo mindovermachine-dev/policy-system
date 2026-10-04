@@ -266,6 +266,8 @@ _NODE_READ_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+)\)(?P<filter> WHERE n\.status = 'approved')? "
     r"RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$"
 )
+# issue #183 -- restore's unfiltered, whole-node governance read (`MATCH (n:Policy) RETURN n`).
+_ALL_NODES_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN n$")
 _VIVIFY_QUERY = "MATCH (n) WHERE false RETURN n"
 
 
@@ -346,6 +348,13 @@ class _FakeStagedGraph:
                     for source_id, target_id, _props in self._edges.get(key, [])
                 ]
             )
+        if match := _ALL_NODES_READ_RE.match(q):
+            return _FakeQueryResult(
+                [
+                    [_FakeRegulatoryInstrumentNode(dict(row))]
+                    for row in self._nodes.get(match.group("label"), {}).values()
+                ]
+            )
         if match := _NODE_READ_RE.match(q):
             label = match.group("label")
             approved_only = bool(match.group("filter"))
@@ -412,10 +421,10 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
-        if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
+        if "MERGE (n:Standard {id: $id}) ON CREATE SET n += $properties" in q:
             self._set(self._standards, params, "title")
             return _FakeQueryResult([])
-        if "MERGE (n:Control {id: $id}) SET n += $properties" in q:
+        if "MERGE (n:Control {id: $id}) ON CREATE SET n += $properties" in q:
             self._set(self._controls, params, "title")
             return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
@@ -972,6 +981,99 @@ def test_real_verified_token_principal_threads_through_to_audit_log_and_delegate
     restore_lines = _restore_log_lines(all_lines)
     assert [line["outcome"] for line in restore_lines] == ["started", "succeeded"]
     assert all(line.get("caller") == token_sub for line in restore_lines)
+
+
+def _internal_policy_transport() -> FakeCuratedArtifactTransport:
+    """An internal-source artifact whose baseline and native legs each carry one Policy."""
+    graph_bytes = to_json_bytes(
+        SerializedGraph(
+            nodes=(
+                SerializedNode(
+                    label="RegulatoryInstrument",
+                    properties={"id": _INSTRUMENT_ID, "title": "Engineering Practices"},
+                ),
+                SerializedNode(
+                    label="Policy",
+                    properties={"id": "pol_a", "title": "Access Policy", "status": "draft"},
+                ),
+            ),
+            edges=(),
+        )
+    )
+    manifest = _manifest(
+        source_type="internal",
+        celex=None,
+        jurisdiction=None,
+        baseline_sha256=checksum_bytes(graph_bytes),
+        native_sha256=checksum_bytes(graph_bytes),
+    )
+    return FakeCuratedArtifactTransport(
+        {
+            "manifest.json": json.dumps(manifest).encode("utf-8"),
+            "baseline.json": graph_bytes,
+            "native.json": graph_bytes,
+        }
+    )
+
+
+def _restored_policy_owner(db: _FakeStagingFalkorDB) -> tuple[object, object]:
+    """The `(owner_subject, owner_issuer)` the restore wrote onto the Policy in `policy_system`."""
+    graph = cast("_FakeSingleTenantGraph", db.select_graph(single_tenant_graph_name()))
+    mints = [
+        params
+        for q, params in cast("list[tuple[str, dict[str, object] | None]]", graph.calls)
+        if "MERGE (n:Policy {id: $id}) ON CREATE SET" in q and params is not None
+    ]
+    assert len(mints) == 1
+    properties = cast("dict[str, object]", mints[0]["properties"])
+    return properties["owner_subject"], properties["owner_issuer"]
+
+
+def test_verified_token_caller_becomes_the_owner_of_restored_drafts(
+    monkeypatch: pytest.MonkeyPatch, mock_oidc_provider: MockOidcProvider
+) -> None:
+    """Issue #183, AC-BI-001: the token's `(sub, iss)` ends up as the Policy's owner."""
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    auth_context = _auth_context(mock_oidc_provider)
+    token_sub = "user-restore-owner"
+    token = mock_oidc_provider.mint_token(sub=token_sub)
+    _grant_compliance_officer(monkeypatch, subject=token_sub, issuer=auth_context.issuer)
+    opened: list[_FakeStagingFalkorDB] = []
+
+    def _open_db(config: ServiceConfig) -> FalkorDB:
+        del config
+        opened.append(_FakeStagingFalkorDB(single_tenant_graph_name()))
+        return cast("FalkorDB", opened[-1])
+
+    _use_fake_restore_infra(monkeypatch, _internal_policy_transport(), open_db=_open_db)
+
+    with _authenticated_test_client(auth_context=auth_context) as client:
+        _call_restore_instrument_over_http(client, token=token)
+
+    assert _restored_policy_owner(opened[0]) == (token_sub, auth_context.issuer)
+
+
+def test_local_test_bypass_caller_owns_restored_drafts_as_the_bypass_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #183: with the bypass active and no token, the bypass identity owns the drafts."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    opened: list[_FakeStagingFalkorDB] = []
+
+    def _open_db(config: ServiceConfig) -> FalkorDB:
+        del config
+        opened.append(_FakeStagingFalkorDB(single_tenant_graph_name()))
+        return cast("FalkorDB", opened[-1])
+
+    _use_fake_restore_infra(monkeypatch, _internal_policy_transport(), open_db=_open_db)
+
+    result = _call_restore_instrument()
+
+    assert result.is_error is False
+    assert _restored_policy_owner(opened[0]) == (LOCAL_TEST_PRINCIPAL_ID, LOCAL_TEST_PRINCIPAL_ID)
 
 
 def test_local_test_bypass_principal_still_threads_through_when_no_token_is_presented(

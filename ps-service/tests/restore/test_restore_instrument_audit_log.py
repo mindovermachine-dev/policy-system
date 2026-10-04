@@ -99,6 +99,8 @@ _NODE_READ_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+)\)(?P<filter> WHERE n\.status = 'approved')? "
     r"RETURN (?P<cols>n\.\w+(?:, n\.\w+)*)$"
 )
+# issue #183 -- restore's unfiltered, whole-node governance read (`MATCH (n:Policy) RETURN n`).
+_ALL_NODES_READ_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN n$")
 _VIVIFY_QUERY = "MATCH (n) WHERE false RETURN n"
 
 
@@ -178,6 +180,13 @@ class _FakeStagedGraph:
                     for source_id, target_id, _props in self._edges.get(key, [])
                 ]
             )
+        if match := _ALL_NODES_READ_RE.match(q):
+            return _FakeQueryResult(
+                [
+                    [_FakeRegulatoryInstrumentNode(dict(row))]
+                    for row in self._nodes.get(match.group("label"), {}).values()
+                ]
+            )
         if match := _NODE_READ_RE.match(q):
             label = match.group("label")
             approved_only = bool(match.group("filter"))
@@ -244,10 +253,10 @@ class _FakeSingleTenantGraph:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._policies.values()])
-        if "MERGE (n:Standard {id: $id}) SET n += $properties" in q:
+        if "MERGE (n:Standard {id: $id}) ON CREATE SET n += $properties" in q:
             self._set(self._standards, params, "title")
             return _FakeQueryResult([])
-        if "MERGE (n:Control {id: $id}) SET n += $properties" in q:
+        if "MERGE (n:Control {id: $id}) ON CREATE SET n += $properties" in q:
             self._set(self._controls, params, "title")
             return _FakeQueryResult([])
         if "MERGE (n:Capability {id: $id}) ON CREATE SET" in q:
@@ -685,6 +694,7 @@ def test_succeeded_entry_carries_classification_write_counts(
         similarity_threshold=0.9,
         actor=_ACTOR,
         emitter=emitter,
+        owner=("owner@example.com", "https://idp.example/"),
     )
     emitter.flush()
 
@@ -692,6 +702,14 @@ def test_succeeded_entry_carries_classification_write_counts(
     succeeded = next(entry for entry in entries if entry["outcome"] == "succeeded")
     for key, expected in _CLASSIFICATION_COUNTS.items():
         assert succeeded[key] == expected
+    # issue #183 / AC-BI-014: the draft-governance counts ride on the same entry.
+    for key in (
+        "governance_policies",
+        "governance_standards",
+        "governance_controls",
+        "governance_status_overridden",
+    ):
+        assert key in succeeded
     # "started" never carries these -- no classification pass has run yet.
     started = next(entry for entry in entries if entry["outcome"] == "started")
     assert "practice_area_count" not in started

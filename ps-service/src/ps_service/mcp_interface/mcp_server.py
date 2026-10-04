@@ -1461,6 +1461,9 @@ def restore_instrument(
     config = load_config()
     principal = _resolve_principal(config)
     actor = _resolve_authz_actor(config)
+    # Issue #183: the restoring caller owns any imported draft Policy. Same resolution as the
+    # policy-lifecycle tools (verified `(sub, iss)`, or the local-test bypass identity).
+    owner = _resolve_policy_lifecycle_actor(config)
 
     def _body() -> dict[str, object] | str:
         if not config.is_local_test_bypass_active:
@@ -1484,6 +1487,7 @@ def restore_instrument(
                 config=config,
                 actor=principal or "unknown",
                 dependencies=dependencies,
+                owner=owner,
             )
         except (
             CatalogSourceOverrideUnavailableError,

@@ -294,11 +294,23 @@ async def list_curated_catalog(
     )
 
 
+def _restore_owner(principal: Principal | None) -> tuple[str, str] | None:
+    """Return the restoring caller's ``(sub, iss)`` pair, or ``None`` with no verified identity.
+
+    Issue #183: the owner of any draft Policy a restore imports. Only a verified
+    principal is ever used -- there is no synthetic fallback on this surface, so an
+    internal restore without a verified caller is refused rather than creating an
+    ownerless draft.
+    """
+    return (principal.sub, principal.iss) if principal is not None else None
+
+
 async def create_restoration(
     request_body: RestorationRequest,
     http_request: Request,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[RestoreDependencies, Depends(provide_restore_dependencies)],
+    principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
     """Restore one curated instrument's artifact (D5, ``POST /restorations``).
 
@@ -317,12 +329,20 @@ async def create_restoration(
             ``create_ingestion``'s own ``caller`` derivation).
         config: The resolved service configuration (injected).
         dependencies: The restore dependency bundle (injected; overridden in tests).
+        principal: The verified caller (injected); becomes the owner of any imported
+            draft Policy (issue #183). ``None`` when no verified identity exists.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
     """
     caller = http_request.client.host if http_request.client else "unknown"
-    return run_restoration(request_body, config=config, actor=caller, dependencies=dependencies)
+    return run_restoration(
+        request_body,
+        config=config,
+        actor=caller,
+        dependencies=dependencies,
+        owner=_restore_owner(principal),
+    )
 
 
 async def create_restoration_from_catalog(
@@ -332,6 +352,7 @@ async def create_restoration_from_catalog(
     dependencies: Annotated[
         CatalogRestoreDependencies, Depends(provide_restore_from_catalog_dependencies)
     ],
+    principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
     """Fetch and restore one curated instrument's artifact from the curated-content source.
 
@@ -358,13 +379,19 @@ async def create_restoration_from_catalog(
             effective curated-content source URL to fetch from.
         dependencies: The fetch-and-restore dependency bundle (injected;
             overridden in tests).
+        principal: The verified caller (injected); becomes the owner of any imported
+            draft Policy (issue #183). ``None`` when no verified identity exists.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration_from_catalog_source(
-        request_body, config=config, actor=caller, dependencies=dependencies
+        request_body,
+        config=config,
+        actor=caller,
+        dependencies=dependencies,
+        owner=_restore_owner(principal),
     )
 
 

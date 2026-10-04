@@ -16,8 +16,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api._fakes import install_compliance_officer_grant, install_no_principal
-from ps_service.api.dependencies import provide_restore_dependencies
+from ps_service.api.dependencies import get_principal, provide_restore_dependencies
 from ps_service.api.restore_orchestration import RestoreDependencies
+from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.main import create_app
@@ -25,7 +26,10 @@ from ps_service.restore.errors import ArtifactContentRejectedError, ArtifactInte
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
+    from fastapi import FastAPI
 
     from ps_service.restore.models import RestoreArtifact
 
@@ -63,6 +67,7 @@ class _FakeDb:
 class _FakeRestoreStage:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.call_count = 0
+        self.owners: list[tuple[str, str] | None] = []
         self._error = error
 
     def __call__(
@@ -74,8 +79,10 @@ class _FakeRestoreStage:
         similarity_threshold: float,
         actor: str,
         emitter: object | None = None,
+        owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         _ = (artifact, db, single_tenant_graph_name, similarity_threshold, actor, emitter)
+        self.owners.append(owner)
         self.call_count += 1
         if self._error is not None:
             raise self._error
@@ -157,7 +164,8 @@ def test_integrity_failure_returns_422() -> None:
     assert body["error"]["code"] == "restore_artifact_rejected"
 
 
-def test_stage_failure_returns_502_naming_the_stage() -> None:
+def test_stage_failure_returns_502_naming_the_stage(configured_logging: Path) -> None:
+    _ = configured_logging
     stage = _FakeRestoreStage(error=RuntimeError("unexpected boom"))
     client = _client_with_fake(stage)
 
@@ -290,3 +298,27 @@ def test_system_owner_without_explicit_grant_is_denied_with_403(
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "access_denied"
     assert stage.call_count == 0
+
+
+def test_verified_caller_is_passed_to_the_delegate_as_the_owner_of_restored_drafts() -> None:
+    """Issue #183, AC-BI-001: the upload route hands the verified `(sub, iss)` to the restore."""
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+    cast("FastAPI", client.app).dependency_overrides[get_principal] = lambda: Principal(
+        sub="alice@example.com", iss="https://idp.example/"
+    )
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 200
+    assert stage.owners == [("alice@example.com", "https://idp.example/")]
+
+
+def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> None:
+    stage = _FakeRestoreStage()
+    client = _client_with_fake(stage)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 200
+    assert stage.owners == [None]

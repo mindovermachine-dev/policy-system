@@ -33,6 +33,7 @@ from ps_service.restore.errors import (
 from ps_service.restore.models import RestoreOutcome
 
 if TYPE_CHECKING:
+    from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
     from ps_service.config import ServiceConfig
@@ -83,6 +84,7 @@ class _RestoreCall:
     single_tenant_graph_name: str
     similarity_threshold: float
     actor: str
+    owner: tuple[str, str] | None = None
 
 
 class _FakeRestoreStage:
@@ -100,10 +102,11 @@ class _FakeRestoreStage:
         similarity_threshold: float,
         actor: str,
         emitter: object | None = None,
+        owner: tuple[str, str] | None = None,
     ) -> RestoreOutcome:
         _ = emitter
         self.calls.append(
-            _RestoreCall(artifact, db, single_tenant_graph_name, similarity_threshold, actor)
+            _RestoreCall(artifact, db, single_tenant_graph_name, similarity_threshold, actor, owner)
         )
         if self._error is not None:
             raise self._error
@@ -175,7 +178,10 @@ def test_run_restoration_translates_integrity_and_schema_errors_to_rejected(
         RuntimeError("unexpected boom"),
     ],
 )
-def test_run_restoration_translates_other_errors_to_stage_failed(delegate_error: Exception) -> None:
+def test_run_restoration_translates_other_errors_to_stage_failed(
+    delegate_error: Exception, configured_logging: Path
+) -> None:
+    _ = configured_logging
     stage = _FakeRestoreStage(error=delegate_error)
     dependencies = _build_dependencies(stage)
 
@@ -242,12 +248,13 @@ def test_run_restoration_cap_trims_the_reason_tail_never_the_rejected_label_pref
     ids=["concurrency_conflict", "runtime_error"],
 )
 def test_run_restoration_keeps_non_whitelisted_delegate_errors_generic(
-    delegate_error: Exception, expected_stage: str
+    delegate_error: Exception, expected_stage: str, configured_logging: Path
 ) -> None:
     """GH #104 boundary: only `ArtifactContentRejectedError` joined the safe-verbatim
     list. `RestoreConcurrencyConflictError` (its message embeds the single-tenant graph
     name) and unexpected failures still collapse to the generic `<stage> failed`.
     """
+    _ = configured_logging
     stage = _FakeRestoreStage(error=delegate_error)
 
     with pytest.raises(RestoreStageFailedError) as excinfo:
@@ -370,3 +377,96 @@ def test_restore_orchestration_module_only_imports_restore_instrument_function_l
     assert not any(
         name.startswith("ps_service.restore.restore_instrument") for name in top_level_imports
     ), "ps_service.restore.restore_instrument must only be imported function-locally"
+
+
+def test_run_restoration_forwards_the_owner_to_the_delegate() -> None:
+    """Issue #183: the caller's verified `(sub, iss)` reaches `restore_instrument` as `owner`."""
+    stage = _FakeRestoreStage()
+    owner = ("alice@example.com", "https://idp.example/")
+
+    run_restoration(
+        _valid_request(),
+        config=_config(),
+        actor="x",
+        dependencies=_build_dependencies(stage),
+        owner=owner,
+    )
+
+    assert stage.calls[0].owner == owner
+
+
+def test_run_restoration_passes_no_owner_when_none_is_given() -> None:
+    stage = _FakeRestoreStage()
+
+    run_restoration(
+        _valid_request(), config=_config(), actor="x", dependencies=_build_dependencies(stage)
+    )
+
+    assert stage.calls[0].owner is None
+
+
+def test_masked_restore_failure_is_logged_server_side_with_traceback(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """AC-BI-012: the exception class, message, traceback, instrument id and caller are logged."""
+    emitter, log_path = make_emitter()
+    stage = _FakeRestoreStage(error=RuntimeError("boom at 10.0.0.5:6379"))
+
+    with pytest.raises(RestoreStageFailedError):
+        run_restoration(
+            _valid_request(),
+            config=_config(),
+            actor="caller-host",
+            dependencies=_build_dependencies(stage),
+            emitter=emitter,
+        )
+    emitter.flush()
+
+    (entry,) = [e for e in read_lines(log_path) if e.get("outcome") == "failed"]
+    assert entry["component"] == "restore"
+    assert entry["entity_id"] == "CRA-1.0"
+    assert entry["caller"] == "caller-host"
+    assert entry["exception_type"] == "RuntimeError"
+    assert entry["detail"] == "boom at 10.0.0.5:6379"
+    assert "Traceback (most recent call last)" in cast("str", entry["traceback"])
+
+
+def test_masked_restore_failure_keeps_the_client_message_scrubbed(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-013: logging the real cause server-side does not change what the client sees."""
+    emitter, _log_path = make_emitter()
+    stage = _FakeRestoreStage(error=RuntimeError("boom at 10.0.0.5:6379 /srv/secret/path"))
+
+    with pytest.raises(RestoreStageFailedError) as excinfo:
+        run_restoration(
+            _valid_request(),
+            config=_config(),
+            actor="x",
+            dependencies=_build_dependencies(stage),
+            emitter=emitter,
+        )
+
+    assert excinfo.value.reason == "restore failed"
+    assert "10.0.0.5" not in str(excinfo.value)
+    assert "/srv/secret" not in str(excinfo.value)
+
+
+def test_whitelisted_restore_failure_is_not_logged_as_a_masked_failure(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """A safe-verbatim failure already reaches the client in full; nothing is logged as masked."""
+    emitter, log_path = make_emitter()
+    stage = _FakeRestoreStage(error=ArtifactContentRejectedError("label not allow-listed"))
+
+    with pytest.raises(RestoreStageFailedError):
+        run_restoration(
+            _valid_request(),
+            config=_config(),
+            actor="x",
+            dependencies=_build_dependencies(stage),
+            emitter=emitter,
+        )
+    emitter.flush()
+
+    assert read_lines(log_path) == []

@@ -130,6 +130,7 @@ _SAFE_VERBATIM_NAMES: frozenset[str] = frozenset(
         "DomainMapperDerivationError",
         "CompanyMergeConfigurationError",
         "ArtifactContentRejectedError",  # ps_service.restore (GH #104) -- by name, never imported
+        "RestoreOwnerRequiredError",  # ps_service.restore (issue #183) -- by name, never imported
     }
 )
 """Whitelisted domain-error class names, matched by name so this module never
