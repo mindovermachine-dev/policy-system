@@ -6,7 +6,7 @@ Four proofs, per PLAN.md Section 5 "Slice 3":
    -- a scripted `create-policy-draft` -> `add-standard-to-draft` ->
    `update-standard-draft` x6 sequence against a module-local `_HybridGraph`
    (adapted from `test_ps_author_policy_policy_loop.py`'s own shape, Slice
-   2), proving the tool-call SEQUENCE `ps-skills/policy-system/skills/
+   2), proving the tool-call SEQUENCE `ps-skills/ps-plugin/skills/
    ps-author-policy/SKILL.md`'s new "Standard authoring loop" sub-flow
    documents: `add-standard-to-draft(policy_id, title=<derived>)` with no
    `fields` (mirrors Policy's own title-only creation, D-3-style), then one

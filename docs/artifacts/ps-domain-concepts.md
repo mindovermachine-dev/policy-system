@@ -430,7 +430,7 @@ Alternatively, authored directly in the internal-seed intake document when the g
 | `measurable_outcomes` | string | No | At least one quantifiable or objectively verifiable outcome. |
 | `capability_grouping_rationale` | string | No | Why the governed Capabilities belong under one Policy — same owner, cadence, and control model. |
 
-These structured fields pair with `ps-skills/policy-system/rubrics/policy-rubric.md` (one field per scored criterion) and `policy-template.md` (one section per field).
+These structured fields pair with `ps-skills/ps-plugin/rubrics/policy-rubric.md` (one field per scored criterion) and `policy-template.md` (one section per field).
 
 #### Relationships
 
@@ -470,7 +470,7 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `verification_notes` | string | No | Written so a Control could be built directly against it, pass/fail, without interpretation. |
 | `change_rationale` | string | No | Why this Standard was introduced, or what changed from its previous version and why. |
 
-These structured fields pair with `ps-skills/policy-system/rubrics/standard-rubric.md` (one field per scored criterion) and `standard-template.md` (one section per field).
+These structured fields pair with `ps-skills/ps-plugin/rubrics/standard-rubric.md` (one field per scored criterion) and `standard-template.md` (one section per field).
 
 #### Relationships
 
@@ -512,7 +512,7 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `reviewer_role` | string | No | Who reviews the result. |
 | `risk_alignment_rationale` | string | No | How this Control's objective addresses the risk exposure of the RiskPath(s) it verifies. |
 
-These structured fields pair with `ps-skills/policy-system/rubrics/control-rubric.md` (one field per scored criterion) and `control-template.md` (one section per field).
+These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md` (one field per scored criterion) and `control-template.md` (one section per field).
 
 #### Relationships
 

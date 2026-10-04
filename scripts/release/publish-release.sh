@@ -42,7 +42,7 @@ readonly VERSION_FILE_PATHS=(
   "ps-cli/pyproject.toml"
   "uv.lock"
   "charts/policy-system/Chart.yaml"
-  "ps-skills/policy-system/.claude-plugin/plugin.json"
+  "ps-skills/ps-plugin/.claude-plugin/plugin.json"
 )
 
 # commit_release_files <release_version>: stage exactly the five version-file paths and commit.

@@ -30,7 +30,7 @@ EXPECTED_VERSION_FILE_PATHS = [
     "ps-cli/pyproject.toml",
     "uv.lock",
     "charts/policy-system/Chart.yaml",
-    "ps-skills/policy-system/.claude-plugin/plugin.json",
+    "ps-skills/ps-plugin/.claude-plugin/plugin.json",
 ]
 
 

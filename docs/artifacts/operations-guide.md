@@ -4,6 +4,7 @@
 
 - [Evaluator (local-test) operations](#evaluator-local-test-operations)
   - [Updating to the latest version](#updating-to-the-latest-version)
+  - [Updating or reinstalling the Policy System Plugin](#updating-or-reinstalling-the-policy-system-plugin)
   - [Owner recovery, certificate renewal and re-running the script](#owner-recovery-certificate-renewal-and-re-running-the-script)
   - [Reaching the Authentik admin UI (evaluator)](#reaching-the-authentik-admin-ui-evaluator)
   - [Recreating the kind cluster](#recreating-the-kind-cluster)
@@ -69,6 +70,23 @@ version and the image version can never disagree — there is no tag to hand-pin
 flag needed to reset one. Your graph data is kept — FalkorDB persists to a
 `PersistentVolumeClaim` (see [Backup](#backup)), so previously loaded regulations do
 not need to be re-seeded.
+
+### Updating or reinstalling the Policy System Plugin
+
+The Policy System Plugin (`ps-plugin`) comes from the Policy System Marketplace (`ps-marketplace`)
+and provides the Policy System MCP connector (`ps-mcp`). Updating the backend does not update the
+plugin; refresh it separately:
+
+```bash
+claude plugin marketplace update ps-marketplace
+claude plugin update ps-plugin@ps-marketplace
+```
+
+In Claude Desktop, use **Update marketplace** under **Customize** → **Plugins** instead (verify
+the wording on screen). To reinstall from scratch, run `/plugin install ps-plugin@ps-marketplace`.
+If Claude Desktop still shows a marketplace registered under an earlier name, or a refresh fails
+with `NOT_REGISTERED`, follow [Reset an earlier account-scoped
+marketplace](./installation-guide.md#reset-an-earlier-account-scoped-marketplace-manual).
 
 ### Owner recovery, certificate renewal and re-running the script
 

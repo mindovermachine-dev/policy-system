@@ -620,7 +620,7 @@ def _policy_properties(node: SeedNode) -> dict[str, object]:
     fields: `scope_in`, `scope_out`, `normative_commitments`,
     `review_cadence`, `exception_pathway`, `measurable_outcomes`,
     `capability_grouping_rationale` -- see
-    `ps-skills/policy-system/rubrics/policy-rubric.md`.
+    `ps-skills/ps-plugin/rubrics/policy-rubric.md`.
 
     Deliberately never sets a `confidence` key (Design Decision 2, PLAN.md
     §3) -- an authored Policy carries no LLM-derivation uncertainty.
@@ -691,7 +691,7 @@ def _standard_properties(node: SeedNode, policy_status: str) -> dict[str, object
     Optional: `description`/`version`. Structured authoring-rubric fields:
     `procedure`, `implementer_role`, `reviewer_role`, `applicability_boundary`,
     `verification_notes`, `change_rationale` -- see
-    `ps-skills/policy-system/rubrics/standard-rubric.md`.
+    `ps-skills/ps-plugin/rubrics/standard-rubric.md`.
 
     `status` (governance status, independent of `implementation_status`) is
     never read off the seed node itself -- it mirrors the root Policy's own
@@ -730,7 +730,7 @@ def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]
     `next_review_date`, `evidence_ref`). Structured authoring-rubric fields:
     `pass_fail_criteria`, `execution_method`, `evidence_plan`, `executor_role`,
     `reviewer_role`, `risk_alignment_rationale` -- see
-    `ps-skills/policy-system/rubrics/control-rubric.md`. `evidence_plan` is
+    `ps-skills/ps-plugin/rubrics/control-rubric.md`. `evidence_plan` is
     the authoring-time prose describing intended evidence; `evidence_ref`
     stays the operational pointer populated once real evidence exists.
 

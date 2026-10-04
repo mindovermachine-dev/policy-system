@@ -1,12 +1,13 @@
 {
-  "name": "policy-system-marketplace",
+  "name": "ps-marketplace",
+  "description": "Policy System Marketplace - distributes the Policy System Plugin (ps-plugin), whose Policy System MCP connector (ps-mcp) reaches a hosted PS Service.",
   "owner": { "name": "Cartman ApS" },
   "plugins": [
     {
-      "name": "policy-system",
-      "displayName": "Policy System",
+      "name": "ps-plugin",
+      "displayName": "Policy System Plugin",
       "description": "ps-qna skill + PS Service MCP connector for compliance Q&A against the knowledge graph.",
-      "source": "./ps-skills/policy-system"
+      "source": "./ps-skills/ps-plugin"
     }
   ]
 }

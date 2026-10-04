@@ -12,7 +12,8 @@
   - [6. Install ps-cli](#6-install-ps-cli)
   - [7. Deploy Policy System Backend](#7-deploy-policy-system-backend)
   - [8. Register your passkey and log in with ps-cli](#8-register-your-passkey-and-log-in-with-ps-cli)
-  - [9. Install the Policy System plugin](#9-install-the-policy-system-plugin)
+  - [9. Install the Policy System Plugin](#9-install-the-policy-system-plugin)
+    - [Reset an earlier account-scoped marketplace (manual)](#reset-an-earlier-account-scoped-marketplace-manual)
   - [What is exposed (evaluator)](#what-is-exposed-evaluator)
 - [Production installation](#production-installation)
   - [Prerequisites (Production)](#prerequisites-production)
@@ -60,7 +61,7 @@ is required.
 
 | Tool                                                                 | Why                                         |
 | --------------------------------------------------------------------- | -------------------------------------------- |
-| [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System plugin              |
+| [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System Plugin              |
 | [git](https://git-scm.com/downloads)                                 | Clones this repo                            |
 | [Podman](https://podman.io/docs/installation)                        | Container runtime backing the local cluster |
 | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
@@ -424,20 +425,35 @@ work. The colleague registers their passkey from the invitation link the owner i
 [SystemOwner bootstrap](#systemowner-bootstrap)), and sets up `ps-cli` with the context
 commands above.
 
-### 9. Install the Policy System plugin
+### 9. Install the Policy System Plugin
 
-In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add
-this repo:
+The plugin ships in two named parts: the **Policy System Marketplace** (id `ps-marketplace`),
+which is this repo, and the **Policy System Plugin** (id `ps-plugin`) it lists. Add the marketplace
+first, then install the plugin from it.
 
-```text
-URL:  `https://github.com/mindovermachine-dev/policy-system`
-```
+1. In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
+   repository**, then add this repo:
+
+   ```text
+   URL:  `https://github.com/mindovermachine-dev/policy-system`
+   ```
+
+   Or from the Claude Code CLI: `claude plugin marketplace add mindovermachine-dev/policy-system`.
+
+2. Install the plugin from that marketplace: in Claude Desktop, pick **Policy System Plugin** under
+   **Customize** → **Plugins**; in Claude Code, run `/plugin install ps-plugin@ps-marketplace` (shell
+   form: `claude plugin install ps-plugin@ps-marketplace`).
+
+The marketplace manifest has no display-name field, so "Policy System Marketplace" is the name this
+guide uses; the id you will see in lists and commands is `ps-marketplace`.
 
 This installs the full set of Policy System skills (`ps-qna`, `ps-author-policy`,
 `ps-check-regulations`, `ps-ingest-regulation`, `ps-assess-instrument-applicability`,
 `ps-invite-user`, `ps-manage-access-roles`, `ps-list-audit-events`,
 `ps-near-miss-review`, `ps-restore-instrument`, `ps-policy-lifecycle`, and
-`ps-get-catalog-listing`) and its shared `policy-system-graph` MCP connector. Unlike a
+`ps-get-catalog-listing`) and its shared **Policy System MCP** connector (server id `ps-mcp`).
+Claude is expected to list it as `plugin:ps-plugin:ps-mcp` and to name its tools
+`mcp__plugin_ps-plugin_ps-mcp__<tool>` (expected; verify with `claude mcp list`). Unlike a
 typical remote connector, this one runs **locally** — the plugin declares it as a
 `stdio` server backed by `ps-cli-mcp-bridge` (installed alongside `ps-cli` in step 6), which reaches whichever PS Service instance `ps-cli`'s current
 context points at ([Configuring which PS Service instance ps-cli
@@ -448,7 +464,7 @@ against the operating system trust store, like `ps-cli`, so it needs no environm
 and works under Claude Desktop's own environment once the local CA is trusted by the OS.
 
 Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat
-— tools bind when a conversation starts. `policy-system-graph` exposes the tools
+— tools bind when a conversation starts. `ps-mcp` exposes the tools
 backing each of the skills above — including `domain_concepts` and `cypher` for direct
 graph queries — plus the catalog-source, access-role, and audit-event tools used by the
 [Role System](./user-guide.md#role-system). If nothing binds, check
@@ -464,6 +480,40 @@ and [Manage access roles](./user-guide.md#manage-access-roles).
 
 Once installed, see the [User Guide](./user-guide.md#using-claude-desktop) for how to
 ask a question.
+
+#### Reset an earlier account-scoped marketplace (manual)
+
+Claude Desktop registers marketplaces against your Claude **account**, so a marketplace added
+under an earlier name stays registered until you remove it. Earlier checkouts of this repo named
+the marketplace `policy-system`. If Claude Desktop shows that marketplace, or Desktop's marketplace
+refresh fails with `NOT_REGISTERED`, reset it by hand. These steps are manual UI and account steps
+that no script performs; the on-screen wording is not verified here, so check each step on screen.
+
+1. In Claude Desktop, open **Customize** → **Plugins** and find any marketplace other than
+   **Policy System Marketplace** (`ps-marketplace`) whose source is
+   `github: mindovermachine-dev/policy-system`. Remove it, and remove any plugin copy it installed
+   (removing a marketplace is expected to uninstall its plugins; verify on screen).
+2. Optionally, from the Claude Code CLI, run `claude plugin marketplace list`. For each marketplace
+   other than `ps-marketplace` that points at this repo, run
+   `claude plugin marketplace remove <name-shown-in-list>`.
+3. Re-add this repo: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
+   repository**, then `https://github.com/mindovermachine-dev/policy-system`. Expect exactly one
+   marketplace, **Policy System Marketplace** (`ps-marketplace`).
+4. Install **Policy System Plugin** (`ps-plugin`). Expect its version to equal the `version` in
+   `ps-skills/ps-plugin/.claude-plugin/plugin.json` on `main`, all 12 skills to be listed, and
+   **Check for new version** to complete without an error.
+5. Run `claude plugin marketplace list` and confirm `ps-marketplace` appears, and that Claude
+   Desktop shows the same id. Refreshing the marketplace in Desktop must not fail with
+   `NOT_REGISTERED`.
+
+Acceptance checklist (tick each on screen):
+
+- [ ] Exactly one marketplace is registered for this repo: **Policy System Marketplace**
+      (`ps-marketplace`).
+- [ ] **Policy System Plugin** installs at the expected version with all 12 skills, and
+      **Check for new version** completes without an error.
+- [ ] `claude plugin marketplace list` and Claude Desktop show the same marketplace id, and a
+      refresh does not fail with `NOT_REGISTERED`.
 
 ### What is exposed (evaluator)
 
@@ -646,11 +696,13 @@ instance](./user-guide.md#point-ps-cli-at-your-instance) — use the URL [step
 A production instance is deployed with the bundled Authentik identity provider wired in, so
 logging in is required, exactly as on the evaluator instance.
 
-**Install the Policy System plugin.** Same as [Evaluator installation, step
-9](#9-install-the-policy-system-plugin): in Claude Desktop, **Customize** → **Plugins**
-→ **Add** → **Add marketplace** → **Add from a repository**, then add this repo
-(`https://github.com/mindovermachine-dev/policy-system`). The plugin's local
-`ps-cli-mcp-bridge` reuses whichever `ps-cli` context is current, so once it's set to
+**Install the Policy System Plugin.** Same as [Evaluator installation, step
+9](#9-install-the-policy-system-plugin): add the Policy System Marketplace (`ps-marketplace`) in
+Claude Desktop (**Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
+repository**, then this repo, `https://github.com/mindovermachine-dev/policy-system`), then install
+the Policy System Plugin (`ps-plugin`) with `/plugin install ps-plugin@ps-marketplace`. The plugin's
+Policy System MCP connector (`ps-mcp`) runs a local
+`ps-cli-mcp-bridge` that reuses whichever `ps-cli` context is current, so once it's set to
 `prod` above, the plugin talks to this instance with no separate configuration — and
 sends the stored `prod` credential as an `Authorization` header, same as any other
 authenticated `ps-cli` call.

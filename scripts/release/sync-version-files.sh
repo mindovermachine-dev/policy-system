@@ -8,7 +8,7 @@
 #   ps-service/pyproject.toml                          version      (uv version --package, +uv.lock)
 #   ps-cli/pyproject.toml                              version      (uv version --package, +uv.lock)
 #   charts/policy-system/Chart.yaml                    version, appVersion
-#   ps-skills/policy-system/.claude-plugin/plugin.json version
+#   ps-skills/ps-plugin/.claude-plugin/plugin.json version
 #
 # `charts/policy-system/values.yaml` is deliberately NOT synced (issue #80 AC-BI-012 amendment):
 # the chart template's `psService.image.tag | default .Chart.AppVersion` fallback means
@@ -31,7 +31,7 @@ readonly USAGE="usage: $(basename "$0") <release_version>"
 readonly PS_SERVICE_PYPROJECT_PATH="ps-service/pyproject.toml"
 readonly PS_CLI_PYPROJECT_PATH="ps-cli/pyproject.toml"
 readonly CHART_YAML_PATH="charts/policy-system/Chart.yaml"
-readonly PLUGIN_JSON_PATH="ps-skills/policy-system/.claude-plugin/plugin.json"
+readonly PLUGIN_JSON_PATH="ps-skills/ps-plugin/.claude-plugin/plugin.json"
 
 # sync_uv_package_version <package_name> <release_version>: rewrites <package_name>/pyproject.toml
 # `version` and re-locks uv.lock (PLAN A-13) -- never --frozen, which would desync uv.lock (A-14).

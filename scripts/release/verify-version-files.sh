@@ -25,7 +25,7 @@ readonly USAGE="usage: $(basename "$0") <release_version>"
 readonly PS_SERVICE_PYPROJECT_PATH="ps-service/pyproject.toml"
 readonly PS_CLI_PYPROJECT_PATH="ps-cli/pyproject.toml"
 readonly CHART_YAML_PATH="charts/policy-system/Chart.yaml"
-readonly PLUGIN_JSON_PATH="ps-skills/policy-system/.claude-plugin/plugin.json"
+readonly PLUGIN_JSON_PATH="ps-skills/ps-plugin/.claude-plugin/plugin.json"
 
 # read_pyproject_version <path>: the `[project]` `version = "..."` value.
 read_pyproject_version() {

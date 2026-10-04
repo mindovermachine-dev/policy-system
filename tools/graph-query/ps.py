@@ -13,7 +13,7 @@ CREATE/MERGE/DELETE/SET/REMOVE/DROP/FOREACH are rejected before execution,
 not just discouraged.
 
 Deprecated for end-user Q&A: this is a local-dev-only fallback, superseded
-by the `policy-system` Claude plugin (`ps-skills/policy-system/`, issue
+by the `ps-plugin` Claude plugin (`ps-skills/ps-plugin/`, issue
 #53), which ships its own MCP connector talking to a running PS Service
 instance instead of a locally-spawned subprocess against a local FalkorDB.
 Kept for contributor workflows that want raw local graph access without

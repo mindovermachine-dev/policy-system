@@ -1,6 +1,6 @@
 """Tests for `ps-author-policy`'s branch-detection sequence (issue #137, Slice 1).
 
-Proves the tool-call SEQUENCE that `ps-skills/policy-system/skills/
+Proves the tool-call SEQUENCE that `ps-skills/ps-plugin/skills/
 ps-author-policy/SKILL.md`'s Process section documents (branch detection:
 not-found / fresh / resume / fork / disagreement) actually works end to end
 against the real `cypher`/`create-policy-draft`/`get-policy` MCP tools --

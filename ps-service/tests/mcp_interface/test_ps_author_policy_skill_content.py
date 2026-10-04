@@ -9,8 +9,8 @@ pure content assertion, the "(a) Structural/content lint" mechanism PLAN.md
 - The six required section headings are present, in order: `## Purpose`,
   `## On Load`, `## Core Principles`, `## Process`, `## Guardrails`,
   `## Output`.
-- On Load text contains both connector names verbatim: `policy-system-
-  graph` and `policy-system-graph-local`.
+- On Load text names the single connector `ps-mcp` verbatim, and the skill
+  text names none of the old connector names.
 - Guardrails text contains all four forbidden tool names verbatim:
   `propose-policy`, `approve-policy`, `reject-policy`,
   `revert-policy-to-draft` (AC-BI-010's "never calling it itself").
@@ -41,7 +41,7 @@ import yaml
 _SKILL_PATH = (
     Path(__file__).resolve().parents[3]
     / "ps-skills"
-    / "policy-system"
+    / "ps-plugin"
     / "skills"
     / "ps-author-policy"
     / "SKILL.md"
@@ -56,7 +56,10 @@ _REQUIRED_HEADINGS_IN_ORDER: tuple[str, ...] = (
     "## Output",
 )
 
-_CONNECTOR_NAMES: tuple[str, ...] = ("policy-system-graph", "policy-system-graph-local")
+_CONNECTOR_NAMES: tuple[str, ...] = ("ps-mcp",)
+
+# Built by concatenation so this file itself never spells the old names.
+_OLD_GRAPH = "policy-system" + "-graph"
 
 _FORBIDDEN_TOOL_NAMES: tuple[str, ...] = (
     "propose-policy",
@@ -146,13 +149,19 @@ def _section_text(body: str, heading: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def test_on_load_names_both_connectors_verbatim() -> None:
+def test_on_load_names_the_connector_verbatim() -> None:
     text = _SKILL_PATH.read_text(encoding="utf-8")
     _frontmatter, body = _split_frontmatter(text)
     on_load = _section_text(body, "## On Load")
 
     for connector_name in _CONNECTOR_NAMES:
         assert connector_name in on_load, f"On Load is missing connector name {connector_name!r}"
+
+
+def test_skill_text_names_no_old_connector() -> None:
+    text = _SKILL_PATH.read_text(encoding="utf-8")
+
+    assert _OLD_GRAPH not in text, "the skill still names an old connector"
 
 
 def test_guardrails_names_all_four_forbidden_tools_verbatim() -> None:

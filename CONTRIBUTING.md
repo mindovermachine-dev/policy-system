@@ -140,7 +140,7 @@ The computed version is written into every version-lockstep file, in one commit:
 - `ps-service/pyproject.toml` — `[project] version`
 - `ps-cli/pyproject.toml` — `[project] version`
 - `charts/policy-system/Chart.yaml` — `version` and `appVersion`
-- `ps-skills/policy-system/.claude-plugin/plugin.json` — `version`
+- `ps-skills/ps-plugin/.claude-plugin/plugin.json` — `version`
 
 `uv.lock` is re-locked in the same commit so it stays consistent with the two
 `pyproject.toml` bumps. The commit, the annotated tag, and the push all land

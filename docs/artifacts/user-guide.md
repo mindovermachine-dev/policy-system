@@ -118,7 +118,7 @@ under the current context. Both the evaluator and production instances are deplo
 the bundled Authentik identity provider wired in, so this step is required on either.
 
 Every subsequent `ps-cli` command, and the Claude Desktop plugin's
-`policy-system-graph` connector, uses whichever context is current. See the
+Policy System MCP connector (`ps-mcp`), uses whichever context is current. See the
 [Appendix](#configuring-which-ps-service-instance-ps-cli-targets) for switching
 between multiple environments, per-command overrides, and credential storage.
 
@@ -172,10 +172,12 @@ requirement.
 
 ## Using Claude Desktop
 
-Once the Policy System plugin is installed (see [Installation Guide: Install the
-plugin](./installation-guide.md#9-install-the-policy-system-plugin)),
+Once the Policy System Plugin is installed (see [Installation Guide: Install the
+Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin);
+the install command is `/plugin install ps-plugin@ps-marketplace`, after adding the
+Policy System Marketplace, `ps-marketplace`),
 you can ask compliance questions directly in a Claude Desktop chat. The plugin's
-`policy-system-graph` MCP connector reaches whichever PS Service instance `ps-cli`'s
+Policy System MCP connector (`ps-mcp`) reaches whichever PS Service instance `ps-cli`'s
 current context points at (see [Point ps-cli at your
 instance](#point-ps-cli-at-your-instance)).
 
@@ -428,7 +430,7 @@ single vendor's IdP is assumed) is implemented server-side
 given deployment enforces it once configured with an issuer/audience. The
 evaluator deployment (see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)) and production both
-are, so every `ps-cli` command (and the plugin's `policy-system-graph` connector — see
+are, so every `ps-cli` command (and the plugin's `ps-mcp` connector — see
 [Using Claude Desktop](#using-claude-desktop)) needs `ps-cli auth login` first. Only a
 deployment started with the local-test bypass (`PS_SERVICE_LOCAL_TEST_BYPASS`, which cannot
 run in a container) needs no login. Re-running `config set-context` for an existing context name with a
@@ -563,7 +565,7 @@ the above — delete it directly wherever you created it.
 | `PS_CLI_CONFIG_DIR` (env var) | ps-cli | `~/.config/ps-cli/` | Where `targets.toml` is read/written. |
 | `targets.toml` (`[contexts]`, `current_context`) | ps-cli | none until `config set-context` is run | Named PS Service targets and which one is current. Never contains a credential. |
 
-This table covers `ps-cli` only. The Policy System plugin's `policy-system-graph`
+This table covers `ps-cli` only. The Policy System Plugin's `ps-mcp`
 connector needs no configuration of its own — it runs as a local `ps-cli-mcp-bridge`
 process that reuses whichever `ps-cli` context is current, so every row above already
 governs it too.

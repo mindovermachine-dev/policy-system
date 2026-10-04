@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from conftest import ReleaseFixture
 
 CHART_RELATIVE_PATH = "charts/policy-system/Chart.yaml"
-PLUGIN_RELATIVE_PATH = "ps-skills/policy-system/.claude-plugin/plugin.json"
+PLUGIN_RELATIVE_PATH = "ps-skills/ps-plugin/.claude-plugin/plugin.json"
 
 
 def test_docs_only_commits_produce_no_commit_no_tag_and_exit_zero(

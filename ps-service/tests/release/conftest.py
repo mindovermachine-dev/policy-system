@@ -30,7 +30,7 @@ Fixture layout under `tmp_path` (CHANGES X-06 recipe):
 
 The seeded `work/` tree holds a minimal offline uv workspace (root `pyproject.toml`, two
 dependency-free hatchling members `ps-service` and `ps-cli` at `0.11.0`, a `uv.lock`) plus real
-copies of `charts/policy-system/Chart.yaml` and `ps-skills/policy-system/.claude-plugin/
+copies of `charts/policy-system/Chart.yaml` and `ps-skills/ps-plugin/.claude-plugin/
 plugin.json`, so `sed`/`awk` patterns are exercised on the true file shapes -- with their
 version fields immediately reseeded to `SEED_TAG` (see `_copy_real_version_files`), so the
 seeded baseline never depends on whatever version happens to be checked out on `main`
@@ -65,7 +65,7 @@ SEED_HEADER = "chore: seed"
 MINI_WORKSPACE_MEMBERS = ("ps-service", "ps-cli")
 REAL_VERSION_FILES = (
     Path("charts/policy-system/Chart.yaml"),
-    Path("ps-skills/policy-system/.claude-plugin/plugin.json"),
+    Path("ps-skills/ps-plugin/.claude-plugin/plugin.json"),
 )
 
 # Mirror `sync-version-files.sh`'s own `sed -E` patterns field-for-field (`scripts/release/

@@ -292,7 +292,7 @@ def _graph_name() -> str:
 
 
 server = MCPServer(
-    name="policy-system-graph",
+    name="ps-mcp",
     instructions=(
         "Read-only Cypher access to the policy_system compliance graph. "
         "Call the domain_concepts tool first (the same text as the psdomain://concepts "

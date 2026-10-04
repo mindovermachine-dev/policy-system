@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "policy-system-graph": {
-      "type": "stdio",
-      "command": "ps-cli-mcp-bridge"
-    }
-  }
-}

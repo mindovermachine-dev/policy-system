@@ -2,7 +2,7 @@
 
 `sync-version-files.sh` writes `release_version` into the version-lockstep fields across four
 files (`ps-service/pyproject.toml`, `ps-cli/pyproject.toml`, `charts/policy-system/Chart.yaml`
-(`version` + `appVersion`)) and `ps-skills/policy-system/.claude-plugin/plugin.json` -- re-locking
+(`version` + `appVersion`)) and `ps-skills/ps-plugin/.claude-plugin/plugin.json` -- re-locking
 `uv.lock` for the two uv workspace members along the way (PLAN A-13). `charts/policy-system/
 values.yaml` is no longer synced here (issue #80 AC-BI-012 amendment): its `psService.image.tag`
 defaults to empty and falls back to `Chart.yaml`'s `appVersion` via the chart template instead.
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 SUBPROCESS_TIMEOUT_SECONDS = 60.0
 
 CHART_RELATIVE_PATH = "charts/policy-system/Chart.yaml"
-PLUGIN_RELATIVE_PATH = "ps-skills/policy-system/.claude-plugin/plugin.json"
+PLUGIN_RELATIVE_PATH = "ps-skills/ps-plugin/.claude-plugin/plugin.json"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SEED_TAG = "0.11.0"  # mirrors conftest.SEED_TAG; duplicated per this package's REPO_ROOT precedent

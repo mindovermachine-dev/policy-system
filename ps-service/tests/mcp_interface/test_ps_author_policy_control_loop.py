@@ -7,7 +7,7 @@ Five proofs, per PLAN.md Section 5 "Slice 4":
    `add-control-to-draft` -> `update-control-draft` x6 sequence against a
    module-local `_HybridGraph` (adapted from `test_ps_author_policy_
    standard_loop.py`'s own shape, Slice 3, one level deeper), proving the
-   tool-call SEQUENCE `ps-skills/policy-system/skills/ps-author-policy/
+   tool-call SEQUENCE `ps-skills/ps-plugin/skills/ps-author-policy/
    SKILL.md`'s new "Control authoring loop" sub-flow documents:
    `add-control-to-draft(standard_id, title=<derived>,
    control_type=<answer>)` with no content `fields` at creation time

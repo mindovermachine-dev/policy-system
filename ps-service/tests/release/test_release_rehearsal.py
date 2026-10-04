@@ -219,7 +219,7 @@ def test_release_rehearsal_on_a_clone_of_this_repo(tmp_path: Path) -> None:
     assert chart["appVersion"] == expected_release_version
 
     plugin = json.loads(
-        (work / "ps-skills" / "policy-system" / ".claude-plugin" / "plugin.json").read_text(
+        (work / "ps-skills" / "ps-plugin" / ".claude-plugin" / "plugin.json").read_text(
             encoding="utf-8"
         )
     )

@@ -5,7 +5,7 @@ Two independent proofs, per PLAN.md Section 5 "Slice 2":
 1. `test_scaffold_then_field_loop_persists_every_field_in_documented_order`
    -- a scripted `create-policy-draft` -> `update-policy-draft` x6 sequence
    against a module-local `_HybridGraph` fake, proving the tool-call
-   SEQUENCE `ps-skills/policy-system/skills/ps-author-policy/SKILL.md`'s
+   SEQUENCE `ps-skills/ps-plugin/skills/ps-author-policy/SKILL.md`'s
    new "Policy authoring loop" sub-flow documents: the scaffold (Title,
    derived and never asked for, D-3; then `scope_in`/`scope_out` persisted
    together as the "1-2 fields" of AC-BI-002) followed by one
