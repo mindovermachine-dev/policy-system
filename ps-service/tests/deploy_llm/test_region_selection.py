@@ -29,11 +29,12 @@ def test_uses_configured_region_directly(deploy_llm_fixture: DeployLlmFixture) -
 
     deploy_llm_fixture.run_deploy("--yes", expect=0)
 
-    # Only LLM_REGION (swedencentral) is ever checked when it already satisfies both models --
-    # no candidate probing happens on the success path.
-    assert _model_list_calls(deploy_llm_fixture) == [
-        "cognitiveservices model list --location swedencentral",
-    ]
+    # Only LLM_REGION (swedencentral) is ever queried when it already satisfies both models --
+    # no candidate probing happens on the success path. (The list is also read once more in
+    # provisioning for the model versions `deployment create` requires, hence "any number".)
+    calls = _model_list_calls(deploy_llm_fixture)
+    assert calls
+    assert set(calls) == {"cognitiveservices model list --location swedencentral"}
 
 
 def test_region_not_generally_available_fails_and_reports_working_alternatives(

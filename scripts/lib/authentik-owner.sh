@@ -209,13 +209,17 @@ check_token_accepted() {
 }
 
 # wait_for_authentik_blueprint: blocks (bounded) until the bundled blueprint instance is
-# `successful`. On a fresh install the API answers as soon as the server is Ready, but the worker
+# `successful`. A blueprint that lands in `error` is re-applied (up to PS_BLUEPRINT_REAPPLY_ATTEMPTS,
+# default 3): on a fresh install the worker applies several blueprints at once and Postgres can abort
+# one with a deadlock, and Authentik re-applies a blueprint only when its file changes, so an
+# `error` left alone stays `error` forever. On a fresh install the API answers as soon as the server is Ready, but the worker
 # discovers and applies blueprints about a minute later; a recovery link requested earlier fails
 # with "No recovery flow set." (found live, LC3). PS_BLUEPRINT_WAIT_ATTEMPTS/_INTERVAL_SECONDS
 # (default 90 x 2s) bound the wait.
 wait_for_authentik_blueprint() {
   local attempts="${PS_BLUEPRINT_WAIT_ATTEMPTS:-90}" interval="${PS_BLUEPRINT_WAIT_INTERVAL_SECONDS:-2}"
-  local i state="" encoded
+  local reapplies_left="${PS_BLUEPRINT_REAPPLY_ATTEMPTS:-3}"
+  local i state="" encoded pk
   encoded="$(jq -rn --arg v "$AUTHENTIK_BLUEPRINT_NAME" '$v | @uri')"
   for ((i = 0; i < attempts; i++)); do
     if authentik_api GET "/managed/blueprints/?name=${encoded}" && [[ "$AUTHENTIK_HTTP_STATUS" == "200" ]]; then
@@ -224,10 +228,18 @@ wait_for_authentik_blueprint() {
       if [[ "$state" == "successful" ]]; then
         return 0
       fi
+      if [[ "$state" == "error" && "$reapplies_left" -gt 0 ]]; then
+        pk="$(printf '%s' "$AUTHENTIK_HTTP_BODY" | jq -r --arg n "$AUTHENTIK_BLUEPRINT_NAME" \
+          '[.results[]? | select(.name == $n)][0].pk // empty')"
+        if [[ -n "$pk" ]]; then
+          reapplies_left=$((reapplies_left - 1))
+          authentik_api POST "/managed/blueprints/${pk}/apply/" || true
+        fi
+      fi
     fi
     sleep "$interval"
   done
-  print_error 'Authentik has not applied its "%s" blueprint (status: %s). Fix: check the Authentik worker is Running and look at its log (kubectl logs deploy/policy-system-authentik-worker), then re-run; nothing was created.\n' \
+  print_error 'Authentik has not applied its "%s" blueprint (status: %s). Fix: check the Authentik worker is Running and look at its log (kubectl logs deploy/policy-system-authentik-worker; a status of error usually has its cause in the task log), then re-run; nothing was created.\n' \
     "$AUTHENTIK_BLUEPRINT_NAME" "${state:-not found yet}"
   return 1
 }

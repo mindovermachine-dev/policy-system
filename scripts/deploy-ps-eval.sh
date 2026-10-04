@@ -5,19 +5,25 @@
 # link printed. No password is ever set, prompted for, or logged.
 #
 # Usage:
-#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--yes]
+#   scripts/deploy-ps-eval.sh [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--yes]
 #
 #   --owner-email  The first SystemOwner. Prompted for when omitted. The address is both the
 #                  Authentik username and the OIDC `sub` PS Service expects, so the deploy sets
 #                  the owner identity in one pass.
 #   --hostname     The name Authentik is served under (default authentik.local). It must resolve
-#                  to this machine on every machine that logs in (/etc/hosts); the script never
-#                  edits /etc/hosts itself.
+#                  to this machine on every machine that logs in (/etc/hosts).
+#   --apply-host-setup
+#                  Run the two sudo steps this machine needs when they are not already done
+#                  (map the hostname to 127.0.0.1 in /etc/hosts; trust the local CA in the macOS
+#                  system keychain) without asking. Without it, an interactive run asks first and
+#                  a non-interactive run only prints the commands. Nothing is touched when both
+#                  are already in place.
 #   --yes          Non-interactive: never prompt (an owner email is then required).
 #
 # Environment: PS_CHART_REF (chart path or OCI ref; default the published OCI chart),
 # PS_EVAL_STATE_DIR (local CA and certificate; default ~/.config/policy-system/eval-tls),
-# PS_OWNER_LINK_TTL (minutes the enrolment link stays valid; default 30), PS_ROLLOUT_TIMEOUT.
+# PS_OWNER_LINK_TTL (minutes the enrolment link stays valid; default 30), PS_ROLLOUT_TIMEOUT,
+# PS_HOSTS_FILE (hosts file checked and edited; default /etc/hosts).
 #
 # Re-running is the owner-recovery path (gated by cluster access): an owner with no passkey gets a
 # fresh link, an owner with one is left untouched. Certificate verification is never disabled:
@@ -52,7 +58,7 @@ source "${SCRIPT_DIR}/lib/local-tls.sh"
 
 readonly EXIT_USAGE=2
 readonly EXIT_FAILURE=1
-USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--yes]"
+USAGE="usage: $(basename "$0") [--owner-email <address>] [--hostname <name>] [--apply-host-setup] [--yes]"
 readonly USAGE
 
 readonly HELM_RELEASE_NAME="policy-system"
@@ -68,7 +74,9 @@ readonly AUTHENTIK_HTTPS_PORT=30443
 readonly AUTHENTIK_APP_SLUG="ps-cli"
 readonly AUTHENTIK_SCOPES="openid profile email offline_access"
 readonly PS_SERVICE_LOCAL_URL="http://127.0.0.1:8000"
+readonly PS_CLI_CONTEXT="eval"
 readonly INSTALL_GUIDE="docs/artifacts/installation-guide.md"
+readonly INSTALL_GUIDE_TRUST_STEP="${INSTALL_GUIDE}#8-register-your-passkey-and-log-in-with-ps-cli"
 
 # Process-wide state, plain assignment only (never inside $(...), so writes reach the caller).
 # OWNER_EMAIL, SKIP_OWNER_PROMPT, AUTHENTIK_API_BASE, AUTHENTIK_LINK_BASE and AUTHENTIK_CURL_ARGS
@@ -84,12 +92,17 @@ namespace="default"
 node_ip=""
 made_release_change=false
 cert_refreshed=false
+apply_host_setup=false
+needs_hosts=false
+needs_trust=false
+ps_cli_context_ready=false
 
 # parse_args <args...>: sets OWNER_EMAIL/hostname_arg/SKIP_OWNER_PROMPT from the flags.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --yes) SKIP_OWNER_PROMPT=true ;;
+      --apply-host-setup) apply_host_setup=true ;;
       --owner-email | --hostname)
         if [[ $# -lt 2 || -z "$2" ]]; then
           print_error '%s needs a value\n%s\n' "$1" "$USAGE"
@@ -264,8 +277,87 @@ ensure_authentik_serves_local_cert() {
   stop_authentik_port_forward
 }
 
-# print_closing_summary <host>: what the evaluator does next. The enrolment link is printed last,
-# exactly once (it is a single-use credential-equivalent).
+# hosts_file: the file checked and edited for the hostname mapping.
+hosts_file() {
+  printf '%s' "${PS_HOSTS_FILE:-/etc/hosts}"
+}
+
+# host_maps_to_loopback <host>: 0 when the hosts file maps <host> to 127.0.0.1.
+host_maps_to_loopback() {
+  awk -v host="$1" '
+    { sub(/#.*/, "") }
+    $1 == "127.0.0.1" { for (i = 2; i <= NF; i++) if ($i == host) found = 1 }
+    END { exit !found }' "$(hosts_file)" 2>/dev/null
+}
+
+# ca_is_trusted <ca.pem>: 0 when the macOS system trust settings accept the CA. Other systems
+# cannot be checked, so they report "not trusted" and get the guide pointer.
+ca_is_trusted() {
+  [[ "$(uname -s)" == Darwin ]] && command -v security >/dev/null 2>&1 \
+    && security verify-cert -c "$1" >/dev/null 2>&1
+}
+
+# check_local_access <host> <ca>: sets needs_hosts/needs_trust to what this machine still lacks.
+check_local_access() {
+  needs_hosts=false
+  needs_trust=false
+  host_maps_to_loopback "$1" || needs_hosts=true
+  ca_is_trusted "$2" || needs_trust=true
+}
+
+# confirm_local_access_setup: 0 when the sudo steps may run now: --apply-host-setup, or a yes at
+# the prompt of an interactive run. A non-interactive run without the flag only prints them.
+confirm_local_access_setup() {
+  local answer=""
+  [[ "$apply_host_setup" == true ]] && return 0
+  [[ "$SKIP_OWNER_PROMPT" == true || ! -t 0 ]] && return 1
+  printf 'This machine still needs sudo steps to open the enrolment link (hostname mapping and/or CA trust). Run them now? [y/N] ' >&2
+  read -r answer || true
+  [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]]
+}
+
+# setup_local_access <host>: when this machine lacks the hostname mapping or CA trust, runs the
+# sudo steps if the evaluator agreed, then re-checks. A step that fails (sudo declined) stays
+# outstanding and is printed by the closing summary instead.
+setup_local_access() {
+  local host="$1" ca
+  ca="$(local_tls_state_dir)/ca.pem"
+  check_local_access "$host" "$ca"
+  [[ "$needs_hosts" == false && "$needs_trust" == false ]] && return 0
+  confirm_local_access_setup || return 0
+  if [[ "$needs_hosts" == true ]]; then
+    log_step "Mapping ${host} to 127.0.0.1 in $(hosts_file) (sudo)"
+    printf '127.0.0.1 %s\n' "$host" | sudo tee -a "$(hosts_file)" >/dev/null || true
+  fi
+  if [[ "$needs_trust" == true && "$(uname -s)" == Darwin ]]; then
+    log_step "Trusting the local CA in the system keychain (sudo)"
+    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$ca" || true
+  fi
+  check_local_access "$host" "$ca"
+}
+
+# configure_ps_cli_context: points ps-cli's "eval" context at PS Service and selects it, unless it
+# already is (set-context deletes the context's stored login, so a re-run must not repeat it).
+# Sets ps_cli_context_ready; any failure leaves it false and the summary prints the commands.
+configure_ps_cli_context() {
+  ps_cli_context_ready=false
+  command -v ps-cli >/dev/null 2>&1 || return 0
+  local contexts
+  contexts="$(ps-cli config get-contexts 2>/dev/null || true)"
+  if grep -Eq "\*.*[[:space:]]${PS_CLI_CONTEXT}[[:space:]].*${PS_SERVICE_LOCAL_URL//./\\.}[[:space:]]" <<<"$contexts"; then
+    ps_cli_context_ready=true
+    return 0
+  fi
+  log_step "Pointing ps-cli's ${PS_CLI_CONTEXT} context at ${PS_SERVICE_LOCAL_URL}"
+  if ps-cli config set-context "$PS_CLI_CONTEXT" --url "$PS_SERVICE_LOCAL_URL" >/dev/null \
+    && ps-cli config use-context "$PS_CLI_CONTEXT" >/dev/null; then
+    ps_cli_context_ready=true
+  fi
+}
+
+# print_closing_summary <host>: what the evaluator does next. Only the steps this machine still
+# lacks are listed; ps-cli and other-machine setup live in the installation guide. The
+# enrolment link is printed last, exactly once (it is a single-use credential-equivalent).
 print_closing_summary() {
   local host="$1" ca
   ca="$(local_tls_state_dir)/ca.pem"
@@ -274,28 +366,30 @@ print_closing_summary() {
   else
     printf 'Policy System (evaluator profile) already up to date.\n'
   fi
-  cat <<EOF
-
-Authentik:  https://${host}:${AUTHENTIK_HTTPS_PORT}/
-PS Service: ${PS_SERVICE_LOCAL_URL}
-
-Before opening the enrolment link in a browser on this machine:
-  1. Map the hostname:     echo '127.0.0.1 ${host}' | sudo tee -a /etc/hosts
-  2. Trust the local CA:   ${ca}
-     (macOS: sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ${ca})
-
-For ps-cli and the MCP bridge (they read SSL_CERT_FILE, not the operating system trust store;
-the variable REPLACES the default CA bundle for that process, so set it for ps-cli only):
-  export SSL_CERT_FILE=${ca}
-  ps-cli config set-context eval --url ${PS_SERVICE_LOCAL_URL}
-  ps-cli config use-context eval
-  ps-cli auth login
-
-LAN colleagues: copy ${ca} to their machine and trust it there, and map ${host} to this
-machine's LAN IP in their hosts file. Authentik's HTTPS login (port ${AUTHENTIK_HTTPS_PORT}) is
-reachable from your LAN by design in this profile, admin UI included.
-
-EOF
+  printf '\nAuthentik:  https://%s:%s/\nPS Service: %s\n\n' \
+    "$host" "$AUTHENTIK_HTTPS_PORT" "$PS_SERVICE_LOCAL_URL"
+  if [[ "$needs_hosts" == true || "$needs_trust" == true ]]; then
+    printf 'Before opening the enrolment link in a browser on this machine, run:\n'
+    if [[ "$needs_hosts" == true ]]; then
+      printf "  echo '127.0.0.1 %s' | sudo tee -a %s\n" "$host" "$(hosts_file)"
+    fi
+    if [[ "$needs_trust" == true ]]; then
+      printf '  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain %s\n' "$ca"
+      printf '  (not macOS: import %s as a trusted root in your system or browser store)\n' "$ca"
+    fi
+    printf '(or re-run with --apply-host-setup to have the script do it)\n\n'
+  else
+    printf 'This machine is ready: %s resolves to 127.0.0.1 and the local CA is trusted.\n\n' "$host"
+  fi
+  if [[ "$ps_cli_context_ready" == true ]]; then
+    printf 'ps-cli is pointed at %s. After you register the passkey, log in with:\n' "$PS_SERVICE_LOCAL_URL"
+  else
+    printf 'Point ps-cli at this instance, then log in once the passkey is registered:\n'
+    printf '  ps-cli config set-context %s --url %s\n  ps-cli config use-context %s\n' \
+      "$PS_CLI_CONTEXT" "$PS_SERVICE_LOCAL_URL" "$PS_CLI_CONTEXT"
+  fi
+  printf '  SSL_CERT_FILE=%s ps-cli auth login\n\n' "$ca"
+  printf 'Other machines (LAN colleagues): copy %s there and see %s\n\n' "$ca" "$INSTALL_GUIDE_TRUST_STEP"
   print_owner_link_message
 }
 
@@ -343,6 +437,8 @@ main() {
     --resolve "${hostname_arg}:${AUTHENTIK_HTTPS_PORT}:127.0.0.1")
   provision_owner "$OWNER_EMAIL" || exit "$EXIT_FAILURE"
 
+  setup_local_access "$hostname_arg"
+  configure_ps_cli_context
   print_closing_summary "$hostname_arg"
 }
 

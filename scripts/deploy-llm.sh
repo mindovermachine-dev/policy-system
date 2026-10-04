@@ -602,18 +602,27 @@ deployment_exists() {
     >/dev/null 2>&1
 }
 
-# ensure_deployment <account_name> <deployment_name> <sku> <capacity>: create-if-absent, using
-# the deployment name as the model name (design doc's own reference deployment does the same,
-# e.g. "Deployment: gpt-5.4-mini").
+# model_version <model_list_json> <model_name>: prints the version Azure's `model list` reports
+# for <model_name> -- `az cognitiveservices account deployment create` hard-requires an explicit
+# `--model-version`.
+model_version() {
+  local model_list="$1" model_name="$2"
+  jq -r --arg name "$model_name" '.[] | select(.model.name == $name) | .model.version' \
+    <<< "$model_list" | head -n1
+}
+
+# ensure_deployment <account_name> <deployment_name> <sku> <capacity> <model_version>:
+# create-if-absent, using the deployment name as the model name (design doc's own reference
+# deployment does the same, e.g. "Deployment: gpt-5.4-mini").
 ensure_deployment() {
-  local account_name="$1" deployment_name="$2" sku="$3" capacity="$4"
+  local account_name="$1" deployment_name="$2" sku="$3" capacity="$4" version="$5"
   if deployment_exists "$account_name" "$deployment_name"; then
     return 0
   fi
   az cognitiveservices account deployment create --name "$account_name" \
     --resource-group "$RESOURCE_GROUP_NAME" --deployment-name "$deployment_name" \
-    --model-name "$deployment_name" --model-format OpenAI --sku-name "$sku" \
-    --sku-capacity "$capacity" >/dev/null
+    --model-name "$deployment_name" --model-version "$version" --model-format OpenAI \
+    --sku-name "$sku" --sku-capacity "$capacity" >/dev/null
   made_changes=true
 }
 
@@ -699,18 +708,19 @@ write_secret_if_changed() {
 # write-if-changed three-secret step (AC-BI-009, AC-BI-010, AC-BI-011, AC-BI-012).
 provision_resources() {
   local region="$1" account_name="$2" vault_name="$3"
-  local key1
+  local key1 model_list
 
+  model_list="$(az cognitiveservices model list --location "$region")"
   log_step "Ensuring resource group $RESOURCE_GROUP_NAME"
   ensure_resource_group "$region"
   log_step "Ensuring AIServices account $account_name"
   ensure_account "$account_name" "$region"
   log_step "Ensuring chat deployment $LLM_CHAT_MODEL_NAME"
   ensure_deployment "$account_name" "$LLM_CHAT_MODEL_NAME" "$CHAT_MODEL_SKU" \
-    "$LLM_CHAT_MODEL_CAPACITY"
+    "$LLM_CHAT_MODEL_CAPACITY" "$(model_version "$model_list" "$LLM_CHAT_MODEL_NAME")"
   log_step "Ensuring embedding deployment $LLM_EMBED_MODEL_NAME"
   ensure_deployment "$account_name" "$LLM_EMBED_MODEL_NAME" "$EMBED_MODEL_SKU" \
-    "$LLM_EMBED_MODEL_CAPACITY"
+    "$LLM_EMBED_MODEL_CAPACITY" "$(model_version "$model_list" "$LLM_EMBED_MODEL_NAME")"
   log_step "Ensuring Key Vault $vault_name"
   ensure_keyvault "$vault_name" "$region"
   log_step "Granting Key Vault access to the signed-in identity"

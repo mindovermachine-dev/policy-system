@@ -176,7 +176,7 @@ requirement.
 ## Using Claude Desktop
 
 Once the Policy System plugin is installed (see [Installation Guide: Install the
-plugin](./installation-guide.md#install-the-plugin)),
+plugin](./installation-guide.md#9-install-the-policy-system-plugin)),
 you can ask compliance questions directly in a Claude Desktop chat. The plugin's
 `policy-system-graph` MCP connector reaches whichever PS Service instance `ps-cli`'s
 current context points at (see [Point ps-cli at your
@@ -227,7 +227,7 @@ System](#role-system). The invitee opens the link, enters a username, name and e
 and registers a passkey — there is no password field, and the account has no password
 set. On the evaluator instance the invitee's machine needs the same CA trust and hostname
 mapping as the owner's (see [Installation Guide, step
-8](./installation-guide.md#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin)).
+8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli)).
 On production, `invite_url` carries the public address only once the deployed PS Service
 release supports `PS_AUTHENTIK_PUBLIC_URL`; see [Installation Guide: Verification
 status](./installation-guide.md#verification-status).

@@ -98,7 +98,7 @@ system trust store, only `SSL_CERT_FILE`/`SSL_CERT_DIR`, so on the evaluator the
 for that process). Browsers need the CA imported into the OS or browser store instead, and
 passkeys only work over such a trusted HTTPS origin. Production uses a public Let's Encrypt
 certificate, so none of this applies there. See the [Installation
-Guide](./installation-guide.md#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin).
+Guide](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli).
 
 ### Passkey-only enrolment and recovery
 

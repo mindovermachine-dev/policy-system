@@ -11,7 +11,8 @@
   - [5. Provision the Azure LLM backend](#5-provision-the-azure-llm-backend)
   - [6. Install ps-cli](#6-install-ps-cli)
   - [7. Deploy Policy System Backend](#7-deploy-policy-system-backend)
-  - [8. Trust the local CA, log in and install the Policy System plugin](#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin)
+  - [8. Register your passkey and log in with ps-cli](#8-register-your-passkey-and-log-in-with-ps-cli)
+  - [9. Install the Policy System plugin](#9-install-the-policy-system-plugin)
   - [What is exposed (evaluator)](#what-is-exposed-evaluator)
 - [Production installation](#production-installation)
   - [Prerequisites (Production)](#prerequisites-production)
@@ -252,7 +253,8 @@ Authentik administrator. Options:
 | Option | Meaning |
 | --- | --- |
 | `--owner-email <address>` | The owner's email; skips the prompt. The address is both the Authentik username and the OIDC `sub` PS Service expects. |
-| `--hostname <name>` | The name Authentik is served under (default `authentik.local`). It must resolve to this machine on every machine that logs in; the script never edits `/etc/hosts` itself. |
+| `--hostname <name>` | The name Authentik is served under (default `authentik.local`). It must resolve to this machine on every machine that logs in. |
+| `--apply-host-setup` | Runs, through `sudo`, the steps this machine still lacks: mapping the hostname to `127.0.0.1` in `/etc/hosts` and (macOS) trusting the local CA in the system keychain. Without it an interactive run asks first, and a `--yes` run only prints the commands. Nothing happens when both are already in place. |
 | `--yes` | Never prompt. An owner email is then required (`--owner-email`). |
 
 `PS_OWNER_LINK_TTL` (minutes the enrolment link stays valid, default `30`), `PS_EVAL_STATE_DIR`
@@ -282,7 +284,7 @@ In one pass the script:
    **no password is set, prompted for or logged** — and prints a single-use, time-limited link
    to register a passkey.
 
-It ends with the exact commands for the next step, and the enrolment link last. Then check
+It ends with what is left to do on this machine, the `ps-cli` login command, and the enrolment link last. Then check
 the pods and PS Service:
 
 ```bash
@@ -320,56 +322,72 @@ for how to upgrade to a newer release later — your graph data is kept across u
 A freshly deployed system has an empty graph and can answer nothing — see the [User
 Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
 
-### 8. Trust the local CA, log in and install the Policy System plugin
+### 8. Register your passkey and log in with ps-cli
 
-#### Trust the certificate and map the hostname
+The script's closing output tells you what, if anything, is still left to do on this machine.
+Work through the parts below in order.
 
-Do this on **every machine whose browser or `ps-cli` will log in**. The script's closing
-output prints the exact paths; the CA certificate is `~/.config/policy-system/eval-tls/ca.pem`
-unless you set `PS_EVAL_STATE_DIR`.
+#### This machine: hostname and certificate
 
-- **Map the hostname.**
-  - On the evaluator's own machine (the one running the kind cluster), map it to loopback:
-    ```bash
-    echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
-    ```
-  - On a **colleague's machine on the same LAN**, map it to the evaluator laptop's LAN IP
-    instead (e.g. `ipconfig getifaddr en0` on macOS on the laptop):
-    ```
-    192.168.1.42 authentik.local
-    ```
-- **Trust the CA in the browser.** On macOS, the command the script prints is:
-  ```bash
-  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
-  ```
-  On other systems, import `ca.pem` as a trusted root certificate in the operating system's
-  or browser's certificate store (Firefox keeps its own store). A colleague first copies
-  `ca.pem` — the **certificate only, never `ca.key`** — from the evaluator's machine.
-- **Trust the CA for `ps-cli` and the MCP bridge.** `ps-cli` and `ps-cli-mcp-bridge` do **not**
-  read the operating system trust store; they honour only the `SSL_CERT_FILE` (or
-  `SSL_CERT_DIR`) environment variable. Setting it **replaces** the default CA bundle for that
-  process, so set it for `ps-cli` only, not in your shell profile:
-  ```bash
-  export SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem
-  ```
-  Without it, `ps-cli auth login` fails with a generic "Could not reach ..." message — that
-  message is a certificate-trust problem here, not a network one.
+For the passkey page to open, this machine must resolve `authentik.local` to `127.0.0.1` and
+trust the local CA (`~/.config/policy-system/eval-tls/ca.pem`, or under `PS_EVAL_STATE_DIR`).
+The script checks both. If either is missing it asks whether to run the two `sudo` steps for
+you (`--apply-host-setup` answers yes in advance); if everything is in place it prints
+"This machine is ready" and you can skip to the next part. If you declined, or the `sudo` step
+failed, run what the output lists:
 
-A colleague on the LAN can log in with a passkey **on the condition that they trust the CA and
-map the hostname** as above. Without both, their browser shows a certificate warning and passkey
-registration does not work.
+```bash
+echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
+```
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
+```
+
+The second command is macOS only. On other systems, import `ca.pem` as a trusted root
+certificate in the operating system's or browser's certificate store (Firefox keeps its own
+store).
 
 #### Register the owner's passkey
 
-Open the enrolment link the script printed last, in a browser on a machine set up as above.
-There is no username or password prompt: the page asks you to register a passkey (a security
-key, the platform authenticator, or a phone), and registering it also logs you in. The link
-works once and expires after `PS_OWNER_LINK_TTL` minutes (default 30); if it lapsed, re-run
+Open the enrolment link the script printed last, in a browser on this machine. There is no
+username or password prompt: the page asks you to register a passkey (a security key, the
+platform authenticator, or a phone), and registering it also logs you in. The link works once
+and expires after `PS_OWNER_LINK_TTL` minutes (default 30); if it lapsed, re-run
 `scripts/deploy-ps-eval.sh` for a fresh one.
 
-#### Point `ps-cli` at the instance and log in
+Registration ends on Authentik's own application library, which shows **"No Applications
+available"**. That is expected, not a failure: the only application is the `ps-cli` OAuth
+client, which has no launch URL, so Authentik does not list it. You are registered and logged
+in; continue with the next part.
 
-The evaluator instance requires login. With `SSL_CERT_FILE` exported as above:
+#### Log in with ps-cli
+
+The script has already pointed `ps-cli` at the instance: it set and selected the `eval`
+context (`http://127.0.0.1:8000`), unless that context was already correct. It cannot log in
+for you, because the login needs the passkey you just registered. Run the command the script
+printed:
+
+```bash
+SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem ps-cli auth login
+```
+
+`ps-cli` reads the CA only from `SSL_CERT_FILE`, not from the operating system trust store, and
+the variable **replaces** the default CA bundle for that process. Setting it inline, as above,
+keeps it out of your shell. Without it, `auth login` fails with a generic "Could not reach ..."
+message that is a certificate-trust problem here, not a network one. `ps-cli` refreshes its
+token against Authentik, so later commands need the same variable; `export` it in the shell you
+use for `ps-cli` rather than in your profile.
+
+`auth login` prints a verification URL and code; open it in the browser you registered the
+passkey in and complete the sign-in. Then verify:
+
+```bash
+ps-cli get health
+```
+
+If the script printed the context commands instead (because `ps-cli` was not on `PATH` when it
+ran, see step 6), run them once first:
 
 ```bash
 ps-cli config set-context eval --url http://127.0.0.1:8000
@@ -379,23 +397,35 @@ ps-cli config set-context eval --url http://127.0.0.1:8000
 ps-cli config use-context eval
 ```
 
-```bash
-ps-cli auth login
-```
-
-`auth login` prints a verification URL and code; open it in the browser you registered the
-passkey in and complete the sign-in. See [User Guide: Point ps-cli at your
+See [User Guide: Point ps-cli at your
 instance](./user-guide.md#point-ps-cli-at-your-instance) for what each command does and the
-[Appendix](./user-guide.md#appendix-ps-cli-reference) for credential storage. Then verify:
+[Appendix](./user-guide.md#appendix-ps-cli-reference) for credential storage. `PS Service`
+itself is addressed over plain HTTP on the loopback address, which `ps-cli` allows; only the
+Authentik issuer needs HTTPS and the CA.
 
-```bash
-ps-cli get health
-```
+#### Another machine (a colleague on the LAN)
 
-`PS Service` itself is addressed over plain HTTP on the loopback address, which `ps-cli`
-allows; only the Authentik issuer needs HTTPS and the CA.
+Repeat the hostname and certificate setup on every other machine whose browser or `ps-cli`
+will log in, with two differences:
 
-#### Install the plugin
+- **Map the hostname to the evaluator laptop's LAN IP**, not loopback (for example
+  `ipconfig getifaddr en0` on macOS on the laptop), in that machine's hosts file:
+  ```
+  192.168.1.42 authentik.local
+  ```
+- **Copy the CA certificate from the evaluator's machine.** It is the file
+  `~/.config/policy-system/eval-tls/ca.pem` (under `PS_EVAL_STATE_DIR` instead, if you set it;
+  the script's closing output prints the full path). Send the certificate only, **never
+  `ca.key`** in the same folder. Any file transfer works (AirDrop, a shared drive, or `scp`
+  if Remote Login is enabled on the laptop).
+  Then trust that copy as above. For `ps-cli`, point `SSL_CERT_FILE` at it.
+
+Without both, their browser shows a certificate warning and passkey registration does not
+work. The colleague registers their passkey from the invitation link the owner issues (see
+[SystemOwner bootstrap](#systemowner-bootstrap)), and sets up `ps-cli` with the context
+commands above.
+
+### 9. Install the Policy System plugin
 
 In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add
 this repo:
@@ -413,7 +443,7 @@ typical remote connector, this one runs **locally** — the plugin declares it a
 `stdio` server backed by `ps-cli-mcp-bridge` (installed alongside `ps-cli` in step 6), which reaches whichever PS Service instance `ps-cli`'s current
 context points at ([Configuring which PS Service instance ps-cli
 targets](./user-guide.md#configuring-which-ps-service-instance-ps-cli-targets)).
-The bridge reuses the `ps-cli` login you just made: it sends the stored access token as an
+The bridge reuses the `ps-cli` login from step 8: it sends the stored access token as an
 `Authorization` header and refreshes it against Authentik, so it needs the **same CA trust** as
 `ps-cli`. The plugin declares no environment for the bridge, so it inherits Claude Desktop's
 own. Set `SSL_CERT_FILE` in that environment — for example on macOS
@@ -623,7 +653,7 @@ A production instance is deployed with the bundled Authentik identity provider w
 logging in is required, exactly as on the evaluator instance.
 
 **Install the Policy System plugin.** Same as [Evaluator installation, step
-8](#install-the-plugin): in Claude Desktop, **Customize** → **Plugins**
+9](#9-install-the-policy-system-plugin): in Claude Desktop, **Customize** → **Plugins**
 → **Add** → **Add marketplace** → **Add from a repository**, then add this repo
 (`https://github.com/mindovermachine-dev/policy-system`). The plugin's local
 `ps-cli-mcp-bridge` reuses whichever `ps-cli` context is current, so once it's set to
@@ -707,7 +737,7 @@ attempt is audited as `access_role.bootstrap_rejected`). This applies to both th
 [Evaluator](#7-deploy-policy-system-backend) and [Production](#3-run-scriptsdeploy-ps-prodsh)
 installs — only the script and the Authentik base URL differ.
 
-1. **Enrol a passkey** from the link the script printed ([evaluator](#8-trust-the-local-ca-log-in-and-install-the-policy-system-plugin),
+1. **Enrol a passkey** from the link the script printed ([evaluator](#8-register-your-passkey-and-log-in-with-ps-cli),
    [production](#5-enrol-the-owners-passkey)).
 2. **Log in with `ps-cli`** (`ps-cli auth login`) — or let the Claude Desktop plugin, which reuses
    that login, make the call.

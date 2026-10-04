@@ -374,6 +374,21 @@ def test_a_blueprint_that_never_reaches_successful_fails_naming_the_fix_and_crea
     assert lib_harness.curl_state_users() == {}
 
 
+def test_a_blueprint_in_error_is_reapplied_a_bounded_number_of_times(
+    lib_harness: LibHarness,
+) -> None:
+    """Parallel blueprint applies on a fresh install can deadlock in Postgres and leave the bundled
+    blueprint in `error`; Authentik re-applies only on a file change, so the script re-applies it.
+    """
+    lib_harness.seed_curl(blueprints=_blueprint("error"))
+
+    proc = _provision(lib_harness, **WAIT_ENV, PS_BLUEPRINT_REAPPLY_ATTEMPTS="2")
+
+    assert proc.returncode != 0
+    applies = [u for u in lib_harness.curl_urls() if u.endswith("/apply/")]
+    assert len(applies) == 2
+
+
 def test_an_already_applied_blueprint_costs_a_single_poll(lib_harness: LibHarness) -> None:
     proc = _provision(lib_harness, **WAIT_ENV)
 

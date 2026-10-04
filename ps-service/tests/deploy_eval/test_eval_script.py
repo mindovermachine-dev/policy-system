@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from conftest import EvalFixture
 
 # Mirror deploy_eval/conftest.py's own constants (hardcoded, same precedent as deploy_ps).
@@ -396,24 +398,137 @@ def test_a_failed_rollout_stops_the_run_with_a_fix_and_creates_no_user(
 # --- closing output (AC-BI-009 script half) ----------------------------------------------------
 
 
-def test_closing_output_states_ssl_cert_file_hosts_line_and_ps_cli_commands(
+def _hosts_file(fixture: EvalFixture, content: str = "") -> str:
+    path = fixture.root / "hosts"
+    path.write_text(content)
+    return str(path)
+
+
+def _fake_sudo(fixture: EvalFixture) -> Path:
+    """A `sudo` that logs its argv; `tee` really runs (against the test hosts file)."""
+    log = fixture.root / "sudo.log"
+    sudo = fixture.bin_dir / "sudo"
+    sudo.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "' + str(log) + '"\n'
+        '[[ "$1" == tee ]] && exec "$@"\nexit 0\n'
+    )
+    sudo.chmod(0o755)
+    return log
+
+
+def test_closing_output_lists_the_missing_local_steps_and_points_at_the_guide(
     eval_fixture: EvalFixture,
 ) -> None:
-    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+    hosts = _hosts_file(eval_fixture)
 
-    assert f"export SSL_CERT_FILE={eval_fixture.state_dir}/ca.pem" in run.stdout
-    assert f"127.0.0.1 {HOST}" in run.stdout
-    assert "ps-cli config set-context" in run.stdout
-    assert "ps-cli config use-context" in run.stdout
-    assert "ps-cli auth login" in run.stdout
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert f"echo '127.0.0.1 {HOST}' | sudo tee -a {hosts}" in run.stdout
+    assert "sudo security add-trusted-cert" in run.stdout
     assert str(eval_fixture.state_dir / "ca.pem") in run.stdout
+    assert "installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli" in run.stdout
+    assert "--apply-host-setup" in run.stdout
+    # The LAN-colleague walkthrough lives in the guide, not in the script output.
+    assert "LAN colleagues" in run.stdout
+    assert "export SSL_CERT_FILE" not in run.stdout
+    assert run.stdout.rstrip().splitlines()[-1].startswith("https://")
 
 
-def test_closing_output_tells_lan_colleagues_to_trust_the_ca(eval_fixture: EvalFixture) -> None:
+def _fake_ps_cli(fixture: EvalFixture, *, current: str = "") -> Path:
+    """A `ps-cli` that logs its argv; `get-contexts` prints `current` (a table row)."""
+    log = fixture.root / "ps-cli.log"
+    cli = fixture.bin_dir / "ps-cli"
+    cli.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "' + str(log) + '"\n'
+        "[[ \"$2\" == get-contexts ]] && printf '%s\\n' '" + current + "'\nexit 0\n"
+    )
+    cli.chmod(0o755)
+    return log
+
+
+def test_ps_cli_context_is_set_and_selected_when_missing(eval_fixture: EvalFixture) -> None:
+    log = _fake_ps_cli(eval_fixture)
+
     run = eval_fixture.run("--owner-email", OWNER_EMAIL)
 
-    assert "LAN" in run.stdout
-    assert "trust" in run.stdout.lower()
+    calls = log.read_text().splitlines()
+    assert "config set-context eval --url http://127.0.0.1:8000" in calls
+    assert "config use-context eval" in calls
+    assert f"SSL_CERT_FILE={eval_fixture.state_dir}/ca.pem ps-cli auth login" in run.stdout
+    assert "ps-cli config set-context" not in run.stdout
+
+
+def test_ps_cli_context_is_left_alone_when_already_current(eval_fixture: EvalFixture) -> None:
+    """set-context deletes the stored login, so a re-run must not repeat it."""
+    log = _fake_ps_cli(eval_fixture, current="│ *  │ eval │ http://127.0.0.1:8000 │ - │")
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert all("set-context" not in call for call in log.read_text().splitlines())
+
+
+def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: EvalFixture) -> None:
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL)
+
+    assert "ps-cli config set-context eval --url http://127.0.0.1:8000" in run.stdout
+    assert "ps-cli config use-context eval" in run.stdout
+    assert f"SSL_CERT_FILE={eval_fixture.state_dir}/ca.pem ps-cli auth login" in run.stdout
+
+
+def test_closing_output_omits_the_hosts_step_when_the_hostname_is_already_mapped(
+    eval_fixture: EvalFixture,
+) -> None:
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 localhost\n127.0.0.1 {HOST} # ps\n")
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, PS_HOSTS_FILE=hosts)
+
+    assert "sudo tee -a" not in run.stdout
+    assert "add-trusted-cert" in run.stdout
+
+
+def test_without_consent_no_sudo_command_is_run(eval_fixture: EvalFixture) -> None:
+    hosts = _hosts_file(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    eval_fixture.run("--owner-email", OWNER_EMAIL, "--yes", PS_HOSTS_FILE=hosts)
+
+    assert not sudo_log.exists()
+    assert (eval_fixture.root / "hosts").read_text() == ""
+
+
+def test_apply_host_setup_maps_the_hostname_and_trusts_the_ca_through_sudo(
+    eval_fixture: EvalFixture,
+) -> None:
+    hosts = _hosts_file(eval_fixture)
+    sudo_log = _fake_sudo(eval_fixture)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
+
+    assert f"127.0.0.1 {HOST}" in (eval_fixture.root / "hosts").read_text()
+    assert f"tee -a {hosts}" in sudo_log.read_text()
+    assert "sudo tee -a" not in run.stdout
+
+
+def test_apply_host_setup_does_nothing_when_the_machine_is_already_set_up(
+    eval_fixture: EvalFixture,
+) -> None:
+    hosts = _hosts_file(eval_fixture, f"127.0.0.1 {HOST}\n")
+    sudo_log = _fake_sudo(eval_fixture)
+    # CA trust is only checkable on macOS, so make the script see Darwin whatever the host is.
+    # `uname` in bin_dir is a symlink to the real binary: unlink before writing, or the write
+    # would go through the link and overwrite the system `uname`.
+    uname = eval_fixture.bin_dir / "uname"
+    uname.unlink()
+    uname.write_text("#!/usr/bin/env bash\necho Darwin\n")
+    uname.chmod(0o755)
+    security = eval_fixture.bin_dir / "security"
+    security.write_text("#!/usr/bin/env bash\nexit 0\n")
+    security.chmod(0o755)
+
+    run = eval_fixture.run("--owner-email", OWNER_EMAIL, "--apply-host-setup", PS_HOSTS_FILE=hosts)
+
+    assert not sudo_log.exists()
+    assert "This machine is ready" in run.stdout
 
 
 # --- helm idempotence --------------------------------------------------------------------------
