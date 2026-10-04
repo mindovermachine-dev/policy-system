@@ -431,89 +431,37 @@ The plugin ships in two named parts: the **Policy System Marketplace** (id `ps-m
 which is this repo, and the **Policy System Plugin** (id `ps-plugin`) it lists. Add the marketplace
 first, then install the plugin from it.
 
-1. In Claude Desktop: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
-   repository**, then add this repo:
+1. In Claude Desktop - Code: **Settings** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add this repo:
 
    ```text
-   URL:  `https://github.com/mindovermachine-dev/policy-system`
+   https://github.com/mindovermachine-dev/policy-system
    ```
 
-   Or from the Claude Code CLI: `claude plugin marketplace add mindovermachine-dev/policy-system`.
+   Or from the Claude Code CLI:
+   ```text
+   claude plugin marketplace add mindovermachine-dev/policy-system
+   ````
 
-2. Install the plugin from that marketplace: in Claude Desktop, pick **Policy System Plugin** under
-   **Customize** → **Plugins**; in Claude Code, run `/plugin install ps-plugin@ps-marketplace` (shell
-   form: `claude plugin install ps-plugin@ps-marketplace`).
+2. Install the plugin from that marketplace: in Claude Desktop - Code, pick **Policy System Plugin** under **Setings** → **Plugins**
 
-The marketplace manifest has no display-name field, so "Policy System Marketplace" is the name this
-guide uses; the id you will see in lists and commands is `ps-marketplace`.
+   Or from the Claude Code CLI:
+   ```text
+   /plugin install ps-plugin@ps-marketplace
+   ```
+   
+   Or from the shell
+   ```text
+   claude plugin install ps-plugin@ps-marketplace
+   ```
 
-This installs the full set of Policy System skills (`ps-qna`, `ps-author-policy`,
-`ps-check-regulations`, `ps-ingest-regulation`, `ps-assess-instrument-applicability`,
-`ps-invite-user`, `ps-manage-access-roles`, `ps-list-audit-events`,
-`ps-near-miss-review`, `ps-restore-instrument`, `ps-policy-lifecycle`, and
-`ps-get-catalog-listing`) and its shared **Policy System MCP** connector (server id `ps-mcp`).
-Claude is expected to list it as `plugin:ps-plugin:ps-mcp` and to name its tools
-`mcp__plugin_ps-plugin_ps-mcp__<tool>` (expected; verify with `claude mcp list`). Unlike a
-typical remote connector, this one runs **locally** — the plugin declares it as a
-`stdio` server backed by `ps-cli-mcp-bridge` (installed alongside `ps-cli` in step 6), which reaches whichever PS Service instance `ps-cli`'s current
-context points at ([Configuring which PS Service instance ps-cli
-targets](./user-guide.md#configuring-which-ps-service-instance-ps-cli-targets)).
-The bridge reuses the `ps-cli` login from step 8: it sends the stored access token as an
-`Authorization` header and refreshes it against Authentik. It verifies Authentik's certificate
-against the operating system trust store, like `ps-cli`, so it needs no environment variable
-and works under Claude Desktop's own environment once the local CA is trusted by the OS.
+Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat. Verify the plugin was installed by asking:
 
-Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat
-— tools bind when a conversation starts. `ps-mcp` exposes the tools
-backing each of the skills above — including `domain_concepts` and `cypher` for direct
-graph queries — plus the catalog-source, access-role, and audit-event tools used by the
-[Role System](./user-guide.md#role-system). If nothing binds, check
-`~/Library/Logs/Claude/mcp*.log` and, separately, the bridge's own log at
-`~/.config/ps-cli/mcp-bridge.log` (`$PS_CLI_CONFIG_DIR/mcp-bridge.log` if that's set) —
-written independently of whatever the host does with the bridge's stderr.
-
-Several of these tools — ingesting/restoring/exporting curated content and running
-change-checks — require the caller to hold the `ComplianceOfficer`
-[access role](./user-guide.md#role-system) first. Nobody holds any role on a fresh instance
-until its first role-gated call by the owner: see [SystemOwner bootstrap](#systemowner-bootstrap)
-and [Manage access roles](./user-guide.md#manage-access-roles).
+```text
+List the policy system tools you have available
+```
 
 Once installed, see the [User Guide](./user-guide.md#using-claude-desktop) for how to
 ask a question.
-
-#### Reset an earlier account-scoped marketplace (manual)
-
-Claude Desktop registers marketplaces against your Claude **account**, so a marketplace added
-under an earlier name stays registered until you remove it. Earlier checkouts of this repo named
-the marketplace `policy-system`. If Claude Desktop shows that marketplace, or Desktop's marketplace
-refresh fails with `NOT_REGISTERED`, reset it by hand. These steps are manual UI and account steps
-that no script performs; the on-screen wording is not verified here, so check each step on screen.
-
-1. In Claude Desktop, open **Customize** → **Plugins** and find any marketplace other than
-   **Policy System Marketplace** (`ps-marketplace`) whose source is
-   `github: mindovermachine-dev/policy-system`. Remove it, and remove any plugin copy it installed
-   (removing a marketplace is expected to uninstall its plugins; verify on screen).
-2. Optionally, from the Claude Code CLI, run `claude plugin marketplace list`. For each marketplace
-   other than `ps-marketplace` that points at this repo, run
-   `claude plugin marketplace remove <name-shown-in-list>`.
-3. Re-add this repo: **Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
-   repository**, then `https://github.com/mindovermachine-dev/policy-system`. Expect exactly one
-   marketplace, **Policy System Marketplace** (`ps-marketplace`).
-4. Install **Policy System Plugin** (`ps-plugin`). Expect its version to equal the `version` in
-   `ps-skills/ps-plugin/.claude-plugin/plugin.json` on `main`, all 12 skills to be listed, and
-   **Check for new version** to complete without an error.
-5. Run `claude plugin marketplace list` and confirm `ps-marketplace` appears, and that Claude
-   Desktop shows the same id. Refreshing the marketplace in Desktop must not fail with
-   `NOT_REGISTERED`.
-
-Acceptance checklist (tick each on screen):
-
-- [ ] Exactly one marketplace is registered for this repo: **Policy System Marketplace**
-      (`ps-marketplace`).
-- [ ] **Policy System Plugin** installs at the expected version with all 12 skills, and
-      **Check for new version** completes without an error.
-- [ ] `claude plugin marketplace list` and Claude Desktop show the same marketplace id, and a
-      refresh does not fail with `NOT_REGISTERED`.
 
 ### What is exposed (evaluator)
 
