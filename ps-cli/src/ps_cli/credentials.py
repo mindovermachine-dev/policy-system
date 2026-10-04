@@ -69,7 +69,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 import msal_extensions
 import msal_extensions.persistence
 
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CredentialStoreError, PsCliError
 from ps_cli.targets import resolve_config_dir
 
 if TYPE_CHECKING:
@@ -211,7 +211,7 @@ class PersistenceCredentialStore:
         except msal_extensions.persistence.PersistenceNotFound:
             return None
         except Exception as exc:
-            raise PsCliError(
+            raise CredentialStoreError(
                 msg=f"could not access the credential store for context '{context}'",
                 hint=f"the credential-storage backend raised {type(exc).__name__}; "
                 "check that it is available and unlocked",
@@ -232,7 +232,7 @@ class PersistenceCredentialStore:
             with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
                 persistence.save(_encode_token_bundle(tokens))
         except Exception as exc:
-            raise PsCliError(
+            raise CredentialStoreError(
                 msg=f"could not access the credential store for context '{context}'",
                 hint=f"the credential-storage backend raised {type(exc).__name__}; "
                 "check that it is available and unlocked",
@@ -252,7 +252,7 @@ class PersistenceCredentialStore:
             with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
                 persistence.save("")
         except Exception as exc:
-            raise PsCliError(
+            raise CredentialStoreError(
                 msg=f"could not access the credential store for context '{context}'",
                 hint=f"the credential-storage backend raised {type(exc).__name__}; "
                 "check that it is available and unlocked",

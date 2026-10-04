@@ -34,7 +34,7 @@ from ps_cli.credentials import (
     TokenBundle,
     build_credential_store,
 )
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CredentialStoreError, PsCliError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -184,7 +184,7 @@ def test_get_tokens_with_non_persistence_error_exception_raises_actionable_ps_cl
     """
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
 
-    with pytest.raises(PsCliError) as excinfo:
+    with pytest.raises(CredentialStoreError) as excinfo:
         store.get_tokens("dev")
 
     assert "dev" in excinfo.value.msg
@@ -201,7 +201,7 @@ def test_set_tokens_with_non_persistence_error_exception_raises_actionable_ps_cl
     secret_value = "super-secret-refresh-token-should-never-print"
     tokens = TokenBundle(refresh_token=secret_value, issuer="https://issuer.example")
 
-    with pytest.raises(PsCliError) as excinfo:
+    with pytest.raises(CredentialStoreError) as excinfo:
         store.set_tokens("dev", tokens)
 
     assert "dev" in excinfo.value.msg
@@ -219,7 +219,7 @@ def test_delete_tokens_with_non_persistence_error_exception_raises_actionable_ps
     """
     store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
 
-    with pytest.raises(PsCliError) as excinfo:
+    with pytest.raises(CredentialStoreError) as excinfo:
         store.delete_tokens("dev")
 
     assert "dev" in excinfo.value.msg

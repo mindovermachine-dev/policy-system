@@ -39,13 +39,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 
 from ps_cli import device_flow
 from ps_cli.cli import run
 from ps_cli.config import CliConfig
 from ps_cli.credentials import PersistenceCredentialStore, TokenBundle
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, CredentialStoreError, PsCliError
 from ps_cli.modules.auth_handlers import handle_auth_login, handle_auth_logout, handle_auth_status
 from ps_cli.targets import AuthOverrides, ContextEntry, TargetsFile, write_targets
 from ps_test_support import mock_oidc_provider as mock_oidc_provider_module
@@ -57,9 +58,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
 
-    import httpx
-    from conftest import InMemoryPersistenceBackend
+    from conftest import AlwaysRaisingPersistenceBackend, InMemoryPersistenceBackend
 
+    from ps_cli.credentials import CredentialStore
     from ps_cli.device_flow import DeviceAuthorization
     from ps_cli.oidc_discovery import ResolvedAuthParameters
     from ps_test_support.mock_oidc_provider import MockOidcProvider
@@ -459,49 +460,253 @@ class _FakeCredentialStore:
         self._tokens.pop(context, None)
 
 
-def test_handle_auth_status_with_stored_tokens_prints_context_issuer_and_logged_in(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A pre-seeded bundle -> `context`/`issuer`/`logged in`, correctly rendered
-    (issue #121, D-121-6) -- no `subject`/`expiry` any more, since `TokenBundle` no
-    longer carries an `access_token`/`expires_at` to derive either from.
-    """
-    credential_store = _FakeCredentialStore()
-    credential_store.set_tokens(
-        "dev", TokenBundle(refresh_token="rt", issuer="https://issuer.example")
+# --- Issue #179: handle_auth_status() verifies the credential -----------------------
+#
+# Drives `handle_auth_status` through a fully-synthetic `httpx.MockTransport` standing
+# in for PS Service's resource-metadata endpoint and a (loopback) IdP -- the handler's
+# own `transport=` seam, mirroring `ensure_valid_access_token`'s.
+
+_STATUS_ISSUER = "http://localhost"
+_STATUS_CONFIG = CliConfig(service_url="http://ps-service.example", context_name="dev")
+_STATUS_REFRESH_MARKER = "marker-refresh-token-should-never-print-79c3"
+
+
+def _status_transport(
+    handle_token: Callable[[httpx.Request], httpx.Response],
+    *,
+    resource_metadata_status: int = 200,
+) -> httpx.MockTransport:
+    def _handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/oauth-protected-resource":
+            return httpx.Response(
+                resource_metadata_status,
+                json={
+                    "resource": "http://ps-service.example",
+                    "authorization_servers": [_STATUS_ISSUER],
+                    "scopes_supported": ["openid"],
+                    "ps_cli_client_id": _CLIENT_ID,
+                },
+            )
+        if request.url.path == "/.well-known/openid-configuration":
+            return httpx.Response(
+                200,
+                json={
+                    "issuer": _STATUS_ISSUER,
+                    "device_authorization_endpoint": f"{_STATUS_ISSUER}/device_authorization",
+                    "token_endpoint": f"{_STATUS_ISSUER}/token",
+                },
+            )
+        return handle_token(request)
+
+    return httpx.MockTransport(_handle)
+
+
+def _token_ok(request: httpx.Request) -> httpx.Response:
+    del request
+    return httpx.Response(
+        200,
+        json={
+            "access_token": "at",
+            "refresh_token": "rt-rotated",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+        },
     )
 
-    handle_auth_status("dev", credential_store=credential_store)
+
+def _status_store(refresh_token: str | None = _STATUS_REFRESH_MARKER) -> _FakeCredentialStore:
+    store = _FakeCredentialStore()
+    store.set_tokens("dev", TokenBundle(refresh_token=refresh_token, issuer=_STATUS_ISSUER))
+    return store
+
+
+def _run_status(
+    store: CredentialStore, transport: httpx.BaseTransport, context: str | None = "dev"
+) -> None:
+    handle_auth_status(
+        context,
+        _STATUS_CONFIG,
+        credential_store=store,
+        auth_override=None,
+        transport=transport,
+    )
+
+
+def test_handle_auth_status_with_refreshable_credential_prints_context_issuer_and_logged_in(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-001: a credential that refreshes -> context, issuer, "logged in"; no raise."""
+    _run_status(_status_store(), _status_transport(_token_ok))
 
     printed = capsys.readouterr().out
     assert "context: dev" in printed
-    assert "issuer: https://issuer.example" in printed
+    assert f"issuer: {_STATUS_ISSUER}" in printed
     assert "logged in" in printed
-    assert "subject" not in printed
-    assert "expiry" not in printed
+    assert "not usable" not in printed
 
 
-def test_handle_auth_status_with_no_stored_tokens_prints_not_logged_in_and_exits_zero(
+def test_handle_auth_status_persists_the_rotated_refresh_token() -> None:
+    """AC-BI-006: the rotated refresh token is stored, so the next run still works."""
+    store = _status_store()
+
+    _run_status(store, _status_transport(_token_ok))
+
+    stored = store.get_tokens("dev")
+    assert stored is not None
+    assert stored.refresh_token == "rt-rotated"
+
+
+def test_handle_auth_status_with_rejected_credential_reports_not_usable_and_raises(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No stored bundle -> a plain status line, no exception (exit code 0)."""
-    credential_store = _FakeCredentialStore()
+    """AC-BI-002: an `invalid_grant` -> "not usable", log-in hint, non-zero, never "logged in"."""
 
-    handle_auth_status("dev", credential_store=credential_store)
+    def _invalid_grant(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(400, json={"error": "invalid_grant"})
 
-    printed = capsys.readouterr().out
-    assert printed == "not logged in to 'dev'\n"
+    with pytest.raises(PsCliError) as excinfo:
+        _run_status(_status_store(), _status_transport(_invalid_grant))
+
+    assert not isinstance(excinfo.value, CannotVerifyError)
+    assert "not usable" in excinfo.value.msg
+    assert "ps-cli auth login" in (excinfo.value.hint or "")
+    assert "logged in" not in capsys.readouterr().out
+
+
+def test_handle_auth_status_with_no_refresh_token_reports_not_usable() -> None:
+    """AC-BI-002: a stored bundle with no refresh token cannot ever refresh."""
+
+    def _unreachable(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(request.url)
+
+    with pytest.raises(PsCliError) as excinfo:
+        _run_status(_status_store(refresh_token=None), _status_transport(_unreachable))
+
+    assert "not usable" in excinfo.value.msg
+
+
+def test_handle_auth_status_with_no_stored_credential_prints_not_logged_in_and_raises(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC-BI-003: nothing stored -> "not logged in" and a non-zero exit (reverses D-121-6)."""
+    with pytest.raises(PsCliError) as excinfo:
+        _run_status(_FakeCredentialStore(), _status_transport(_token_ok))
+
+    assert "not logged in to 'dev'" in excinfo.value.msg
+    assert "ps-cli auth login" in (excinfo.value.hint or "")
+    assert "logged in\n" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["idp_connect_error", "idp_timeout", "idp_5xx", "service_connect_error", "service_5xx"],
+)
+def test_handle_auth_status_when_unverifiable_reports_cannot_verify_not_logged_in_or_unusable(
+    scenario: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-004: transport failures and 5xx say nothing about the credential."""
+
+    def _handle_token(request: httpx.Request) -> httpx.Response:
+        if scenario == "idp_connect_error":
+            raise httpx.ConnectError("refused", request=request)
+        if scenario == "idp_timeout":
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(503)
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        if scenario.startswith("service") and request.url.path.endswith("protected-resource"):
+            if scenario == "service_connect_error":
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(503)
+        return _status_transport(_handle_token).handle_request(request)
+
+    with pytest.raises(PsCliError) as excinfo:
+        _run_status(_status_store(), httpx.MockTransport(_handle))
+
+    assert "cannot verify" in excinfo.value.msg
+    assert "not usable" not in excinfo.value.msg
+    assert "not logged in" not in excinfo.value.msg
+    assert "ps-cli auth login" not in (excinfo.value.hint or "")
+    assert "logged in\n" not in capsys.readouterr().out
+
+
+def test_handle_auth_status_when_credential_store_is_inaccessible_reports_store_hint(
+    build_always_raising_persistence: Callable[[str], AlwaysRaisingPersistenceBackend],
+) -> None:
+    """AC-BI-010: a store that raises on read is neither "not logged in" nor "not usable"."""
+    store = PersistenceCredentialStore(build_persistence=build_always_raising_persistence)
+
+    with pytest.raises(PsCliError) as excinfo:
+        _run_status(store, _status_transport(_token_ok))
+
+    assert "credential store" in excinfo.value.msg
+    assert "available and unlocked" in (excinfo.value.hint or "")
+    assert "not usable" not in excinfo.value.msg
+    assert "not logged in" not in excinfo.value.msg
+
+
+class _WriteFailingCredentialStore(_FakeCredentialStore):
+    """Reads work; persisting the rotated token raises, as a locked keychain would."""
+
+    def set_tokens(self, context: str, tokens: TokenBundle) -> None:
+        del context, tokens
+        raise CredentialStoreError(
+            msg="could not access the credential store for context 'dev'",
+            hint="the credential-storage backend raised OSError; check that it is available "
+            "and unlocked",
+        )
+
+
+def test_handle_auth_status_when_persisting_the_rotated_token_fails_reports_store_error() -> None:
+    """AC-BI-010: a store failure on the post-refresh write is not "not usable"."""
+    store = _WriteFailingCredentialStore()
+    _FakeCredentialStore.set_tokens(
+        store, "dev", TokenBundle(refresh_token="rt", issuer=_STATUS_ISSUER)
+    )
+
+    with pytest.raises(CredentialStoreError) as excinfo:
+        _run_status(store, _status_transport(_token_ok))
+
+    assert "credential store" in excinfo.value.msg
+    assert "available and unlocked" in (excinfo.value.hint or "")
+    assert "not usable" not in excinfo.value.msg
 
 
 def test_handle_auth_status_with_no_context_raises_ps_cli_error() -> None:
-    """`context_name is None` raises up front (D-57-5), same as `handle_auth_login`."""
-    credential_store = _FakeCredentialStore()
-
+    """AC-BI-009: `context_name is None` raises up front (D-57-5), as `handle_auth_login` does."""
     with pytest.raises(PsCliError) as excinfo:
-        handle_auth_status(None, credential_store=credential_store)
+        _run_status(_FakeCredentialStore(), _status_transport(_token_ok), context=None)
 
     assert "no context to authenticate" in excinfo.value.msg
     assert "ps-cli config set-context" in excinfo.value.msg
+
+
+@pytest.mark.parametrize("outcome", ["logged_in", "rejected", "unverifiable"])
+def test_handle_auth_status_output_never_contains_a_secret(
+    outcome: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """AC-BI-005: neither the stored refresh token nor the access token ever prints."""
+
+    def _handle_token(request: httpx.Request) -> httpx.Response:
+        if outcome == "logged_in":
+            return _token_ok(request)
+        if outcome == "rejected":
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        raise httpx.ConnectError("refused", request=request)
+
+    try:
+        _run_status(_status_store(), _status_transport(_handle_token))
+    except PsCliError as error:
+        raised_text = str(error)
+    else:
+        raised_text = ""
+
+    printed = capsys.readouterr()
+    for secret in (_STATUS_REFRESH_MARKER, "rt-rotated", "at"):
+        assert secret not in printed.out.split()
+        assert secret not in printed.err.split()
+        assert secret not in raised_text.split()
 
 
 def test_handle_auth_logout_deletes_stored_tokens() -> None:
@@ -607,25 +812,3 @@ def test_handle_auth_login_output_never_contains_the_stored_refresh_token_value(
     stored = credential_store.get_tokens("dev")
     assert stored is not None
     assert stored.refresh_token == marker_refresh_token
-
-
-def test_handle_auth_status_output_never_contains_the_stored_refresh_token_value(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """`auth status`'s report prints `context`/`issuer`/`logged in` (issue #121,
-    D-121-6) but never the stored `refresh_token` value itself (AC-BI-018) -- the
-    only secret-shaped field left on `TokenBundle` for this command to ever touch.
-    """
-    refresh_marker = "marker-refresh-token-should-never-print-79c3"
-    credential_store = _FakeCredentialStore()
-    credential_store.set_tokens(
-        "dev", TokenBundle(refresh_token=refresh_marker, issuer="https://issuer.example")
-    )
-
-    handle_auth_status("dev", credential_store=credential_store)
-
-    printed = capsys.readouterr()
-    assert "context: dev" in printed.out
-    assert "issuer: https://issuer.example" in printed.out
-    assert refresh_marker not in printed.out
-    assert refresh_marker not in printed.err

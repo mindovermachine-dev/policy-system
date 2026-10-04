@@ -10,12 +10,13 @@ Slice 15 (bearer attachment), `_resolve_client`'s underlying `PsServiceClient`
 requires an *already-valid* token for every business call, which would make
 `auth login` itself circular if it had to go through that same path.
 
-`login` (Slice 13), `status` (Slice 19), and `logout` (Slice 20) all have real
-implementations and `AUTH_DISPATCH` entries now. See IMPL_SLICE_13-14.md for
-why `status`/`logout` carried placeholder `AUTH_DISPATCH` entries prior to
-Slices 19/20 (raising an actionable "not yet implemented" `PsCliError` rather
-than being left out of the dict entirely, which would otherwise fall through
-to `_resolve_client`/`DISPATCH` and crash with an opaque `KeyError`).
+`login` (Slice 13), `status` (Slice 19; verifies the credential since issue #179),
+and `logout` (Slice 20) all have real implementations and `AUTH_DISPATCH` entries
+now. See IMPL_SLICE_13-14.md for why `status`/`logout` carried placeholder
+`AUTH_DISPATCH` entries prior to Slices 19/20 (raising an actionable "not yet
+implemented" `PsCliError` rather than being left out of the dict entirely, which
+would otherwise fall through to `_resolve_client`/`DISPATCH` and crash with an
+opaque `KeyError`).
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import TYPE_CHECKING, cast
 from ps_cli import device_flow, oidc_discovery
 from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, CredentialStoreError, PsCliError
 from ps_cli.targets import resolve_auth_override, resolve_config_dir
 
 if TYPE_CHECKING:
@@ -34,10 +35,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    import httpx
+
     from ps_cli.config import CliConfig
     from ps_cli.credentials import CredentialStore
     from ps_cli.device_flow import DeviceAuthorization
     from ps_cli.targets import AuthOverrides
+
+_LOGIN_HINT = "run `ps-cli auth login`"
 
 _NO_CONTEXT_TO_AUTHENTICATE_MSG = (
     "no context to authenticate; run `ps-cli config set-context <name> --url <url>` first"
@@ -101,28 +106,62 @@ def handle_auth_login(
     print(f"logged in to {context_name} ({params.issuer})")
 
 
-def handle_auth_status(context_name: str | None, *, credential_store: CredentialStore) -> None:
-    """Print `context_name`'s login status (AC-BI-015; issue #121 D-121-6).
+def handle_auth_status(
+    context_name: str | None,
+    config: CliConfig,
+    *,
+    credential_store: CredentialStore,
+    auth_override: AuthOverrides | None,
+    transport: httpx.BaseTransport | None = None,
+) -> None:
+    """Verify `context_name`'s stored credential and print its status (issue #179).
 
     Raises `PsCliError` if `context_name is None` (D-57-5, same boundary as
-    `handle_auth_login`). If `credential_store.get_tokens(context_name)` is `None`,
-    prints `"not logged in to '{context_name}'"` and returns normally -- this is a
-    legitimate status to report (exit code 0), not a failure, unlike `auth login`'s
-    own D-57-5 "no context" case. Otherwise prints three lines: `context`, `issuer`,
-    and `logged in`.
+    `handle_auth_login`). Otherwise resolves the credential through
+    `device_flow.ensure_valid_access_token` -- the same path the bridge and every
+    other authenticated command use -- so "logged in" means a usable access token
+    actually came back, and the rotated refresh token is persisted. Prints `context`,
+    `issuer` and `logged in` and returns only in that case; every other outcome
+    raises a `PsCliError` (exit 1), each distinct:
 
-    Issue #121: no `subject`/`expiry` any more -- `TokenBundle` no longer carries an
-    `access_token`/`expires_at` to derive either from (AC-BI-001), and deriving them
-    would require a live refresh-token exchange purely to populate a status display,
-    contradicting this command's own invariant of never contacting PS Service or the
-    IdP -- reads only the local store.
+    - credential store inaccessible (on the initial read or the post-refresh write):
+      the store's own `CredentialStoreError` propagates unchanged;
+    - no stored credential: "not logged in";
+    - `CannotVerifyError` (IdP/PS Service unreachable or 5xx): "cannot verify";
+    - any other `PsCliError` from the refresh: "not usable", pointing at `auth login`.
+
+    This reverses #121's D-121-6 offline invariant: the offline design reported
+    "logged in" for credentials the plugin's bridge then failed to refresh. No token
+    value is ever printed -- only the issuer, context and the error's own wording.
+    `transport` is the same test seam `ensure_valid_access_token` takes.
     """
     if context_name is None:
         raise PsCliError(msg=_NO_CONTEXT_TO_AUTHENTICATE_MSG)
     bundle = credential_store.get_tokens(context_name)
     if bundle is None:
-        print(f"not logged in to '{context_name}'")
-        return
+        raise PsCliError(msg=f"not logged in to '{context_name}'", hint=_LOGIN_HINT)
+    try:
+        device_flow.ensure_valid_access_token(
+            context=context_name,
+            service_url=config.service_url,
+            auth_override=auth_override,
+            credential_store=credential_store,
+            access_token_cache=device_flow.AccessTokenCache(),
+            transport=transport,
+        )
+    except CredentialStoreError:
+        raise
+    except CannotVerifyError as error:
+        reason = f"{error.msg} ({error.detail})" if error.detail else error.msg
+        raise PsCliError(
+            msg=f"cannot verify the credential for '{context_name}': {reason}",
+            hint="check the connection to PS Service and the identity provider, then retry",
+        ) from error
+    except PsCliError as error:
+        raise PsCliError(
+            msg=f"credential present for '{context_name}' but not usable: {error.msg}",
+            hint=_LOGIN_HINT,
+        ) from error
     print(f"context: {context_name}")
     print(f"issuer: {bundle.issuer}")
     print("logged in")
@@ -166,14 +205,21 @@ def _dispatch_auth_login(args: argparse.Namespace) -> None:
 def _dispatch_auth_status(args: argparse.Namespace) -> None:
     """Adapt `handle_auth_status`'s signature to the `AUTH_DISPATCH` shape.
 
-    Resolves `config`/`credential_store` independently of `_resolve_client`, exactly
-    like `_dispatch_auth_login` -- see this module's own docstring.
+    Resolves `config`/`credential_store`/`auth_override` independently of
+    `_resolve_client`, exactly like `_dispatch_auth_login` -- see this module's own
+    docstring.
     """
     context = cast("str | None", getattr(args, "context", None))
     config_dir = resolve_config_dir()
     config = load_config(context=context, config_dir=config_dir)
     credential_store = build_credential_store()
-    handle_auth_status(config.context_name, credential_store=credential_store)
+    auth_override = resolve_auth_override(config, config_dir)
+    handle_auth_status(
+        config.context_name,
+        config,
+        credential_store=credential_store,
+        auth_override=auth_override,
+    )
 
 
 def _dispatch_auth_logout(args: argparse.Namespace) -> None:

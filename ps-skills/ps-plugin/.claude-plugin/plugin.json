@@ -5,6 +5,6 @@
   "version": "3.13.1",
   "author": { "name": "Mind Over Machine" },
   "repository": "https://github.com/mindovermachine-dev/policy-system",
-  "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#using-claude-desktop",
+  "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#using-claude-desktop---code",
   "keywords": ["compliance", "policy", "cypher", "mcp"]
 }

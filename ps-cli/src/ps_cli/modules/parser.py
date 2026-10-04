@@ -288,7 +288,7 @@ def _add_auth_parser(
     status_parser = auth_subparsers.add_parser(
         "status",
         parents=[verbose_parent_parser],
-        help="Show the current context's login status.",
+        help="Verify the current context's stored credential and show its login status.",
     )
     status_parser.set_defaults(command="auth_status")
 

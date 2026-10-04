@@ -27,6 +27,33 @@ class PsCliError(Exception):
         return text
 
 
+class CannotVerifyError(PsCliError):
+    """A `PsCliError` raised when a check could not be completed, not when it failed.
+
+    Raised for transport-level failures (connection error, timeout, TLS failure) and
+    server-side 5xx responses from the IdP or PS Service -- outcomes that say nothing
+    about whether a stored credential is valid. Subclassing `PsCliError` keeps every
+    existing `except PsCliError` site and its user-facing wording unchanged; only
+    `auth status` distinguishes it. `detail` is a short, secret-free reason (an
+    exception class name or an HTTP status) for callers that report it.
+    """
+
+    def __init__(self, *, msg: str, hint: str | None = None, detail: str = "") -> None:
+        """Store the message, optional hint, and the secret-free `detail` reason."""
+        self.detail = detail
+        super().__init__(msg=msg, hint=hint)
+
+
+class CredentialStoreError(PsCliError):
+    """A `PsCliError` raised when the OS credential backend itself fails.
+
+    Distinct from "no credential stored" and "credential rejected": the store could not
+    be read or written (e.g. a locked keychain). Subclassing `PsCliError` leaves every
+    existing `except PsCliError` site and its wording unchanged; `auth status` uses the
+    type to report the store problem as-is instead of calling the credential unusable.
+    """
+
+
 def assert_contract(*, contract: bool, msg: str, hint: str | None = None) -> None:
     """Raise PsCliError(msg=msg, hint=hint) if contract is False; no-op otherwise."""
     if not contract:

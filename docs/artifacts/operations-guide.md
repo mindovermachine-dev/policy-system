@@ -84,9 +84,6 @@ claude plugin update ps-plugin@ps-marketplace
 
 In Claude Desktop, use **Update marketplace** under **Customize** → **Plugins** instead (verify
 the wording on screen). To reinstall from scratch, run `/plugin install ps-plugin@ps-marketplace`.
-If Claude Desktop still shows a marketplace registered under an earlier name, or a refresh fails
-with `NOT_REGISTERED`, follow [Reset an earlier account-scoped
-marketplace](./installation-guide.md#reset-an-earlier-account-scoped-marketplace-manual).
 
 ### Owner recovery, certificate renewal and re-running the script
 

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, PsCliError
 from ps_cli.oidc_discovery import (
     OidcDiscoveryDocument,
     ProtectedResourceMetadata,
@@ -603,3 +603,36 @@ def test_resolve_auth_parameters_loopback_issuer_and_endpoints_are_not_refused(
         == f"{mock_oidc_provider.base_url}/device_authorization"
     )
     assert result.token_endpoint == f"{mock_oidc_provider.base_url}/token"
+
+
+# --- Issue #179 (AC-BI-008): transport failures vs rejected/malformed discovery -----
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [httpx.ConnectError("refused"), httpx.ReadTimeout("slow")],
+)
+def test_discovery_transport_failure_raises_cannot_verify_with_unchanged_wording(
+    raised: httpx.TransportError,
+) -> None:
+    def _handle(request: httpx.Request) -> httpx.Response:
+        raise type(raised)(str(raised), request=request)
+
+    with pytest.raises(CannotVerifyError) as excinfo:
+        fetch_protected_resource_metadata(_SERVICE_URL, transport=httpx.MockTransport(_handle))
+
+    assert str(excinfo.value.msg).startswith(("Could not reach", _SERVICE_URL))
+
+
+def test_discovery_5xx_raises_cannot_verify() -> None:
+    with pytest.raises(CannotVerifyError) as excinfo:
+        fetch_protected_resource_metadata(_SERVICE_URL, transport=_handler_for({}, status=503))
+
+    assert "503" in excinfo.value.msg
+
+
+def test_discovery_4xx_is_a_plain_error_not_cannot_verify() -> None:
+    with pytest.raises(PsCliError) as excinfo:
+        fetch_protected_resource_metadata(_SERVICE_URL, transport=_handler_for({}, status=404))
+
+    assert not isinstance(excinfo.value, CannotVerifyError)

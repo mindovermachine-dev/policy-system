@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, PsCliError
 from ps_cli.tls import (
     CERTIFICATE_ERROR_HINT,
     build_ssl_context,
@@ -145,14 +145,17 @@ def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
     itself, so constructing one just to make a single GET before any credential
     exists would be the wrong layering.
     """
+    detail = type(cause).__name__
     if is_certificate_verification_error(cause):
-        raise PsCliError(
+        raise CannotVerifyError(
             msg=f"Could not verify the TLS certificate of {url}.",
             hint=CERTIFICATE_ERROR_HINT,
+            detail=detail,
         ) from cause
-    raise PsCliError(
+    raise CannotVerifyError(
         msg=f"Could not reach {url}.",
         hint="check the URL and that the server is running",
+        detail=detail,
     ) from cause
 
 
@@ -162,7 +165,9 @@ def _raise_read_timeout_error(url: str, cause: BaseException) -> NoReturn:
     Mirrors `http_client.py::_raise_read_timeout_error`'s wording style
     (`http_client.py:127-129`).
     """
-    raise PsCliError(msg=f"{url} did not respond in time.") from cause
+    raise CannotVerifyError(
+        msg=f"{url} did not respond in time.", detail=type(cause).__name__
+    ) from cause
 
 
 def _assert_secure_or_loopback(url: str, *, what: str) -> None:
@@ -186,9 +191,10 @@ def _assert_secure_or_loopback(url: str, *, what: str) -> None:
 def _get_json(url: str, *, transport: httpx.BaseTransport | None) -> object:
     """`GET url` over a short-lived `httpx.Client`, returning the parsed JSON body.
 
-    Raises `PsCliError` on a connect failure, a read timeout, a non-2xx status, or a
-    non-JSON body -- the shared network-error mapping both `fetch_protected_
-    resource_metadata()` and `fetch_openid_configuration()` need.
+    Raises `CannotVerifyError` (a `PsCliError`) on a connect failure, a read timeout, or
+    a 5xx status, and a plain `PsCliError` on any other non-2xx status or a non-JSON
+    body -- the shared network-error mapping both `fetch_protected_resource_metadata()`
+    and `fetch_openid_configuration()` need.
     """
     with httpx.Client(
         timeout=_DISCOVERY_TIMEOUT, transport=transport, verify=build_ssl_context()
@@ -200,9 +206,10 @@ def _get_json(url: str, *, transport: httpx.BaseTransport | None) -> object:
         except httpx.TransportError as exc:
             _raise_connection_error(url, exc)
     if not response.is_success:
-        raise PsCliError(
-            msg=f"{url} returned an unexpected error response (status {response.status_code})."
-        )
+        msg = f"{url} returned an unexpected error response (status {response.status_code})."
+        if response.is_server_error:
+            raise CannotVerifyError(msg=msg, detail=f"status {response.status_code}")
+        raise PsCliError(msg=msg)
     try:
         return response.json()
     except ValueError as exc:

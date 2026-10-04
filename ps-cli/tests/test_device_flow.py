@@ -37,7 +37,7 @@ from ps_cli.device_flow import (
     request_device_authorization,
     token_bundle_from_response,
 )
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, PsCliError
 from ps_cli.oidc_discovery import ResolvedAuthParameters
 from ps_test_support.mock_oidc_provider import (
     mock_oidc_provider_fixture,  # noqa: F401  # pyright: ignore[reportUnusedImport]
@@ -875,3 +875,121 @@ def test_device_flow_never_prints_a_token_value_on_any_error_path() -> None:
         return httpx.Response(200, json={"token_type": "Bearer"})
 
     _assert_refresh_failure_never_leaks_marker(_discovery_success_then(_malformed_shape_handler))
+
+
+# --- Issue #179 (AC-BI-008): transport failures vs credential rejection -------------
+
+
+class TestRefreshFailureClassification:
+    """`ensure_valid_access_token` separates "cannot verify" from "credential rejected".
+
+    Both keep the bridge's existing user-facing wording (AC-BI-013): the split is the
+    exception *type*, never the message.
+    """
+
+    _issuer = "http://localhost"
+
+    def _transport_with_token_handler(
+        self, handle_token: Callable[[httpx.Request], httpx.Response]
+    ) -> httpx.MockTransport:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/.well-known/oauth-protected-resource":
+                return httpx.Response(
+                    200,
+                    json={
+                        "resource": "http://ps-service.example",
+                        "authorization_servers": [self._issuer],
+                        "scopes_supported": ["openid"],
+                        "ps_cli_client_id": _CLIENT_ID,
+                    },
+                )
+            if request.url.path == "/.well-known/openid-configuration":
+                return httpx.Response(
+                    200,
+                    json={
+                        "issuer": self._issuer,
+                        "device_authorization_endpoint": f"{self._issuer}/device_authorization",
+                        "token_endpoint": f"{self._issuer}/token",
+                    },
+                )
+            return handle_token(request)
+
+        return httpx.MockTransport(_handle)
+
+    def _refresh_error(
+        self, transport: httpx.BaseTransport, *, refresh_token: str | None = "rt"
+    ) -> PsCliError:
+        store = _FakeCredentialStore()
+        store.set_tokens("dev", TokenBundle(refresh_token=refresh_token, issuer=self._issuer))
+        with pytest.raises(PsCliError) as excinfo:
+            ensure_valid_access_token(
+                context="dev",
+                service_url="http://ps-service.example",
+                auth_override=None,
+                credential_store=store,
+                access_token_cache=AccessTokenCache(),
+                transport=transport,
+            )
+        return excinfo.value
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            httpx.ConnectError("connection refused"),
+            httpx.ReadTimeout("timed out"),
+        ],
+    )
+    def test_transport_failure_on_refresh_raises_cannot_verify_with_unchanged_wording(
+        self, raised: httpx.TransportError
+    ) -> None:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            raise type(raised)(str(raised), request=request)
+
+        error = self._refresh_error(self._transport_with_token_handler(_handle))
+
+        assert isinstance(error, CannotVerifyError)
+        assert error.msg == "stored credentials could not be refreshed"
+        assert "ps-cli auth login" in (error.hint or "")
+
+    def test_idp_5xx_on_refresh_raises_cannot_verify_naming_the_status(self) -> None:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(503)
+
+        error = self._refresh_error(self._transport_with_token_handler(_handle))
+
+        assert isinstance(error, CannotVerifyError)
+        assert error.msg == "stored credentials could not be refreshed"
+        assert "503" in error.detail
+
+    def test_idp_4xx_on_refresh_is_credential_rejection_not_cannot_verify(self) -> None:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(400, json={"error": "invalid_grant"})
+
+        error = self._refresh_error(self._transport_with_token_handler(_handle))
+
+        assert not isinstance(error, CannotVerifyError)
+        assert error.msg == "stored credentials could not be refreshed"
+
+    def test_malformed_2xx_body_on_refresh_is_credential_rejection_not_cannot_verify(
+        self,
+    ) -> None:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200, content=b"not json")
+
+        error = self._refresh_error(self._transport_with_token_handler(_handle))
+
+        assert not isinstance(error, CannotVerifyError)
+
+    def test_bundle_without_refresh_token_is_credential_rejection_not_cannot_verify(
+        self,
+    ) -> None:
+        def _handle(request: httpx.Request) -> httpx.Response:
+            raise AssertionError(request.url)
+
+        error = self._refresh_error(self._transport_with_token_handler(_handle), refresh_token=None)
+
+        assert not isinstance(error, CannotVerifyError)
+        assert error.msg == "stored credentials could not be refreshed"

@@ -13,7 +13,6 @@
   - [7. Deploy Policy System Backend](#7-deploy-policy-system-backend)
   - [8. Register your passkey and log in with ps-cli](#8-register-your-passkey-and-log-in-with-ps-cli)
   - [9. Install the Policy System Plugin](#9-install-the-policy-system-plugin)
-    - [Reset an earlier account-scoped marketplace (manual)](#reset-an-earlier-account-scoped-marketplace-manual)
   - [What is exposed (evaluator)](#what-is-exposed-evaluator)
 - [Production installation](#production-installation)
   - [Prerequisites (Production)](#prerequisites-production)
@@ -460,7 +459,7 @@ Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **ne
 List the policy system tools you have available
 ```
 
-Once installed, see the [User Guide](./user-guide.md#using-claude-desktop) for how to
+Once installed, see the [User Guide](./user-guide.md#using-claude-desktop---code) for how to
 ask a question.
 
 ### What is exposed (evaluator)

@@ -39,7 +39,7 @@ import httpx
 
 from ps_cli import oidc_discovery
 from ps_cli.credentials import TokenBundle
-from ps_cli.errors import PsCliError
+from ps_cli.errors import CannotVerifyError, PsCliError
 from ps_cli.tls import (
     CERTIFICATE_ERROR_HINT,
     build_ssl_context,
@@ -397,6 +397,16 @@ def _raise_refresh_failed() -> NoReturn:
     raise PsCliError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT)
 
 
+def _raise_refresh_unverifiable(detail: str) -> NoReturn:
+    """Raise `CannotVerifyError` for a refresh that failed for reasons unrelated to the credential.
+
+    Same wording as `_raise_refresh_failed` (AC-BI-013 is unchanged for the bridge and
+    every other command); the exception type alone tells `auth status` the credential
+    was never judged. `detail` is a transport exception class name or an HTTP status.
+    """
+    raise CannotVerifyError(msg=_REFRESH_FAILED_MSG, hint=_RELOGIN_HINT, detail=detail)
+
+
 def _is_cache_stale(cache: AccessTokenCache) -> bool:
     """Return whether `cache`'s token is expired or expiring within `_EXPIRY_LEEWAY_SECONDS`.
 
@@ -432,8 +442,9 @@ def _refresh_tokens(
 
     Carries `refresh_token` forward unchanged if the response does not include a
     new one (AC-BI-005: "not every IdP rotates on every refresh"), else adopts the
-    rotated one. Raises the AC-BI-009 fail-closed error (`_raise_refresh_failed`)
-    on any network error, non-2xx response, or malformed body -- never lets an
+    rotated one. Raises the AC-BI-009 fail-closed error (`_raise_refresh_failed`) on a
+    4xx response or malformed body, and `CannotVerifyError` (same wording) on a network
+    error or 5xx response (issue #179) -- never lets an
     `httpx` exception or a raw `KeyError`/`TypeError` escape.
 
     Also sends `params.scopes` as `scope` (issue #119, AC-BI-003) -- `params` is
@@ -463,8 +474,10 @@ def _refresh_tokens(
     ) as client:
         try:
             response = client.post(params.token_endpoint, data=data)
-        except httpx.HTTPError:
-            _raise_refresh_failed()
+        except httpx.HTTPError as exc:
+            _raise_refresh_unverifiable(type(exc).__name__)
+    if response.is_server_error:
+        _raise_refresh_unverifiable(f"status {response.status_code}")
     if not response.is_success:
         _raise_refresh_failed()
     try:

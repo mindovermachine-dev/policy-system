@@ -425,9 +425,9 @@ def test_full_login_call_refresh_logout_cycle_against_generic_mock_oidc_provider
     assert len(refresh_grant_tokens) == 2  # fails closed before ever attempting one
 
     status_exit_code = run(["auth", "status", "--context", _CONTEXT_NAME])
-    status_output = capsys.readouterr().out
-    assert status_exit_code == 0
-    assert f"not logged in to '{_CONTEXT_NAME}'" in status_output
+    status_error = capsys.readouterr().err
+    assert status_exit_code == 1  # issue #179: status verifies, so "not logged in" fails
+    assert f"not logged in to '{_CONTEXT_NAME}'" in status_error
 
 
 @pytest.mark.integration

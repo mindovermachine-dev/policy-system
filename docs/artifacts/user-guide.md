@@ -7,11 +7,12 @@
   - [Point ps-cli at your instance](#point-ps-cli-at-your-instance)
   - [Load curated content](#load-curated-content)
   - [Find and ingest a regulation from EUR-Lex](#find-and-ingest-a-regulation-from-eur-lex)
-- [Using Claude Desktop](#using-claude-desktop)
+- [Using Claude Desktop - Code](#using-claude-desktop---code)
   - [Ask a question](#ask-a-question)
   - [Manage access roles](#manage-access-roles)
   - [Invite a new user](#invite-a-new-user)
   - [Review the audit trail](#review-the-audit-trail)
+  - [Assess EU-instrument applicability](#assess-eu-instrument-applicability)
 - [Role System](#role-system)
 - [Glossary](#glossary)
 - [Appendix: ps-cli reference](#appendix-ps-cli-reference)
@@ -37,10 +38,11 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | I want to... | Use |
 | --- | --- |
 | Ingest an internal policy, check service health, administer an instance | [Using ps-cli](#using-ps-cli) |
-| Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop](#using-claude-desktop) |
+| Ask a compliance question in natural language, or ingest a regulation by CELEX | [Using Claude Desktop - Code](#using-claude-desktop---code) |
 | Grant, revoke, or list access roles | [Role System](#role-system) |
 | Invite a new user | [Invite a new user](#invite-a-new-user) |
 | Review who did what, to what, and when | [Review the audit trail](#review-the-audit-trail) |
+| Find out which EU regulations might apply to a company | [Assess EU-instrument applicability](#assess-eu-instrument-applicability) |
 
 ---
 
@@ -124,7 +126,7 @@ between multiple environments, per-command overrides, and credential storage.
 
 ### Load curated content
 
-The `ps-get-catalog-listing` skill (see [Using Claude Desktop](#using-claude-desktop))
+The `ps-get-catalog-listing` skill (see [Using Claude Desktop](#using-claude-desktop---code))
 lists every curated instrument PS Service's configured curated-content source
 currently serves — external and internal, no local checkout needed. Ask Claude to
 use it, e.g. _"Use the ps-get-catalog-listing skill to list the curated catalog."_
@@ -142,7 +144,7 @@ answers nothing until something is restored or ingested. Requires
 
 Not every regulation is curated. Ingesting one by CELEX identifier — curated or
 not — is done through the `ps-ingest-regulation` skill (see [Using Claude
-Desktop](#using-claude-desktop)), not `ps-cli`: ask Claude to ingest the
+Desktop](#using-claude-desktop---code)), not `ps-cli`: ask Claude to ingest the
 regulation, e.g. _"Use the ps-ingest-regulation skill to ingest 32016R0679 as
 gdpr."_ The skill always asks for both the CELEX identifier and a `short_name`,
 even for a curated regulation — never guess `short_name` on the user's behalf.
@@ -170,16 +172,20 @@ requirement.
 
 ---
 
-## Using Claude Desktop
+## Using Claude Desktop - Code
 
-Once the Policy System Plugin is installed (see [Installation Guide: Install the
-Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin);
-the install command is `/plugin install ps-plugin@ps-marketplace`, after adding the
-Policy System Marketplace, `ps-marketplace`),
-you can ask compliance questions directly in a Claude Desktop chat. The plugin's
-Policy System MCP connector (`ps-mcp`) reaches whichever PS Service instance `ps-cli`'s
-current context points at (see [Point ps-cli at your
-instance](#point-ps-cli-at-your-instance)).
+Install the Policy System Plugin (see [Installation Guide: Install the
+Policy System Plugin](./installation-guide.md#9-install-the-policy-system-plugin))
+with:
+
+```text
+/plugin install ps-plugin@ps-marketplace
+```
+
+The plugin's Policy System MCP connector (`ps-mcp`) reaches whichever PS Service
+instance `ps-cli`'s current context points at (see [Point ps-cli at your
+instance](#point-ps-cli-at-your-instance)). It can take the connector a moment to
+connect, so if a query fails, try again.
 
 ### Ask a question
 
@@ -330,7 +336,7 @@ Global flags, usable before or after any subcommand:
 | `ps-cli ingest document <document_path>` | `document_path` — a local `.json` file path; `ps-cli` reads it from your own machine and sends its content | Ingest an internal policy document. |
 | `ps-cli export instrument <instrument_id> [destination]` | `instrument_id` — the already-ingested instrument's id (e.g. `CRA-1.0`); `destination` — optional local directory, defaults to the current directory | Export an already-ingested instrument's baseline/native/manifest files to a local destination. |
 | `ps-cli auth login` | — | Log in to the current context via OIDC device-flow (see [Credential storage](#credential-storage)). |
-| `ps-cli auth status` | — | Show the current context's login status (context, issuer) — reads the local store only, no network call. |
+| `ps-cli auth status` | — | Verify the current context's stored credential by refreshing it, and show its login status (context, issuer). Exits non-zero unless the credential works: not logged in, credential not usable, cannot verify (IdP or PS Service unreachable) and credential store inaccessible are each reported separately. |
 | `ps-cli auth logout` | — | Remove the current context's stored credential. |
 | `ps-cli config set-context <name> --url <url>` | `name`, `--url` (required) | Create or update a named context's PS Service URL. Clears any credential previously stored for that name. |
 | `ps-cli config use-context <name>` | `name` | Select the named context every subsequent command uses. |
@@ -419,9 +425,10 @@ Log in with `ps-cli auth login` (requires a named context — `config
 set-context`/`use-context` first, since a stored credential is keyed per context
 name). This runs an OIDC device-authorization flow ([#57](https://github.com/mindovermachine-dev/policy-system/issues/57)):
 `ps-cli` prints a verification URL and code, you complete sign-in in a browser, and
-the resulting token is stored under the current context. `ps-cli auth status` shows
-whether you're logged in (context, issuer) without contacting anything; `ps-cli auth
-logout` removes the stored credential.
+the resulting token is stored under the current context. `ps-cli auth status` verifies
+the stored credential by refreshing it with the identity provider, so "logged in" means
+it works (and exits non-zero otherwise); `ps-cli auth logout` removes the stored
+credential.
 
 Whether login is required depends on the target PS Service instance:
 generic OIDC bearer-token validation against any OIDC-compliant provider (no
@@ -431,7 +438,7 @@ given deployment enforces it once configured with an issuer/audience. The
 evaluator deployment (see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)) and production both
 are, so every `ps-cli` command (and the plugin's `ps-mcp` connector — see
-[Using Claude Desktop](#using-claude-desktop)) needs `ps-cli auth login` first. Only a
+[Using Claude Desktop](#using-claude-desktop---code)) needs `ps-cli auth login` first. Only a
 deployment started with the local-test bypass (`PS_SERVICE_LOCAL_TEST_BYPASS`, which cannot
 run in a container) needs no login. Re-running `config set-context` for an existing context name with a
 new `--url` always clears any credential previously stored for that name, so nothing
