@@ -420,10 +420,10 @@ def test_system_owner_grants_a_peer_system_owner_and_both_show_as_owner(
     assert AccessRole.SYSTEM_OWNER not in store.active_roles_for(fourth_target)
 
 
-def test_system_owner_cannot_grant_system_admin_to_themselves(
+def test_system_owner_can_grant_system_admin_to_themselves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005: the bootstrapped SystemOwner may not grant SystemAdmin to their own subject."""
+    """AC-BI-005 exemption: the bootstrapped SystemOwner may grant SystemAdmin to themselves."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
     store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
@@ -434,10 +434,8 @@ def test_system_owner_cannot_grant_system_admin_to_themselves(
         result = _call_grant_access_role(_FIRST_CALLER_SUBJECT, "SystemAdmin")
 
     assert result.is_error is False
-    assert _text(result) == "error: You cannot grant or revoke your own access roles."
-    assert AccessRole.SYSTEM_ADMIN not in store.active_roles_for(
-        (_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER)
-    )
+    assert not _text(result).startswith("error:")
+    assert AccessRole.SYSTEM_ADMIN in store.active_roles_for((_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
 
 
 def test_grant_access_role_naming_a_role_outside_the_closed_set_is_rejected_by_the_mcp_schema(
@@ -521,16 +519,10 @@ def test_revoke_of_system_admin_and_policy_manager_round_trips_with_its_own_audi
     assert revoke_events[0].access_role is AccessRole.SYSTEM_ADMIN
 
 
-def test_self_revoke_of_system_admin_is_blocked_the_same_way_as_self_grant(
+def test_system_owner_can_self_revoke_system_admin_but_not_system_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC-BI-005 extended to revoke: the RBAC-eligible SystemOwner may not target themselves.
-
-    Revoke RBAC for `SystemAdmin` requires the actor hold `SystemOwner`
-    (mirroring grant's own requirement) -- so the bootstrapped SystemOwner
-    themselves is the actor that actually reaches `block_self_target`,
-    exactly as the analogous self-grant scenario does.
-    """
+    """AC-BI-005 exemption extended to revoke: non-owner roles yes, `SystemOwner` still blocked."""
     configure()
     monkeypatch.setenv("PS_AUTH_ISSUER", _ACTOR_ISSUER)
     store = FakeAccessRoleStore(expected_owner=(_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER))
@@ -538,10 +530,15 @@ def test_self_revoke_of_system_admin_is_blocked_the_same_way_as_self_grant(
 
     with _verified_actor(sub=_FIRST_CALLER_SUBJECT):
         _call_list_access_roles()  # bootstraps FIRST_CALLER as SystemOwner
-        result = _call_revoke_access_role(_FIRST_CALLER_SUBJECT, "SystemAdmin")
+        _call_grant_access_role(_FIRST_CALLER_SUBJECT, "SystemAdmin")
+        revoked = _call_revoke_access_role(_FIRST_CALLER_SUBJECT, "SystemAdmin")
+        blocked = _call_revoke_access_role(_FIRST_CALLER_SUBJECT, "SystemOwner")
 
-    assert result.is_error is False
-    assert _text(result) == "error: You cannot grant or revoke your own access roles."
+    assert not _text(revoked).startswith("error:")
+    assert AccessRole.SYSTEM_ADMIN not in store.active_roles_for(
+        (_FIRST_CALLER_SUBJECT, _ACTOR_ISSUER)
+    )
+    assert _text(blocked) == "error: You cannot grant or revoke your own access roles."
 
 
 def test_revoke_access_role_naming_a_role_outside_the_closed_set_is_rejected_by_the_mcp_schema(

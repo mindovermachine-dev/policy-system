@@ -414,31 +414,55 @@ def test_grant_role_rejects_a_non_owner_granting_system_admin() -> None:
     ]
 
 
-def test_grant_role_blocks_a_system_owner_granting_system_admin_to_themselves() -> None:
-    """AC-BI-005: the sole SystemOwner may not grant SystemAdmin to their own subject.
+def test_grant_role_lets_a_system_owner_grant_themselves_another_role() -> None:
+    """AC-BI-005 exemption: a SystemOwner may grant any role to their own subject."""
+    store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=store)
+
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_FIRST_CALLER[0],
+        access_role="PolicyManager",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    assert AccessRole.POLICY_MANAGER in store.active_roles_for(_FIRST_CALLER)
+    assert store.rejected_records == []
+
+
+def test_grant_role_still_blocks_a_non_owner_granting_themselves_a_role() -> None:
+    """AC-BI-005 still binds everyone but SystemOwner: a SystemAdmin may not self-grant.
 
     AC-BI-012: this denial also records one `outcome='rejected'`
     `access_role.grant` audit event with `reason_code="self_grant_blocked"`.
     """
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_SECOND_CALLER[0],
+        access_role="SystemAdmin",
+        store=store,
+        issuer=_ISSUER,
+    )
 
     with pytest.raises(SelfGrantOrRevokeBlockedError) as exc_info:
         grant_role(
-            actor=_FIRST_CALLER,
-            target_subject=_FIRST_CALLER[0],
-            access_role="SystemAdmin",
+            actor=_SECOND_CALLER,
+            target_subject=_SECOND_CALLER[0],
+            access_role="PolicyManager",
             store=store,
             issuer=_ISSUER,
         )
     assert str(exc_info.value) == "You cannot grant or revoke your own access roles."
-    assert AccessRole.SYSTEM_ADMIN not in store.active_roles_for(_FIRST_CALLER)
+    assert AccessRole.POLICY_MANAGER not in store.active_roles_for(_SECOND_CALLER)
     assert store.rejected_records == [
         RejectedAuditRecord(
             action="grant",
-            actor=_FIRST_CALLER,
-            target=(_FIRST_CALLER[0], _ISSUER),
-            access_role=AccessRole.SYSTEM_ADMIN,
+            actor=_SECOND_CALLER,
+            target=(_SECOND_CALLER[0], _ISSUER),
+            access_role=AccessRole.POLICY_MANAGER,
             reason_code="self_grant_blocked",
         )
     ]
@@ -606,41 +630,29 @@ def test_revoke_role_round_trips_compliance_officer() -> None:
     assert AccessRole.COMPLIANCE_OFFICER not in store.active_roles_for(_SECOND_CALLER)
 
 
-def test_revoke_role_blocks_self_revoke() -> None:
-    """AC-BI-005 extended to revoke: the RBAC-eligible SystemOwner may not target themselves.
-
-    Revoke RBAC for `SystemAdmin` requires the actor hold `SystemOwner`
-    (mirroring grant's own requirement, PLAN.md §0.7's judgment-call
-    symmetry) -- so the scenario that actually exercises `block_self_target`
-    (as opposed to being turned away earlier by the RBAC check) is a
-    `SystemOwner` targeting their own subject, not a bare `SystemAdmin` who
-    is never RBAC-eligible to revoke `SystemAdmin` from anyone, self
-    included.
-
-    AC-BI-012: this denial also records one `outcome='rejected'`
-    `access_role.revoke` audit event with `reason_code="self_revoke_blocked"`.
-    """
+def test_revoke_role_lets_a_system_owner_revoke_a_non_owner_role_from_themselves() -> None:
+    """AC-BI-005 exemption extended to revoke: a SystemOwner may drop their own non-owner roles."""
     store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
     resolve_active_roles(_FIRST_CALLER, store=store)  # bootstraps -- FIRST_CALLER: SystemOwner
+    grant_role(
+        actor=_FIRST_CALLER,
+        target_subject=_FIRST_CALLER[0],
+        access_role="SystemAdmin",
+        store=store,
+        issuer=_ISSUER,
+    )
 
-    with pytest.raises(SelfGrantOrRevokeBlockedError) as exc_info:
-        revoke_role(
-            actor=_FIRST_CALLER,
-            target_subject=_FIRST_CALLER[0],
-            access_role="SystemAdmin",
-            store=store,
-            issuer=_ISSUER,
-        )
-    assert str(exc_info.value) == "You cannot grant or revoke your own access roles."
-    assert store.rejected_records == [
-        RejectedAuditRecord(
-            action="revoke",
-            actor=_FIRST_CALLER,
-            target=(_FIRST_CALLER[0], _ISSUER),
-            access_role=AccessRole.SYSTEM_ADMIN,
-            reason_code="self_revoke_blocked",
-        )
-    ]
+    revoke_role(
+        actor=_FIRST_CALLER,
+        target_subject=_FIRST_CALLER[0],
+        access_role="SystemAdmin",
+        store=store,
+        issuer=_ISSUER,
+    )
+
+    assert AccessRole.SYSTEM_ADMIN not in store.active_roles_for(_FIRST_CALLER)
+    assert AccessRole.SYSTEM_OWNER in store.active_roles_for(_FIRST_CALLER)
+    assert store.rejected_records == []
 
 
 def test_revoke_role_denies_a_bare_system_admin_who_is_not_rbac_eligible_at_all() -> None:

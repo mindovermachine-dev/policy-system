@@ -20,11 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ps_service.authz.models import AccessRole
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Literal
-
-    from ps_service.authz.models import AccessRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,8 @@ class AccessRuleContext:
 
     `active_system_owner_count` is only meaningful when `access_role` is
     `SYSTEM_OWNER` (consumed by Slice 3's `enforce_system_owner_floor`) --
-    `block_self_target` never reads it.
+    `block_self_target` never reads it. `actor_is_system_owner` is read only
+    by `block_self_target`'s SystemOwner exemption.
     """
 
     actor: tuple[str, str]
@@ -41,6 +42,7 @@ class AccessRuleContext:
     access_role: AccessRole
     action: Literal["grant", "revoke"]
     active_system_owner_count: int
+    actor_is_system_owner: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,21 +66,29 @@ unchanged.
 
 
 def block_self_target(ctx: AccessRuleContext) -> AccessRuleResult:
-    """AC-BI-005: a caller may never grant or revoke their own access roles.
+    """AC-BI-005: a caller may not grant or revoke their own access roles.
+
+    A `SystemOwner` is exempt, so one principal can run an evaluation end to
+    end: they may grant themselves any role and revoke any role from
+    themselves except `SYSTEM_OWNER`. Self-revoking `SYSTEM_OWNER` stays blocked.
 
     Args:
         ctx: The grant/revoke call's facts.
 
     Returns:
         `AccessRuleResult(allowed=False, ...)` when `ctx.actor == ctx.target`
-        (compared as the full `(sub, iss)` pair), else
-        `AccessRuleResult(allowed=True, reason=None)`.
+        (compared as the full `(sub, iss)` pair) and the exemption does not
+        apply, else `AccessRuleResult(allowed=True, reason=None)`.
     """
-    if ctx.actor == ctx.target:
-        return AccessRuleResult(
-            allowed=False, reason="a caller may not grant or revoke their own access roles"
-        )
-    return AccessRuleResult(allowed=True, reason=None)
+    if ctx.actor != ctx.target:
+        return AccessRuleResult(allowed=True, reason=None)
+    if ctx.actor_is_system_owner and not (
+        ctx.action == "revoke" and ctx.access_role is AccessRole.SYSTEM_OWNER
+    ):
+        return AccessRuleResult(allowed=True, reason=None)
+    return AccessRuleResult(
+        allowed=False, reason="a caller may not grant or revoke their own access roles"
+    )
 
 
 def enforce_system_owner_floor(ctx: AccessRuleContext) -> AccessRuleResult:

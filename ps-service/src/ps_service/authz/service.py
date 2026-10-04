@@ -430,6 +430,7 @@ def grant_role(
             access_role=role,
             action="grant",
             active_system_owner_count=0,  # unused by block_self_target
+            actor_is_system_owner=AccessRole.SYSTEM_OWNER in actor_roles,
         )
     )
     if not rule_result.allowed:
@@ -527,6 +528,7 @@ def revoke_role(
             access_role=role,
             action="revoke",
             active_system_owner_count=0,  # unused by block_self_target
+            actor_is_system_owner=AccessRole.SYSTEM_OWNER in actor_roles,
         )
     )
     if not rule_result.allowed:
