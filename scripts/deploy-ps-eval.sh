@@ -388,7 +388,7 @@ print_closing_summary() {
     printf '  ps-cli config set-context %s --url %s\n  ps-cli config use-context %s\n' \
       "$PS_CLI_CONTEXT" "$PS_SERVICE_LOCAL_URL" "$PS_CLI_CONTEXT"
   fi
-  printf '  SSL_CERT_FILE=%s ps-cli auth login\n\n' "$ca"
+  printf '  ps-cli auth login\n\n'
   printf 'Other machines (LAN colleagues): copy %s there and see %s\n\n' "$ca" "$INSTALL_GUIDE_TRUST_STEP"
   print_owner_link_message
 }

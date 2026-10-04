@@ -369,15 +369,14 @@ for you, because the login needs the passkey you just registered. Run the comman
 printed:
 
 ```bash
-SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem ps-cli auth login
+ps-cli auth login
 ```
 
-`ps-cli` reads the CA only from `SSL_CERT_FILE`, not from the operating system trust store, and
-the variable **replaces** the default CA bundle for that process. Setting it inline, as above,
-keeps it out of your shell. Without it, `auth login` fails with a generic "Could not reach ..."
-message that is a certificate-trust problem here, not a network one. `ps-cli` refreshes its
-token against Authentik, so later commands need the same variable; `export` it in the shell you
-use for `ps-cli` rather than in your profile.
+`ps-cli` verifies Authentik's certificate against the operating system trust store, which the
+script has already added the local CA to, so no environment variable is needed. If `auth login`
+reports that it could not verify the TLS certificate, the CA is not trusted on this machine (for
+example a second machine: see the colleague steps below). On Linux, `SSL_CERT_FILE` or
+`SSL_CERT_DIR` also work; on macOS and Windows they are ignored.
 
 `auth login` prints a verification URL and code; open it in the browser you registered the
 passkey in and complete the sign-in. Then verify:
@@ -418,7 +417,7 @@ will log in, with two differences:
   the script's closing output prints the full path). Send the certificate only, **never
   `ca.key`** in the same folder. Any file transfer works (AirDrop, a shared drive, or `scp`
   if Remote Login is enabled on the laptop).
-  Then trust that copy as above. For `ps-cli`, point `SSL_CERT_FILE` at it.
+  Then trust that copy as above; `ps-cli` and the plugin's bridge read the same OS trust store.
 
 Without both, their browser shows a certificate warning and passkey registration does not
 work. The colleague registers their passkey from the invitation link the owner issues (see
@@ -444,14 +443,9 @@ typical remote connector, this one runs **locally** — the plugin declares it a
 context points at ([Configuring which PS Service instance ps-cli
 targets](./user-guide.md#configuring-which-ps-service-instance-ps-cli-targets)).
 The bridge reuses the `ps-cli` login from step 8: it sends the stored access token as an
-`Authorization` header and refreshes it against Authentik, so it needs the **same CA trust** as
-`ps-cli`. The plugin declares no environment for the bridge, so it inherits Claude Desktop's
-own. Set `SSL_CERT_FILE` in that environment — for example on macOS
-`launchctl setenv SSL_CERT_FILE ~/.config/policy-system/eval-tls/ca.pem` (use the absolute
-path), then quit and relaunch Claude Desktop — and be aware that it then applies to every
-application started afterwards that honours the variable. The bridge itself was verified with
-the variable in its environment (initialize and tool listing succeed with it, fail without
-it); setting it through Claude Desktop is not verified here.
+`Authorization` header and refreshes it against Authentik. It verifies Authentik's certificate
+against the operating system trust store, like `ps-cli`, so it needs no environment variable
+and works under Claude Desktop's own environment once the local CA is trusted by the OS.
 
 Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat
 — tools bind when a conversation starts. `policy-system-graph` exposes the tools

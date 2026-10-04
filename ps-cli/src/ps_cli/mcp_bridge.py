@@ -42,6 +42,7 @@ from ps_cli.credentials import build_credential_store
 from ps_cli.device_flow import AccessTokenCache, ensure_valid_access_token
 from ps_cli.errors import PsCliError
 from ps_cli.targets import resolve_auth_override, resolve_config_dir
+from ps_cli.tls import build_ssl_context
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -459,7 +460,7 @@ def main(*, transport: httpx.BaseTransport | None = None) -> None:
     )
 
     try:
-        with httpx.Client(timeout=30, transport=transport) as client:
+        with httpx.Client(timeout=30, transport=transport, verify=build_ssl_context()) as client:
             _run_proxy_loop(client, ctx)
     except Exception as exc:  # log before propagating (AC-BI-006), never swallowed
         _log(f"exiting: unhandled exception: {exc!r}", log_file=log_file)

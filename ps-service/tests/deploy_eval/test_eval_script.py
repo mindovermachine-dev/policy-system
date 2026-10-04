@@ -454,7 +454,8 @@ def test_ps_cli_context_is_set_and_selected_when_missing(eval_fixture: EvalFixtu
     calls = log.read_text().splitlines()
     assert "config set-context eval --url http://127.0.0.1:8000" in calls
     assert "config use-context eval" in calls
-    assert f"SSL_CERT_FILE={eval_fixture.state_dir}/ca.pem ps-cli auth login" in run.stdout
+    assert "  ps-cli auth login" in run.stdout
+    assert "SSL_CERT_FILE" not in run.stdout
     assert "ps-cli config set-context" not in run.stdout
 
 
@@ -472,7 +473,8 @@ def test_without_ps_cli_the_closing_output_prints_the_commands(eval_fixture: Eva
 
     assert "ps-cli config set-context eval --url http://127.0.0.1:8000" in run.stdout
     assert "ps-cli config use-context eval" in run.stdout
-    assert f"SSL_CERT_FILE={eval_fixture.state_dir}/ca.pem ps-cli auth login" in run.stdout
+    assert "  ps-cli auth login" in run.stdout
+    assert "SSL_CERT_FILE" not in run.stdout
 
 
 def test_closing_output_omits_the_hosts_step_when_the_hostname_is_already_mapped(

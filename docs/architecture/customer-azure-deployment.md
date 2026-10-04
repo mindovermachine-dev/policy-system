@@ -315,8 +315,8 @@ host) — deliberately, so a LAN colleague can log in (issue #160) — and serve
 certificate from a local CA the script creates, because browsers only offer passkeys in a secure
 context and `ps-cli` refuses credentials over a non-`https`, non-loopback issuer. Authentik's
 plain-HTTP NodePort stays inside the node. PS Service's pod trusts the local CA through
-`SSL_CERT_FILE`; `ps-cli` and the MCP bridge need the same variable because they do not read the
-operating-system trust store. The exposure of each profile is stated in the installation guide's
+`SSL_CERT_FILE`; `ps-cli` and the MCP bridge instead verify against the operating-system trust
+store (via `truststore`), which the host setup adds the CA to. The exposure of each profile is stated in the installation guide's
 "What is exposed" sections.
 
 **Secret provisioning and rotation (issue #159 — Helm-native, no Key Vault).** Authentik's Django

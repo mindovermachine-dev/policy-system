@@ -33,6 +33,11 @@ from urllib.parse import urlparse
 import httpx
 
 from ps_cli.errors import PsCliError
+from ps_cli.tls import (
+    CERTIFICATE_ERROR_HINT,
+    build_ssl_context,
+    is_certificate_verification_error,
+)
 
 if TYPE_CHECKING:
     from ps_cli.targets import AuthOverrides
@@ -140,6 +145,11 @@ def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
     itself, so constructing one just to make a single GET before any credential
     exists would be the wrong layering.
     """
+    if is_certificate_verification_error(cause):
+        raise PsCliError(
+            msg=f"Could not verify the TLS certificate of {url}.",
+            hint=CERTIFICATE_ERROR_HINT,
+        ) from cause
     raise PsCliError(
         msg=f"Could not reach {url}.",
         hint="check the URL and that the server is running",
@@ -180,7 +190,9 @@ def _get_json(url: str, *, transport: httpx.BaseTransport | None) -> object:
     non-JSON body -- the shared network-error mapping both `fetch_protected_
     resource_metadata()` and `fetch_openid_configuration()` need.
     """
-    with httpx.Client(timeout=_DISCOVERY_TIMEOUT, transport=transport) as client:
+    with httpx.Client(
+        timeout=_DISCOVERY_TIMEOUT, transport=transport, verify=build_ssl_context()
+    ) as client:
         try:
             response = client.get(url)
         except httpx.ReadTimeout as exc:

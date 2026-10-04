@@ -71,13 +71,11 @@ its prerequisites.
 deployment, see [Installation Guide: Evaluator
 installation](./installation-guide.md#evaluator-installation)), and it **requires login**
 through the bundled Authentik. Authentik is served over HTTPS with a locally issued
-certificate, and `ps-cli` reads only the `SSL_CERT_FILE` environment variable for extra CA
-trust (not the operating system store), so point it at the local CA first (the path
-`scripts/deploy-ps-eval.sh` printed, by default `~/.config/policy-system/eval-tls/ca.pem`):
-
-```bash
-export SSL_CERT_FILE=~/.config/policy-system/eval-tls/ca.pem
-```
+certificate. `ps-cli` verifies it against the operating system trust store, which
+`scripts/deploy-ps-eval.sh --apply-host-setup` has already added the local CA to on the
+machine that ran it, so no environment variable is needed. On another machine, trust the
+CA certificate first (see [Installation Guide, step
+8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli)).
 
 ```bash
 ps-cli config set-context eval --url http://127.0.0.1:8000
@@ -91,8 +89,7 @@ ps-cli config use-context eval
 ps-cli auth login
 ```
 
-`SSL_CERT_FILE` replaces the default CA bundle for that process, so set it only where you run
-`ps-cli`. The account you sign in with must first have a passkey: the owner registers one from
+The account you sign in with must first have a passkey: the owner registers one from
 the link the deploy script printed, and everyone else from an invitation (see [Invite a new
 user](#invite-a-new-user)). Neither ever sets a password.
 
@@ -496,9 +493,12 @@ unhealthy server:
 
 `ps-cli auth login` against an evaluator instance can instead fail with `Could not reach
 <issuer>.` even though Authentik is running: the issuer is HTTPS with a locally issued
-certificate, and `ps-cli` (and `ps-cli-mcp-bridge`) trust only what `SSL_CERT_FILE` names, not the
-operating system store. Export `SSL_CERT_FILE` as shown in [Point ps-cli at your
-instance](#point-ps-cli-at-your-instance) and retry.
+certificate, and `ps-cli` (and `ps-cli-mcp-bridge`) verify it against the operating system
+trust store. If the message says it could not verify the TLS certificate, the local CA is not
+trusted on this machine: trust it as described in [Installation Guide, step
+8](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli) and retry. A plain
+`Could not reach` message means the host is unreachable, not a certificate problem. On Linux,
+`SSL_CERT_FILE` or `SSL_CERT_DIR` also work; on macOS and Windows they are ignored.
 
 Beyond that, PS Service's own health is what to check next — see the [Operations
 Guide: Troubleshooting / FAQ](./operations-guide.md#troubleshooting--faq) for

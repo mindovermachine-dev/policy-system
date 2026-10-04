@@ -92,11 +92,14 @@ device-authorization endpoint or token endpoint that is neither `https://` nor a
 profile therefore serves Authentik over HTTPS, with a certificate from a local certificate
 authority created by `scripts/deploy-ps-eval.sh`. PS Service's pod trusts that CA through
 `SSL_CERT_FILE` (a bundle of the system CAs plus the local CA, mounted by the chart); nothing
-disables TLS verification. `ps-cli` and `ps-cli-mcp-bridge` do **not** read the operating
-system trust store, only `SSL_CERT_FILE`/`SSL_CERT_DIR`, so on the evaluator they need
-`SSL_CERT_FILE` pointing at the local CA certificate (which replaces their default bundle
-for that process). Browsers need the CA imported into the OS or browser store instead, and
-passkeys only work over such a trusted HTTPS origin. Production uses a public Let's Encrypt
+disables TLS verification. `ps-cli` and `ps-cli-mcp-bridge` verify the certificate against the
+operating system trust store (through `truststore`), so a machine whose OS already trusts the
+local CA (`scripts/deploy-ps-eval.sh --apply-host-setup` arranges this) needs no environment
+variable, including for the bridge under Claude Desktop. On macOS and Windows
+`SSL_CERT_FILE`/`SSL_CERT_DIR` are ignored; on Linux they are honoured, with the system bundle as
+the fallback. A failed certificate check is reported as such, not as an unreachable host.
+Browsers need the CA imported into the OS or browser store too, and passkeys only work over such
+a trusted HTTPS origin. Production uses a public Let's Encrypt
 certificate, so none of this applies there. See the [Installation
 Guide](./installation-guide.md#8-register-your-passkey-and-log-in-with-ps-cli).
 
@@ -224,9 +227,9 @@ configuration beyond the four values above was involved.
   install only accepts a passkey as an MFA *second* factor, not as a
   password replacement. The bundled blueprint patches this explicitly (see
   `docs/architecture/customer-azure-deployment.md`'s Authentik section).
-- **`ps-cli auth login` reports `Could not reach ...` against the evaluator's
-  `https://` issuer**: the local CA is not trusted by `ps-cli`, which reads only
-  `SSL_CERT_FILE`/`SSL_CERT_DIR` — see [Transport](#transport-https-and-trust-for-ps-cli).
+- **`ps-cli auth login` reports `Could not verify the TLS certificate of ...` against the
+  evaluator's `https://` issuer**: the local CA is not in the operating system trust store that
+  `ps-cli` verifies against — see [Transport](#transport-https-and-trust-for-ps-cli).
 - **Opening an owner link says no recovery flow is set**: the blueprint has not applied
   yet (a fresh install takes about a minute after Authentik is Ready). The deploy scripts
   wait for it; a hand-run instance needs the bundled blueprint applied.

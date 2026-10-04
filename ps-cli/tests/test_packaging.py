@@ -6,6 +6,7 @@ install`/`pip install` rely on to place `ps-cli` on `PATH` as a distributed,
 installable command (AC-BI-001).
 """
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -19,3 +20,13 @@ def test_pyproject_declares_ps_cli_console_script_entry_point() -> None:
     scripts = pyproject["project"]["scripts"]
 
     assert scripts["ps-cli"] == "ps_cli.cli:main"
+
+
+def test_pyproject_pins_truststore_exactly() -> None:
+    """`truststore` is a declared dependency with an exact `==` pin (issue #175, AC-BI-008)."""
+    pyproject = tomllib.loads(_PYPROJECT_PATH.read_text(encoding="utf-8"))
+
+    pins = [dep for dep in pyproject["project"]["dependencies"] if dep.startswith("truststore")]
+
+    assert len(pins) == 1
+    assert re.fullmatch(r"truststore==\d+(\.\d+)*", pins[0])

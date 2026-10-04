@@ -40,6 +40,11 @@ import httpx
 from ps_cli import oidc_discovery
 from ps_cli.credentials import TokenBundle
 from ps_cli.errors import PsCliError
+from ps_cli.tls import (
+    CERTIFICATE_ERROR_HINT,
+    build_ssl_context,
+    is_certificate_verification_error,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -130,6 +135,11 @@ def _raise_connection_error(url: str, cause: BaseException) -> NoReturn:
     (same rationale `oidc_discovery.py`'s own docstring gives for not going through
     `PsServiceClient`).
     """
+    if is_certificate_verification_error(cause):
+        raise PsCliError(
+            msg=f"Could not verify the TLS certificate of {url}.",
+            hint=CERTIFICATE_ERROR_HINT,
+        ) from cause
     raise PsCliError(
         msg=f"Could not reach {url}.",
         hint="check the URL and that the server is running",
@@ -204,7 +214,9 @@ def request_device_authorization(
     }
     if params.audience is not None:
         data["audience"] = params.audience
-    with httpx.Client(timeout=_DEVICE_FLOW_TIMEOUT, transport=transport) as client:
+    with httpx.Client(
+        timeout=_DEVICE_FLOW_TIMEOUT, transport=transport, verify=build_ssl_context()
+    ) as client:
         response = _post_form(client, params.device_authorization_endpoint, data)
     if not response.is_success:
         raise PsCliError(
@@ -306,7 +318,9 @@ def poll_for_token(
         "device_code": device_auth.device_code,
         "client_id": params.client_id,
     }
-    with httpx.Client(timeout=_DEVICE_FLOW_TIMEOUT, transport=transport) as client:
+    with httpx.Client(
+        timeout=_DEVICE_FLOW_TIMEOUT, transport=transport, verify=build_ssl_context()
+    ) as client:
         while True:
             response = _post_form(client, params.token_endpoint, data)
             if response.is_success:
@@ -444,7 +458,9 @@ def _refresh_tokens(
         # refresh_token to work with.
         "scope": " ".join(params.scopes),
     }
-    with httpx.Client(timeout=_DEVICE_FLOW_TIMEOUT, transport=transport) as client:
+    with httpx.Client(
+        timeout=_DEVICE_FLOW_TIMEOUT, transport=transport, verify=build_ssl_context()
+    ) as client:
         try:
             response = client.post(params.token_endpoint, data=data)
         except httpx.HTTPError:

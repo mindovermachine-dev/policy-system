@@ -24,6 +24,11 @@ from ps_cli.models import (
     ReadinessResult,
     StageOutcome,
 )
+from ps_cli.tls import (
+    CERTIFICATE_ERROR_HINT,
+    build_ssl_context,
+    is_certificate_verification_error,
+)
 
 if TYPE_CHECKING:
     from ps_cli.credentials import CredentialStore
@@ -93,6 +98,11 @@ def _should_warn_insecure(url: str) -> bool:
 
 def _raise_connection_error(base_url: str, cause: BaseException) -> NoReturn:
     """Raise the actionable `PsCliError` for a connect failure to `base_url` (D5)."""
+    if is_certificate_verification_error(cause):
+        raise PsCliError(
+            msg=f"Could not verify the TLS certificate of PS Service at {base_url}.",
+            hint=CERTIFICATE_ERROR_HINT,
+        ) from cause
     raise PsCliError(
         msg=f"Could not reach PS Service at {base_url}.",
         hint=_CONNECTION_ERROR_HINT,
@@ -416,6 +426,7 @@ class PsServiceClient:
             base_url=base_url,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0),
             transport=transport,
+            verify=build_ssl_context(),
         )
 
     def _authorization_headers(self) -> dict[str, str]:
