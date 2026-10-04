@@ -27,314 +27,414 @@
 - [Upgrading an existing install](#upgrading-an-existing-install)
 - [Verification status](#verification-status)
 
-This guide covers **deploying** Policy System — either an evaluator instance on your
-own laptop, or a production customer-tenant rollout to Azure. The two are **separate
-paths** with separate scripts ([`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh)
-and [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh)) that deploy the same Helm
-chart; pick one and follow only its section. Both ask for the owner's email, create that
-person as an Authentik administrator and the first `SystemOwner`, and print a single-use link
-to register a passkey — no password is ever set. If you want an overview of the project see
-[README.md](../../README.md). If you want to build, test, or release the project, see
-[CONTRIBUTING.md](../../CONTRIBUTING.md). Once your instance is deployed, see the [User
-Guide](./user-guide.md) for asking questions and using `ps-cli`, and the [Operations
-Guide](./operations-guide.md) for rotating credentials, upgrading, backing up, and tearing
-down an instance.
+This guide shows how to **deploy** Policy System. You can deploy it in one of two ways:
+
+- An evaluator instance on your own laptop.
+- A production rollout to a customer tenant in Azure.
+
+The two are **separate paths**. Each path has its own script
+([`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh) and
+[`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh)). Both scripts deploy the same
+Helm chart. Pick one path and follow only that section.
+
+Both scripts do the same three things:
+
+1. They ask for the owner's email.
+2. They create that person as an Authentik administrator and as the first `SystemOwner`.
+3. They print a single-use link to register a passkey. No password is ever set.
+
+Other documents:
+
+- For an overview of the project, see [README.md](../../README.md).
+- To build, test, or release the project, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
+- To ask questions and use `ps-cli` after deployment, see the [User Guide](./user-guide.md).
+- To rotate credentials, upgrade, back up, or tear down an instance, see the
+  [Operations Guide](./operations-guide.md).
 
 ---
 
 ## Evaluator installation
 
 > [!NOTE]
-> **This path is for evaluators** trying Policy System on their own laptop via a
-> Helm chart on a local `kind` cluster, using
+> **This path is for evaluators.** It runs Policy System on your own laptop. It uses a Helm
+> chart on a local `kind` cluster and the script
 > [`scripts/deploy-ps-eval.sh`](../../scripts/deploy-ps-eval.sh).
 
-The same Helm chart also serves **production administrators** deploying to a real
-Azure subscription, with a different values profile — see [Production
-installation](#production-installation). This walkthrough covers the evaluator profile
-only. The evaluator profile runs the bundled Authentik identity provider over HTTPS with a
-locally issued certificate (passkeys only work in a secure browser context), and logging in
-is required.
+Production administrators use the same Helm chart with a different values profile. See
+[Production installation](#production-installation). This section covers the evaluator
+profile only.
+
+The evaluator profile has these properties:
+
+- It runs the bundled Authentik identity provider over HTTPS with a locally issued
+  certificate.
+- Login is required.
+
+> **Why HTTPS:** Passkeys work only in a secure browser context.
 
 ### Prerequisites
+
+Install these tools before you start:
 
 | Tool                                                                 | Why                                         |
 | --------------------------------------------------------------------- | -------------------------------------------- |
 | [Claude Desktop](https://claude.com/download)                        | Hosts the Policy System Plugin              |
 | [git](https://git-scm.com/downloads)                                 | Clones this repo                            |
-| [Podman](https://podman.io/docs/installation)                        | Container runtime backing the local cluster |
+| [Podman](https://podman.io/docs/installation)                        | Container runtime for the local cluster     |
 | [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) | Runs a Kubernetes cluster on Podman         |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/)                   | Talks to the cluster                        |
 | [Helm](https://helm.sh/docs/intro/install/)                          | Installs the Policy System chart            |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Provisions the Azure LLM backend (step 5)   |
-| [jq](https://jqlang.org/download/)                                   | Used by the Azure LLM bootstrap scripts (step 5) and `deploy-ps-eval.sh` (step 7) |
-| [openssl](https://www.openssl.org/)                                  | `deploy-ps-eval.sh` issues the local CA and certificate with it (step 7) |
-| [curl](https://curl.se/)                                             | `deploy-ps-eval.sh` calls Authentik's API with it (step 7) |
-
+| [jq](https://jqlang.org/download/)                                   | Used by the Azure LLM scripts (step 5) and `deploy-ps-eval.sh` (step 7) |
+| [openssl](https://www.openssl.org/)                                  | `deploy-ps-eval.sh` uses it to issue the local CA and certificate (step 7) |
+| [curl](https://curl.se/)                                             | `deploy-ps-eval.sh` uses it to call the Authentik API (step 7) |
 
 ### 1. Install Claude Desktop
 
-Download from [claude.com/download](https://claude.com/download) (macOS or Windows) and
-sign in.
+1. Download Claude Desktop from [claude.com/download](https://claude.com/download) (macOS or
+   Windows).
+2. Sign in.
 
 ### 2. Install Podman and start its machine
 
+Install Podman:
 
 ```bash
 brew install podman
 ```
 
+Create the Podman machine:
+
 ```bash
 podman machine init --cpus 4 --memory 8192
 ```
+
+Start the Podman machine:
 
 ```bash
 podman machine start
 ```
 
+Check that the machine runs:
+
 ```bash
 podman info
 ```
 
-The last command confirms the Podman machine is running.
-
-kind under Podman needs a machine with enough headroom to run a control plane plus both
-Policy System containers. 4 CPUs / 8 GB is the tested floor.
+> **Why 4 CPUs and 8 GB:** kind under Podman needs enough headroom to run a control plane and
+> both Policy System containers. 4 CPUs and 8 GB is the tested minimum.
 
 ### 3. Clone the repo
 
-Navigate to the folder where you want the Policy System repo to reside.
+Go to the folder where you want the repo.
+
+Clone the repo:
+
 ```bash
 git clone https://github.com/mindovermachine-dev/policy-system
 ```
 
-Navigate to the repo root folder.
+Go to the repo root folder:
 
 ```bash
 cd policy-system
 ```
 
-The remaining steps reference repo-relative paths (`deploy/kind/cluster.yaml`,
-`./charts/policy-system`) and assume you're running commands from inside the repo root folder.
+Run all the remaining steps from this folder. They use repo-relative paths, such as
+`deploy/kind/cluster.yaml` and `./charts/policy-system`.
 
 ### 4. Create the local cluster
+
+Install kind and kubectl:
 
 ```bash
 brew install kind kubectl
 ```
 
+Tell kind to use Podman:
+
 ```bash
 export KIND_EXPERIMENTAL_PROVIDER=podman
 ```
+
+Create the cluster:
 
 ```bash
 kind create cluster --config deploy/kind/cluster.yaml --name policy-system
 ```
 
+Check that the cluster runs:
+
 ```bash
 kubectl cluster-info --context kind-policy-system
 ```
 
-This last command will print the cluster information, confirming that the local kind cluster is up and running.
+The command prints the cluster information when the cluster is up.
 
 > [!WARNING]
-> **Already have a `policy-system` kind cluster from before this guide's HTTPS Authentik
-> setup?** `kind`'s `extraPortMappings` are fixed at cluster creation and cannot be
-> changed on an existing cluster. The evaluator profile serves Authentik over HTTPS on host
-> port `30443`, and older clusters were created with a plain-HTTP mapping on `30080`
-> instead — an old cluster does not have the `30443` mapping, so you must delete and
-> recreate it:
+> **Do you already have a `policy-system` kind cluster from before the HTTPS Authentik
+> setup?** If yes, delete it and create it again.
+>
 > ```bash
 > kind delete cluster --name policy-system
 > ```
-> **This destroys all existing kind PVC data** — FalkorDB's graph, the PS Postgres
-> database and Authentik's Postgres database all live on PVCs backed by this cluster's
-> local storage. Re-run the `kind create cluster` command above, then re-run step 5 onward;
-> see [User Guide: Load curated content](./user-guide.md#load-curated-content) to
-> reload FalkorDB's data afterward.
+>
+> **This destroys all existing kind PVC data.** FalkorDB's graph, the PS Postgres database,
+> and Authentik's Postgres database all live on PVCs in this cluster's local storage.
+>
+> After you delete the cluster:
+>
+> 1. Run the `kind create cluster` command above again.
+> 2. Run step 5 and the steps after it again.
+> 3. Reload the FalkorDB data. See [User Guide: Load curated
+>    content](./user-guide.md#load-curated-content).
+>
+> **Why:** kind fixes its `extraPortMappings` when it creates a cluster. You cannot change
+> them later. The evaluator profile serves Authentik over HTTPS on host port `30443`. Older
+> clusters have a plain-HTTP mapping on `30080` and do not have the `30443` mapping.
 
 ### 5. Provision the Azure LLM backend
 
-This provisions a real Azure Cognitive Services (`AIServices`) account, two model
-deployments, and a Key Vault in your own Azure subscription, then syncs the
-resulting credentials into the kind cluster created in step 4. It's a one-time
-setup per subscription — both scripts are safe to re-run and no-op once nothing
-has changed.
+This step creates these resources in your own Azure subscription:
 
-You'll need an Azure subscription where your signed-in identity has `Owner` or
-`Contributor` at subscription scope:
+- An Azure Cognitive Services (`AIServices`) account.
+- Two model deployments.
+- A Key Vault.
+
+It then syncs the credentials into the kind cluster from step 4. You do this step once per
+subscription. You can run both scripts again safely. They do nothing when nothing changed.
+
+Your signed-in identity needs the `Owner` or `Contributor` role at subscription scope.
+
+Sign in to Azure:
 
 ```bash
 az login
 ```
 
+Run the provisioning script:
+
 ```bash
 scripts/deploy-llm.sh
 ```
 
-This prints a confirmation table — region candidates, resource group, account,
-both model deployments, Key Vault, all resolved from `scripts/llm-defaults.conf`
-(edit that file first if you want different model names/capacities) — and
-prompts `Proceed with these values? [Y/n]`. 
+The script does these things:
 
-It then verifies your subscription
-permissions, checks the configured region and quota, and provisions everything,
-printing a summary line only — never a secret value. If the deterministic
-AIServices account is soft-deleted, the script detects it and asks before purging
-it permanently so its model capacity is released. Pass `--yes` to accept both
-the deployment and purge confirmations non-interactively.
+1. It prints a confirmation table. The table shows the region candidates, resource group,
+   account, both model deployments, and the Key Vault. The script reads all values from
+   `scripts/llm-defaults.conf`. To use other model names or capacities, edit that file first.
+2. It asks `Proceed with these values? [Y/n]`.
+3. It checks your subscription permissions.
+4. It checks the configured region and quota.
+5. It provisions the resources. It prints a summary line only, never a secret value.
+
+If the AIServices account is soft-deleted, the script finds it. It asks before it permanently
+purges the account to release the model capacity. Add `--yes` to accept the deployment
+prompt and the purge prompt without questions.
+
+Sync the credentials into the cluster:
 
 ```bash
 scripts/sync-llm-secrets-to-kind.sh
 ```
 
-This reads the three credentials back out of Key Vault and writes them into the
-active kind cluster as a `policy-system-llm-credentials` Secret. It refuses to run
-unless your current `kubectl` context is a `kind-*` context, so it can't land
-Azure credentials in the wrong cluster.
+The script reads the three credentials from Key Vault. It writes them into the active kind
+cluster as the Secret `policy-system-llm-credentials`.
 
-Once your instance is running, see the [Operations Guide](./operations-guide.md#rotating-the-azure-llm-api-key)
-for rotating this key later.
+> **Why it is safe:** The script stops unless your current `kubectl` context is a `kind-*`
+> context. It cannot write Azure credentials into the wrong cluster.
+
+To rotate this key later, see the [Operations
+Guide](./operations-guide.md#rotating-the-azure-llm-api-key).
 
 ### 6. Install ps-cli
 
-`ps-cli` is a command-line client for PS Service's REST API: select and ingest EU
-regulations from Cellar/ELI, ingest internal policies, and check service health and
-readiness. It's a distributed client, installable independently of this repo like
-`gh`/`az` — no clone/checkout needed. Installing it requires
-[uv](https://docs.astral.sh/uv/getting-started/installation/).
+`ps-cli` is a command-line client for the PS Service REST API. You can use it to:
+
+- Select and ingest EU regulations from Cellar/ELI.
+- Ingest internal policies.
+- Check service health and readiness.
+
+You install `ps-cli` on its own, like `gh` or `az`. You do not need to clone this repo.
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. Then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
 ```
 
-This runs [`ps-cli/install.sh`](../../ps-cli/install.sh), which resolves the **latest
-non-prerelease GitHub Release** of `ps-cli`, downloads its wheel, verifies the wheel's
-SHA-256 against the release's `SHA256SUMS` asset, then installs it via `uv tool install`
-and puts it on `PATH` through `uv`'s tool-install shims. Verify:
+The script [`ps-cli/install.sh`](../../ps-cli/install.sh) does these things:
+
+1. It finds the **latest non-prerelease GitHub Release** of `ps-cli`.
+2. It downloads the wheel of that release.
+3. It checks the SHA-256 of the wheel against the `SHA256SUMS` asset of the release.
+4. It installs the wheel with `uv tool install`.
+5. It adds `ps-cli` to your `PATH` through the `uv` tool-install shims.
+
+Check the installation:
 
 ```
 ps-cli --version
 ```
 
-PS Service isn't deployed yet at this point, so the second line reports
-`unavailable (...)` — that's expected here, and `ps-cli --version` still exits 0.
+The second line of the output shows `unavailable (...)`. This is expected, because PS Service
+is not deployed yet. The command still exits with code 0.
 
-On Linux, `ps-cli auth login`/`auth status`/`auth logout` additionally require
-`gir1.2-secret-1` (Debian/Ubuntu: `sudo apt install python3-gi gir1.2-secret-1`) to
-access the OS Secret Service for encrypted credential storage. If it's missing,
-`ps-cli` reports an actionable error naming the exact install command rather than
-crashing.
+**To upgrade:** run `install.sh` again. It installs over the version that is on your `PATH`.
+There is no separate upgrade command.
 
-There is no separate upgrade command — re-run `install.sh` whenever a newer release is available; re-running is the documented upgrade path and installs over whatever version is currently on `PATH`.
+**Linux only:** `ps-cli auth login`, `auth status`, and `auth logout` need `gir1.2-secret-1`
+to use the OS Secret Service for encrypted credential storage. On Debian or Ubuntu, install
+it:
+
+```bash
+sudo apt install python3-gi gir1.2-secret-1
+```
+
+If the package is missing, `ps-cli` prints an error with the exact install command. It does
+not crash.
 
 ### 7. Deploy Policy System Backend
 
-The evaluator profile runs with real OIDC login against the bundled Authentik IdP —
-`psService.localTestBypass.enabled=true` cannot start in a container (the bypass refuses to
-bind a non-loopback host, and every container image binds `0.0.0.0`), so the deploy runs with
-the bypass **off**. Authentik is served over HTTPS with a locally issued certificate, because
-browsers only offer passkeys in a secure context, and `ps-cli` refuses to send credentials to
-a non-`https`, non-loopback issuer. This needs the `30443` port mapping in
-`deploy/kind/cluster.yaml` from step 4, so make sure step 4's cluster-recreate warning
-doesn't apply to you.
+One script does the whole deployment. Before you run it, make sure that:
 
-One script does the whole deploy. Run it from the repo root with your kubectl context set to
-the kind cluster (it refuses to run against anything but a `kind-*` context) and the LLM
-Secret from step 5 in place:
+- You are in the repo root folder.
+- Your kubectl context is the kind cluster. The script refuses to run against any other
+  context than `kind-*`.
+- The LLM Secret from step 5 exists.
+- The cluster has the `30443` port mapping from step 4. If step 4's warning applies to you,
+  recreate the cluster first.
+
+Run the script:
 
 ```bash
 scripts/deploy-ps-eval.sh
 ```
 
-It prompts for the **owner's email** — the person who becomes the first `SystemOwner` and the
-Authentik administrator. Options:
+The script asks for the **owner's email**. This person becomes the first `SystemOwner` and the
+Authentik administrator.
+
+Options:
 
 | Option | Meaning |
 | --- | --- |
-| `--owner-email <address>` | The owner's email; skips the prompt. The address is both the Authentik username and the OIDC `sub` PS Service expects. |
-| `--hostname <name>` | The name Authentik is served under (default `authentik.local`). It must resolve to this machine on every machine that logs in. |
-| `--apply-host-setup` | Runs, through `sudo`, the steps this machine still lacks: mapping the hostname to `127.0.0.1` in `/etc/hosts` and (macOS) trusting the local CA in the system keychain. Without it an interactive run asks first, and a `--yes` run only prints the commands. Nothing happens when both are already in place. |
-| `--yes` | Never prompt. An owner email is then required (`--owner-email`). |
+| `--owner-email <address>` | The owner's email. Skips the prompt. The address is the Authentik username and the OIDC `sub` that PS Service expects. |
+| `--hostname <name>` | The name that serves Authentik. Default: `authentik.local`. Every machine that logs in must resolve this name to this machine. |
+| `--apply-host-setup` | Runs the missing host steps through `sudo`. The steps are: map the hostname to `127.0.0.1` in `/etc/hosts`, and (macOS) trust the local CA in the system keychain. Without this option, an interactive run asks first. A `--yes` run only prints the commands. If both steps are already done, nothing happens. |
+| `--yes` | Never prompts. You must then give `--owner-email`. |
 
-`PS_OWNER_LINK_TTL` (minutes the enrolment link stays valid, default `30`), `PS_EVAL_STATE_DIR`
-(where the local CA and certificate live, default `~/.config/policy-system/eval-tls`) and
-`PS_ROLLOUT_TIMEOUT` are optional environment overrides. You do not need `PS_CHART_REF`: the
-script deploys the published chart unless you point it at a checkout, for example
-`PS_CHART_REF=./charts/policy-system` (run `helm dependency build charts/policy-system` once
-first) — see [Verification status](#verification-status) for when the published chart contains
-this flow.
+Optional environment variables:
 
-In one pass the script:
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `PS_OWNER_LINK_TTL` | Minutes that the enrolment link stays valid | `30` |
+| `PS_EVAL_STATE_DIR` | Folder for the local CA and certificate | `~/.config/policy-system/eval-tls` |
+| `PS_ROLLOUT_TIMEOUT` | Rollout timeout | script default |
 
-1. Checks that `kubectl`, `helm`, `openssl`, `jq`, `curl` and `podman` (or `docker`) are on
-   `PATH`, and stops naming every missing one.
-2. Detects the kind node's IP address (PS Service's pod must resolve the Authentik hostname to
-   it, so its token validation reaches the same Authentik a browser reaches).
-3. Creates a local certificate authority once, and a certificate for the hostname (regenerated
-   automatically when the hostname changes or it is close to expiry), stored under the state
-   directory with owner-only permissions.
-4. Runs **one** `helm upgrade --install`, which sets the issuer
-   (`https://<hostname>:30443/application/o/ps-cli/`) and the bootstrap owner (the owner's email
-   as `sub`, with that issuer) together — there is no second deploy. It re-runs the upgrade only
-   when its values changed.
-5. Waits for Authentik and PS Service to be Ready, and makes Authentik serve the local
+You do not need `PS_CHART_REF`. By default, the script deploys the published chart. To deploy
+a checkout instead, run `helm dependency build charts/policy-system` once. Then set
+`PS_CHART_REF=./charts/policy-system`. To find out when the published chart contains this
+flow, see [Verification status](#verification-status).
+
+The script does these things, in this order:
+
+1. It checks that `kubectl`, `helm`, `openssl`, `jq`, `curl`, and `podman` (or `docker`) are
+   on `PATH`. It stops and names every missing tool.
+2. It finds the IP address of the kind node.
+3. It creates a local certificate authority once. It creates a certificate for the hostname.
+   It stores both in the state directory with owner-only permissions. It creates the
+   certificate again when the hostname changes or the certificate is close to expiry.
+4. It runs **one** `helm upgrade --install`. This sets the issuer
+   (`https://<hostname>:30443/application/o/ps-cli/`) and the bootstrap owner together. The
+   bootstrap owner is the owner's email as `sub`, with that issuer. There is no second
+   deployment. The script runs the upgrade again only when its values change.
+5. It waits until Authentik and PS Service are Ready. It makes Authentik serve the local
    certificate.
-6. Creates the owner as an Authentik administrator — username and email are the address you gave,
-   **no password is set, prompted for or logged** — and prints a single-use, time-limited link
-   to register a passkey.
+6. It creates the owner as an Authentik administrator. The username and email are the address
+   you gave. **No password is set, prompted for, or logged.** It prints a single-use,
+   time-limited link to register a passkey.
 
-It ends with what is left to do on this machine, the `ps-cli` login command, and the enrolment link last. Then check
-the pods and PS Service:
+The script ends with these items, in this order:
+
+1. What is left to do on this machine.
+2. The `ps-cli` login command.
+3. The enrolment link.
+
+> **Why a real login:** The evaluator profile uses OIDC login against the bundled Authentik.
+> `psService.localTestBypass.enabled=true` cannot start in a container. The bypass refuses to
+> bind a non-loopback host, and every container image binds `0.0.0.0`. The deployment
+> therefore runs with the bypass **off**.
+>
+> **Why HTTPS and a local certificate:** Browsers offer passkeys only in a secure context.
+> Also, `ps-cli` refuses to send credentials to an issuer that is not `https` and not
+> loopback.
+>
+> **Why the hostname must resolve to the kind node:** The PS Service pod must resolve the
+> Authentik hostname to the node IP. Its token validation then reaches the same Authentik that
+> a browser reaches.
+
+Check the pods:
 
 ```bash
 kubectl get pods
 ```
 
+Check that PS Service is healthy:
+
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+Check that PS Service is ready:
 
 ```bash
 curl http://127.0.0.1:8000/ready
 ```
 
+Open the FalkorDB web UI. Use it to explore the graph database:
+
 ```bash
 open http://localhost:3001/login
 ```
 
-`localhost:3001/login` opens the FalkorDB web UI used to explore the graph database.
+A new system has an empty graph and cannot answer questions. To seed it, see [User Guide: Load
+curated content](./user-guide.md#load-curated-content).
 
-**Re-running the script is the owner-recovery path** (it is gated by cluster access — whoever
-can run `kubectl` against the cluster can run it). With the same email:
+To upgrade to a newer release later, see the [Operations
+Guide](./operations-guide.md#updating-to-the-latest-version). Your graph data stays across
+upgrades.
 
-- an owner who has **no passkey registered** (the link expired or was never used) gets a fresh
-  link;
-- an owner who already has a passkey is left unchanged and no link is issued. If the only
-  device was lost, remove it from the owner's user page in the Authentik admin UI (see [What
-  is exposed (evaluator)](#what-is-exposed-evaluator) for how to reach it) and re-run;
-- a failed run — invalid email, Authentik unreachable, a missing tool — exits non-zero with the
-  fix, leaves no half-created user, and a re-run completes.
+#### Recover the owner
 
-Once deployed, see the [Operations Guide](./operations-guide.md#updating-to-the-latest-version)
-for how to upgrade to a newer release later — your graph data is kept across upgrades.
+Run the script again with the same email. Whoever can run `kubectl` against the cluster can
+run it. The result depends on the owner's state:
 
-A freshly deployed system has an empty graph and can answer nothing — see the [User
-Guide: Load curated content](./user-guide.md#load-curated-content) for seeding it.
+| Owner state | Result |
+| --- | --- |
+| No passkey registered (the link expired or was never used) | The script gives a fresh link. |
+| A passkey is registered | The script changes nothing and gives no link. |
+| A passkey is registered, but the only device is lost | Remove the device on the owner's user page in the Authentik admin UI. See [What is exposed (evaluator)](#what-is-exposed-evaluator) for how to reach it. Then run the script again. |
+| The run failed (invalid email, Authentik unreachable, a missing tool) | The script exits with a non-zero code and prints the fix. It leaves no half-created user. A new run completes. |
 
 ### 8. Register your passkey and log in with ps-cli
 
-The script's closing output tells you what, if anything, is still left to do on this machine.
-Work through the parts below in order.
+The closing output of the script tells you what is still left to do on this machine. Do the
+three parts below in order.
 
 #### This machine: hostname and certificate
 
-For the passkey page to open, this machine must resolve `authentik.local` to `127.0.0.1` and
-trust the local CA (`~/.config/policy-system/eval-tls/ca.pem`, or under `PS_EVAL_STATE_DIR`).
-The script checks both. If either is missing it asks whether to run the two `sudo` steps for
-you (`--apply-host-setup` answers yes in advance); if everything is in place it prints
-"This machine is ready" and you can skip to the next part. If you declined, or the `sudo` step
-failed, run what the output lists:
+For the passkey page to open, this machine must do both of these:
+
+- Resolve `authentik.local` to `127.0.0.1`.
+- Trust the local CA. The CA file is `~/.config/policy-system/eval-tls/ca.pem`, or the same
+  file under `PS_EVAL_STATE_DIR`.
+
+The script checks both. Then one of these happens:
+
+- **Both are in place.** The script prints "This machine is ready". Go to the next part.
+- **One is missing.** The script asks whether to run the two `sudo` steps for you. The option
+  `--apply-host-setup` answers yes in advance.
+- **You declined, or a `sudo` step failed.** Run the commands that the output lists:
 
 ```bash
 echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
@@ -344,49 +444,34 @@ echo '127.0.0.1 authentik.local' | sudo tee -a /etc/hosts
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.config/policy-system/eval-tls/ca.pem
 ```
 
-The second command is macOS only. On other systems, import `ca.pem` as a trusted root
-certificate in the operating system's or browser's certificate store (Firefox keeps its own
-store).
+The second command is for macOS only. On other systems, import `ca.pem` as a trusted root
+certificate in the certificate store of the operating system or browser. Firefox has its own
+store.
 
 #### Register the owner's passkey
 
-Open the enrolment link the script printed last, in a browser on this machine. There is no
-username or password prompt: the page asks you to register a passkey (a security key, the
-platform authenticator, or a phone), and registering it also logs you in. The link works once
-and expires after `PS_OWNER_LINK_TTL` minutes (default 30); if it lapsed, re-run
-`scripts/deploy-ps-eval.sh` for a fresh one.
+1. Open the enrolment link that the script printed last. Use a browser on this machine.
+2. Register a passkey when the page asks. You can use a security key, the platform
+   authenticator, or a phone. There is no username or password prompt.
 
-Registration ends on Authentik's own application library, which shows **"No Applications
-available"**. That is expected, not a failure: the only application is the `ps-cli` OAuth
-client, which has no launch URL, so Authentik does not list it. You are registered and logged
-in; continue with the next part.
+Registering the passkey also logs you in.
+
+The link works once. It expires after `PS_OWNER_LINK_TTL` minutes (default 30). If the link
+expired, run `scripts/deploy-ps-eval.sh` again for a new link.
+
+Registration ends on the Authentik application library. It shows **"No Applications
+available"**. This is expected, not a failure. The only application is the `ps-cli` OAuth
+client. It has no launch URL, so Authentik does not list it. You are registered and logged
+in. Go to the next part.
 
 #### Log in with ps-cli
 
-The script has already pointed `ps-cli` at the instance: it set and selected the `eval`
-context (`http://127.0.0.1:8000`), unless that context was already correct. It cannot log in
-for you, because the login needs the passkey you just registered. Run the command the script
-printed:
+The script already pointed `ps-cli` at the instance. It set and selected the `eval` context
+(`http://127.0.0.1:8000`), unless that context was already correct. The script cannot log in
+for you, because the login needs the passkey you just registered.
 
-```bash
-ps-cli auth login
-```
-
-`ps-cli` verifies Authentik's certificate against the operating system trust store, which the
-script has already added the local CA to, so no environment variable is needed. If `auth login`
-reports that it could not verify the TLS certificate, the CA is not trusted on this machine (for
-example a second machine: see the colleague steps below). On Linux, `SSL_CERT_FILE` or
-`SSL_CERT_DIR` also work; on macOS and Windows they are ignored.
-
-`auth login` prints a verification URL and code; open it in the browser you registered the
-passkey in and complete the sign-in. Then verify:
-
-```bash
-ps-cli get health
-```
-
-If the script printed the context commands instead (because `ps-cli` was not on `PATH` when it
-ran, see step 6), run them once first:
+If the script printed the context commands instead, run them first. This happens when `ps-cli`
+was not on `PATH` while the script ran (see step 6):
 
 ```bash
 ps-cli config set-context eval --url http://127.0.0.1:8000
@@ -396,135 +481,199 @@ ps-cli config set-context eval --url http://127.0.0.1:8000
 ps-cli config use-context eval
 ```
 
-See [User Guide: Point ps-cli at your
-instance](./user-guide.md#point-ps-cli-at-your-instance) for what each command does and the
-[Appendix](./user-guide.md#appendix-ps-cli-reference) for credential storage. `PS Service`
-itself is addressed over plain HTTP on the loopback address, which `ps-cli` allows; only the
-Authentik issuer needs HTTPS and the CA.
+Log in:
+
+```bash
+ps-cli auth login
+```
+
+`ps-cli auth login` prints a verification URL and a code. Open the URL in the browser where you
+registered the passkey. Complete the sign-in.
+
+Check the connection:
+
+```bash
+ps-cli get health
+```
+
+If `auth login` reports that it could not verify the TLS certificate, this machine does not
+trust the CA. This happens, for example, on a second machine. See [Another machine](#another-machine-a-colleague-on-the-lan).
+
+> **Why no environment variable:** `ps-cli` checks the Authentik certificate against the
+> operating system trust store. The script already added the local CA to that store. On
+> Linux, `SSL_CERT_FILE` or `SSL_CERT_DIR` also work. On macOS and Windows, `ps-cli` ignores
+> them.
+>
+> **Why HTTP for PS Service:** `ps-cli` allows plain HTTP to PS Service on the loopback
+> address. Only the Authentik issuer needs HTTPS and the CA.
+
+For what each command does, see [User Guide: Point ps-cli at your
+instance](./user-guide.md#point-ps-cli-at-your-instance). For credential storage, see the
+[Appendix](./user-guide.md#appendix-ps-cli-reference).
 
 #### Another machine (a colleague on the LAN)
 
-Repeat the hostname and certificate setup on every other machine whose browser or `ps-cli`
-will log in, with two differences:
+Do the hostname and certificate setup on every other machine whose browser or `ps-cli` logs in.
+Two things are different:
 
-- **Map the hostname to the evaluator laptop's LAN IP**, not loopback (for example
-  `ipconfig getifaddr en0` on macOS on the laptop), in that machine's hosts file:
-  ```
-  192.168.1.42 authentik.local
-  ```
-- **Copy the CA certificate from the evaluator's machine.** It is the file
-  `~/.config/policy-system/eval-tls/ca.pem` (under `PS_EVAL_STATE_DIR` instead, if you set it;
-  the script's closing output prints the full path). Send the certificate only, **never
-  `ca.key`** in the same folder. Any file transfer works (AirDrop, a shared drive, or `scp`
-  if Remote Login is enabled on the laptop).
-  Then trust that copy as above; `ps-cli` and the plugin's bridge read the same OS trust store.
+1. **Map the hostname to the LAN IP of the evaluator laptop, not to loopback.** Add this
+   line to the hosts file of that machine. To find the IP on macOS, run `ipconfig getifaddr en0`
+   on the laptop.
 
-Without both, their browser shows a certificate warning and passkey registration does not
-work. The colleague registers their passkey from the invitation link the owner issues (see
-[SystemOwner bootstrap](#systemowner-bootstrap)), and sets up `ps-cli` with the context
-commands above.
+   ```
+   192.168.1.42 authentik.local
+   ```
+
+2. **Copy the CA certificate from the evaluator machine.**
+   - The file is `~/.config/policy-system/eval-tls/ca.pem`. If you set `PS_EVAL_STATE_DIR`,
+     the file is in that folder. The closing output of the script prints the full path.
+   - Send the certificate only. **Never send `ca.key`** from the same folder.
+   - You can use any file transfer: AirDrop, a shared drive, or `scp` (if Remote Login is on
+     for the laptop).
+   - Trust the copy as described above. `ps-cli` and the plugin bridge read the same OS trust
+     store.
+
+Without both changes, the browser shows a certificate warning and passkey registration fails.
+
+The colleague registers a passkey from the invitation link that the owner issues. See
+[SystemOwner bootstrap](#systemowner-bootstrap). The colleague then sets up `ps-cli` with the
+context commands above.
 
 ### 9. Install the Policy System Plugin
 
-The plugin ships in two named parts: the **Policy System Marketplace** (id `ps-marketplace`),
-which is this repo, and the **Policy System Plugin** (id `ps-plugin`) it lists. Add the marketplace
-first, then install the plugin from it.
+The plugin has two named parts:
 
-1. In Claude Desktop - Code: **Settings** → **Plugins** → **Add** → **Add marketplace** → **Add from a repository**, then add this repo:
+- The **Policy System Marketplace** (id `ps-marketplace`). This is this repo.
+- The **Policy System Plugin** (id `ps-plugin`). The marketplace lists it.
+
+Add the marketplace first. Then install the plugin from it.
+
+1. Add the marketplace.
+
+   In Claude Desktop - Code: **Settings** → **Plugins** → **Add** → **Add marketplace** →
+   **Add from a repository**. Then enter this repo:
 
    ```text
    https://github.com/mindovermachine-dev/policy-system
    ```
 
-   Or from the Claude Code CLI:
+   Or use the Claude Code CLI:
+
    ```text
    claude plugin marketplace add mindovermachine-dev/policy-system
-   ````
+   ```
 
-2. Install the plugin from that marketplace: in Claude Desktop - Code, pick **Policy System Plugin** under **Setings** → **Plugins**
+2. Install the plugin.
 
-   Or from the Claude Code CLI:
+   In Claude Desktop - Code: under **Settings** → **Plugins**, select **Policy System
+   Plugin**.
+
+   Or use the Claude Code CLI:
+
    ```text
    /plugin install ps-plugin@ps-marketplace
    ```
-   
-   Or from the shell
+
+   Or use the shell:
+
    ```text
    claude plugin install ps-plugin@ps-marketplace
    ```
 
-Quit Claude Desktop fully (⌘Q) and relaunch after installing, then open a **new** chat. Verify the plugin was installed by asking:
+3. Quit Claude Desktop fully (⌘Q). Start it again. Open a **new** chat.
 
-```text
-List the policy system tools you have available
-```
+4. Check the installation. Ask:
 
-Once installed, see the [User Guide](./user-guide.md#using-claude-desktop---code) for how to
-ask a question.
+   ```text
+   List the policy system tools you have available
+   ```
+
+To ask a question, see the [User Guide](./user-guide.md#using-claude-desktop---code).
 
 ### What is exposed (evaluator)
 
-The evaluator profile is built for one trusted person on their own machine, and it
-deliberately exposes Authentik to the local network. Exactly what is reachable, and by whom:
+The evaluator profile is for one trusted person on their own machine. It exposes Authentik to
+the local network on purpose. This table shows what is reachable and by whom:
 
 | Listener | Address | Reachable by | What it serves |
 | --- | --- | --- | --- |
-| Authentik over HTTPS | host port `30443` on **all interfaces** (`0.0.0.0`), mapped by `deploy/kind/cluster.yaml` to the Authentik server's HTTPS NodePort | Anyone who can reach this machine's port `30443` — on a shared LAN, everyone on it | **All of Authentik**: the login, enrolment and device-code pages, its whole API, and the **admin UI** (`https://<hostname>:30443/if/admin/`). Protected only by Authentik's own login (a passkey). This is deliberate: it is what lets a colleague on the LAN log in ([issue #160](https://github.com/mindovermachine-dev/policy-system/issues/160)). |
-| Authentik over plain HTTP | NodePort `30080` inside the kind node only | Not mapped to the host: nothing outside the node, and not the LAN | The deploy script uses it through a loopback `kubectl port-forward` while the certificate is being set up. |
-| PS Service | `127.0.0.1:8000` | This machine only | REST API and MCP endpoint; every call needs an Authentik-issued bearer token. |
-| FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI; it is not behind Authentik. |
-| FalkorDB (Redis) | ClusterIP only | In-cluster pods only, never mapped | The graph database. |
+| Authentik over HTTPS | Host port `30443` on **all interfaces** (`0.0.0.0`). `deploy/kind/cluster.yaml` maps it to the HTTPS NodePort of the Authentik server. | Anyone who can reach port `30443` of this machine. On a shared LAN, this is everyone on the LAN. | **All of Authentik**: the login, enrolment, and device-code pages, the whole API, and the **admin UI** (`https://<hostname>:30443/if/admin/`). Only the Authentik login (a passkey) protects it. This is on purpose: it lets a colleague on the LAN log in ([issue #160](https://github.com/mindovermachine-dev/policy-system/issues/160)). |
+| Authentik over plain HTTP | NodePort `30080` inside the kind node only | Nobody outside the node. It is not mapped to the host and not reachable from the LAN. | The deploy script uses it through a loopback `kubectl port-forward` while it sets up the certificate. |
+| PS Service | `127.0.0.1:8000` | This machine only | The REST API and the MCP endpoint. Every call needs an Authentik-issued bearer token. |
+| FalkorDB Browser | `127.0.0.1:3001` | This machine only | The graph explorer UI. Authentik does not protect it. |
+| FalkorDB (Redis) | ClusterIP only | Pods in the cluster only. It is never mapped. | The graph database. |
 
-**Reaching the Authentik admin UI:** it is on the same HTTPS listener as everything else —
-open `https://<hostname>:30443/if/admin/` (default `https://authentik.local:30443/if/admin/`)
-in a browser that trusts the CA, signed in as the owner. No port-forward is needed. To
-restrict access to your own machine, do not let the LAN reach the laptop's port `30443`
-(host firewall) and do not enrol colleagues.
+**To reach the Authentik admin UI:**
+
+1. Open `https://<hostname>:30443/if/admin/` in a browser that trusts the CA. The default is
+   `https://authentik.local:30443/if/admin/`.
+2. Sign in as the owner.
+
+The admin UI uses the same HTTPS listener as everything else. You do not need a port-forward.
+
+**To limit access to your own machine:**
+
+- Block port `30443` of the laptop from the LAN with the host firewall.
+- Do not enrol colleagues.
 
 Things to know:
 
-- The local CA's private key (`ca.key`, in the state directory) can mint a certificate the
-  browsers that trust `ca.pem` will accept for any name. It stays on the evaluator's machine
-  with owner-only permissions; never copy it. Distribute `ca.pem` only.
-- The chart's Authentik API token is the Authentik bootstrap token: it is **administrator-
-  equivalent**, stored in the Secret `policy-system-authentik-api-token` (readable by anyone
-  with `kubectl` access to the cluster) and never printed by the scripts.
-- The evaluator profile is not for production: never expose it on the public internet.
+- The local CA private key (`ca.key`, in the state directory) can create a certificate for any
+  name. Browsers that trust `ca.pem` accept that certificate. Keep the key on the evaluator
+  machine with owner-only permissions. Never copy it. Share `ca.pem` only.
+- The Authentik API token of the chart is the Authentik bootstrap token. It is
+  **administrator-equivalent**. It is stored in the Secret `policy-system-authentik-api-token`.
+  Anyone with `kubectl` access to the cluster can read it. The scripts never print it.
+- The evaluator profile is not for production. Never expose it on the public internet.
 
 ---
 
 ## Production installation
 
 > [!NOTE]
-> **This path is for production/customer-tenant deployments** to a real Azure
-> subscription, using [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh). It is a
-> separate, self-contained script from `deploy-llm.sh` (used by [Evaluator
-> installation step 5](#5-provision-the-azure-llm-backend)) and from
-> [`deploy-ps-eval.sh`](#7-deploy-policy-system-backend) — they are not the same
-> code path and all keep working independently. `deploy-ps-prod.sh` provisions the LLM
-> backend, an AKS cluster, the Helm release with the bundled Authentik identity
-> provider, and public HTTPS exposure, all in one run, then creates the owner.
+> **This path is for production and customer-tenant deployments** to a real Azure
+> subscription. It uses [`scripts/deploy-ps-prod.sh`](../../scripts/deploy-ps-prod.sh).
+>
+> `deploy-ps-prod.sh` is separate and self-contained. It is not the same code path as
+> `deploy-llm.sh` (used by [Evaluator installation step
+> 5](#5-provision-the-azure-llm-backend)) or
+> [`deploy-ps-eval.sh`](#7-deploy-policy-system-backend). All three keep working
+> independently.
+>
+> In one run, `deploy-ps-prod.sh` provisions:
+>
+> - The LLM backend.
+> - An AKS cluster.
+> - The Helm release with the bundled Authentik identity provider.
+> - Public HTTPS exposure.
+>
+> It then creates the owner.
 
 ### Prerequisites (Production)
 
+Install these tools before you start:
+
 | Tool | Why | Verify |
 | --- | --- | --- |
-| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Everything `deploy-ps-prod.sh` provisions | `az version` |
-| [jq](https://jqlang.org/download/) | Used by `deploy-ps-prod.sh` to parse Azure CLI JSON output | `jq --version` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the AKS cluster `deploy-ps-prod.sh` creates; also carries the `port-forward` the owner-creation step and admin access use | `kubectl version --client` |
+| [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Everything that `deploy-ps-prod.sh` provisions | `az version` |
+| [jq](https://jqlang.org/download/) | `deploy-ps-prod.sh` uses it to parse Azure CLI JSON output | `jq --version` |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Talks to the AKS cluster that `deploy-ps-prod.sh` creates. Also carries the `port-forward` for the owner-creation step and admin access. | `kubectl version --client` |
 | [Helm](https://helm.sh/docs/intro/install/) | Installs the Policy System chart | `helm version` |
-| [curl](https://curl.se/) | Calls Authentik's API to create the owner | `curl --version` |
-| [kubelogin](https://azure.github.io/kubelogin/install.html) | Required to authenticate `kubectl`/`helm` against the AAD-enabled AKS cluster — see [step 4](#4-access-the-cluster-with-kubelogin) | `kubelogin --version` |
+| [curl](https://curl.se/) | Calls the Authentik API to create the owner | `curl --version` |
+| [kubelogin](https://azure.github.io/kubelogin/install.html) | Authenticates `kubectl` and `helm` against the AAD-enabled AKS cluster. See [step 4](#4-access-the-cluster-with-kubelogin). | `kubelogin --version` |
 
-You'll need an Azure subscription where your signed-in identity has `Owner` or
-`Contributor` at subscription scope (checked by the script before it touches
-anything).
+Your signed-in identity needs the `Owner` or `Contributor` role at subscription scope. The
+script checks this before it changes anything.
 
 ### 1. Sign in to Azure
+
+Sign in:
 
 ```bash
 az login
 ```
+
+Select the subscription:
 
 ```bash
 az account set --subscription <subscription-id>
@@ -532,38 +681,54 @@ az account set --subscription <subscription-id>
 
 ### 2. Review scripts/ps-defaults.conf
 
-`scripts/ps-defaults.conf` holds the evaluator-tunable defaults: region candidates,
-chat/embedding model names and SKUs, capacities, `TLS_CONTACT_EMAIL` (used for
-Let's Encrypt expiry/revocation notices — leave blank to be prompted interactively) and
-`AUTHZ_OWNER_EMAIL` (the owner's email: the first `SystemOwner` and Authentik administrator —
-leave blank to be prompted, or pass `--owner-email`). The older
-`AUTHZ_BOOTSTRAP_OWNER_SUBJECT`/`AUTHZ_BOOTSTRAP_OWNER_ISSUER` pair is no longer read: the
-script derives the owner's identity from the email and the public hostname, so there is no
-placeholder identity and no second deploy (see [SystemOwner bootstrap](#systemowner-bootstrap)).
-The default SKUs are proven to have quota on a fresh subscription; if your
-subscription/region differs, see the [Operations Guide](./operations-guide.md#manual-steps-and-operational-notes)
-item 1 for how to discover the right values before your first run.
+The file `scripts/ps-defaults.conf` holds the defaults that you can tune:
+
+- Region candidates.
+- Chat and embedding model names and SKUs.
+- Capacities.
+- `TLS_CONTACT_EMAIL`. Let's Encrypt sends expiry and revocation notices to this address. Leave
+  it blank to be prompted.
+- `AUTHZ_OWNER_EMAIL`. This is the owner's email: the first `SystemOwner` and Authentik
+  administrator. Leave it blank to be prompted, or pass `--owner-email`.
+
+The script no longer reads `AUTHZ_BOOTSTRAP_OWNER_SUBJECT` and `AUTHZ_BOOTSTRAP_OWNER_ISSUER`.
+It derives the owner's identity from the email and the public hostname. There is no
+placeholder identity and no second deployment. See [SystemOwner
+bootstrap](#systemowner-bootstrap).
+
+The default SKUs have quota on a fresh subscription. If your subscription or region is
+different, find the right values before your first run. See item 1 in the [Operations
+Guide](./operations-guide.md#manual-steps-and-operational-notes).
 
 ### 3. Run scripts/deploy-ps-prod.sh
+
+Run the script:
 
 ```bash
 scripts/deploy-ps-prod.sh
 ```
 
-This prints a confirmation table — region candidates, resource group, AIServices
-account, both model deployments, Key Vault, AKS cluster name, and public DNS label,
-all deterministically derived from your subscription id — and prompts
-`Proceed with these values? [Y/n]`. It also prompts for the **owner's email** when neither
-`--owner-email <address>` nor `AUTHZ_OWNER_EMAIL` supplies it; an invalid address stops the run
-before any Azure call. Pass `--yes` to skip the confirmation prompt (`--yes` never prompts for
-the email, so combine it with `--owner-email` or `AUTHZ_OWNER_EMAIL`).
+The script does these things:
 
-Each phase prints a `==> <step>` progress line as it starts. The whole run is
-idempotent — re-running with nothing changed does no work and reports so. After the
-Helm release it waits for Authentik, then creates the owner as an Authentik administrator
-(username and email are the address you gave; **no password is set, prompted for or logged**),
-and it ends with a summary naming which secrets were written (never their values), the
-resulting URL, and a single-use passkey-enrolment link, printed last and once:
+1. It prints a confirmation table. The table shows the region candidates, resource group,
+   AIServices account, both model deployments, Key Vault, AKS cluster name, and public DNS
+   label. The script derives all values from your subscription id.
+2. It asks `Proceed with these values? [Y/n]`.
+3. It asks for the **owner's email**, unless `--owner-email <address>` or `AUTHZ_OWNER_EMAIL`
+   gives it. An invalid address stops the run before any Azure call.
+4. It prints a `==> <step>` progress line at the start of each phase.
+5. It waits for Authentik after the Helm release.
+6. It creates the owner as an Authentik administrator. The username and email are the address
+   you gave. **No password is set, prompted for, or logged.**
+7. It prints a summary.
+
+Add `--yes` to skip the confirmation prompt. `--yes` never prompts for the email. Combine it
+with `--owner-email` or `AUTHZ_OWNER_EMAIL`.
+
+The whole run is idempotent. A new run with no changes does no work and reports this.
+
+The summary names the secrets that the script wrote (never their values), the resulting URL,
+and a single-use passkey-enrolment link. The script prints the link last, once:
 
 ```
 Policy System provisioned. Wrote secrets: AZURE-API-BASE, AZURE-API-KEY, AZURE-API-VERSION.
@@ -572,183 +737,245 @@ Open this single-use link in a browser to register your passkey (valid 30 minute
 https://<label>.<region>.cloudapp.azure.com/auth/if/flow/ps-passkey-recovery/...
 ```
 
-Because the Authentik admin API is not on the public Ingress (see [What is exposed
-(production)](#what-is-exposed-production)), the script creates the owner through a temporary
-loopback `kubectl port-forward` to the Authentik Service and prints the link on the public
-address. It sets the bootstrap owner's `sub` (the email) and issuer in the same deploy that
-creates the release. The Helm release is re-applied only when one of its script-managed values
-changed (the LLM secret, the four `psService.auth.*` values, the owner subject and issuer, and
-the two Authentik URLs).
+> **Why a port-forward:** The Authentik admin API is not on the public Ingress. See [What is
+> exposed (production)](#what-is-exposed-production). The script creates the owner through a
+> temporary loopback `kubectl port-forward` to the Authentik Service. It prints the link on
+> the public address.
+>
+> **One deployment:** The script sets the `sub` (the email) and the issuer of the bootstrap
+> owner in the same deployment that creates the release.
+>
+> **When Helm runs again:** The script applies the Helm release again only when one of its
+> managed values changed. These values are the LLM secret, the four `psService.auth.*`
+> values, the owner subject and issuer, and the two Authentik URLs.
 
 ### 4. Access the cluster with kubelogin
 
 `deploy-ps-prod.sh` creates the AKS cluster with `--enable-aad --enable-azure-rbac
---disable-local-accounts`, so a plain `kubeconfig` from `az aks get-credentials`
-(which the script already ran for you) cannot authenticate on its own —
-`kubectl`/`helm` need `kubelogin` to complete the Azure AD sign-in:
+--disable-local-accounts`. A plain `kubeconfig` from `az aks get-credentials` cannot
+authenticate on its own. The script already ran that command for you. `kubectl` and `helm`
+need `kubelogin` to complete the Azure AD sign-in.
+
+Each operator must do this step on each machine. The script does not do it.
+
+Convert the kubeconfig:
 
 ```bash
 kubelogin convert-kubeconfig -l azurecli
 ```
 
+Check the pods:
+
 ```bash
 kubectl get pods
 ```
 
-ps-service and falkordb should both be in "Running" state. This is a manual,
-per-operator, per-machine prerequisite `deploy-ps-prod.sh` does not automate.
+Both `ps-service` and `falkordb` must be in the "Running" state.
 
-Once deployed, see the [Operations Guide](./operations-guide.md#production-operations)
-for rotating the API key, manual operational notes, and teardown.
+For API key rotation, manual operational notes, and teardown, see the [Operations
+Guide](./operations-guide.md#production-operations).
 
 ### 5. Enrol the owner's passkey
 
-Open the link `deploy-ps-prod.sh` printed in a browser. There is no username or password
-prompt: the page asks you to register a passkey, and registering it also logs you in. The
-link works once and lapses after 30 minutes (`PS_OWNER_LINK_TTL` sets another duration in
-minutes). Production uses a real Let's Encrypt certificate, so there is no CA to trust in the
-browser or for `ps-cli`. After enrolment the browser ends on `https://<host>/auth/`, a path
-Authentik's public allowlist does not serve, so PS Service answers it — an error or
-"not found" page there is expected; you are enrolled and signed in.
+1. Open the link that `deploy-ps-prod.sh` printed in a browser.
+2. Register a passkey when the page asks. There is no username or password prompt.
 
-**Re-running the script is the owner-recovery path**, gated by access to the cluster (the
-run needs `kubectl` against it). With the same email: an owner with no passkey registered
-(link expired or unused) gets a fresh link; an owner who already has one is left unchanged and
-no link is issued. If the only device was lost, remove it from the owner's user page in the
-Authentik admin UI (reached by port-forward, below) and re-run.
+Registering the passkey also logs you in.
+
+The link works once. It lapses after 30 minutes. `PS_OWNER_LINK_TTL` sets another duration in
+minutes.
+
+Production uses a real Let's Encrypt certificate. You do not need to trust a CA in the browser
+or for `ps-cli`.
+
+After enrolment, the browser ends on `https://<host>/auth/`. The Authentik public allowlist
+does not serve this path, so PS Service answers it. An error or "not found" page is
+expected. You are enrolled and signed in.
+
+#### Recover the owner
+
+Run the script again with the same email. You need `kubectl` access to the cluster. The result
+depends on the owner's state:
+
+| Owner state | Result |
+| --- | --- |
+| No passkey registered (link expired or unused) | The script gives a fresh link. |
+| A passkey is registered | The script changes nothing and gives no link. |
+| A passkey is registered, but the only device is lost | Remove the device on the owner's user page in the Authentik admin UI. Reach it [by port-forward](#what-is-exposed-production). Then run the script again. |
 
 ### 6. Set up each user's computer
 
-The steps above provision the shared backend once. Every person who wants to query
-this instance — via `ps-cli` directly or the Claude Desktop plugin — separately needs
-the following on their own machine; none of it is done by `scripts/deploy-ps-prod.sh`.
-A user who is not the owner first needs an invitation: the owner (or a `SystemAdmin`) runs
-the `ps-invite-user` skill and delivers the invite link — see [User Guide: Invite a new
-user](./user-guide.md#invite-a-new-user). The invitee registers a passkey from that link and
-never sets a password (their account has no password set); see [Verification
-status](#verification-status) for the release that makes the link carry the public address.
+The steps above provision the shared backend once. Each person who queries this instance needs
+the items below on their own machine. This applies to `ps-cli` and to the Claude Desktop plugin.
+`scripts/deploy-ps-prod.sh` does none of it.
 
-**Install Claude Desktop.** Download from [claude.com/download](https://claude.com/download)
-(macOS or Windows) and sign in.
+A user who is not the owner needs an invitation first:
 
-**Install `ps-cli`.** Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
+1. The owner (or a `SystemAdmin`) runs the `ps-invite-user` skill.
+2. The owner delivers the invite link. See [User Guide: Invite a new
+   user](./user-guide.md#invite-a-new-user).
+3. The invitee registers a passkey from that link. The invitee never sets a password. The
+   account has no password set.
+
+For the release that makes the link carry the public address, see [Verification
+status](#verification-status).
+
+**Install Claude Desktop.** Download it from [claude.com/download](https://claude.com/download)
+(macOS or Windows). Sign in.
+
+**Install `ps-cli`.** Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+first. Then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mindovermachine-dev/policy-system/main/ps-cli/install.sh | bash
 ```
 
-**Point `ps-cli` at this instance and log in.** See [User Guide: Point ps-cli at your
-instance](./user-guide.md#point-ps-cli-at-your-instance) — use the URL [step
+**Point `ps-cli` at this instance and log in.** Use the URL that [step
 3](#3-run-scriptsdeploy-ps-prodsh) printed (`https://<label>.<region>.cloudapp.azure.com`).
-A production instance is deployed with the bundled Authentik identity provider wired in, so
-logging in is required, exactly as on the evaluator instance.
+See [User Guide: Point ps-cli at your
+instance](./user-guide.md#point-ps-cli-at-your-instance). Login is required, as on the
+evaluator instance. Production deploys the bundled Authentik identity provider.
 
-**Install the Policy System Plugin.** Same as [Evaluator installation, step
-9](#9-install-the-policy-system-plugin): add the Policy System Marketplace (`ps-marketplace`) in
-Claude Desktop (**Customize** → **Plugins** → **Add** → **Add marketplace** → **Add from a
-repository**, then this repo, `https://github.com/mindovermachine-dev/policy-system`), then install
-the Policy System Plugin (`ps-plugin`) with `/plugin install ps-plugin@ps-marketplace`. The plugin's
-Policy System MCP connector (`ps-mcp`) runs a local
-`ps-cli-mcp-bridge` that reuses whichever `ps-cli` context is current, so once it's set to
-`prod` above, the plugin talks to this instance with no separate configuration — and
-sends the stored `prod` credential as an `Authorization` header, same as any other
-authenticated `ps-cli` call.
+**Install the Policy System Plugin.**
+
+1. Add the Policy System Marketplace (`ps-marketplace`) in Claude Desktop: **Customize** →
+   **Plugins** → **Add** → **Add marketplace** → **Add from a repository**. Enter this repo:
+   `https://github.com/mindovermachine-dev/policy-system`.
+2. Install the Policy System Plugin (`ps-plugin`):
+   `/plugin install ps-plugin@ps-marketplace`.
+
+For more detail, see [Evaluator installation, step 9](#9-install-the-policy-system-plugin).
+
+> **No extra plugin configuration:** The plugin's Policy System MCP connector (`ps-mcp`) runs a
+> local `ps-cli-mcp-bridge`. The bridge uses the current `ps-cli` context. When the context is
+> `prod`, the plugin talks to this instance. The bridge sends the stored `prod` credential as an
+> `Authorization` header, like any other authenticated `ps-cli` call.
 
 ### What is exposed (production)
 
 `deploy-ps-prod.sh` publishes PS Service and a **restricted** part of Authentik on one public
-hostname, `https://<label>.<region>.cloudapp.azure.com`, served with a Let's Encrypt
-certificate. Authentik's own Ingress routes only the eight path prefixes an end user's login
-and enrolment need:
+hostname: `https://<label>.<region>.cloudapp.azure.com`. A Let's Encrypt certificate serves it.
+
+The Ingress of Authentik routes only the eight path prefixes that an end user needs for login
+and enrolment:
 
 | Public path | Serves |
 | --- | --- |
-| `/auth/application/o/` | OIDC discovery, authorize, token, device and JWKS endpoints |
-| `/auth/device` | The device-code page `ps-cli auth login` sends you to |
-| `/auth/flows/-/default/` | Authentik's default flow redirects |
-| `/auth/if/flow/` | The login, enrolment and recovery flow pages |
-| `/auth/api/v3/flows/executor/` | The flow executor those pages call |
-| `/auth/api/v3/root/config/` | Flow-page configuration |
-| `/auth/api/v3/core/brands/current/` | Flow-page branding |
-| `/auth/static/` | Flow-page JavaScript, CSS and images |
+| `/auth/application/o/` | OIDC discovery, authorize, token, device, and JWKS endpoints |
+| `/auth/device` | The device-code page that `ps-cli auth login` sends you to |
+| `/auth/flows/-/default/` | The default flow redirects of Authentik |
+| `/auth/if/flow/` | The login, enrolment, and recovery flow pages |
+| `/auth/api/v3/flows/executor/` | The flow executor that those pages call |
+| `/auth/api/v3/root/config/` | The flow-page configuration |
+| `/auth/api/v3/core/brands/current/` | The flow-page branding |
+| `/auth/static/` | The flow-page JavaScript, CSS, and images |
+
+This table shows what is public and what is not:
 
 | Surface | Public? | Notes |
 | --- | --- | --- |
-| The eight paths above | Yes, to anyone on the internet | Login, enrolment and recovery run here; each flow is gated by Authentik itself (an enrolment or recovery link, a passkey). |
-| PS Service (`/` and everything else on the host) | Yes | Every call needs an Authentik-issued bearer token; `/health` and `/ready` are unauthenticated. |
-| Authentik admin UI (`/auth/if/admin/`), admin and core APIs, the invitation API, `/auth/if/user/` | **No** | Not routed: the request is answered by PS Service, never Authentik. Verified on ingress-nginx, not on AKS (see [Verification status](#verification-status)). |
-| The owner enrolment link, and the owner-creation API calls | Link: public path. API: **no** | The link opens on the public `/auth/if/flow/` path; the script creates the owner and the link through a cluster-internal `kubectl port-forward`. |
-| PS Service to Authentik (`invite_user`) | No | PS Service calls Authentik's API on its in-cluster address (`http://policy-system-authentik-server/auth`) and only builds the invitee's link on the public address. |
+| The eight paths above | Yes, to anyone on the internet | Login, enrolment, and recovery run here. Authentik gates each flow itself (an enrolment or recovery link, a passkey). |
+| PS Service (`/` and everything else on the host) | Yes | Every call needs an Authentik-issued bearer token. `/health` and `/ready` need no token. |
+| The Authentik admin UI (`/auth/if/admin/`), the admin and core APIs, the invitation API, and `/auth/if/user/` | **No** | Not routed. PS Service answers the request, never Authentik. Verified on ingress-nginx, not on AKS. See [Verification status](#verification-status). |
+| The owner enrolment link and the owner-creation API calls | Link: public path. API: **no** | The link opens on the public `/auth/if/flow/` path. The script creates the owner and the link through a cluster-internal `kubectl port-forward`. |
+| PS Service to Authentik (`invite_user`) | No | PS Service calls the Authentik API on its in-cluster address (`http://policy-system-authentik-server/auth`). It builds the invitee's link on the public address only. |
 | FalkorDB, Authentik's Postgres, PS Postgres | No | ClusterIP only, behind NetworkPolicies. |
 
-**Reaching the Authentik admin UI:** through a port-forward from a machine with cluster access
-(see [step 4](#4-access-the-cluster-with-kubelogin)). Leave this running while you use it:
+**To reach the Authentik admin UI:**
 
-```bash
-kubectl port-forward svc/policy-system-authentik-server 9000:80
-```
+1. Start a port-forward from a machine with cluster access (see [step
+   4](#4-access-the-cluster-with-kubelogin)). Leave it running while you use the UI:
 
-Then open `http://localhost:9000/auth/if/admin/` and sign in as the owner. Note the `/auth`
-prefix in production. The port-forward stays on your machine (loopback); nothing about it is
-public.
+   ```bash
+   kubectl port-forward svc/policy-system-authentik-server 9000:80
+   ```
+
+2. Open `http://localhost:9000/auth/if/admin/`.
+3. Sign in as the owner.
+
+Production uses the `/auth` prefix. The port-forward stays on your machine (loopback). It is
+not public.
 
 Things to know:
 
-- The Authentik API token is the Authentik bootstrap token. It is **administrator-equivalent**,
-  chart-generated once, stored in the Secret `policy-system-authentik-api-token`, readable by
-  anyone with `kubectl` access to the cluster, never printed by the scripts, and — because
-  Authentik applies a bootstrap token once per tenant — it does **not** rotate.
-- The bundled `akadmin` account and the owner have no usable password (verified live), and
-  an invitee has **no password set** (an empty hash) — all of them register passkeys instead.
-  The shipped login flow still contains a password stage, and an administrator can set a user's
-  password in the admin UI, so "passkey-only" is enforced for enrolment and recovery, not by
-  removing the password stage. Live checks showed a submitted password being rejected for both
-  the owner and an invitee.
-- Production TLS termination (Let's Encrypt, cert-manager) is unchanged by this flow.
+- The Authentik API token is the Authentik bootstrap token. It is **administrator-equivalent**.
+  - The chart generates it once.
+  - It is stored in the Secret `policy-system-authentik-api-token`.
+  - Anyone with `kubectl` access to the cluster can read it.
+  - The scripts never print it.
+  - It does **not** rotate, because Authentik applies a bootstrap token once per tenant.
+- The bundled `akadmin` account and the owner have no usable password (verified live). An
+  invitee has **no password set** (an empty hash). All of them register passkeys instead.
+  - The shipped login flow still contains a password stage.
+  - An administrator can set a user's password in the admin UI.
+  - Therefore "passkey-only" applies to enrolment and recovery. It does not come from removing
+    the password stage.
+  - Live checks showed that Authentik rejected a submitted password for both the owner and an
+    invitee.
+- This flow does not change production TLS termination (Let's Encrypt, cert-manager).
 
 ---
 
-For `ps-cli` configuration reference (context/credential storage, env vars, config
-files), see [User Guide: Appendix — ps-cli reference](./user-guide.md#appendix-ps-cli-reference).
-For PS Service / chart-level configuration, see the [Helm Chart Values
-Reference](./helm-chart-values-reference.md).
+For the `ps-cli` configuration reference (context and credential storage, environment
+variables, config files), see [User Guide: Appendix — ps-cli
+reference](./user-guide.md#appendix-ps-cli-reference). For PS Service and chart configuration,
+see the [Helm Chart Values Reference](./helm-chart-values-reference.md).
 
 ---
 
 ## SystemOwner bootstrap
 
-Both deploy scripts set the bootstrap owner in **one deploy**: the owner's email you give the
-script is created as the Authentik username and becomes the OIDC `sub` in the ID token
-(the bundled `ps-cli` provider uses `sub_mode: user_username`), and the script sets
-`psService.authzBootstrapOwner.subject` to that email and `.issuer` to the Authentik issuer in
-the same Helm release that deploys everything else. Nobody needs to log in first to discover
-their own identity, and there is no placeholder identity to replace afterwards.
+Both deploy scripts set the bootstrap owner in **one deployment**:
 
-The first authenticated caller whose `(sub, iss)` matches those two values is granted
-`SystemOwner`, exactly once. Anyone else who reaches an empty instance first gets nothing (the
-attempt is audited as `access_role.bootstrap_rejected`). This applies to both the
-[Evaluator](#7-deploy-policy-system-backend) and [Production](#3-run-scriptsdeploy-ps-prodsh)
-installs — only the script and the Authentik base URL differ.
+- The owner's email that you give the script becomes the Authentik username. It also becomes
+  the OIDC `sub` in the ID token. (The bundled `ps-cli` provider uses
+  `sub_mode: user_username`.)
+- In the same Helm release that deploys everything else, the script sets
+  `psService.authzBootstrapOwner.subject` to that email. It sets `.issuer` to the Authentik
+  issuer.
 
-1. **Enrol a passkey** from the link the script printed ([evaluator](#8-register-your-passkey-and-log-in-with-ps-cli),
+Nobody needs to log in first to find their own identity. There is no placeholder identity to
+replace later.
+
+The first authenticated caller whose `(sub, iss)` matches those two values gets `SystemOwner`,
+exactly once. Anyone else who reaches an empty instance first gets nothing. PS Service audits
+that attempt as `access_role.bootstrap_rejected`.
+
+This applies to both the [Evaluator](#7-deploy-policy-system-backend) and the
+[Production](#3-run-scriptsdeploy-ps-prodsh) installation. Only the script and the Authentik
+base URL are different.
+
+To become `SystemOwner`:
+
+1. **Register a passkey** from the link that the script printed
+   ([evaluator](#8-register-your-passkey-and-log-in-with-ps-cli),
    [production](#5-enrol-the-owners-passkey)).
-2. **Log in with `ps-cli`** (`ps-cli auth login`) — or let the Claude Desktop plugin, which reuses
-   that login, make the call.
-3. **Make the first role-gated call** as the owner — for example listing access roles through the
-   `ps-manage-access-roles` skill. That call wins the bootstrap and makes you `SystemOwner`. See
-   the [User Guide's Role System](./user-guide.md#role-system) for what to do with it.
+2. **Log in with `ps-cli`** (`ps-cli auth login`). Or let the Claude Desktop plugin make the
+   call. The plugin reuses that login.
+3. **Make the first role-gated call** as the owner. For example, list the access roles with the
+   `ps-manage-access-roles` skill. That call wins the bootstrap and makes you `SystemOwner`.
+   For what to do next, see the [User Guide's Role System](./user-guide.md#role-system).
 
-`SystemOwner` counts as `SystemAdmin` or above, so the owner can invite users directly with the
-`ps-invite-user` skill without being granted `SystemAdmin` first. The owner is both the
-Authentik administrator and the PS `SystemOwner`; that is acceptable for a single-owner
-deployment, and splitting the two later is a role change.
+`SystemOwner` counts as `SystemAdmin` or above. The owner can therefore invite users directly
+with the `ps-invite-user` skill. The owner does not need `SystemAdmin` first.
 
-To confirm the owner's identity matches what PS Service expects, read your `sub` and `iss` back
-from an access token. `ps-cli` never prints or stores an access token, so request one with
-Authentik's device flow. `<issuer>` is the value of `psService.auth.issuer` — evaluator:
-`https://authentik.local:30443/application/o/ps-cli/` (your `--hostname`); production:
-`https://<label>.<region>.cloudapp.azure.com/auth/application/o/ps-cli/`. The evaluator needs
-`--cacert` pointing at the local CA on each `curl`:
+The owner is both the Authentik administrator and the PS `SystemOwner`. This is acceptable for
+a single-owner deployment. To split the two roles later, change the roles.
+
+### Check the owner's identity (optional)
+
+To confirm that the owner's identity matches what PS Service expects, read `sub` and `iss`
+from an access token. `ps-cli` never prints or stores an access token. Request one with the
+Authentik device flow.
+
+`<issuer>` is the value of `psService.auth.issuer`:
+
+- Evaluator: `https://authentik.local:30443/application/o/ps-cli/` (it uses your `--hostname`).
+- Production: `https://<label>.<region>.cloudapp.azure.com/auth/application/o/ps-cli/`.
+
+On the evaluator, add `--cacert` with the path to the local CA to each `curl` command.
+
+Request a device code:
 
 ```bash
 ISSUER=<issuer>
@@ -757,9 +984,10 @@ TOKEN_ENDPOINT=$(curl -s "${ISSUER}.well-known/openid-configuration" | jq -r .to
 curl -s -d client_id=ps-cli -d "scope=openid profile email" "$DEVICE_ENDPOINT"
 ```
 
-Open the returned `verification_uri_complete` in a browser and sign in with your passkey, then
-exchange the returned `device_code` (it expires after a few minutes; rerun the previous command
-if it does):
+Open the returned `verification_uri_complete` in a browser. Sign in with your passkey.
+
+Exchange the returned `device_code` for an access token. The code expires after a few minutes.
+If it expired, run the previous command again.
 
 ```bash
 curl -s -d client_id=ps-cli \
@@ -767,9 +995,9 @@ curl -s -d client_id=ps-cli \
   -d device_code=<device_code> "$TOKEN_ENDPOINT" | jq -r .access_token
 ```
 
-Decode the access token's payload (the middle, dot-separated part) — no signature check is
-needed here, you're only reading your own claims. `sub` must equal the owner email, character
-for character:
+Decode the payload of the access token (the middle, dot-separated part). You do not need a
+signature check, because you only read your own claims. `sub` must equal the owner email,
+character for character:
 
 ```bash
 echo '<access_token>' | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | . + ("="*((4 - length % 4) % 4)) | @base64d | fromjson | {sub, iss}'
@@ -777,63 +1005,97 @@ echo '<access_token>' | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | .
 
 ## Upgrading an existing install
 
-An install made before this flow existed used a fixed placeholder as the API token PS Service
-sends to Authentik (`ps-service-authentik-dev-token`), which no Authentik token matched. That
-value and the `psService.authentik.apiToken` key are gone: the chart now generates one random
-64-character token in the Secret `policy-system-authentik-api-token` and hands the same value to
-Authentik as `AUTHENTIK_BOOTSTRAP_TOKEN` and to PS Service as `PS_AUTHENTIK_API_TOKEN`. A
-values file that still sets `psService.authentik.apiToken` no longer has any effect. An
-existing Secret still holding the old placeholder is replaced by a generated token on upgrade.
+**Applies to:** installs made before this flow existed.
 
-On an Authentik that had no bootstrap token yet, the first start after the upgrade creates the
-token from the new value, so re-running the deploy script is enough. Authentik applies the
-bootstrap token **once per tenant and never rotates it**: if the Secret and Authentik disagree
-(for instance the Secret was edited after Authentik had already created its token), the deploy
-script stops before creating anything, with an error that Authentik rejected the shared API
-token (HTTP 401 or 403) — the token is never printed. To fix it:
+Those installs used a fixed placeholder as the API token that PS Service sends to Authentik
+(`ps-service-authentik-dev-token`). No Authentik token matched it. These items are gone:
 
-1. Create an API token in the Authentik admin UI (evaluator: `kubectl port-forward
-   svc/policy-system-authentik-server 9000:80`, then `http://127.0.0.1:9000/if/admin/`;
-   production: the same port-forward, then `http://127.0.0.1:9000/auth/if/admin/`).
-2. Store it in a Secret with key `PS_AUTHENTIK_API_TOKEN` and set
-   `psService.authentik.existingSecret` to that Secret's name (see the [Helm Chart Values
-   Reference](./helm-chart-values-reference.md#authentik-and-local-tls-values)).
-3. Re-run the deploy script.
+- The placeholder value.
+- The `psService.authentik.apiToken` key.
 
-On an evaluator cluster with no data worth keeping, deleting the cluster and starting again is
-the simpler route. A `kind` cluster created for the old plain-HTTP port mapping must be
-recreated regardless — see the warning in [step 4](#4-create-the-local-cluster).
+The chart now generates one random 64-character token. It stores the token in the Secret
+`policy-system-authentik-api-token`. It gives the same value to Authentik as
+`AUTHENTIK_BOOTSTRAP_TOKEN` and to PS Service as `PS_AUTHENTIK_API_TOKEN`.
+
+- A values file that still sets `psService.authentik.apiToken` has no effect.
+- An existing Secret that holds the old placeholder gets a generated token on upgrade.
+
+**If Authentik had no bootstrap token yet:** the first start after the upgrade creates the
+token from the new value. Run the deploy script again. That is enough.
+
+**If the Secret and Authentik disagree:** Authentik applies the bootstrap token **once per
+tenant** and **never rotates it**. This can happen when someone edits the Secret after
+Authentik already created its token. The deploy script then stops before it creates anything.
+It reports that Authentik rejected the shared API token (HTTP 401 or 403). It never prints the
+token.
+
+To fix it:
+
+1. Create an API token in the Authentik admin UI. Start a port-forward, then open the UI:
+
+   ```bash
+   kubectl port-forward svc/policy-system-authentik-server 9000:80
+   ```
+
+   - Evaluator: `http://127.0.0.1:9000/if/admin/`
+   - Production: `http://127.0.0.1:9000/auth/if/admin/`
+
+2. Store the token in a Secret with the key `PS_AUTHENTIK_API_TOKEN`.
+3. Set `psService.authentik.existingSecret` to the name of that Secret. See the [Helm Chart
+   Values Reference](./helm-chart-values-reference.md#authentik-and-local-tls-values).
+4. Run the deploy script again.
+
+**Evaluator cluster with no data to keep:** it is simpler to delete the cluster and start
+again.
+
+**Cluster with the old plain-HTTP port mapping:** you must recreate it in all cases. See the
+warning in [step 4](#4-create-the-local-cluster).
 
 ## Verification status
 
-What the flows above were verified against, and what they were not. Read this before relying
-on a claim for a real deployment.
+This section lists what the flows above were verified against, and what they were not. Read it
+before you rely on a claim for a real deployment.
 
-- **Evaluator path: verified live** on a clean `kind` cluster (Podman) with the real script —
-  one deploy, owner passkey enrolment in a browser, `ps-cli auth login` and the MCP bridge with
-  `SSL_CERT_FILE`, `SystemOwner` granted on the first role-gated call, a second user invited and
-  enrolled, owner re-run recovery, certificate refresh without a manual restart.
-- **A second machine on the LAN was simulated, not tried on physical hardware.** A separate
-  container with the CA in its trust store reached Authentik over HTTPS through the host's
-  `0.0.0.0:30443` mapping, and a second browser profile completed a passkey device login with the
-  hostname mapped to the LAN address. Browser trust in that run used a test flag rather than an
-  imported CA (macOS keychain untouched).
+- **Evaluator path: verified live** on a clean `kind` cluster (Podman) with the real script.
+  The test covered:
+  - One deployment.
+  - Owner passkey enrolment in a browser.
+  - `ps-cli auth login` and the MCP bridge with `SSL_CERT_FILE`.
+  - `SystemOwner` granted on the first role-gated call.
+  - A second user invited and enrolled.
+  - Owner re-run recovery.
+  - Certificate refresh without a manual restart.
+- **A second machine on the LAN: simulated, not tried on physical hardware.**
+  - A separate container with the CA in its trust store reached Authentik over HTTPS through
+    the `0.0.0.0:30443` mapping of the host.
+  - A second browser profile completed a passkey device login. The hostname was mapped to the
+    LAN address.
+  - Browser trust in that run used a test flag. It did not use an imported CA. The macOS
+    keychain was untouched.
 - **Production path: verified on `kind`, not on AKS.** The real `deploy-ps-prod.sh` and
-  `values-prod.yaml` ran against `kind` with `ingress-nginx`, a stand-in Azure CLI and the
-  cert-manager/Let's Encrypt steps skipped. That proved the Ingress routes exactly the eight
-  paths above and blocks the admin UI and admin APIs, that the owner link printed on the public
-  address enrols a passkey through the Ingress with no blocked flow request, and that a re-run
-  leaves the owner untouched. **Not verified:** AKS's managed NGINX add-on, real Let's Encrypt
-  issuance through this flow, and real Azure resources.
-- **The invitation link on production needs an unreleased PS Service image.** `invite_user`
-  calls Authentik in-cluster and must build the invitee's link on the public address. That is
-  the `PS_AUTHENTIK_PUBLIC_URL` support added by issue #165, which is in the repository but in
-  no published release yet — the latest release, 3.11.0, does not contain it. Until a release
-  that includes it is published and deployed, production `invite_user` returns a link that
-  begins with the in-cluster address `http://policy-system-authentik-server/auth`; replace that
-  beginning with `https://<label>.<region>.cloudapp.azure.com/auth` by hand before giving the
-  link to the invitee. The evaluator is not affected (its Authentik address is already
-  reachable by users). The same release applies to the published Helm chart: until one that
-  contains this flow is published, run the scripts with `PS_CHART_REF=./charts/policy-system`
-  from a checkout (`deploy-ps-eval.sh`; `deploy-ps-prod.sh` honours it too). `invite_user`
-  through PS Service on production was **not** exercised end to end.
+  `values-prod.yaml` ran against `kind`. The run used `ingress-nginx`, a stand-in Azure CLI,
+  and skipped the cert-manager and Let's Encrypt steps.
+  - **Verified:**
+    - The Ingress routes exactly the eight paths above.
+    - The Ingress blocks the admin UI and the admin APIs.
+    - The owner link on the public address enrols a passkey through the Ingress. No flow
+      request was blocked.
+    - A re-run leaves the owner untouched.
+  - **Not verified:**
+    - The AKS managed NGINX add-on.
+    - Real Let's Encrypt issuance through this flow.
+    - Real Azure resources.
+- **The invitation link on production needs an unreleased PS Service image.**
+  - `invite_user` calls Authentik in-cluster. It must build the invitee's link on the public
+    address.
+  - Issue #165 added the `PS_AUTHENTIK_PUBLIC_URL` support for this. It is in the repository
+    but in no published release. The latest release, 3.11.0, does not contain it.
+  - Until a release with it is published and deployed, production `invite_user` returns a link
+    that starts with the in-cluster address `http://policy-system-authentik-server/auth`.
+    Before you give the link to the invitee, replace that start with
+    `https://<label>.<region>.cloudapp.azure.com/auth` by hand.
+  - The evaluator is not affected. Users can already reach its Authentik address.
+  - `invite_user` through PS Service on production was **not** exercised end to end.
+- **The published Helm chart has the same limit.** Until a chart that contains this flow is
+  published, run the scripts with `PS_CHART_REF=./charts/policy-system` from a checkout.
+  `deploy-ps-eval.sh` and `deploy-ps-prod.sh` both honour it.
