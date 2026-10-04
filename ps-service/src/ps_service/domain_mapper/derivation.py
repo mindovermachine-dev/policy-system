@@ -660,9 +660,14 @@ def _distinct_obligations(obligations: tuple[ObligationNode, ...]) -> list[tuple
     return list(seen.items())
 
 
+# issue #109: status="active" at mint time, mirroring extraction.py's
+# RequirementNode (same ingest-time-active, deprecate-later-via-supersede
+# rule) and ingestion's RegulatoryInstrument.status pattern
+# (graph_writer.py:163).
 def _to_capability_node(decision: CapabilityDecision) -> CapabilityNode:
     properties: dict[str, str | float] = {
         "name": decision.name,
+        "status": "active",
         "confidence": decision.confidence,
     }
     if decision.description is not None:

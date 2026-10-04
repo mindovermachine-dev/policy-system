@@ -105,6 +105,26 @@ and a falsification report (attempts made, landed or missed, per
      (e.g. `Role`, `Obligation`), don't invent one — it's covered
      transitively by whichever adjacent entity's active-only filter
      already applies.
+   - **Null-status fallback.** Before reporting a zero-row result produced
+     by the active-only filter above as "the graph does not contain this
+     information," check whether the exact same query, with only that one
+     entity's `status = 'active'` clause removed (every other clause
+     unchanged), returns rows whose `status` property is null for **every**
+     one of them. That all-null condition is the known legacy-ingestion gap
+     (issue #109): `Requirement`/`Capability` nodes minted before status was
+     set at ingest time carry no `status` property at all — neither
+     `active` nor `deprecated` — so the strict filter silently excludes
+     them even though nothing marked them deprecated either. When the
+     all-null condition holds, relax that one entity's filter for this
+     query, re-run without it, and disclose the relaxation explicitly: in
+     the proposed question's caveat (step 3) if discovered before approval,
+     or in the answer and the Output's Filters line (step 8) if discovered
+     during retrieval (step 5) — never silently. Do **not** relax the
+     filter when some matching rows carry `status = 'active'` and others
+     are null for the same entity type in the same query — a null row
+     sitting alongside active ones is a genuinely mixed population, not the
+     all-null legacy signature, so the strict filter stays in force and
+     returns only the active subset, same as always.
    - Whether the question bundles more than one distinct ask (e.g. a count
      plus a separate specific-fact lookup) — if so, ask the user whether to
      keep it as one approved question with explicit clauses, or split into
@@ -135,11 +155,15 @@ and a falsification report (attempts made, landed or missed, per
    **Pre-flight gate, mandatory, not discretionary:** if the proposal
    applies the default active-only filter to any entity, list each
    filtered entity explicitly in the proposed question text — never apply
-   it silently/invisibly, even though it wasn't asked about. For `Policy`
-   and `Standard`/`Control`, confirm a lifecycle bound was explicitly
-   asked about in step 2 (per the bullet above) rather than defaulted or
-   omitted. This is a checklist item to verify, not a judgment call about
-   whether the ambiguity "feels" significant enough to raise.
+   it silently/invisibly, even though it wasn't asked about. If the
+   null-status fallback above was already triggered during an earlier
+   discovery query for this same question, state that explicitly in the
+   proposal too, rather than waiting until step 8's Output to surface it
+   for the first time. For `Policy` and `Standard`/`Control`, confirm a
+   lifecycle bound was explicitly asked about in step 2 (per the bullet
+   above) rather than defaulted or omitted. This is a checklist item to
+   verify, not a judgment call about whether the ambiguity "feels"
+   significant enough to raise.
 
 4. **Approval gate.** Ask the user to approve the question verbatim. If not
    approved, continue the loop on the specific part that's wrong — don't
@@ -247,7 +271,11 @@ and a falsification report (attempts made, landed or missed, per
 
    Filters: <status filters auto-applied by the active-only default, e.g.
      "RegulatoryInstrument.status = active, Requirement.status = active">, or "none"
-     if no entity in the chain qualified for the default.
+     if no entity in the chain qualified for the default. If the null-status
+     fallback applied, name it explicitly instead of a plain filter, e.g.
+     "Requirement.status filter relaxed — status is unpopulated for all 12
+     matching Requirements (pre-issue-109 legacy data), not disabled by
+     choice."
 
    Query:
    <the executed Cypher>
@@ -311,7 +339,12 @@ and a falsification report (attempts made, landed or missed, per
 - The active-only default (see step 2) may be applied without asking, but
   never invisibly — it must always appear in the proposed question and the
   output's Filters line, and it never extends to `Policy`/`Standard`/
-  `Control`, which still require an explicit lifecycle question.
+  `Control`, which still require an explicit lifecycle question. The
+  null-status fallback (step 2) is the only sanctioned way to relax it, and
+  only when `status` is null for every matching row of that entity type in
+  that query — never merely because a first attempt returned zero rows,
+  and never without disclosing the relaxation the same way the default
+  itself must be disclosed.
 - Never collapse the four error states in step 5's table into each other
   or into a generic "no answer" — an unreachable endpoint, a throttled
   request, a rejected query, and a graph that genuinely lacks the

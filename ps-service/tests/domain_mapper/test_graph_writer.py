@@ -164,6 +164,59 @@ def test_persist_writes_regulation_role_and_requirement_with_edges() -> None:
     }
 
 
+def test_persist_writes_requirement_status_from_real_extraction_output() -> None:
+    """AC-BI-001 end-to-end (mint -> persist): a RequirementNode built by
+    extraction.py's own _build_requirement_graph (not this file's
+    _requirement_node() fixture) carries status="active" all the way into
+    the MERGE call's params, proving graph_writer.py's existing
+    SET n += $properties pass-through (no property allow-list exists here,
+    unlike ps_service.ingestion.graph_writer's element_type allow-list)
+    needs no change of its own for this to work.
+    """
+    from ps_service.domain_mapper.extraction import (
+        _build_requirement_graph,  # pyright: ignore[reportPrivateUsage]
+    )
+    from ps_service.domain_mapper.models import RequirementCandidate
+
+    candidate = RequirementCandidate.model_validate(
+        {
+            "unit_citation_ref": "Art. 13(1)",
+            "unit_article_number": "13",
+            "unit_paragraph_number": "1",
+            "role_name": "Manufacturer",
+            "text": "Manufacturers shall conduct a cybersecurity risk assessment.",
+            "type": "requirement",
+            "letter_suffix": None,
+            "confidence": 0.9,
+        }
+    )
+    requirement_nodes, _edges, _collided = _build_requirement_graph(
+        [candidate], "CRA-1.0", {"Manufacturer": "role_manufacturer_abc123"}
+    )
+    graph = _FakeGraph()
+
+    persist_role_and_requirement_graph(
+        graph,
+        "CRA-1.0",
+        _regulatory_instrument_properties(),
+        (_role_node(),),
+        (RoleDefinesEdge(role_node_id="role_manufacturer_abc123", source_ref="Art. 13(1)"),),
+        requirement_nodes,
+        (
+            RequirementExpressesEdge(
+                requirement_node_id=requirement_nodes[0].id, source_ref="Art. 13(1)"
+            ),
+        ),
+    )
+
+    requirement_call = graph.calls[3]
+    assert requirement_call.query == "MERGE (n:Requirement {id: $id}) SET n += $properties"
+    assert requirement_call.params is not None
+    properties = requirement_call.params["properties"]
+    assert isinstance(properties, dict)
+    assert properties["status"] == "active"
+
+
 def test_persist_writes_instrument_type_verbatim_when_present_in_properties() -> None:
     """AC-BI-010 (Domain Mapper, write side): `instrument_type` rides
     through the Regulation MERGE verbatim inside `params["properties"]` —
@@ -506,6 +559,39 @@ def test_persist_writes_obligation_capability_nodes_and_edges_exact_shape() -> N
         "source_id": requires_edge.obligation_node_id,
         "target_id": requires_edge.capability_node_id,
     }
+
+
+def test_persist_writes_capability_status_from_real_derivation_output() -> None:
+    """AC-BI-002 end-to-end (mint -> persist): a CapabilityNode built by
+    derivation.py's own _to_capability_node (not this file's
+    _capability_node() fixture) carries status="active" all the way into
+    the MERGE call's params — same pass-through proof as Slice 1's
+    requirement-side equivalent; graph_writer.py needs no change.
+    """
+    from ps_service.domain_mapper.derivation import (
+        _to_capability_node,  # pyright: ignore[reportPrivateUsage]
+    )
+    from ps_service.domain_mapper.models import CapabilityDecision
+
+    decision = CapabilityDecision(
+        obligation_node_id="obl_risk_management_abc123",
+        capability_node_id="cap_security_logging_abc123",
+        name="Security Logging",
+        description=None,
+        confidence=0.85,
+    )
+    capability = _to_capability_node(decision)
+    graph = _FakeGraph()
+
+    persist_obligation_and_capability_graph(graph, (), (), (), (capability,), ())
+
+    assert len(graph.calls) == 1
+    call = graph.calls[0]
+    assert call.query == "MERGE (n:Capability {id: $id}) SET n += $properties"
+    assert call.params is not None
+    properties = call.params["properties"]
+    assert isinstance(properties, dict)
+    assert properties["status"] == "active"
 
 
 def test_persist_obligation_and_capability_writes_zero_elements_when_collections_empty() -> None:

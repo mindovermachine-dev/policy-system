@@ -20,15 +20,18 @@ from litellm.types.utils import Choices, Message, ModelResponse
 from ps_service.domain_mapper.derivation import (
     _derive_capabilities,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
     _derive_obligations,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly (see module docstring)
+    _to_capability_node,  # pyright: ignore[reportPrivateUsage]  # test drives this module-internal helper directly, mirrors test_extraction.py's identical pattern for _build_requirement_graph
     derive_obligations_and_capabilities,
 )
 from ps_service.domain_mapper.errors import DomainMapperDerivationError
 from ps_service.domain_mapper.identity import capability_id, obligation_id
-from ps_service.domain_mapper.models import ObligationNode, RoleRequirements
+from ps_service.domain_mapper.models import CapabilityDecision, ObligationNode, RoleRequirements
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from ps_service.llm_interface.client import CompletionCaller
 
@@ -319,6 +322,58 @@ def test_derive_obligations_emits_unmatched_log_entry(
     assert unmatched_entries[0]["entity_id"] == "CRA_req_art_13.9"
     assert unmatched_entries[0]["component"] == "domain_mapper"
     assert unmatched_entries[0]["action"] == "derive_obligations_and_capabilities"
+
+
+# --- _to_capability_node (issue #109) ---------------------------------------
+
+
+def test_to_capability_node_stamps_status_active_at_mint_time() -> None:
+    """AC-BI-002: every newly-minted CapabilityNode carries status="active" —
+    same ingest-time-active rule as RequirementNode (extraction.py), mirroring
+    ingestion's RegulatoryInstrument.status pattern (graph_writer.py:163).
+    """
+    decision = CapabilityDecision(
+        obligation_node_id="obl_risk_management_abc123",
+        capability_node_id=capability_id("Security Logging"),
+        name="Security Logging",
+        description=None,
+        confidence=0.85,
+    )
+
+    node = _to_capability_node(decision)
+
+    assert node.properties["status"] == "active"
+
+
+def test_capability_active_only_filter_returns_newly_minted_but_not_legacy_null_status() -> None:
+    """AC-BI-003 (Capability half): filter-semantics proxy test
+    (documentation only — no production filter exists; see PLAN.md §0 /
+    CHANGES.md Resolution 2). This test does not call or exercise any
+    production filter code — none exists in ps-qna or
+    `ps_service/query_engine` (confirmed in §0/Critique); `active_only_filter()`
+    is a lambda defined locally inside the test purely to document and verify
+    the predicate semantics AC-BI-003 depends on, not to test a real filter
+    implementation. Same predicate shape as
+    test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null_status
+    (test_extraction.py) — mirrors ps-qna/SKILL.md:86-107's
+    `WHERE n.status = 'active'` against in-memory properties dicts, no live
+    graph required.
+    """
+    decision = CapabilityDecision(
+        obligation_node_id="obl_risk_management_abc123",
+        capability_node_id=capability_id("Security Logging"),
+        name="Security Logging",
+        description=None,
+        confidence=0.85,
+    )
+    newly_minted = _to_capability_node(decision).properties
+    legacy_pre_fix = {"name": "Old Capability", "confidence": 0.7}
+
+    def active_only_filter(properties: Mapping[str, object]) -> bool:
+        return properties.get("status") == "active"
+
+    assert active_only_filter(newly_minted) is True
+    assert active_only_filter(legacy_pre_fix) is False
 
 
 # --- _derive_capabilities (Increment 14) ------------------------------------

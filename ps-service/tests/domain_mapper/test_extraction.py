@@ -46,6 +46,8 @@ from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from domain_mapper._fakes import MakeEmitter, ReadLines
     from ps_service.domain_mapper.falkordb_client import GraphHandle
     from ps_service.llm_interface.client import CompletionCaller
@@ -399,6 +401,52 @@ def test_build_requirement_graph_stamps_role_id_bookkeeping_property() -> None:
     assert nodes[0].properties["role_id"] == "role_manufacturer_abc123"
     assert edges[0].source_ref == candidate.unit_citation_ref
     assert edges[0].requirement_node_id == nodes[0].id
+
+
+def test_build_requirement_graph_stamps_status_active_at_mint_time() -> None:
+    """AC-BI-001: every newly-minted RequirementNode carries status="active",
+    mirroring ingestion's RegulatoryInstrument.status pattern
+    (ps_service.ingestion.adapters.cellar_eli.metadata.extract_metadata,
+    graph_writer.py:163) — new entities are active by definition at
+    creation; deprecation is a later, separate supersede mechanism.
+    """
+    candidate = _candidate()
+    role_node_ids = {"Manufacturer": "role_manufacturer_abc123"}
+
+    nodes, _edges, _collided_ids = _build_requirement_graph(
+        [candidate], _REGULATION_ID, role_node_ids
+    )
+
+    assert nodes[0].properties["status"] == "active"
+
+
+def test_requirement_active_only_filter_returns_newly_minted_but_not_legacy_null_status() -> None:
+    """AC-BI-003 (Requirement half): filter-semantics proxy test
+    (documentation only — no production filter exists; see PLAN.md §0 /
+    CHANGES.md Resolution 2). This test does not call or exercise any
+    production filter code — none exists in ps-qna or
+    `ps_service/query_engine` (confirmed in §0/Critique); `active_only_filter()`
+    is a lambda defined locally inside the test purely to document and
+    verify the predicate semantics AC-BI-003 depends on, not to test a real
+    filter implementation. It mirrors the exact predicate ps-qna/SKILL.md:
+    86-107 instructs the LLM to author freehand (`WHERE n.status = 'active'`)
+    against the properties dict that would actually land on the graph node,
+    for both a newly-minted (post-fix) Requirement and a legacy (pre-fix,
+    out-of-scope-to-backfill per the issue's Discussion section) Requirement
+    whose status is null.
+    """
+    new_candidate = _candidate(unit_citation_ref="Art. 13(1)")
+    nodes, _edges, _collided = _build_requirement_graph(
+        [new_candidate], _REGULATION_ID, {"Manufacturer": "role_manufacturer_abc123"}
+    )
+    newly_minted = nodes[0].properties
+    legacy_pre_fix = {"text": "Old duty.", "type": "requirement", "confidence": 0.9}
+
+    def active_only_filter(properties: Mapping[str, object]) -> bool:
+        return properties.get("status") == "active"
+
+    assert active_only_filter(newly_minted) is True
+    assert active_only_filter(legacy_pre_fix) is False
 
 
 # --- extract_roles_and_requirements (Increment 10) -------------------------

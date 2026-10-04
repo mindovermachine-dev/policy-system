@@ -541,8 +541,11 @@ def _build_requirement_graph(
     bookkeeping property (not an Edge Catalog relationship), the owning
     Role node's id from `role_node_ids[candidate.role_name]`
     (`_canonicalize_roles`'s output) — consumed later by `derivation.py`
-    (PLAN_REVIEWED.md §7.2). Each `EXPRESSES` edge carries
-    `source_ref = candidate.unit_citation_ref` (AC-001).
+    (PLAN_REVIEWED.md §7.2) — and `status="active"` (issue #109: every
+    newly-minted Requirement is active by definition at creation;
+    deprecation happens later via the supersede mechanism noted in
+    `ps-domain-concepts.md:268`, never at ingest). Each `EXPRESSES` edge
+    carries `source_ref = candidate.unit_citation_ref` (AC-001).
 
     Pure, no logging/IO — the orchestrating `extract_roles_and_requirements`
     (a later increment) is responsible for emitting one `outcome="collision"`
@@ -576,6 +579,7 @@ def _build_requirement_graph(
                 properties={
                     "text": candidate.text,
                     "type": candidate.type,
+                    "status": "active",
                     "confidence": candidate.confidence,
                     "role_id": role_node_ids[candidate.role_name],
                 },
