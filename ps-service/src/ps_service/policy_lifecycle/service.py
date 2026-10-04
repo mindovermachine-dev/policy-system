@@ -41,8 +41,11 @@ from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.domain_mapper.identity import policy_id as compute_policy_id
 from ps_service.policy_lifecycle import graph_writer
 from ps_service.policy_lifecycle.errors import (
+    PolicyCapabilityAlreadyGovernedError,
+    PolicyCapabilityNotFoundError,
     PolicyControlNotFoundError,
     PolicyDraftAccessDeniedError,
+    PolicyGovernanceConflictError,
     PolicyIncompleteForProposalError,
     PolicyInvalidStatusTransitionError,
     PolicyLifecycleGraphUnavailableError,
@@ -210,7 +213,9 @@ class PolicyDraftResult:
     `Literal["1"]` to `str` -- an ordinary draft still gets `"1"`, but a
     supersede fork's successor version is `str(int(prior_version) + 1)`,
     genuinely variable. `superseded_policy_id` is `None` for an ordinary
-    draft, or the forked-from Policy's id (AC-BI-010).
+    draft, or the forked-from Policy's id (AC-BI-010). `capability_ids`
+    (issue #185) are the Capabilities the fresh draft now governs; `()` for
+    a fork or a draft created without any.
     """
 
     policy_id: str
@@ -222,6 +227,7 @@ class PolicyDraftResult:
     standard_ids: tuple[str, ...]
     control_ids: tuple[str, ...]
     superseded_policy_id: str | None = None
+    capability_ids: tuple[str, ...] = ()
 
 
 def _build_standard_drafts(
@@ -317,12 +323,70 @@ def _build_forked_standard_drafts(
     return tuple(drafts)
 
 
+def _validate_capability_claims(
+    *,
+    graph: GraphHandle,
+    audit_store: AuditStore,
+    actor: tuple[str, str],
+    new_policy_id: str,
+    capability_ids: tuple[str, ...],
+) -> None:
+    """Reject a fresh draft's claim on missing or already-governed Capabilities (issue #185).
+
+    Pure read (`graph_writer.read_capability_governors`); on a bad claim a
+    `rejected` `policy.create_draft` audit event (with `capability_ids=()`,
+    nothing is claimed) is recorded BEFORE the named error is raised, and no
+    graph write is ever attempted.
+    """
+    governors = graph_writer.read_capability_governors(graph, capability_ids)
+    missing = tuple(cap for cap in capability_ids if cap not in governors)
+    governed = tuple(cap for cap in capability_ids if governors.get(cap) is not None)
+    if not missing and not governed:
+        return
+    _record_create_draft(
+        audit_store,
+        actor=actor,
+        resource_id=new_policy_id,
+        outcome="rejected",
+        details={
+            "affected_node_ids": (),
+            "to_status": "draft",
+            "reason_code": "capability_not_found" if missing else "capability_already_governed",
+            "capability_ids": (),
+        },
+    )
+    if missing:
+        raise PolicyCapabilityNotFoundError(missing)
+    raise PolicyCapabilityAlreadyGovernedError(governed)
+
+
+def _record_create_draft(
+    audit_store: AuditStore,
+    *,
+    actor: tuple[str, str],
+    resource_id: str,
+    outcome: Literal["applied", "rejected", "failed"],
+    details: Mapping[str, object],
+) -> None:
+    """Record one `policy.create_draft` audit event (the component's semantic log)."""
+    audit_store.record_standalone(
+        actor_subject=actor[0],
+        actor_issuer=actor[1],
+        action=_CREATE_DRAFT_ACTION,
+        resource_type=_POLICY_RESOURCE_TYPE,
+        resource_id=resource_id,
+        outcome=outcome,
+        details=details,
+    )
+
+
 def create_policy_draft(
     *,
     actor: tuple[str, str],
     title: str,
     standards: tuple[StandardDraftInput, ...] = (),
     supersedes_policy_id: str | None = None,
+    capability_ids: tuple[str, ...] = (),
     graph: GraphHandle,
     audit_store: AuditStore,
 ) -> PolicyDraftResult:
@@ -365,6 +429,10 @@ def create_policy_draft(
             `supersedes_policy_id` is set.
         supersedes_policy_id: An existing, `"approved"` Policy id to fork a
             successor draft from, or `None` for an ordinary v1 draft.
+        capability_ids: Capabilities a FRESH draft claims via `GOVERNED_BY`
+            at creation (issue #185, de-duplicated order-preserving).
+            Silently ignored when `supersedes_policy_id` is set -- a fork's
+            edges stay on the prior Policy until it is approved.
         graph: The single-tenant policy graph handle.
         audit_store: Where every `policy.create_draft` audit event is
             recorded, via `record_standalone` -- this call has no
@@ -381,6 +449,11 @@ def create_policy_draft(
         PolicyTitleAlreadyExistsError: the computed id already exists
             (AC-BI-022) -- a rejected audit event is recorded first; no
             graph write is ever attempted.
+        PolicyCapabilityNotFoundError: a `capability_ids` entry names no
+            Capability (issue #185) -- rejected audit event, no write.
+        PolicyCapabilityAlreadyGovernedError: a `capability_ids` entry is
+            already governed, or was claimed concurrently (the guarded write
+            matched nothing -- `applied` then `failed` audit events).
         PolicyLifecycleGraphUnavailableError: the graph write failed after
             the `applied` audit event was already recorded -- a `failed`
             follow-up event is recorded for the same action/resource_id
@@ -399,11 +472,9 @@ def create_policy_draft(
     existing = graph_writer.find_existing_policy(graph, new_policy_id)
     if existing is not None:
         existing_id, _existing_title = existing
-        audit_store.record_standalone(
-            actor_subject=owner_subject,
-            actor_issuer=owner_issuer,
-            action=_CREATE_DRAFT_ACTION,
-            resource_type=_POLICY_RESOURCE_TYPE,
+        _record_create_draft(
+            audit_store,
+            actor=actor,
             resource_id=new_policy_id,
             outcome="rejected",
             details={
@@ -413,6 +484,18 @@ def create_policy_draft(
             },
         )
         raise PolicyTitleAlreadyExistsError(title, existing_id)
+
+    claimed_capability_ids: tuple[str, ...] = (
+        () if supersedes_policy_id is not None else tuple(dict.fromkeys(capability_ids))
+    )
+    if claimed_capability_ids:
+        _validate_capability_claims(
+            graph=graph,
+            audit_store=audit_store,
+            actor=actor,
+            new_policy_id=new_policy_id,
+            capability_ids=claimed_capability_ids,
+        )
 
     standard_drafts = (
         _build_forked_standard_drafts(new_policy_id, supersedes_policy_id, graph)
@@ -425,46 +508,59 @@ def create_policy_draft(
     )
     affected_node_ids = (new_policy_id, *new_standard_ids, *new_control_ids)
 
-    audit_store.record_standalone(
-        actor_subject=owner_subject,
-        actor_issuer=owner_issuer,
-        action=_CREATE_DRAFT_ACTION,
-        resource_type=_POLICY_RESOURCE_TYPE,
+    _record_create_draft(
+        audit_store,
+        actor=actor,
         resource_id=new_policy_id,
         outcome="applied",
         details={
             "affected_node_ids": affected_node_ids,
             "to_status": "draft",
             "supersedes_policy_id": supersedes_policy_id,
+            "capability_ids": claimed_capability_ids,
         },
     )
 
     try:
-        graph_writer.create_policy_draft(
+        created = graph_writer.create_policy_draft(
             graph,
             policy_id=new_policy_id,
             title=title,
-            owner_subject=owner_subject,
-            owner_issuer=owner_issuer,
+            owner=actor,
             standards=standard_drafts,
             supersedes_policy_id=supersedes_policy_id,
             version=new_version,
+            capability_ids=claimed_capability_ids,
         )
     except redis.exceptions.RedisError as exc:
-        audit_store.record_standalone(
-            actor_subject=owner_subject,
-            actor_issuer=owner_issuer,
-            action=_CREATE_DRAFT_ACTION,
-            resource_type=_POLICY_RESOURCE_TYPE,
+        _record_create_draft(
+            audit_store,
+            actor=actor,
             resource_id=new_policy_id,
             outcome="failed",
             details={
                 "affected_node_ids": affected_node_ids,
                 "to_status": "draft",
                 "supersedes_policy_id": supersedes_policy_id,
+                "capability_ids": claimed_capability_ids,
             },
         )
         raise PolicyLifecycleGraphUnavailableError from exc
+
+    if not created:
+        _record_create_draft(
+            audit_store,
+            actor=actor,
+            resource_id=new_policy_id,
+            outcome="failed",
+            details={
+                "affected_node_ids": (),
+                "to_status": "draft",
+                "reason_code": "capability_already_governed",
+                "capability_ids": (),
+            },
+        )
+        raise PolicyCapabilityAlreadyGovernedError(claimed_capability_ids)
 
     return PolicyDraftResult(
         policy_id=new_policy_id,
@@ -476,6 +572,7 @@ def create_policy_draft(
         standard_ids=new_standard_ids,
         control_ids=new_control_ids,
         superseded_policy_id=supersedes_policy_id,
+        capability_ids=claimed_capability_ids,
     )
 
 
@@ -743,16 +840,39 @@ def _tree_node_ids(record: graph_writer.PolicyRecord) -> tuple[str, ...]:
     return (record.id, *standard_ids, *control_ids)
 
 
+@dataclass(frozen=True, slots=True)
+class _Repoint:
+    """A fork approval's governed-Capability move (issue #185): from `prior_id` to the fork."""
+
+    prior_id: str
+    capability_ids: tuple[str, ...]
+
+
+def _write_cascade(
+    graph: GraphHandle, *, policy_id: str, target_status: str, repoint: _Repoint | None
+) -> bool:
+    """Issue the one status-cascade write; `False` only when a re-point guard failed."""
+    if repoint is None:
+        graph_writer.cascade_status(graph, policy_id=policy_id, target_status=target_status)
+        return True
+    return graph_writer.approve_fork_repoint(
+        graph,
+        policy_id=policy_id,
+        prior_id=repoint.prior_id,
+        capability_ids=repoint.capability_ids,
+        target_status=target_status,
+    )
+
+
 def _cascade_with_audit(
     *,
     actor: tuple[str, str],
-    action: str,
     policy_id: str,
+    spec: _TransitionSpec,
     affected_node_ids: tuple[str, ...],
-    from_status: str,
-    target_status: str,
     graph: GraphHandle,
     audit_store: AuditStore,
+    repoint: _Repoint | None = None,
 ) -> None:
     """D-9's audit-then-cascade tail: `applied` audit, cascade, `failed` audit on failure.
 
@@ -766,44 +886,57 @@ def _cascade_with_audit(
     own at all -- every gate has already run by the time either caller
     reaches this point).
 
+    When `repoint` is given (issue #185: approving a fork whose prior governs
+    Capabilities) the cascade is the single guarded re-point statement and the
+    `applied` event carries the intended `capability_ids`. A guard mismatch
+    records a `failed` event (`reason_code="governance_conflict"`,
+    `capability_ids=()` -- nothing moved) and raises
+    `PolicyGovernanceConflictError`.
+
     Raises:
         PolicyLifecycleGraphUnavailableError: the graph write failed after
             the `applied` audit event was already recorded -- a `failed`
             follow-up event is recorded for the same action/resource_id
             before this is raised (AC-BI-024), the original
             `redis.exceptions.RedisError` chained.
+        PolicyGovernanceConflictError: `repoint` was given and the governed
+            set no longer matched at write time; nothing was written.
     """
     actor_subject, actor_issuer = actor
-    audit_store.record_standalone(
-        actor_subject=actor_subject,
-        actor_issuer=actor_issuer,
-        action=action,
-        resource_type=_POLICY_RESOURCE_TYPE,
-        resource_id=policy_id,
-        outcome="applied",
-        details={
-            "affected_node_ids": affected_node_ids,
-            "from_status": from_status,
-            "to_status": target_status,
-        },
-    )
-    try:
-        graph_writer.cascade_status(graph, policy_id=policy_id, target_status=target_status)
-    except redis.exceptions.RedisError as exc:
+    base_details: dict[str, object] = {
+        "affected_node_ids": affected_node_ids,
+        "from_status": spec.from_status,
+        "to_status": spec.target_status,
+    }
+    applied_details = dict(base_details)
+    if repoint is not None:
+        applied_details["capability_ids"] = repoint.capability_ids
+
+    def _record(outcome: Literal["applied", "failed"], details: dict[str, object]) -> None:
         audit_store.record_standalone(
             actor_subject=actor_subject,
             actor_issuer=actor_issuer,
-            action=action,
+            action=spec.action,
             resource_type=_POLICY_RESOURCE_TYPE,
             resource_id=policy_id,
-            outcome="failed",
-            details={
-                "affected_node_ids": affected_node_ids,
-                "from_status": from_status,
-                "to_status": target_status,
-            },
+            outcome=outcome,
+            details=details,
         )
+
+    _record("applied", applied_details)
+    try:
+        moved = _write_cascade(
+            graph, policy_id=policy_id, target_status=spec.target_status, repoint=repoint
+        )
+    except redis.exceptions.RedisError as exc:
+        _record("failed", base_details)
         raise PolicyLifecycleGraphUnavailableError from exc
+    if not moved:
+        _record(
+            "failed",
+            {**base_details, "reason_code": "governance_conflict", "capability_ids": ()},
+        )
+        raise PolicyGovernanceConflictError(policy_id)
 
 
 def _read_transition_target(graph: GraphHandle, policy_id: str) -> graph_writer.PolicyRecord:
@@ -868,6 +1001,26 @@ def _apply_transition(
     graph: GraphHandle,
     audit_store: AuditStore,
 ) -> None:
+    """Run `_check_gates`, then `_cascade_with_audit` -- see `_check_gates` for the gate rules."""
+    _check_gates(actor=actor, policy_id=policy_id, spec=spec, gates=gates, audit_store=audit_store)
+    _cascade_with_audit(
+        actor=actor,
+        policy_id=policy_id,
+        spec=spec,
+        affected_node_ids=affected_node_ids,
+        graph=graph,
+        audit_store=audit_store,
+    )
+
+
+def _check_gates(
+    *,
+    actor: tuple[str, str],
+    policy_id: str,
+    spec: _TransitionSpec,
+    gates: Sequence[_TransitionGate],
+    audit_store: AuditStore,
+) -> None:
     """D-9's full gate-check + audit-then-cascade sequence, shared by every transition (S26).
 
     Extracted only after `propose_policy`/`approve_policy`/`reject_policy`/
@@ -886,10 +1039,10 @@ def _apply_transition(
     `affected_node_ids` fixed to `(policy_id,)` -- nothing was ever
     transitioned, so only the root Policy id is named) then raises that
     gate's own named error -- byte-identical to every transition function's
-    own pre-refactor if/raise chain. When every gate passes, delegates to
-    `_cascade_with_audit` for the `outcome="applied"` event, the cascading
-    write, and the `outcome="failed"` follow-up on a graph failure
-    (AC-BI-024) -- unchanged from before this refactor.
+    own pre-refactor if/raise chain. When every gate passes this returns and
+    the caller runs `_cascade_with_audit` (`_apply_transition` does so
+    directly; `approve_policy` first reads the fork's governed Capabilities,
+    which must not happen before a gate has rejected).
 
     Args:
         actor: The calling caller's verified `(sub, iss)` identity.
@@ -899,21 +1052,15 @@ def _apply_transition(
             rejected event's `from_status`/`to_status` (a rejected call
             never actually changes status) and for the applied event's own
             `from_status`; `target_status` only for the applied event.
-        affected_node_ids: `(policy_id, *standard_ids, *control_ids)` for
-            the tree being transitioned -- only used once every gate has
-            passed (the `applied`/`failed` events).
         gates: Every precondition for this transition, already evaluated by
             the caller, in the exact order the pre-refactor code checked
             them.
-        graph: The single-tenant policy graph handle.
-        audit_store: Where every audit event this call records is written,
-            via `record_standalone`.
+        audit_store: Where every rejected audit event is written, via
+            `record_standalone`.
 
     Raises:
         Exception: whichever named error the first failing gate in `gates`
             carries.
-        PolicyLifecycleGraphUnavailableError: the graph write failed after
-            the `applied` audit event was already recorded (AC-BI-024).
     """
     actor_subject, actor_issuer = actor
     for gate in gates:
@@ -935,17 +1082,6 @@ def _apply_transition(
         )
         raise gate.error
 
-    _cascade_with_audit(
-        actor=actor,
-        action=spec.action,
-        policy_id=policy_id,
-        affected_node_ids=affected_node_ids,
-        from_status=spec.from_status,
-        target_status=spec.target_status,
-        graph=graph,
-        audit_store=audit_store,
-    )
-
 
 @dataclass(frozen=True, slots=True)
 class PolicyApproveResult:
@@ -956,6 +1092,19 @@ class PolicyApproveResult:
     standard_ids: tuple[str, ...]
     control_ids: tuple[str, ...]
     auto_deprecated_policy_id: str | None
+    governed_capability_ids: tuple[str, ...] = ()
+
+
+def _read_repoint(graph: GraphHandle, policy_id: str) -> _Repoint | None:
+    """The fork's governed-Capability move, or `None` for the plain cascade (issue #185, D-5).
+
+    `None` for a non-fork and for a fork whose prior governs nothing (legacy
+    forks without `GOVERNED_BY` edges stay approvable).
+    """
+    governance = graph_writer.read_fork_governance(graph, policy_id)
+    if governance is None or not governance.capability_ids:
+        return None
+    return _Repoint(prior_id=governance.prior_id, capability_ids=governance.capability_ids)
 
 
 def approve_policy(
@@ -1021,6 +1170,11 @@ def approve_policy(
         PolicySelfApprovalBlockedError: `actor` is `policy_id`'s own owner.
         PolicyInvalidStatusTransitionError: `policy_id`'s Policy is not
             currently `"proposed"`.
+        PolicyGovernanceConflictError: the fork's prior governs Capabilities
+            (issue #185) and that set changed between the read and the single
+            guarded write; nothing was moved or approved. A `failed` audit
+            event (`reason_code="governance_conflict"`) follows the `applied`
+            one.
         PolicyLifecycleGraphUnavailableError: a graph write failed after its
             own `applied` audit event was already recorded -- a `failed`
             follow-up event is recorded for that same action/resource_id
@@ -1054,16 +1208,19 @@ def approve_policy(
             ),
         ),
     )
-    _apply_transition(
+    spec = _TransitionSpec(
+        action=_APPROVE_ACTION, from_status=current_status, target_status="approved"
+    )
+    _check_gates(actor=actor, policy_id=policy_id, spec=spec, gates=gates, audit_store=audit_store)
+    repoint = _read_repoint(graph, policy_id)
+    _cascade_with_audit(
         actor=actor,
         policy_id=policy_id,
-        spec=_TransitionSpec(
-            action=_APPROVE_ACTION, from_status=current_status, target_status="approved"
-        ),
+        spec=spec,
         affected_node_ids=affected_node_ids,
-        gates=gates,
         graph=graph,
         audit_store=audit_store,
+        repoint=repoint,
     )
 
     auto_deprecated_policy_id: str | None = None
@@ -1073,11 +1230,13 @@ def approve_policy(
         if prior_record is not None:
             _cascade_with_audit(
                 actor=actor,
-                action=_AUTO_DEPRECATE_ACTION,
                 policy_id=prior_id,
+                spec=_TransitionSpec(
+                    action=_AUTO_DEPRECATE_ACTION,
+                    from_status=prior_record.status,
+                    target_status="deprecated",
+                ),
                 affected_node_ids=_tree_node_ids(prior_record),
-                from_status=prior_record.status,
-                target_status="deprecated",
                 graph=graph,
                 audit_store=audit_store,
             )
@@ -1091,6 +1250,7 @@ def approve_policy(
             control.id for standard in record.standards for control in standard.controls
         ),
         auto_deprecated_policy_id=auto_deprecated_policy_id,
+        governed_capability_ids=repoint.capability_ids if repoint is not None else (),
     )
 
 

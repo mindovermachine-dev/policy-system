@@ -180,6 +180,68 @@ class PolicySupersedePriorNotApprovedError(Exception):
         self.actual_status = actual_status
 
 
+class PolicyCapabilityNotFoundError(Exception):
+    """`create-policy-draft` named Capability ids that do not exist (issue #185).
+
+    `capability_ids` are the caller-supplied ids that were not found; echoing
+    them back leaks nothing new.
+    """
+
+    def __init__(self, capability_ids: tuple[str, ...]) -> None:
+        """Build the message from the caller-supplied, unknown `capability_ids`.
+
+        Args:
+            capability_ids: The requested ids that match no Capability.
+        """
+        super().__init__(
+            f"no Capability exists with id(s) {', '.join(map(repr, capability_ids))}; "
+            "check the Capability ids and retry"
+        )
+        self.capability_ids = capability_ids
+
+
+class PolicyCapabilityAlreadyGovernedError(Exception):
+    """`create-policy-draft` named Capability ids already governed by a Policy (issue #185).
+
+    Only the caller-supplied ids are named -- never the governing Policy's
+    id, which the caller may not be allowed to see (draft visibility).
+    """
+
+    def __init__(self, capability_ids: tuple[str, ...]) -> None:
+        """Build the message from the caller-supplied, already-governed `capability_ids`.
+
+        Args:
+            capability_ids: The requested ids that already have a governing Policy.
+        """
+        super().__init__(
+            f"Capability id(s) {', '.join(map(repr, capability_ids))} already governed "
+            "by a Policy; amend that Policy via the supersede workflow instead"
+        )
+        self.capability_ids = capability_ids
+
+
+class PolicyGovernanceConflictError(Exception):
+    """`approve-policy` found the superseded Policy's governed Capabilities changed (issue #185).
+
+    The governed set read before the write no longer matched at write time,
+    so the single guarded statement wrote nothing: no edge moved and the
+    Policy's status is unchanged.
+    """
+
+    def __init__(self, policy_id: str) -> None:
+        """Build the message from the Policy id the caller asked to approve.
+
+        Args:
+            policy_id: The Policy whose approval was not applied.
+        """
+        super().__init__(
+            f"Policy {policy_id!r} was not approved: the Capabilities governed by the "
+            "Policy it supersedes changed during approval and nothing was changed; "
+            "retry the approval"
+        )
+        self.policy_id = policy_id
+
+
 class PolicyLifecycleGraphUnavailableError(Exception):
     """The FalkorDB-backed policy graph could not be acquired for a lifecycle call.
 

@@ -25,9 +25,16 @@ from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/aut
 from ps_service.api.errors import AccessDeniedError
 from ps_service.authz.models import AccessRole
 from ps_service.domain_mapper.identity import control_id, standard_id
+from ps_service.policy_lifecycle.audit_actions import (
+    PolicyCreateDraftDetails,
+    PolicyTransitionDetails,
+)
 from ps_service.policy_lifecycle.errors import (
+    PolicyCapabilityAlreadyGovernedError,
+    PolicyCapabilityNotFoundError,
     PolicyControlNotFoundError,
     PolicyDraftAccessDeniedError,
+    PolicyGovernanceConflictError,
     PolicyIncompleteForProposalError,
     PolicyInvalidStatusTransitionError,
     PolicyLifecycleGraphUnavailableError,
@@ -39,6 +46,7 @@ from ps_service.policy_lifecycle.errors import (
 )
 from ps_service.policy_lifecycle.service import (
     ControlDraftInput,
+    PolicyApproveResult,
     StandardDraftInput,
     add_control_to_draft,
     add_standard_to_draft,
@@ -131,21 +139,40 @@ class _FakeQueryResult:
 class _FakeGraph:
     """A `GraphHandle` double: returns a canned existence-check row, records write calls."""
 
-    def __init__(self, recorder: list[str], *, existing: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        recorder: list[str],
+        *,
+        existing: tuple[str, str] | None = None,
+        governors: dict[str, str | None] | None = None,
+    ) -> None:
         self._recorder = recorder
         self._existing = existing
+        # Issue #185: `{capability_id: governing_policy_id | None}`; ids absent here do not exist.
+        self._governors = governors if governors is not None else {}
+        self.lose_claim_race = False
+        self.governor_reads = 0
         self.write_queries: list[str] = []
+        self.write_params: list[dict[str, object]] = []
         self.raise_on_write: Exception | None = None
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        del params
         if "RETURN p.id, p.title" in q:
             rows: list[object] = [[self._existing[0], self._existing[1]]] if self._existing else []
             return _FakeQueryResult(result_set=rows)
+        if "RETURN cap.id, g.id" in q:
+            self.governor_reads += 1
+            ids = cast("list[str]", (params or {})["capability_ids"])
+            return _FakeQueryResult(
+                result_set=[[i, self._governors[i]] for i in ids if i in self._governors]
+            )
         self._recorder.append("graph_write")
         self.write_queries.append(q)
+        self.write_params.append(dict(params or {}))
         if self.raise_on_write is not None:
             raise self.raise_on_write
+        if "size(caps) = $expected" in q:
+            return _FakeQueryResult(result_set=[] if self.lose_claim_race else [["pol"]])
         return _FakeQueryResult()
 
 
@@ -691,10 +718,17 @@ class _ApproveFakeGraph:
         superseded_by: dict[str, str] | None = None,
         raise_on_write_for: str | None = None,
         raise_on_write: Exception | None = None,
+        governed: dict[str, str] | None = None,
+        governed_after_read: dict[str, str] | None = None,
     ) -> None:
         self._recorder = recorder
         self._policies = policies
         self._superseded_by = superseded_by or {}
+        # Issue #185 stateful contract (CHANGES A5): `{capability_id: governing_policy_id}`.
+        # `governed_after_read` replaces it right after the governance read (a lost race).
+        self.governed = governed if governed is not None else {}
+        self._governed_after_read = governed_after_read
+        self.governance_reads = 0
         self._raise_on_write_for = raise_on_write_for
         self._raise_on_write = raise_on_write
         self.write_queries: list[str] = []
@@ -702,6 +736,17 @@ class _ApproveFakeGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         assert params is not None
+        if "RETURN prior.id, collect(cap.id)" in q:
+            self.governance_reads += 1
+            prior_id = self._superseded_by.get(cast("str", params["policy_id"]))
+            if prior_id is None:
+                return _FakeQueryResult(result_set=[])
+            caps = [cap for cap, gov in self.governed.items() if gov == prior_id]
+            if self._governed_after_read is not None:
+                self.governed = dict(self._governed_after_read)
+            return _FakeQueryResult(result_set=[[prior_id, caps]])
+        if "DELETE r" in q:
+            return self._repoint(q, params)
         if "SET p.status = $target_status" in q:
             self._recorder.append("graph_write")
             self.write_queries.append(q)
@@ -729,6 +774,28 @@ class _ApproveFakeGraph:
             return _FakeQueryResult(result_set=_policy_tree_rows(policy))
         # `backfill_governance_status`'s three `SET ... IS NULL` statements: no-op.
         return _FakeQueryResult()
+
+    def _repoint(self, q: str, params: dict[str, object]) -> _FakeQueryResult:
+        """The guarded single-statement contract: all-or-nothing on the `expected` count."""
+        self._recorder.append("graph_write")
+        self.write_queries.append(q)
+        self.write_params.append(params)
+        if self._raise_on_write is not None and params["policy_id"] == self._raise_on_write_for:
+            raise self._raise_on_write
+        if not _repoint_guard_holds(self, params):
+            return _FakeQueryResult(result_set=[])
+        for cap in cast("list[str]", params["capability_ids"]):
+            self.governed[cap] = cast("str", params["policy_id"])
+        self._policies[cast("str", params["policy_id"])].status = cast(
+            "str", params["target_status"]
+        )
+        return _FakeQueryResult(result_set=[[params["policy_id"]]])
+
+
+def _repoint_guard_holds(graph: _ApproveFakeGraph, params: dict[str, object]) -> bool:
+    ids = cast("list[str]", params["capability_ids"])
+    held = [cap for cap in ids if graph.governed.get(cap) == params["prior_id"]]
+    return len(held) == params["expected"]
 
 
 def _approvable_proposed(
@@ -994,6 +1061,205 @@ def test_superseded_by_prior_not_yet_approved_is_left_untouched(prior_status: st
     assert graph.write_params[0] == {"policy_id": "pol_new", "target_status": "approved"}
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].action == "policy.approve"
+
+
+def _approve_fork(
+    graph: _ApproveFakeGraph, audit_store: _TransitionFakeAuditStore, policy_id: str
+) -> PolicyApproveResult:
+    store = FakeAccessRoleStore()
+    store.grant(actor=_GRANTER, target=_MANAGER, access_role=AccessRole.POLICY_MANAGER)
+    return approve_policy(
+        actor=_MANAGER,
+        policy_id=policy_id,
+        graph=graph,
+        audit_store=audit_store,
+        access_role_store=store,
+    )
+
+
+def _fork_of_approved_prior(
+    recorder: list[str],
+    *,
+    governed: dict[str, str],
+    governed_after_read: dict[str, str] | None = None,
+    raise_on_write_for: str | None = None,
+    raise_on_write: Exception | None = None,
+) -> tuple[_ApproveFakeGraph, _PolicyFixture, _PolicyFixture]:
+    successor = _approvable_proposed(policy_id="pol_new")
+    prior = _approvable_proposed(policy_id="pol_old", status="approved")
+    graph = _ApproveFakeGraph(
+        recorder,
+        {"pol_new": successor, "pol_old": prior},
+        superseded_by={"pol_new": "pol_old"},
+        governed=governed,
+        governed_after_read=governed_after_read,
+        raise_on_write_for=raise_on_write_for,
+        raise_on_write=raise_on_write,
+    )
+    return graph, successor, prior
+
+
+def test_approve_fork_moves_governed_capabilities_in_one_write_and_audits_ids() -> None:
+    recorder: list[str] = []
+    graph, successor, _prior = _fork_of_approved_prior(
+        recorder, governed={"c1": "pol_old", "c2": "pol_old"}
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    result = _approve_fork(graph, audit_store, "pol_new")
+
+    assert result.governed_capability_ids == ("c1", "c2")
+    assert graph.governed == {"c1": "pol_new", "c2": "pol_new"}
+    assert successor.status == "approved"
+    # one repoint write for the successor, one plain cascade for the auto-deprecated prior
+    assert len(graph.write_queries) == 2
+    assert graph.write_params[0] == {
+        "policy_id": "pol_new",
+        "prior_id": "pol_old",
+        "capability_ids": ["c1", "c2"],
+        "expected": 2,
+        "target_status": "approved",
+    }
+    approve_call, deprecate_call = audit_store.calls
+    assert (approve_call.action, approve_call.outcome) == ("policy.approve", "applied")
+    assert approve_call.details["capability_ids"] == ("c1", "c2")
+    assert deprecate_call.action == "policy.auto_deprecate"
+    assert deprecate_call.details.get("capability_ids", ()) == ()
+
+
+def test_approve_fork_audit_precedes_the_repoint_write() -> None:
+    recorder: list[str] = []
+    graph, _successor, _prior = _fork_of_approved_prior(recorder, governed={"c1": "pol_old"})
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    _approve_fork(graph, audit_store, "pol_new")
+
+    assert recorder.index("audit") < recorder.index("graph_write")
+
+
+def test_approve_fork_guard_mismatch_raises_conflict_and_writes_nothing_else() -> None:
+    """AC-BI-006: governed state changed after the pre-read -> no row, nothing moved."""
+    recorder: list[str] = []
+    graph, successor, prior = _fork_of_approved_prior(
+        recorder,
+        governed={"c1": "pol_old", "c2": "pol_old"},
+        governed_after_read={"c1": "pol_old", "c2": "pol_third"},
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    with pytest.raises(PolicyGovernanceConflictError):
+        _approve_fork(graph, audit_store, "pol_new")
+
+    assert len(graph.write_queries) == 1  # nothing but the guarded statement was issued
+    assert successor.status == "proposed"
+    assert prior.status == "approved"  # zero auto-deprecate
+    assert graph.governed == {"c1": "pol_old", "c2": "pol_third"}
+    assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
+    failed = audit_store.calls[1]
+    assert failed.action == "policy.approve"
+    assert failed.details["reason_code"] == "governance_conflict"
+    assert failed.details["capability_ids"] == ()
+
+
+def test_approve_fork_of_deprecated_prior_with_no_governed_caps_uses_plain_cascade() -> None:
+    """D-5 (CHANGES F-1): legacy forks without GOVERNED_BY edges stay approvable."""
+    recorder: list[str] = []
+    successor = _approvable_proposed(policy_id="pol_new")
+    prior = _approvable_proposed(policy_id="pol_old", status="deprecated")
+    graph = _ApproveFakeGraph(
+        recorder,
+        {"pol_new": successor, "pol_old": prior},
+        superseded_by={"pol_new": "pol_old"},
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    result = _approve_fork(graph, audit_store, "pol_new")
+
+    assert result.governed_capability_ids == ()
+    assert graph.write_params == [{"policy_id": "pol_new", "target_status": "approved"}]
+    assert "capability_ids" not in audit_store.calls[0].details
+
+
+def test_approve_fork_when_sibling_fork_already_approved_leaves_caps_on_sibling() -> None:
+    """D-5 / OQ-4: F2 approve finds zero caps on P (they moved to F1); plain cascade, caps stay."""
+    recorder: list[str] = []
+    f2 = _approvable_proposed(policy_id="pol_f2")
+    prior = _approvable_proposed(policy_id="pol_old", status="deprecated")
+    graph = _ApproveFakeGraph(
+        recorder,
+        {"pol_f2": f2, "pol_old": prior},
+        superseded_by={"pol_f2": "pol_old"},
+        governed={"c1": "pol_f1"},
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    result = _approve_fork(graph, audit_store, "pol_f2")
+
+    assert result.governed_capability_ids == ()
+    assert graph.governed == {"c1": "pol_f1"}
+    assert graph.write_params == [{"policy_id": "pol_f2", "target_status": "approved"}]
+
+
+def test_approve_non_fork_reads_no_fork_capabilities_and_uses_plain_cascade() -> None:
+    recorder: list[str] = []
+    graph = _ApproveFakeGraph(recorder, {"pol_x": _approvable_proposed()})
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    result = _approve_fork(graph, audit_store, "pol_x")
+
+    assert result.governed_capability_ids == ()
+    assert graph.write_params == [{"policy_id": "pol_x", "target_status": "approved"}]
+
+
+def test_approve_gate_failure_rejects_before_any_governance_read() -> None:
+    recorder: list[str] = []
+    graph, _successor, _prior = _fork_of_approved_prior(recorder, governed={"c1": "pol_old"})
+    audit_store = _TransitionFakeAuditStore(recorder)
+    store = FakeAccessRoleStore()
+    store.grant(actor=_GRANTER, target=_OWNER, access_role=AccessRole.POLICY_MANAGER)
+
+    with pytest.raises(PolicySelfApprovalBlockedError):
+        approve_policy(
+            actor=_OWNER,
+            policy_id="pol_new",
+            graph=graph,
+            audit_store=audit_store,
+            access_role_store=store,
+        )
+
+    assert graph.governance_reads == 0
+    assert graph.write_queries == []
+
+
+def test_approve_fork_repoint_graph_failure_records_failed_and_raises_unavailable() -> None:
+    recorder: list[str] = []
+    graph, _successor, _prior = _fork_of_approved_prior(
+        recorder,
+        governed={"c1": "pol_old"},
+        raise_on_write_for="pol_new",
+        raise_on_write=redis.exceptions.ConnectionError("boom"),
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+
+    with pytest.raises(PolicyLifecycleGraphUnavailableError):
+        _approve_fork(graph, audit_store, "pol_new")
+
+    assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
+
+
+def test_approve_fork_audit_payloads_validate_against_the_registered_model() -> None:
+    recorder: list[str] = []
+    graph, _s, _p = _fork_of_approved_prior(
+        recorder,
+        governed={"c1": "pol_old"},
+        governed_after_read={"c1": "pol_third"},
+    )
+    audit_store = _TransitionFakeAuditStore(recorder)
+    with pytest.raises(PolicyGovernanceConflictError):
+        _approve_fork(graph, audit_store, "pol_new")
+
+    for call in audit_store.calls:
+        PolicyTransitionDetails.model_validate(dict(call.details))
 
 
 # --- `reject_policy` (issue #134, S19) --------------------------------------
@@ -2659,3 +2925,181 @@ def test_ordinary_create_policy_draft_still_has_null_supersedes_policy_id_in_aud
     create_policy_draft(actor=_ACTOR, title=_TITLE, graph=graph, audit_store=audit_store)
 
     assert audit_store.calls[0].details["supersedes_policy_id"] is None
+
+
+# --- Issue #185: fresh drafts claim Capabilities via `capability_ids` --------
+
+
+def test_fresh_draft_with_capability_ids_issues_guarded_claim_and_audits_ids() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder, governors={"cap_a": None, "cap_b": None})
+    audit_store = _FakeAuditStore(recorder)
+
+    result = create_policy_draft(
+        actor=_ACTOR,
+        title=_TITLE,
+        capability_ids=("cap_a", "cap_b"),
+        graph=graph,
+        audit_store=audit_store,
+    )
+
+    claim = next(q for q in graph.write_queries if "size(caps) = $expected" in q)
+    assert "MERGE (c)-[:GOVERNED_BY]->(p)" in claim
+    claim_params = next(p for p in graph.write_params if "expected" in p)
+    assert claim_params["expected"] == 2
+    assert claim_params["policy_id"] == result.policy_id
+    assert len(audit_store.calls) == 1
+    assert audit_store.calls[0].outcome == "applied"
+    assert audit_store.calls[0].details["capability_ids"] == ("cap_a", "cap_b")
+    assert recorder.index("audit") < recorder.index("graph_write")
+
+
+def test_fresh_draft_with_duplicate_capability_ids_dedupes_preserving_order() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder, governors={"cap_a": None, "cap_b": None})
+    audit_store = _FakeAuditStore(recorder)
+
+    create_policy_draft(
+        actor=_ACTOR,
+        title=_TITLE,
+        capability_ids=("cap_b", "cap_a", "cap_b"),
+        graph=graph,
+        audit_store=audit_store,
+    )
+
+    assert audit_store.calls[0].details["capability_ids"] == ("cap_b", "cap_a")
+    claim_params = next(p for p in graph.write_params if "expected" in p)
+    assert claim_params["expected"] == 2
+
+
+def test_fresh_draft_without_capability_ids_reads_no_governors_and_audits_empty_ids() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder)
+    audit_store = _FakeAuditStore(recorder)
+
+    create_policy_draft(actor=_ACTOR, title=_TITLE, graph=graph, audit_store=audit_store)
+
+    assert graph.governor_reads == 0
+    assert audit_store.calls[0].details["capability_ids"] == ()
+    assert not any("GOVERNED_BY" in q for q in graph.write_queries)
+
+
+def test_missing_capability_id_raises_named_error_rejected_audit_and_zero_writes() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder, governors={"cap_a": None})
+    audit_store = _FakeAuditStore(recorder)
+
+    with pytest.raises(PolicyCapabilityNotFoundError) as exc_info:
+        create_policy_draft(
+            actor=_ACTOR,
+            title=_TITLE,
+            capability_ids=("cap_a", "cap_missing"),
+            graph=graph,
+            audit_store=audit_store,
+        )
+
+    assert exc_info.value.capability_ids == ("cap_missing",)
+    assert "cap_missing" in str(exc_info.value)
+    assert graph.write_queries == []
+    assert [call.outcome for call in audit_store.calls] == ["rejected"]
+    assert audit_store.calls[0].details["reason_code"] == "capability_not_found"
+    assert audit_store.calls[0].details["capability_ids"] == ()
+
+
+def test_already_governed_capability_raises_named_error_rejected_audit_and_zero_writes() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder, governors={"cap_a": None, "cap_b": "pol_other"})
+    audit_store = _FakeAuditStore(recorder)
+
+    with pytest.raises(PolicyCapabilityAlreadyGovernedError) as exc_info:
+        create_policy_draft(
+            actor=_ACTOR,
+            title=_TITLE,
+            capability_ids=("cap_a", "cap_b"),
+            graph=graph,
+            audit_store=audit_store,
+        )
+
+    assert exc_info.value.capability_ids == ("cap_b",)
+    assert "cap_b" in str(exc_info.value)
+    assert graph.write_queries == []
+    assert [call.outcome for call in audit_store.calls] == ["rejected"]
+    assert audit_store.calls[0].details["reason_code"] == "capability_already_governed"
+
+
+def test_lost_claim_race_records_failed_audit_with_empty_ids_and_writes_no_children() -> None:
+    recorder: list[str] = []
+    graph = _FakeGraph(recorder, governors={"cap_a": None})
+    graph.lose_claim_race = True
+    audit_store = _FakeAuditStore(recorder)
+
+    with pytest.raises(PolicyCapabilityAlreadyGovernedError):
+        create_policy_draft(
+            actor=_ACTOR,
+            title=_TITLE,
+            standards=(StandardDraftInput(title="Encryption Standard"),),
+            capability_ids=("cap_a",),
+            graph=graph,
+            audit_store=audit_store,
+        )
+
+    assert len(graph.write_queries) == 1  # the guarded claim only; no Standard/Control statements
+    assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
+    assert audit_store.calls[0].details["capability_ids"] == ("cap_a",)
+    assert audit_store.calls[1].details["capability_ids"] == ()
+    assert audit_store.calls[1].details["reason_code"] == "capability_already_governed"
+
+
+def test_fork_ignores_capability_ids_reads_no_governors_and_writes_no_governed_by() -> None:
+    """D-2: `capability_ids` is silently ignored when `supersedes_policy_id` is set (AC-BI-004)."""
+    recorder: list[str] = []
+    graph = _ForkFakeGraph(prior=_prior_fixture(status="approved"), forked_rows=_forked_rows())
+    audit_store = _FakeAuditStore(recorder)
+
+    create_policy_draft(
+        actor=_ACTOR,
+        title=_TITLE,
+        supersedes_policy_id=_PRIOR_POLICY_ID,
+        capability_ids=("cap_a",),
+        graph=graph,
+        audit_store=audit_store,
+    )
+
+    assert not any("GOVERNED_BY" in w.query for w in graph.writes)
+    assert audit_store.calls[0].details["capability_ids"] == ()
+
+
+def test_every_capability_claim_audit_payload_validates_against_the_registered_model() -> None:
+    """Rejected, applied and failed `policy.create_draft` payloads for #185 are valid details.
+
+    A `failed` event for a lost race carries a `reason_code` (rejected AND
+    failed may carry one) and `capability_ids=()`.
+    """
+    recorder: list[str] = []
+    audit_store = _FakeAuditStore(recorder)
+    lost_graph = _FakeGraph(recorder, governors={"cap_a": None})
+    lost_graph.lose_claim_race = True
+    with pytest.raises(PolicyCapabilityAlreadyGovernedError):
+        create_policy_draft(
+            actor=_ACTOR,
+            title=_TITLE,
+            capability_ids=("cap_a",),
+            graph=lost_graph,
+            audit_store=audit_store,
+        )
+    with pytest.raises(PolicyCapabilityNotFoundError):
+        create_policy_draft(
+            actor=_ACTOR,
+            title="Other Policy",
+            capability_ids=("cap_missing",),
+            graph=_FakeGraph(recorder),
+            audit_store=audit_store,
+        )
+
+    parsed = [PolicyCreateDraftDetails.model_validate(c.details) for c in audit_store.calls]
+
+    assert [c.outcome for c in audit_store.calls] == ["applied", "failed", "rejected"]
+    assert parsed[0].capability_ids == ("cap_a",)
+    assert parsed[1].reason_code == "capability_already_governed"
+    assert parsed[1].capability_ids == ()
+    assert parsed[2].reason_code == "capability_not_found"

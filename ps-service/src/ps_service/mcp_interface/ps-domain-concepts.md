@@ -173,7 +173,7 @@ full cross-model shape and provenance rationale at once.
 | `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
 | `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
 | `VERIFIED_BY` | RiskPath → Control | 1 : 0..* | — | 3 — classification layer |
-| `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived |
+| `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived. For a human-authored Policy the edge is written when a fresh draft is created with `capability_ids`; a fork of an approved Policy does not write it — the edges move from the superseded Policy to the fork when the fork is approved |
 | `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 if Standard is human-authored; 2 (recoverable via `GOVERNED_BY` onward) if internal-SoP-derived |
 | `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 if Control is human-authored; 2 (recoverable via `SUPPORTED_BY` onward) if internal-SoP-derived |
 
@@ -398,7 +398,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `REQUIRES` (inbound) | Obligation | 0..\* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
 | `COVERS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
 | `MITIGATED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
-| `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). |
+| `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). A Capability has exactly one governing Policy at any time, including while its Policy is being superseded. |
 
 ---
 
@@ -406,7 +406,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Description:** An organizational commitment governing how one or more Capabilities must be achieved. Policy is where accountability actually attaches to the generic model: the "what capacity must exist" of a Capability becomes "who owns making it happen and how it's reviewed" (owner, review cycle, approval status) once it reaches Policy. A single Policy commonly governs several Capabilities at once — e.g. one "Data Protection Policy" governing encryption, logging, and access-control capabilities together — rather than each Capability answering to its own policy; different business contexts or risk tolerances are handled by minting a distinct Capability, not by a Capability answering to more than one Policy.
 
-**Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `approved` → `deprecated` status workflow.
+**Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `approved` → `deprecated` status workflow. The Policy's `GOVERNED_BY` edges follow the same workflow: a fresh human-authored draft's edges are written at creation; a fork's edges stay on the superseded Policy until the fork is approved, then move to the fork in the same operation as the approval.
 
 Alternatively, authored directly in the internal-seed intake document when the governing Capability traces to an `internal` RegulatoryInstrument, and minted (canonical id only) by `ps_service.ingestion.adapters.internal_seed` in the same step that authors/mints the rest of that source's spine — no LLM involved, permanent design. A Policy instance is one origin or the other, never both; see [Document Purpose](#document-purpose).
 
@@ -437,9 +437,9 @@ These structured fields pair with `ps-skills/ps-plugin/rubrics/policy-rubric.md`
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `OWNS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → OWNS](#practicearea). A Policy may be owned by any number of PracticeAreas — no artificial one-owner cap, matching COVERS/MITIGATED_BY/VERIFIED_BY (see AC-BI-011). |
-| `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. |
+| `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. A human-authored fresh draft claims its Capabilities when it is created (the caller names them via `capability_ids`; every named Capability must exist and be ungoverned, otherwise nothing is created) and holds them until approved or abandoned. A fork never claims Capabilities at creation: the Capabilities governed by the superseded Policy move to the fork in the same operation as the fork's approval, so a Capability never has zero or two governing Policies. A fork whose superseded Policy governs no Capabilities (a legacy Policy) is approved without moving any edge. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
-| `SUPERSEDED_BY` (outbound) | Policy | 0..1 : 0..1 | — | A Policy may be superseded by exactly one successor version (or none); Policy-level only — no per-Standard/Control links. Linking a new version to its prior approved version is #136's fork tool; this issue delivers the edge's schema and the auto-deprecation cascade it triggers on the successor's approval (see Policy's Lifecycle note above). |
+| `SUPERSEDED_BY` (outbound) | Policy | 0..1 : 0..1 | — | A Policy may be superseded by exactly one successor version (or none); Policy-level only — no per-Standard/Control links. The edge is written when a fork of an approved Policy is created. Approving the successor moves the superseded Policy's `GOVERNED_BY` Capabilities to the successor and auto-deprecates the superseded Policy (see Policy's Lifecycle note above). |
 
 ---
 

@@ -12,8 +12,10 @@ closes a Capability's coverage gap, one rubric criterion at a time, using
 issue #136's content-CRUD MCP tools. Given one or more Capability names,
 first detects whether a governing Policy already exists (none -> fresh
 top-down draft; the caller's own Draft -> resume it at its weakest-scoring
-criterion; a Proposed or Approved Policy the caller doesn't own -> fork a
-superseding draft via `supersedes_policy_id`), then walks
+criterion; a Proposed or Approved Policy with no superseding fork yet ->
+fork a superseding draft via `supersedes_policy_id`; one that already has
+a fork -> resume the caller's own draft fork, or stop on a named state),
+then walks
 Policy -> Standard(s) -> Control(s), asking exactly one Socratic question
 per weak rubric criterion, persisting each answered field immediately,
 offering -- never requiring -- cited web research for "how" content, and
@@ -66,11 +68,13 @@ entities/relationships -- not required again per call, only once at load.
   successful `get-policy` call means the Draft is resumable; a
   `PolicyDraftAccessDeniedError` means it is not, and is never treated as
   a signal to fork it or to create a competing Policy instead.
-- A governing Policy that is currently `"proposed"` or `"approved"` is
-  always forked immediately (`create-policy-draft` with
-  `supersedes_policy_id`) -- ownership of a Proposed/Approved Policy is
-  irrelevant to which action is taken, because none of this skill's
-  authoring tools can resume a Policy that isn't itself `"draft"`. When the
+- A governing Policy that is currently `"proposed"` or `"approved"` and has
+  no `SUPERSEDED_BY` successor is always forked immediately
+  (`create-policy-draft` with `supersedes_policy_id`) -- ownership of a
+  Proposed/Approved Policy is irrelevant to which action is taken, because
+  none of this skill's authoring tools can resume a Policy that isn't
+  itself `"draft"`. When a successor already exists, the skill never
+  creates a second fork (see Branch detection). When the
   prior was only `"proposed"` (not yet `"approved"`), the fork attempt
   itself is rejected by the tool with a named error, which is reported
   plainly -- never treated as if the fork had been silently blocked before
@@ -114,8 +118,16 @@ entities/relationships -- not required again per call, only once at load.
 
    ```cypher
    MATCH (c:Capability {name: '<name>'})-[:GOVERNED_BY]->(p:Policy)
-   RETURN p.id AS policy_id, p.status AS status
+   OPTIONAL MATCH (p)-[:SUPERSEDED_BY]->(f:Policy)
+   RETURN p.id AS policy_id, p.status AS status, f.id AS fork_id, f.status AS fork_status
    ```
+
+   `fork_id`/`fork_status` are the Policy's `SUPERSEDED_BY` successor(s)
+   (null when none). More than one row per Capability is possible when
+   several forks exist; handle them all as described below. A fork keeps
+   the Capability's `GOVERNED_BY` edge on the prior Policy until the fork
+   is approved, so an in-progress fork is only visible through
+   `fork_id`/`fork_status`.
 
 4. If the named Capabilities' results disagree with each other (Core
    Principles), stop here: report the disagreement and ask the user how to
@@ -134,7 +146,23 @@ entities/relationships -- not required again per call, only once at load.
        prior can be forked). Report this as a distinct
        `governed_by_unowned_draft` state and stop -- never create a
        second, competing Policy for the same Capability.
-   - **A row with `status` of `"proposed"` or `"approved"`** -- fork
+   - **A row with `status` of `"proposed"` or `"approved"` and a non-null
+     `fork_id`** -- a fork already exists; never call `create-policy-draft`
+     again. Examine every successor row, in this order:
+     - A successor with `fork_status == "draft"`: call `get-policy` with
+       its `fork_id`. Success -- the caller owns the fork: resume it,
+       opening the field loop at its weakest-scoring rubric criterion.
+       `error: you do not have access to this Policy` -- the fork belongs
+       to someone else. Report the distinct `superseded_by_unowned_draft`
+       state and stop. (If another successor row is an owned draft,
+       resume that one instead.)
+     - Otherwise, a successor with `fork_status == "proposed"`: report the
+       distinct `fork_awaiting_approval` state and stop -- the fork awaits
+       the user's own separate approval, which this skill never triggers.
+     - Otherwise (every successor is `"approved"`, rejected or otherwise
+       not in progress): fork as in the next bullet.
+   - **A row with `status` of `"proposed"` or `"approved"` and no
+     `fork_id`** -- fork
      branch: immediately call `create-policy-draft` with
      `title=<derived from the Capability name(s)>` and
      `supersedes_policy_id=<policy_id>`. This is always attempted, never
@@ -157,7 +185,15 @@ or fork continuation (the same loop, just not started at the top).
    1. Derive a provisional title from the named Capability(ies) (e.g.
       `"{Capability name} Policy"` for one Capability; for several, a
       name for the shared grouping) and call
-      `create-policy-draft(title=<derived>)`. `title` can never be
+      `create-policy-draft(title=<derived>, capability_ids=[<capability_id
+of every Capability found by the step 2 existence check>])`. The
+      new draft claims those Capabilities (`GOVERNED_BY` is written at
+      creation), so the next branch detection finds it as their governing
+      Policy with `status == "draft"` and resumes it. Pass only ids step 2
+      returned, never ids for dropped (not found) Capabilities, and never
+      pass `capability_ids` together with `supersedes_policy_id` -- a fork
+      does not claim Capabilities (they move to it when the fork is
+      approved). `title` can never be
       patched through `update-policy-draft` afterwards -- if the user
       wants a materially different title later, the only path is
       abandoning this draft and starting a new one (see Guardrails).
@@ -468,8 +504,12 @@ against that real source, not copied from paraphrase:
 | `error: Policy '<policy_id>' cannot be superseded: current status is '<actual_status>', requires 'approved'`                                                                                      | `supersede_prior_not_approved` -- the fork branch's governing Policy was only `"proposed"`, not yet `"approved"` (Branch detection)                                                                                          | `create-policy-draft` (fork path)                                                                                                                                           |
 | Query contains a write clause (`CREATE`/`MERGE`/`DELETE`/`SET`/`REMOVE`/`DROP`/`FOREACH`)                                                                                                         | `query_rejected_write_clause` -- `cypher` is read-only; rejected before execution                                                                                                                                            | `cypher`                                                                                                                                                                    |
 | The graph has no seeded content at all yet (distinct from a query that legitimately matches nothing)                                                                                              | `graph_unseeded`                                                                                                                                                                                                             | `cypher`                                                                                                                                                                    |
+| `error: no Capability exists with id(s) '<capability_id>'; check the Capability ids and retry`                                                                                                    | `capability_not_found` -- a `capability_ids` entry matches no Capability; re-run the step 2 existence check, never retry blindly                                                                                             | `create-policy-draft` (fresh path)                                                                                                                                          |
+| `error: Capability id(s) '<capability_id>' already governed by a Policy; amend that Policy via the supersede workflow instead`                                                                    | `capability_already_governed` -- the Capability gained a governing Policy since step 3 (or concurrently); re-run branch detection from step 3                                                                                | `create-policy-draft` (fresh path)                                                                                                                                          |
 | `error: an unexpected error occurred`                                                                                                                                                             | `unexpected_error` -- an unrecognised failure, distinct from every named state above; never guess at its cause                                                                                                               | every tool this skill calls                                                                                                                                                 |
 | (Not a tool error -- a branch-detection-only state, see Core Principles/Process) `get-policy` denied on a Draft whose `GOVERNED_BY` status the branch-detection query already showed as `"draft"` | `governed_by_unowned_draft` -- the Draft belongs to someone else and is not forkable (only an `"approved"` prior can be forked); block and report, never create a second, competing Policy for the same Capability           | branch detection only                                                                                                                                                       |
+| (Not a tool error -- a branch-detection-only state) `get-policy` denied on the draft `fork_id` of a `SUPERSEDED_BY` successor of the governing Policy                                             | `superseded_by_unowned_draft` -- the fork belongs to someone else; block and report, never create a second fork                                                                                                              | branch detection only                                                                                                                                                       |
+| (Not a tool error -- a branch-detection-only state) the governing Policy's `SUPERSEDED_BY` successor has `fork_status == "proposed"`                                                              | `fork_awaiting_approval` -- the fork awaits the user's own separate approval; block and report, never create a second fork                                                                                                   | branch detection only                                                                                                                                                       |
 | Two or more named Capabilities' `GOVERNED_BY` results disagree                                                                                                                                    | `capability_governance_disagreement` -- report and ask the user how to proceed, per the bullet above                                                                                                                         | branch detection only                                                                                                                                                       |
 | Successful structured response                                                                                                                                                                    | -- report the scaffold, the persisted field, the tree, or the session summary, whichever this step of Process produced                                                                                                       | every tool this skill calls                                                                                                                                                 |
 

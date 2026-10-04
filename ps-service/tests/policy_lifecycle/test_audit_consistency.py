@@ -249,7 +249,13 @@ def test_invalid_status_reason_code_is_identical_across_all_four_transitions() -
 
 @pytest.mark.parametrize(
     "reason_code",
-    ["access_denied", "self_approval_blocked", "invalid_status", "incomplete_for_proposal"],
+    [
+        "access_denied",
+        "self_approval_blocked",
+        "invalid_status",
+        "incomplete_for_proposal",
+        "governance_conflict",
+    ],
 )
 def test_every_action_reason_code_is_accepted_by_the_registered_vocabulary(
     reason_code: str,

@@ -8,7 +8,10 @@ substrings that would leak internal detail (AC-BI-015).
 from __future__ import annotations
 
 from ps_service.policy_lifecycle.errors import (
+    PolicyCapabilityAlreadyGovernedError,
+    PolicyCapabilityNotFoundError,
     PolicyDraftAccessDeniedError,
+    PolicyGovernanceConflictError,
     PolicyIncompleteForProposalError,
     PolicyInvalidStatusTransitionError,
     PolicyLifecycleGraphUnavailableError,
@@ -98,3 +101,36 @@ def test_policy_lifecycle_graph_unavailable_error_is_fixed_and_leaks_nothing() -
 def test_error_types_are_distinct_and_not_a_shared_hierarchy() -> None:
     assert not issubclass(PolicyNotFoundError, PolicyDraftAccessDeniedError)
     assert not issubclass(PolicyDraftAccessDeniedError, PolicyTitleAlreadyExistsError)
+
+
+def test_policy_capability_not_found_error_names_the_supplied_ids() -> None:
+    exc = PolicyCapabilityNotFoundError(("cap_a", "cap_b"))
+
+    message = str(exc)
+
+    assert "'cap_a'" in message
+    assert "'cap_b'" in message
+    assert "no Capability exists" in message
+    _assert_no_forbidden_substrings(message)
+
+
+def test_policy_capability_already_governed_error_names_ids_and_points_at_supersede() -> None:
+    exc = PolicyCapabilityAlreadyGovernedError(("cap_a",))
+
+    message = str(exc)
+
+    assert "'cap_a'" in message
+    assert "already governed" in message
+    assert "supersede" in message
+    _assert_no_forbidden_substrings(message)
+
+
+def test_policy_governance_conflict_error_is_actionable_and_leaks_nothing() -> None:
+    exc = PolicyGovernanceConflictError("pol-new")
+
+    message = str(exc)
+
+    assert "pol-new" in message
+    assert "nothing was changed" in message
+    assert "retry" in message
+    _assert_no_forbidden_substrings(message)

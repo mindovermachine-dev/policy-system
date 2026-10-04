@@ -16,21 +16,26 @@ Cypher engine.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import cast
 
 from ps_service.policy_lifecycle.graph_writer import (
     ControlDraft,
     ControlWithParent,
+    ForkGovernance,
     StandardDraft,
     StandardWithParent,
     add_control_to_standard,
     add_standard_to_policy,
+    approve_fork_repoint,
     backfill_governance_status,
     create_policy_draft,
     find_approved_prior,
     find_control_with_parent,
     find_standard_with_parent,
+    read_capability_governors,
+    read_fork_governance,
     read_policy_tree_for_fork,
     update_control_fields,
     update_policy_fields,
@@ -729,8 +734,7 @@ def test_create_policy_draft_writes_given_version_not_hardcoded_one() -> None:
         graph,
         policy_id="pol-2",
         title="Data Protection Policy",
-        owner_subject="alice",
-        owner_issuer="https://issuer.example",
+        owner=("alice", "https://issuer.example"),
         version="4",
     )
 
@@ -749,8 +753,7 @@ def test_create_policy_draft_defaults_version_to_one_when_omitted() -> None:
         graph,
         policy_id="pol-2",
         title="Data Protection Policy",
-        owner_subject="alice",
-        owner_issuer="https://issuer.example",
+        owner=("alice", "https://issuer.example"),
     )
 
     params = cast("dict[str, object]", graph.calls[0].params)
@@ -765,8 +768,7 @@ def test_create_policy_draft_with_supersedes_policy_id_writes_superseded_by_edge
         graph,
         policy_id="pol-2",
         title="Data Protection Policy",
-        owner_subject="alice",
-        owner_issuer="https://issuer.example",
+        owner=("alice", "https://issuer.example"),
         supersedes_policy_id="pol-1",
         version="2",
     )
@@ -783,8 +785,7 @@ def test_create_policy_draft_without_supersedes_policy_id_writes_no_superseded_b
         graph,
         policy_id="pol-2",
         title="Data Protection Policy",
-        owner_subject="alice",
-        owner_issuer="https://issuer.example",
+        owner=("alice", "https://issuer.example"),
     )
 
     assert not any("SUPERSEDED_BY" in call.query for call in graph.calls)
@@ -804,8 +805,7 @@ def test_create_policy_draft_forked_standard_and_control_extra_properties_surviv
         graph,
         policy_id="pol-2",
         title="Data Protection Policy",
-        owner_subject="alice",
-        owner_issuer="https://issuer.example",
+        owner=("alice", "https://issuer.example"),
         standards=(
             StandardDraft(
                 id="std-2",
@@ -847,3 +847,241 @@ def test_create_policy_draft_forked_standard_and_control_extra_properties_surviv
     assert control_properties["title"] == "Key Rotation"
     assert control_properties["type"] == "automated"
     assert control_properties["status"] == "draft"
+
+
+# --- `read_capability_governors` / guarded fresh create (issue #185) --------
+
+
+class _RowsFakeGraph:
+    """Records every `query()` call; returns canned rows for each call in order."""
+
+    def __init__(self, *row_sets: list[object]) -> None:
+        self.calls: list[_RecordedCall] = []
+        self._row_sets = list(row_sets)
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _RowsResult:
+        self.calls.append(_RecordedCall(q, params))
+        rows = self._row_sets.pop(0) if self._row_sets else []
+        return _RowsResult(rows)
+
+
+@dataclass
+class _RowsResult:
+    result_set: list[object]
+
+
+def test_read_capability_governors_maps_existing_ids_and_omits_missing_ones() -> None:
+    graph = _RowsFakeGraph([["cap_a", None], ["cap_b", "pol-9"]])
+
+    governors = read_capability_governors(graph, ("cap_a", "cap_b", "cap_missing"))
+
+    assert governors == {"cap_a": None, "cap_b": "pol-9"}
+    assert len(graph.calls) == 1
+    assert graph.calls[0].params == {"capability_ids": ["cap_a", "cap_b", "cap_missing"]}
+
+
+def test_read_capability_governors_issues_a_read_without_write_keywords() -> None:
+    graph = _RowsFakeGraph([])
+
+    read_capability_governors(graph, ("cap_a",))
+
+    query = graph.calls[0].query
+    assert "GOVERNED_BY" in query
+    assert not any(kw in query for kw in ("MERGE", "CREATE", "SET ", "DELETE"))
+
+
+def test_create_policy_draft_with_capability_ids_issues_one_guarded_first_statement() -> None:
+    graph = _RowsFakeGraph([["pol-2"]])
+
+    created = create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="Data Protection Policy",
+        owner=("alice", "https://issuer.example"),
+        capability_ids=("cap_a", "cap_b"),
+    )
+
+    assert created is True
+    assert len(graph.calls) == 1
+    first = graph.calls[0]
+    assert "NOT (cap)-[:GOVERNED_BY]->(:Policy)" in first.query
+    assert "size(caps) = $expected" in first.query
+    assert "MERGE (c)-[:GOVERNED_BY]->(p)" in first.query
+    params = cast("dict[str, object]", first.params)
+    assert params["expected"] == 2
+    assert params["capability_ids"] == ["cap_a", "cap_b"]
+    assert params["policy_id"] == "pol-2"
+    properties = cast("dict[str, object]", params["properties"])
+    assert properties["status"] == "draft"
+    assert properties["owner_subject"] == "alice"
+
+
+def test_create_policy_draft_guard_precedes_every_write_keyword() -> None:
+    """Atomicity is the behaviour; text-order is the only observable of
+    guard-before-write without a live engine (L1 carve-out,
+    `level1-coding-principles.md:71-76`).
+    """
+    graph = _RowsFakeGraph([["pol-2"]])
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="T",
+        owner=("alice", "https://issuer.example"),
+        capability_ids=("cap_a",),
+    )
+
+    query = graph.calls[0].query
+    guard = query.index("size(caps) = $expected")
+    write = re.search(r"\b(DELETE|MERGE|CREATE|SET|REMOVE)\b", query)
+    assert write is not None
+    assert guard < write.start()
+
+
+def test_create_policy_draft_lost_claim_race_returns_false_and_writes_no_children() -> None:
+    graph = _RowsFakeGraph([])
+
+    created = create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="T",
+        owner=("alice", "https://issuer.example"),
+        standards=(StandardDraft(id="std-2", title="S", controls=()),),
+        capability_ids=("cap_a",),
+    )
+
+    assert created is False
+    assert len(graph.calls) == 1
+
+
+def test_create_policy_draft_with_capability_ids_still_writes_children_after_claim() -> None:
+    graph = _RowsFakeGraph([["pol-2"]])
+
+    create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="T",
+        owner=("alice", "https://issuer.example"),
+        standards=(StandardDraft(id="std-2", title="S", controls=()),),
+        capability_ids=("cap_a",),
+    )
+
+    assert len(graph.calls) == 2
+    assert "SUPPORTED_BY" in graph.calls[1].query
+
+
+def test_create_policy_draft_without_capability_ids_uses_plain_policy_merge_and_returns_true() -> (
+    None
+):
+    graph = _RecordingFakeGraph()
+
+    created = create_policy_draft(
+        graph,
+        policy_id="pol-2",
+        title="T",
+        owner=("alice", "https://issuer.example"),
+    )
+
+    assert created is True
+    assert len(graph.calls) == 1
+    assert graph.calls[0].query == "MERGE (p:Policy {id: $policy_id}) SET p += $properties"
+    assert "GOVERNED_BY" not in graph.calls[0].query
+
+
+# --- fork governance read + atomic approve re-point (issue #185) ------------
+
+
+def test_read_fork_governance_is_none_without_an_inbound_superseded_by_edge() -> None:
+    graph = _RowsFakeGraph([])
+
+    assert read_fork_governance(graph, "pol-new") is None
+    assert graph.calls[0].params == {"policy_id": "pol-new"}
+
+
+def test_read_fork_governance_returns_prior_and_governed_capability_ids() -> None:
+    graph = _RowsFakeGraph([["pol-old", ["cap_a", "cap_b"]]])
+
+    governance = read_fork_governance(graph, "pol-new")
+
+    assert governance == ForkGovernance(prior_id="pol-old", capability_ids=("cap_a", "cap_b"))
+
+
+def test_read_fork_governance_allows_a_prior_that_governs_nothing() -> None:
+    graph = _RowsFakeGraph([["pol-old", []]])
+
+    governance = read_fork_governance(graph, "pol-new")
+
+    assert governance == ForkGovernance(prior_id="pol-old", capability_ids=())
+
+
+def test_read_fork_governance_is_a_pure_read() -> None:
+    graph = _RowsFakeGraph([])
+
+    read_fork_governance(graph, "pol-new")
+
+    query = graph.calls[0].query
+    assert "SUPERSEDED_BY" in query
+    assert not re.search(r"\b(DELETE|MERGE|CREATE|SET|REMOVE)\b", query)
+
+
+def test_approve_fork_repoint_is_exactly_one_statement_with_exact_params() -> None:
+    graph = _RowsFakeGraph([["pol-new"]])
+
+    moved = approve_fork_repoint(
+        graph,
+        policy_id="pol-new",
+        prior_id="pol-old",
+        capability_ids=("cap_a", "cap_b"),
+        target_status="approved",
+    )
+
+    assert moved is True
+    assert len(graph.calls) == 1
+    query = graph.calls[0].query
+    assert "DELETE r" in query
+    assert "MERGE (c)-[:GOVERNED_BY]->(p)" in query
+    assert "SET p.status = $target_status" in query
+    assert graph.calls[0].params == {
+        "policy_id": "pol-new",
+        "prior_id": "pol-old",
+        "capability_ids": ["cap_a", "cap_b"],
+        "expected": 2,
+        "target_status": "approved",
+    }
+
+
+def test_approve_fork_repoint_guard_precedes_every_write_keyword() -> None:
+    """Atomicity is the behaviour; text-order is the only observable of
+    guard-before-write without a live engine (L1 carve-out,
+    `level1-coding-principles.md:71-76`).
+    """
+    graph = _RowsFakeGraph([["pol-new"]])
+
+    approve_fork_repoint(
+        graph,
+        policy_id="pol-new",
+        prior_id="pol-old",
+        capability_ids=("cap_a",),
+        target_status="approved",
+    )
+
+    query = graph.calls[0].query
+    guard = query.index("size(rels) = $expected")
+    write = re.search(r"\b(DELETE|MERGE|CREATE|SET|REMOVE)\b", query)
+    assert write is not None
+    assert guard < write.start()
+
+
+def test_approve_fork_repoint_returns_false_when_the_guard_yields_no_row() -> None:
+    graph = _RowsFakeGraph([])
+
+    moved = approve_fork_repoint(
+        graph,
+        policy_id="pol-new",
+        prior_id="pol-old",
+        capability_ids=("cap_a",),
+        target_status="approved",
+    )
+
+    assert moved is False
+    assert len(graph.calls) == 1

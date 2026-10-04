@@ -26,8 +26,15 @@ from ps_service.audit.models import (
 class PolicyCreateDraftDetails(AuditDetails):
     """`policy.create_draft`.
 
-    `outcome='applied'`: `reason_code` is absent. `outcome='rejected'`
-    (AC-BI-022's title-collision rejection): `reason_code` is populated.
+    `outcome='applied'`: `reason_code` is absent. `outcome='rejected'` or
+    `'failed'` (AC-BI-022's title-collision rejection; issue #185's
+    Capability-claim rejections and lost race): `reason_code` is populated.
+
+    `capability_ids` (issue #185): the Capabilities a fresh draft claims via
+    `GOVERNED_BY` at creation. An `applied` event carries the intended ids; a
+    `failed` event for a lost claim race carries `()` because nothing was
+    claimed. An `applied` event followed by a `failed` event for the same
+    resource therefore means the ids did not move. Always `()` for a fork.
 
     `supersedes_policy_id` (issue #136, Slice 6, TASK.md's own
     Implementation-decisions paragraph): added directly to this existing
@@ -38,8 +45,12 @@ class PolicyCreateDraftDetails(AuditDetails):
 
     affected_node_ids: tuple[str, ...]
     to_status: Literal["draft"] = "draft"
-    reason_code: Literal["title_already_exists"] | None = None
+    reason_code: (
+        Literal["title_already_exists", "capability_not_found", "capability_already_governed"]
+        | None
+    ) = None
     supersedes_policy_id: str | None = None
+    capability_ids: tuple[str, ...] = ()
 
 
 class PolicyTransitionDetails(AuditDetails):
@@ -51,6 +62,14 @@ class PolicyTransitionDetails(AuditDetails):
     per rejection reason. `outcome='applied'`: `reason_code` is absent.
     `outcome='rejected'`: `reason_code` is populated with the specific
     reason the transition did not happen.
+
+    `capability_ids` (issue #185): on `policy.approve` of a fork, the
+    Capabilities whose `GOVERNED_BY` edge moves from the superseded Policy to
+    the approved one; `()` for every other transition. `reason_code=
+    "governance_conflict"` (`outcome='failed'`) means the governed set changed
+    between read and write, so nothing moved and the `failed` event carries
+    `capability_ids=()` -- an `applied` event followed by a `failed` event for
+    the same resource means the ids did not move.
     """
 
     affected_node_ids: tuple[str, ...]
@@ -62,9 +81,11 @@ class PolicyTransitionDetails(AuditDetails):
             "self_approval_blocked",
             "invalid_status",
             "incomplete_for_proposal",
+            "governance_conflict",
         ]
         | None
     ) = None
+    capability_ids: tuple[str, ...] = ()
 
 
 register_audit_action("policy.create_draft", PolicyCreateDraftDetails)

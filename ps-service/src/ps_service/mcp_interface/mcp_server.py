@@ -120,8 +120,11 @@ from ps_service.mcp_interface.errors import (
 from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
 from ps_service.policy_lifecycle.errors import (
+    PolicyCapabilityAlreadyGovernedError,
+    PolicyCapabilityNotFoundError,
     PolicyControlNotFoundError,
     PolicyDraftAccessDeniedError,
+    PolicyGovernanceConflictError,
     PolicyIncompleteForProposalError,
     PolicyInvalidStatusTransitionError,
     PolicyLifecycleGraphUnavailableError,
@@ -1997,6 +2000,8 @@ def _parse_patch_fields(
 
 
 _CREATE_POLICY_DRAFT_ERRORS = (
+    PolicyCapabilityAlreadyGovernedError,
+    PolicyCapabilityNotFoundError,
     PolicyNotFoundError,
     PolicySupersedePriorNotApprovedError,
     PolicyTitleAlreadyExistsError,
@@ -2085,6 +2090,7 @@ def create_policy_draft(
     title: Annotated[str, Field(min_length=1)],
     standards: list[dict[str, object]] | None = None,
     supersedes_policy_id: Annotated[str, Field(min_length=1)] | None = None,
+    capability_ids: list[Annotated[str, Field(min_length=1)]] | None = None,
 ) -> dict[str, object] | str:
     """CreatePolicyDraft: mint a new draft Policy owned by the calling caller (issue #134/#136).
 
@@ -2121,9 +2127,22 @@ def create_policy_draft(
     naming a Policy that does not exist, or that exists but is not currently
     `"approved"`, is rejected with a named error; no fork is attempted.
 
+    `capability_ids` (issue #185) is optional. On a FRESH draft (no
+    `supersedes_policy_id`) it names existing Capabilities the new Policy
+    will govern: the `GOVERNED_BY` edges are written together with the Policy
+    node, in one guarded step, so the Policy governs those Capabilities from
+    creation (while still a draft) until it is approved or removed. Duplicates
+    are dropped (order kept). Every id must name an existing Capability that
+    no Policy governs yet -- otherwise a named error is returned and nothing
+    is written. **`capability_ids` is silently ignored when
+    `supersedes_policy_id` is set**: a fork's Capabilities stay on the prior
+    Policy and move to the successor when it is approved.
+
     On success, returns `{"policy_id", "title", "status", "version",
-    "owner_subject", "standard_ids", "control_ids", "superseded_policy_id"}`
-    -- `standard_ids`/`control_ids` are `[]` on a title-only draft, or every
+    "owner_subject", "standard_ids", "control_ids", "superseded_policy_id",
+    "governed_capability_ids"}` -- `governed_capability_ids` are the
+    Capabilities now governed by the draft (`[]` when none, or on a fork);
+    `standard_ids`/`control_ids` are `[]` on a title-only draft, or every
     minted/forked child's id otherwise, immediately usable in a following
     `update-standard-draft`/`add-control-to-draft`/`update-control-draft`
     call; `superseded_policy_id` is `null` unless this was a fork. Returns a
@@ -2133,8 +2152,9 @@ def create_policy_draft(
     (or a nested `controls` entry) is shaped wrong (not a list of objects, or
     missing/empty a required `title`, or an invalid `control_type`), when
     `supersedes_policy_id` names a Policy that does not exist or is not
-    `"approved"`, when the computed id already collides with an existing
-    Policy, when the policy graph cannot be reached, or (this tool's own
+    `"approved"`, when a `capability_ids` entry names no Capability or one
+    that is already governed, when the computed id already collides with an
+    existing Policy, when the policy graph cannot be reached, or (this tool's own
     residual safety net) on any other unexpected failure.
     """
     config = load_config()
@@ -2159,6 +2179,7 @@ def create_policy_draft(
                 title=title,
                 standards=parsed_standards,
                 supersedes_policy_id=supersedes_policy_id,
+                capability_ids=tuple(capability_ids or ()),
                 graph=graph,
                 audit_store=audit_store,
             )
@@ -2173,6 +2194,7 @@ def create_policy_draft(
             "standard_ids": list(result.standard_ids),
             "control_ids": list(result.control_ids),
             "superseded_policy_id": result.superseded_policy_id,
+            "governed_capability_ids": list(result.capability_ids),
         }
 
     return _run_mcp_action("create_policy_draft", principal, _body, entity_id=supersedes_policy_id)
@@ -2798,6 +2820,7 @@ _APPROVE_POLICY_ERRORS = (
     AccessDeniedError,
     PolicySelfApprovalBlockedError,
     PolicyInvalidStatusTransitionError,
+    PolicyGovernanceConflictError,
     PolicyLifecycleGraphUnavailableError,
     AuthorizationStoreUnavailableError,
 )
@@ -2820,20 +2843,26 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
     blocked, even for a `PolicyManager` who also happens to own it) -- only
     while the Policy is currently `"proposed"`. On success, the Policy and
     every Standard/Control in its tree move to `"approved"` in one cascading
-    graph write; if the Policy has an approved prior linked via a
-    `SUPERSEDED_BY` edge (created by a separate, out-of-scope mechanism --
-    issue #136's own fork tool), that prior's whole tree is automatically
-    cascaded to `"deprecated"` in the same call, as its own separate audit
-    event.
+    graph write; if the Policy is a fork (`create-policy-draft` with
+    `supersedes_policy_id`) of an approved prior, that prior's whole tree is
+    automatically cascaded to `"deprecated"` in the same call, as its own
+    separate audit event. When that prior governs Capabilities, their
+    `GOVERNED_BY` edges move to the approved Policy in the same single write
+    as the status change (all-or-nothing); a fork whose prior governs none
+    approves without moving edges.
 
     On success, returns `{"policy_id", "status", "standard_ids",
-    "control_ids", "auto_deprecated_policy_id"}` -- the last field is `None`
-    unless an auto-deprecation cascade also ran. Returns a string beginning
+    "control_ids", "auto_deprecated_policy_id", "governed_capability_ids"}`
+    -- `auto_deprecated_policy_id` is `None` unless an auto-deprecation
+    cascade also ran; `governed_capability_ids` lists the Capabilities whose
+    governance moved (empty when none). Returns a string beginning
     `error: ` when the caller has no real authenticated session, when no
     Policy exists with `policy_id`, when the caller does not hold
     `PolicyManager`, when the caller is the Policy's own owner, when it is
-    not currently `"proposed"`, when the policy graph or the authorization
-    store cannot be reached, or (this tool's own residual safety net) on any
+    not currently `"proposed"`, when the Capabilities governed by the
+    superseded Policy changed during approval (nothing was changed; retry),
+    when the policy graph or the authorization store cannot be reached, or
+    (this tool's own residual safety net) on any
     other unexpected failure.
     """
     config = load_config()
@@ -2865,6 +2894,7 @@ def approve_policy(policy_id: Annotated[str, Field(min_length=1)]) -> dict[str, 
             "standard_ids": list(result.standard_ids),
             "control_ids": list(result.control_ids),
             "auto_deprecated_policy_id": result.auto_deprecated_policy_id,
+            "governed_capability_ids": list(result.governed_capability_ids),
         }
 
     return _run_mcp_action("approve_policy", principal, _body)

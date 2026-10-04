@@ -99,7 +99,18 @@ _ERROR_MESSAGE_SUBSTRINGS: tuple[str, ...] = (
     "cannot <action> a Policy in status",
     "cannot be superseded: current status is",
     "an unexpected error occurred",
+    "no Capability exists with id(s)",
+    "already governed by a Policy",
 )
+
+# Issue #185: named stop states and the fork-detection query the skill must carry.
+_NAMED_STATES: tuple[str, ...] = (
+    "superseded_by_unowned_draft",
+    "fork_awaiting_approval",
+    "capability_not_found",
+    "capability_already_governed",
+)
+_FORK_DETECTION_QUERY_FRAGMENT = "OPTIONAL MATCH (p)-[:SUPERSEDED_BY]->(f:Policy)"
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -215,3 +226,26 @@ def test_never_describes_a_freshly_scaffolded_control_as_draft_implementation_st
         "Never describe a freshly scaffolded Control's `implementation_status` as"
         in process_one_line
     )
+
+
+def test_issue_185_named_states_appear_in_process_or_guardrails() -> None:
+    text = _SKILL_PATH.read_text(encoding="utf-8")
+    _frontmatter, body = _split_frontmatter(text)
+    combined = _section_text(body, "## Process") + "\n" + _section_text(body, "## Guardrails")
+
+    for state in _NAMED_STATES:
+        assert state in combined, f"named state {state!r} is missing from Process/Guardrails"
+
+
+def test_issue_185_branch_detection_follows_superseded_by_and_scaffold_passes_capability_ids() -> (
+    None
+):
+    text = _SKILL_PATH.read_text(encoding="utf-8")
+    _frontmatter, body = _split_frontmatter(text)
+    process = _section_text(body, "## Process")
+    process_one_line = " ".join(process.split())
+
+    assert _FORK_DETECTION_QUERY_FRAGMENT in process_one_line
+    assert "create-policy-draft(title=<derived>, capability_ids=[" in process_one_line
+    # A fork never carries capability_ids (the edges move at approval).
+    assert "never pass `capability_ids` together with `supersedes_policy_id`" in process_one_line

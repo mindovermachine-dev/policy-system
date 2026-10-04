@@ -83,21 +83,37 @@ class _GraphHandleDouble(Protocol):
 class _FakeGraph:
     """Fake FalkorDB graph handle: existence-check read, plus recorded writes."""
 
-    def __init__(self, *, existing: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        existing: tuple[str, str] | None = None,
+        governors: dict[str, str | None] | None = None,
+    ) -> None:
         self._existing = existing
+        # Issue #185: `{capability_id: governing_policy_id | None}`; absent ids do not exist.
+        self._governors = governors if governors is not None else {}
+        self.total_queries = 0
         self.write_queries: list[str] = []
         self.raise_on_write: Exception | None = None
 
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> _FakeQueryResult:
-        del params, timeout
+        del timeout
+        self.total_queries += 1
         if "RETURN p.id, p.title" in q:
             rows: list[object] = [[self._existing[0], self._existing[1]]] if self._existing else []
             return _FakeQueryResult(result_set=rows)
+        if "RETURN cap.id, g.id" in q:
+            ids = cast("list[str]", (params or {})["capability_ids"])
+            return _FakeQueryResult(
+                result_set=[[i, self._governors[i]] for i in ids if i in self._governors]
+            )
         self.write_queries.append(q)
         if self.raise_on_write is not None:
             raise self.raise_on_write
+        if "size(caps) = $expected" in q:
+            return _FakeQueryResult(result_set=[["pol"]])
         return _FakeQueryResult()
 
 
@@ -172,8 +188,13 @@ def _install_audit_store(monkeypatch: pytest.MonkeyPatch, store: _FakeAuditStore
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", _factory)
 
 
-def _call_create_policy_draft(title: str = _TITLE) -> CallToolResult:
-    result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", {"title": title}))
+def _call_create_policy_draft(
+    title: str = _TITLE, *, capability_ids: list[str] | None = None
+) -> CallToolResult:
+    arguments: dict[str, object] = {"title": title}
+    if capability_ids is not None:
+        arguments["capability_ids"] = capability_ids
+    result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", arguments))
     assert isinstance(result, CallToolResult)
     return result
 
@@ -214,6 +235,7 @@ def test_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "standard_ids": [],
         "control_ids": [],
         "superseded_policy_id": None,
+        "governed_capability_ids": [],
     }
     assert body["policy_id"].startswith("pol_data_protection_policy_")
 
@@ -291,6 +313,117 @@ def test_bypass_active_creates_a_policy_owned_by_the_bypass_principal(
     assert audit_store.calls[0].actor_issuer == LOCAL_TEST_PRINCIPAL_ID
 
 
+# --- `create-policy-draft` `capability_ids` argument (issue #185) -----------
+
+
+def test_capability_ids_claims_capabilities_and_echoes_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _FakeGraph(governors={"cap_a": None, "cap_b": None})
+    audit_store = _FakeAuditStore()
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, audit_store)
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(capability_ids=["cap_a", "cap_b", "cap_a"])
+
+    assert result.is_error is False
+    body = json.loads(_text(result))
+    assert body["governed_capability_ids"] == ["cap_a", "cap_b"]
+    assert any("MERGE (c)-[:GOVERNED_BY]->(p)" in q for q in graph.write_queries)
+    assert audit_store.calls[0].details["capability_ids"] == ("cap_a", "cap_b")
+
+
+def test_empty_capability_ids_behaves_like_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    configure()
+    graph = _FakeGraph()
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(capability_ids=[])
+
+    assert json.loads(_text(result))["governed_capability_ids"] == []
+    assert not any("GOVERNED_BY" in q for q in graph.write_queries)
+
+
+def test_unknown_capability_id_surfaces_as_error_string_with_no_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _FakeGraph(governors={})
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(capability_ids=["cap_missing"])
+
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "no Capability exists" in text
+    assert "cap_missing" in text
+    assert graph.write_queries == []
+
+
+def test_already_governed_capability_id_surfaces_as_error_string_with_no_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _FakeGraph(governors={"cap_a": "pol_other"})
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(capability_ids=["cap_a"])
+
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "already governed" in text
+    assert "pol_other" not in text
+    assert graph.write_queries == []
+
+
+def test_blank_capability_id_entry_is_rejected_before_any_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _FakeGraph()
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT), pytest.raises(Exception, match="capability_ids"):
+        _call_create_policy_draft(capability_ids=[""])
+
+    assert graph.total_queries == 0
+
+
+def test_capability_ids_without_authenticated_caller_is_refused_before_graph_is_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the PRE-EXISTING authentication gate (AC-BI-001, D-1/D-6), not new behaviour.
+
+    `create-policy-draft` is not role-gated; a caller with no verified
+    identity who passes `capability_ids` is refused with the same fixed
+    message as without them, the graph is never touched and nothing is
+    audited. No role gate is added by issue #185.
+    """
+    configure()
+    graph = _FakeGraph(governors={"cap_a": None})
+    audit_store = _FakeAuditStore()
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, audit_store)
+
+    result = _call_create_policy_draft(capability_ids=["cap_a"])
+
+    assert _text(result) == (
+        "error: this action requires a real authenticated caller "
+        "(the local-test bypass counts as one)"
+    )
+    assert graph.total_queries == 0
+    assert audit_store.calls == []
+
+
 # --- `create-policy-draft` `standards` argument (issue #134, S12B gap fix) --
 
 
@@ -319,6 +452,7 @@ def test_create_policy_draft_without_standards_argument_still_works_unchanged(
         "standard_ids": [],
         "control_ids": [],
         "superseded_policy_id": None,
+        "governed_capability_ids": [],
     }
 
 
@@ -2917,11 +3051,74 @@ def test_approve_policy_success_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         "standard_ids": ["std_1"],
         "control_ids": [],
         "auto_deprecated_policy_id": None,
+        "governed_capability_ids": [],
     }
     assert len(graph.write_queries) == 1
     assert len(audit_store.calls) == 1
     assert audit_store.calls[0].outcome == "applied"
     assert audit_store.calls[0].action == "policy.approve"
+
+
+class _ForkApproveFakeGraph(_ApproveFakeGraph):
+    """A fork of `prior_old` governing `capability_ids`; the guarded re-point row is toggleable."""
+
+    def __init__(
+        self, policy: _PolicyFixture, *, capability_ids: list[str], guard_holds: bool
+    ) -> None:
+        super().__init__(policy)
+        self._capability_ids = capability_ids
+        self._guard_holds = guard_holds
+
+    def query(
+        self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
+    ) -> _FakeQueryResult:
+        if "RETURN prior.id, collect(cap.id)" in q:
+            return _FakeQueryResult(result_set=[["prior_old", self._capability_ids]])
+        if "DELETE r" in q:
+            self.write_queries.append(q)
+            return _FakeQueryResult(result_set=[["pol"]] if self._guard_holds else [])
+        return super().query(q, params, timeout)
+
+
+def test_approve_policy_fork_returns_governed_capability_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _ForkApproveFakeGraph(
+        _approvable_fixture(), capability_ids=["cap_a", "cap_b"], guard_holds=True
+    )
+    _install_graph(monkeypatch, graph)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+    _install_manager_role(monkeypatch)
+
+    with _verified_actor(sub=_MANAGER_SUBJECT):
+        result = _call_approve_policy()
+
+    assert result.is_error is False
+    body = json.loads(_text(result))
+    assert body["governed_capability_ids"] == ["cap_a", "cap_b"]
+    assert len(graph.write_queries) == 1
+
+
+def test_approve_policy_governance_conflict_surfaces_as_its_own_distinct_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    graph = _ForkApproveFakeGraph(
+        _approvable_fixture(), capability_ids=["cap_a"], guard_holds=False
+    )
+    _install_graph(monkeypatch, graph)
+    audit_store = _FakeAuditStore()
+    _install_audit_store(monkeypatch, audit_store)
+    _install_manager_role(monkeypatch)
+
+    with _verified_actor(sub=_MANAGER_SUBJECT):
+        result = _call_approve_policy()
+
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "nothing was changed" in text
+    assert [call.outcome for call in audit_store.calls] == ["applied", "failed"]
 
 
 def test_approve_policy_owner_self_approval_surfaces_as_its_own_distinct_error(

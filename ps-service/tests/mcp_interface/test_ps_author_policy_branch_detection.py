@@ -97,7 +97,8 @@ def _capability_existence_query(name: str) -> str:
 def _capability_governed_by_query(name: str) -> str:
     return (
         f"MATCH (c:Capability {{name: '{name}'}})-[:GOVERNED_BY]->(p:Policy) "
-        "RETURN p.id AS policy_id, p.status AS status"
+        "OPTIONAL MATCH (p)-[:SUPERSEDED_BY]->(f:Policy) "
+        "RETURN p.id AS policy_id, p.status AS status, f.id AS fork_id, f.status AS fork_status"
     )
 
 
@@ -135,7 +136,12 @@ class _FakeQueryResult:
 
 
 _CAP_EXISTENCE_HEADER: list[object] = [[0, "capability_name"], [0, "capability_id"]]
-_GOVERNED_BY_HEADER: list[object] = [[0, "policy_id"], [0, "status"]]
+_GOVERNED_BY_HEADER: list[object] = [
+    [0, "policy_id"],
+    [0, "status"],
+    [0, "fork_id"],
+    [0, "fork_status"],
+]
 
 
 def _existence_result(rows: list[object]) -> _FakeQueryResult:
@@ -181,7 +187,10 @@ class _HybridGraph:
         existing: tuple[str, str] | None = None,
         policy_tree: _PolicyTreeFixture | None = None,
         cypher_results: list[_FakeQueryResult | Exception] | None = None,
+        governors: dict[str, str | None] | None = None,
     ) -> None:
+        self._governors = governors or {}
+        self.claim_params: list[dict[str, object]] = []
         self._existing = existing
         self._policy_tree = policy_tree
         self._cypher_results = list(cypher_results or [])
@@ -192,7 +201,7 @@ class _HybridGraph:
     def query(
         self, q: str, params: dict[str, object] | None = None, timeout: int | None = None
     ) -> _FakeQueryResult:
-        del params, timeout
+        del timeout
         if q == _SEED_CHECK_QUERY:
             return _FakeQueryResult(header=[[0, "c"]], result_set=[[1]])
         if "coalesce(p.version" in q or "IS NULL" in q:
@@ -203,6 +212,18 @@ class _HybridGraph:
             # `_TreeFakeGraph`/`_StatefulFakeGraph` treat them (never
             # recorded as a "write" this test cares about).
             return _FakeQueryResult()
+        if "RETURN cap.id, g.id" in q:
+            # `graph_writer.read_capability_governors` (issue #185): the fresh
+            # create's existence/ungoverned pre-check.
+            requested = cast("list[str]", (params or {})["capability_ids"])
+            return _FakeQueryResult(
+                result_set=[[c, self._governors[c]] for c in requested if c in self._governors]
+            )
+        if "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p))" in q:
+            # The guarded fresh-create statement: one write, returns its row.
+            self.write_queries.append(q)
+            self.claim_params.append(dict(params or {}))
+            return _FakeQueryResult(result_set=[["pol"]])
         if "RETURN s.id, properties(s), c.id, properties(c)" in q:
             # `graph_writer.read_policy_tree_for_fork` -- only reached on a
             # successful fork, before the actual graph write; this fixture's
@@ -363,9 +384,14 @@ def _call_get_policy(policy_id: str) -> CallToolResult:
 
 
 def _call_create_policy_draft(
-    *, title: str, supersedes_policy_id: str | None = None
+    *,
+    title: str,
+    supersedes_policy_id: str | None = None,
+    capability_ids: list[str] | None = None,
 ) -> CallToolResult:
     args: dict[str, object] = {"title": title}
+    if capability_ids is not None:
+        args["capability_ids"] = capability_ids
     if supersedes_policy_id is not None:
         args["supersedes_policy_id"] = supersedes_policy_id
     result = asyncio.run(mcp_server.server.call_tool("create-policy-draft", args))
@@ -402,18 +428,63 @@ def test_scenario_2_no_governing_policy_is_the_fresh_branch(
         cypher_results=[
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
             _governed_by_result([]),
-        ]
+        ],
+        governors={_CAPABILITY_ID: None},
     )
     _install_graph(monkeypatch, handle)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
 
     existence_result = _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
-    assert _cypher_body(existence_result)["rows"] == [[_CAPABILITY_NAME, _CAPABILITY_ID]]
+    existence_rows = cast("list[list[str]]", _cypher_body(existence_result)["rows"])
+    assert existence_rows == [[_CAPABILITY_NAME, _CAPABILITY_ID]]
 
     governed_by_result = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
     assert _cypher_body(governed_by_result)["rows"] == []
 
     assert len(handle.cypher_queries) == 2
-    # Scaffold itself is Slice 2's own test -- no further tool call yet.
+    assert handle.write_queries == []
+
+    # Scaffold (issue #185): the skill passes the ids step 2 returned.
+    found_ids = [row[1] for row in existence_rows]
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        create_result = _call_create_policy_draft(
+            title="Data Protection Policy", capability_ids=found_ids
+        )
+
+    assert create_result.is_error is False
+    body = json.loads(_text(create_result))
+    assert body["governed_capability_ids"] == [_CAPABILITY_ID]
+    assert len(handle.write_queries) == 1  # the one guarded claim statement
+    assert handle.claim_params[0]["capability_ids"] == [_CAPABILITY_ID]
+
+
+def test_scenario_2b_fresh_create_for_already_governed_capability_names_the_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    handle = _HybridGraph(governors={_CAPABILITY_ID: "pol_someone_elses"})
+    _install_graph(monkeypatch, handle)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(title="X Policy", capability_ids=[_CAPABILITY_ID])
+
+    assert "already governed by a Policy" in _text(result)
+    assert handle.write_queries == []
+
+
+def test_scenario_2c_fresh_create_for_unknown_capability_names_the_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    handle = _HybridGraph(governors={})
+    _install_graph(monkeypatch, handle)
+    _install_audit_store(monkeypatch, _FakeAuditStore())
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        result = _call_create_policy_draft(title="X Policy", capability_ids=["cap_missing"])
+
+    assert "no Capability exists with id(s)" in _text(result)
     assert handle.write_queries == []
 
 
@@ -432,7 +503,7 @@ def test_scenario_3_resume_caller_owned_draft(monkeypatch: pytest.MonkeyPatch) -
         policy_tree=tree,
         cypher_results=[
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
-            _governed_by_result([[_DRAFT_POLICY_ID, "draft"]]),
+            _governed_by_result([[_DRAFT_POLICY_ID, "draft", None, None]]),
         ],
     )
     _install_graph(monkeypatch, handle)
@@ -440,7 +511,7 @@ def test_scenario_3_resume_caller_owned_draft(monkeypatch: pytest.MonkeyPatch) -
 
     _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     governed_by_result = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
-    assert _cypher_body(governed_by_result)["rows"] == [[_DRAFT_POLICY_ID, "draft"]]
+    assert _cypher_body(governed_by_result)["rows"] == [[_DRAFT_POLICY_ID, "draft", None, None]]
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         get_result = _call_get_policy(_DRAFT_POLICY_ID)
@@ -471,7 +542,7 @@ def test_scenario_4_governing_draft_not_caller_owned_reports_access_denied(
         policy_tree=tree,
         cypher_results=[
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
-            _governed_by_result([[_DRAFT_POLICY_ID, "draft"]]),
+            _governed_by_result([[_DRAFT_POLICY_ID, "draft", None, None]]),
         ],
     )
     _install_graph(monkeypatch, handle)
@@ -505,7 +576,7 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
         policy_tree=tree,
         cypher_results=[
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
-            _governed_by_result([[_APPROVED_POLICY_ID, "approved"]]),
+            _governed_by_result([[_APPROVED_POLICY_ID, "approved", None, None]]),
         ],
     )
     _install_graph(monkeypatch, handle)
@@ -513,7 +584,9 @@ def test_scenario_5_fork_from_approved_prior_succeeds(monkeypatch: pytest.Monkey
 
     _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     governed_by_result = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
-    assert _cypher_body(governed_by_result)["rows"] == [[_APPROVED_POLICY_ID, "approved"]]
+    assert _cypher_body(governed_by_result)["rows"] == [
+        [_APPROVED_POLICY_ID, "approved", None, None]
+    ]
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         fork_result = _call_create_policy_draft(
@@ -549,7 +622,7 @@ def test_scenario_5b_fork_from_proposed_prior_reports_named_error(
         policy_tree=tree,
         cypher_results=[
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
-            _governed_by_result([[_PROPOSED_POLICY_ID, "proposed"]]),
+            _governed_by_result([[_PROPOSED_POLICY_ID, "proposed", None, None]]),
         ],
     )
     _install_graph(monkeypatch, handle)
@@ -557,7 +630,9 @@ def test_scenario_5b_fork_from_proposed_prior_reports_named_error(
 
     _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
     governed_by_result = _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
-    assert _cypher_body(governed_by_result)["rows"] == [[_PROPOSED_POLICY_ID, "proposed"]]
+    assert _cypher_body(governed_by_result)["rows"] == [
+        [_PROPOSED_POLICY_ID, "proposed", None, None]
+    ]
 
     with _verified_actor(sub=_ACTOR_SUBJECT):
         # D-2: the fork is ALWAYS attempted for a proposed/approved prior --
@@ -589,7 +664,7 @@ def test_scenario_6_multi_capability_governed_by_disagreement_blocks_both(
             _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
             _existence_result([[_CAPABILITY_B_NAME, _CAPABILITY_B_ID]]),
             _governed_by_result([]),  # A: ungoverned
-            _governed_by_result([[_DRAFT_POLICY_B_ID, "draft"]]),  # B: draft
+            _governed_by_result([[_DRAFT_POLICY_B_ID, "draft", None, None]]),  # B: draft
         ]
     )
     configure()
@@ -605,8 +680,122 @@ def test_scenario_6_multi_capability_governed_by_disagreement_blocks_both(
     b_governed = _call_cypher(_capability_governed_by_query(_CAPABILITY_B_NAME))
 
     assert _cypher_body(a_governed)["rows"] == []
-    assert _cypher_body(b_governed)["rows"] == [[_DRAFT_POLICY_B_ID, "draft"]]
+    assert _cypher_body(b_governed)["rows"] == [[_DRAFT_POLICY_B_ID, "draft", None, None]]
     assert len(handle.cypher_queries) == 4
     # Disagreement (D-6): report and ask the user how to proceed -- no
     # `create-policy-draft`/`get-policy` call for either Capability.
+    assert handle.write_queries == []
+
+
+# --- (7) issue #185: a SUPERSEDED_BY successor of the governing Policy ----
+
+_FORK_POLICY_ID = "pol_data_protection_policy_ffffff"
+
+
+def _fork_rows_result(rows: list[list[str | None]]) -> _FakeQueryResult:
+    return _governed_by_result(cast("list[object]", rows))
+
+
+def test_scenario_7_owned_draft_fork_is_resumed_and_never_re_forked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-007: governing Policy approved + owned draft fork => resume, no second fork."""
+    configure()
+    tree = _PolicyTreeFixture(id=_FORK_POLICY_ID, title="Data Protection Policy v2", status="draft")
+    handle = _HybridGraph(
+        policy_tree=tree,
+        cypher_results=[
+            _existence_result([[_CAPABILITY_NAME, _CAPABILITY_ID]]),
+            _fork_rows_result([[_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "draft"]]),
+        ],
+    )
+    _install_graph(monkeypatch, handle)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+
+    _call_cypher(_capability_existence_query(_CAPABILITY_NAME))
+    rows = cast(
+        "list[list[str]]",
+        _cypher_body(_call_cypher(_capability_governed_by_query(_CAPABILITY_NAME)))["rows"],
+    )
+    assert rows == [[_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "draft"]]
+
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        get_result = _call_get_policy(rows[0][2])
+
+    body = json.loads(_text(get_result))
+    assert body["policy_id"] == _FORK_POLICY_ID
+    assert body["status"] == "draft"
+    # Resume = read only: no create-policy-draft, no write of any kind.
+    assert handle.write_queries == []
+
+
+def test_scenario_7b_unowned_draft_fork_is_access_denied_and_not_re_forked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    tree = _PolicyTreeFixture(
+        id=_FORK_POLICY_ID,
+        title="Data Protection Policy v2",
+        status="draft",
+        owner_subject=_OTHER_SUBJECT,
+    )
+    handle = _HybridGraph(
+        policy_tree=tree,
+        cypher_results=[
+            _fork_rows_result([[_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "draft"]]),
+        ],
+    )
+    _install_graph(monkeypatch, handle)
+    _install_access_role_store(monkeypatch, FakeAccessRoleStore())
+
+    _call_cypher(_capability_governed_by_query(_CAPABILITY_NAME))
+    with _verified_actor(sub=_ACTOR_SUBJECT):
+        get_result = _call_get_policy(_FORK_POLICY_ID)
+
+    # Skill state `superseded_by_unowned_draft`: stop, no create-policy-draft.
+    assert _text(get_result) == "error: you do not have access to this Policy"
+    assert handle.write_queries == []
+
+
+def test_scenario_7c_proposed_fork_row_carries_status_for_fork_awaiting_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    handle = _HybridGraph(
+        cypher_results=[
+            _fork_rows_result([[_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "proposed"]]),
+        ]
+    )
+    _install_graph(monkeypatch, handle)
+
+    rows = _cypher_body(_call_cypher(_capability_governed_by_query(_CAPABILITY_NAME)))["rows"]
+
+    # Skill state `fork_awaiting_approval`: decided from the row alone -- the
+    # skill neither calls get-policy nor create-policy-draft.
+    assert rows == [[_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "proposed"]]
+    assert handle.write_queries == []
+
+
+def test_scenario_7d_multiple_successor_rows_are_returned_and_tolerated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure()
+    handle = _HybridGraph(
+        cypher_results=[
+            _fork_rows_result(
+                [
+                    [_APPROVED_POLICY_ID, "approved", "pol_fork_one", "proposed"],
+                    [_APPROVED_POLICY_ID, "approved", _FORK_POLICY_ID, "draft"],
+                ]
+            ),
+        ]
+    )
+    _install_graph(monkeypatch, handle)
+
+    rows = cast(
+        "list[list[str]]",
+        _cypher_body(_call_cypher(_capability_governed_by_query(_CAPABILITY_NAME)))["rows"],
+    )
+
+    assert [row[2] for row in rows] == ["pol_fork_one", _FORK_POLICY_ID]
     assert handle.write_queries == []

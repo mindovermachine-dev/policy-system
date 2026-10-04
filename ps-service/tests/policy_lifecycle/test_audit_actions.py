@@ -142,3 +142,46 @@ def test_transition_details_accepts_every_registered_reason_code() -> None:
             }
         )
         assert details.reason_code == reason_code
+
+
+def test_create_draft_details_accepts_capability_ids_and_new_reason_codes() -> None:
+    """Issue #185: a fresh draft's audit payload names the Capabilities it claims."""
+    applied = PolicyCreateDraftDetails.model_validate(
+        {"affected_node_ids": ("policy-1",), "capability_ids": ("cap_a", "cap_b")}
+    )
+    assert applied.capability_ids == ("cap_a", "cap_b")
+
+    for code in ("capability_not_found", "capability_already_governed"):
+        rejected = PolicyCreateDraftDetails.model_validate(
+            {"affected_node_ids": (), "reason_code": code}
+        )
+        assert rejected.reason_code == code
+
+
+def test_create_draft_details_capability_ids_defaults_to_empty() -> None:
+    details = PolicyCreateDraftDetails.model_validate({"affected_node_ids": ("policy-1",)})
+
+    assert details.capability_ids == ()
+
+
+def test_transition_details_accepts_capability_ids_and_governance_conflict() -> None:
+    details = PolicyTransitionDetails.model_validate(
+        {
+            "affected_node_ids": ("policy-2",),
+            "from_status": "proposed",
+            "to_status": "approved",
+            "capability_ids": ("cap_a",),
+            "reason_code": "governance_conflict",
+        }
+    )
+
+    assert details.capability_ids == ("cap_a",)
+    assert details.reason_code == "governance_conflict"
+
+
+def test_transition_details_capability_ids_defaults_to_empty() -> None:
+    details = PolicyTransitionDetails.model_validate(
+        {"affected_node_ids": ("policy-2",), "from_status": "draft", "to_status": "proposed"}
+    )
+
+    assert details.capability_ids == ()

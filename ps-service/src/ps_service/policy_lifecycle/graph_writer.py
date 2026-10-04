@@ -73,6 +73,7 @@ __all__ = [
     "ControlDraft",
     "ControlRecord",
     "ControlWithParent",
+    "ForkGovernance",
     "ForkedControlRecord",
     "ForkedStandardRecord",
     "PolicyRecord",
@@ -81,6 +82,7 @@ __all__ = [
     "StandardWithParent",
     "add_control_to_standard",
     "add_standard_to_policy",
+    "approve_fork_repoint",
     "backfill_governance_status",
     "cascade_status",
     "create_policy_draft",
@@ -88,6 +90,8 @@ __all__ = [
     "find_control_with_parent",
     "find_existing_policy",
     "find_standard_with_parent",
+    "read_capability_governors",
+    "read_fork_governance",
     "read_policy_tree",
     "read_policy_tree_for_fork",
     "update_control_fields",
@@ -264,6 +268,102 @@ def find_approved_prior(graph: GraphHandle, successor_policy_id: str) -> str | N
 
 
 @dataclass(frozen=True, slots=True)
+class ForkGovernance:
+    """What a fork's superseded prior currently governs (issue #185).
+
+    `capability_ids` may be empty: a legacy prior with no `GOVERNED_BY`
+    edges (D-5) leaves nothing to move.
+    """
+
+    prior_id: str
+    capability_ids: tuple[str, ...]
+
+
+def read_fork_governance(graph: GraphHandle, policy_id: str) -> ForkGovernance | None:
+    """Read the prior superseded by `policy_id` and the Capabilities it governs (issue #185).
+
+    A pure read through the health-tracking wrapper. The prior's own status
+    is deliberately not filtered (D-5: a non-approved prior is still
+    approvable).
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: The successor (fork) Policy id about to be approved.
+
+    Returns:
+        `None` when no inbound `SUPERSEDED_BY` edge exists, otherwise the
+        prior's id and the ids of Capabilities it governs.
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (prior:Policy)-[:SUPERSEDED_BY]->(:Policy {id: $policy_id}) "
+        "OPTIONAL MATCH (cap:Capability)-[:GOVERNED_BY]->(prior) "
+        "RETURN prior.id, collect(cap.id) LIMIT 1",
+        params={"policy_id": policy_id},
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return None
+    return ForkGovernance(
+        prior_id=cast("str", rows[0][0]),
+        capability_ids=tuple(cast("list[str]", rows[0][1])),
+    )
+
+
+def approve_fork_repoint(
+    graph: GraphHandle,
+    *,
+    policy_id: str,
+    prior_id: str,
+    capability_ids: tuple[str, ...],
+    target_status: str,
+) -> bool:
+    """Move `GOVERNED_BY` edges to `policy_id` and cascade its status, atomically (issue #185).
+
+    Deliberately ONE Cypher statement: the guard
+    `WHERE size(rels) = $expected` precedes every write, so if the governed
+    set changed since `read_fork_governance` the statement returns no row
+    and writes nothing. Correctness relies on that guard-before-write
+    ordering, not on mid-statement rollback. Edge move and status cascade
+    share the statement so a Capability never has zero or two governors.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        policy_id: The fork being approved (the new governor).
+        prior_id: The superseded Policy that currently governs the Capabilities.
+        capability_ids: The Capabilities read from `prior_id` beforehand.
+        target_status: The status to cascade over the fork's tree.
+
+    Returns:
+        `True` when the move and cascade were applied, `False` when the
+        guard failed (nothing was written).
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (p:Policy {id: $policy_id}) "
+        "OPTIONAL MATCH (cap:Capability)-[r:GOVERNED_BY]->(:Policy {id: $prior_id}) "
+        "WHERE cap.id IN $capability_ids "
+        "WITH p, collect(cap) AS caps, collect(r) AS rels WHERE size(rels) = $expected "
+        "FOREACH (r IN rels | DELETE r) "
+        "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p)) "
+        "WITH p "
+        "OPTIONAL MATCH (p)-[:SUPPORTED_BY]->(s:Standard) "
+        "OPTIONAL MATCH (s)-[:IMPLEMENTED_BY]->(c2:Control) "
+        "SET p.status = $target_status, s.status = $target_status, "
+        "c2.status = $target_status "
+        "RETURN p.id",
+        params={
+            "policy_id": policy_id,
+            "prior_id": prior_id,
+            "capability_ids": list(capability_ids),
+            "expected": len(capability_ids),
+            "target_status": target_status,
+        },
+    )
+    return bool(result.result_set)
+
+
+@dataclass(frozen=True, slots=True)
 class ControlDraft:
     """One Control child to mint alongside a `create_policy_draft` call (D-6).
 
@@ -329,17 +429,48 @@ def find_existing_policy(graph: GraphHandle, policy_id: str) -> tuple[str, str] 
     return cast("str", existing_id), cast("str", existing_title)
 
 
+def read_capability_governors(
+    graph: GraphHandle, capability_ids: tuple[str, ...]
+) -> dict[str, str | None]:
+    """Read which Policy (if any) currently governs each of `capability_ids` (issue #185).
+
+    A pure read through the health-tracking wrapper. A Capability that does
+    not exist is absent from the result; an existing but ungoverned one maps
+    to `None`.
+
+    Args:
+        graph: The single-tenant policy graph handle.
+        capability_ids: The Capability ids a fresh draft wants to claim.
+
+    Returns:
+        `{capability_id: governing_policy_id | None}` for every id that exists.
+    """
+    result = _execute_query(
+        graph,
+        "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
+        "OPTIONAL MATCH (cap)-[:GOVERNED_BY]->(g:Policy) "
+        "RETURN cap.id, g.id",
+        params={"capability_ids": list(capability_ids)},
+    )
+    governors: dict[str, str | None] = {}
+    for row in cast("list[list[object]]", result.result_set):
+        capability_id, governor_id = cast("str", row[0]), cast("str | None", row[1])
+        if governors.get(capability_id) is None:
+            governors[capability_id] = governor_id
+    return governors
+
+
 def create_policy_draft(
     graph: GraphHandle,
     *,
     policy_id: str,
     title: str,
-    owner_subject: str,
-    owner_issuer: str,
+    owner: tuple[str, str],
     standards: tuple[StandardDraft, ...] = (),
     supersedes_policy_id: str | None = None,
     version: str = "1",
-) -> None:
+    capability_ids: tuple[str, ...] = (),
+) -> bool:
     """Mint a new draft Policy, plus any optional Standard/Control children (S11).
 
     The Policy node is written with `status="draft"`, `version=version`
@@ -370,8 +501,7 @@ def create_policy_draft(
         graph: The single-tenant policy graph handle.
         policy_id: The already-computed, collision-checked new Policy id.
         title: The Policy's title.
-        owner_subject: The creating actor's `sub`.
-        owner_issuer: The creating actor's `iss`.
+        owner: The creating actor's `(sub, iss)`.
         standards: Optional Standard children (each with its own optional
             Control children), ids already computed by the caller.
         supersedes_policy_id: The prior Policy id this new draft amends via
@@ -380,21 +510,50 @@ def create_policy_draft(
             `docs/artifacts`'s "version stays a string" decision) --
             `"1"` for an ordinary draft, or `str(int(prior_version) + 1)`
             for a fork (computed by the caller, `service.create_policy_draft`).
+        capability_ids: Capabilities a fresh draft claims via `GOVERNED_BY`
+            (issue #185). When non-empty, the Policy node and the edges are
+            written by ONE guarded statement (the guard -- every id exists
+            and is ungoverned -- precedes every write keyword), so a lost
+            claim race writes nothing. The caller never passes these with
+            `supersedes_policy_id`.
+
+    Returns:
+        `True` when the draft was written; `False` when the guarded claim
+        statement matched nothing (a Capability was claimed concurrently) --
+        in which case no Policy, edge, Standard or Control was written.
     """
-    _execute_query(
-        graph,
-        "MERGE (p:Policy {id: $policy_id}) SET p += $properties",
-        params={
-            "policy_id": policy_id,
-            "properties": {
-                "title": title,
-                "status": "draft",
-                "version": version,
-                "owner_subject": owner_subject,
-                "owner_issuer": owner_issuer,
+    owner_subject, owner_issuer = owner
+    properties = {
+        "title": title,
+        "status": "draft",
+        "version": version,
+        "owner_subject": owner_subject,
+        "owner_issuer": owner_issuer,
+    }
+    if capability_ids:
+        claimed = _execute_query(
+            graph,
+            "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
+            "AND NOT (cap)-[:GOVERNED_BY]->(:Policy) "
+            "WITH collect(cap) AS caps WHERE size(caps) = $expected "
+            "MERGE (p:Policy {id: $policy_id}) SET p += $properties "
+            "FOREACH (c IN caps | MERGE (c)-[:GOVERNED_BY]->(p)) "
+            "RETURN p.id",
+            params={
+                "capability_ids": list(capability_ids),
+                "expected": len(capability_ids),
+                "policy_id": policy_id,
+                "properties": properties,
             },
-        },
-    )
+        )
+        if not claimed.result_set:
+            return False
+    else:
+        _execute_query(
+            graph,
+            "MERGE (p:Policy {id: $policy_id}) SET p += $properties",
+            params={"policy_id": policy_id, "properties": properties},
+        )
     if supersedes_policy_id is not None:
         _execute_query(
             graph,
@@ -433,6 +592,7 @@ def create_policy_draft(
                     "properties": control_properties,
                 },
             )
+    return True
 
 
 @dataclass(frozen=True, slots=True)
