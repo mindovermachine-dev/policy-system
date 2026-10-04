@@ -22,10 +22,13 @@ Portable fakes (`InMemoryPersistenceBackend`/`AlwaysRaisingPersistenceBackend`) 
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 import msal_extensions
 import pytest
+from msal_extensions.persistence import KeychainPersistence
 
 from ps_cli import credentials
 from ps_cli.credentials import (
@@ -337,3 +340,130 @@ def test_build_credential_store_wires_the_production_persistence_factory() -> No
         store._build_persistence  # pyright: ignore[reportPrivateUsage]  # structural factory-wiring proof, not behavior
         is credentials._build_production_persistence  # pyright: ignore[reportPrivateUsage]  # same reason
     )
+
+
+class _FlakyReadPersistence:
+    """Raises each queued exception from `load` once, then serves `content` (issue #180)."""
+
+    def __init__(self, lock_path: Path, failures: list[Exception], content: str) -> None:
+        self._lock_path = lock_path
+        self._failures = failures
+        self._content = content
+        self.loads = 0
+
+    def save(self, content: str) -> None:
+        self._content = content
+
+    def load(self) -> str:
+        self.loads += 1
+        if self._failures:
+            raise self._failures.pop(0)
+        return self._content
+
+    def get_location(self) -> str:
+        return str(self._lock_path)
+
+
+class _FakeKeychainError(OSError):
+    """Mimics `msal_extensions.osx.KeychainError`, which carries `exit_status`."""
+
+    def __init__(self, exit_status: int) -> None:
+        super().__init__()
+        self.exit_status = exit_status
+
+
+def test_get_tokens_retries_a_transient_keychain_error_and_returns_the_rewritten_value(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-001/003: a read racing another process's rewrite (`-67701`) is retried."""
+    encoded = credentials._encode_token_bundle(_TOKENS)  # pyright: ignore[reportPrivateUsage]
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [_FakeKeychainError(-67701)], encoded)
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    assert store.get_tokens("dev") == _TOKENS
+    assert backend.loads == 2
+
+
+def test_get_tokens_retries_a_not_found_read_caught_mid_rewrite(tmp_path: Path) -> None:
+    """AC-BI-001/003: `PersistenceNotFound` while the item is mid-rewrite is retried."""
+    encoded = credentials._encode_token_bundle(_TOKENS)  # pyright: ignore[reportPrivateUsage]
+    not_found = msal_extensions.persistence.PersistenceNotFound(message="x", location="y")
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [not_found], encoded)
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    assert store.get_tokens("dev") == _TOKENS
+
+
+def test_get_tokens_after_logout_returns_none_not_keychain_error(tmp_path: Path) -> None:
+    """AC-BI-002: a removed credential (empty sentinel) reads as 'nothing stored'."""
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [_FakeKeychainError(-67701)], "")
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    assert store.get_tokens("dev") is None
+
+
+def test_get_tokens_persistent_failure_still_fails_closed_with_status_and_no_token(
+    tmp_path: Path,
+) -> None:
+    """AC-BI-004/005: a genuinely unavailable backend raises after bounded retries; the
+    hint carries the numeric status and never a token value.
+    """
+    failures: list[Exception] = [_FakeKeychainError(-25308) for _ in range(10)]
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "refresh-tok-secret")
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    with pytest.raises(CredentialStoreError) as excinfo:
+        store.get_tokens("dev")
+
+    assert backend.loads == credentials._READ_ATTEMPTS  # pyright: ignore[reportPrivateUsage]
+    assert "-25308" in (excinfo.value.hint or "")
+    assert "refresh-tok-secret" not in (excinfo.value.hint or "") + excinfo.value.msg
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "darwin", reason="reproduces the macOS Keychain rewrite race")
+def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> None:
+    """Issue #180 reproduction (AC-BI-001/003): a long-lived reader against the real
+    macOS Keychain, while another process rewrites the same entry, never raises.
+
+    Uses a throwaway service/account, deleted afterwards -- never a real credential.
+    """
+    service, account = "ps-cli-issue180-test", "live-race"
+    location = str(tmp_path / "race.bin")
+    writer = (
+        "import time\n"
+        "from msal_extensions.persistence import KeychainPersistence\n"
+        f"p = KeychainPersistence({location!r}, service_name={service!r}, "
+        f"account_name={account!r})\n"
+        "for i in range(60):\n"
+        '    p.save(\'{"refresh_token": "r%d", "issuer": "i"}\' % i); time.sleep(0.05)\n'
+    )
+    persistence = KeychainPersistence(location, service_name=service, account_name=account)
+    persistence.save(  # pyright: ignore[reportUnknownMemberType]  # msal-extensions: no py.typed
+        '{"refresh_token": "r", "issuer": "i"}'
+    )
+    store = PersistenceCredentialStore(build_persistence=lambda _c: persistence)
+    proc = subprocess.Popen([sys.executable, "-c", writer])  # noqa: S603  # fixed args, test-only
+    try:
+        failures = 0
+        while proc.poll() is None:
+            try:
+                store.get_tokens("race")
+            except CredentialStoreError:
+                failures += 1
+    finally:
+        proc.wait()
+        subprocess.run(  # noqa: S603  # fixed args
+            ["/usr/bin/security", "delete-generic-password", "-s", service, "-a", account],
+            check=False,
+            capture_output=True,
+        )
+    assert failures == 0

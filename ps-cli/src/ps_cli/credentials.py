@@ -63,6 +63,7 @@ OS-credential-store library's free functions.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -74,6 +75,13 @@ from ps_cli.targets import resolve_config_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# Issue #180: a read that lands while another process rewrites the same entry can fail
+# transiently (macOS Keychain `-67701` "invalid record", or a `PersistenceNotFound` for
+# an item caught mid-rewrite). A few short re-reads let a running process pick up the
+# rewritten value; a genuinely absent or unavailable store still fails after the last.
+_READ_ATTEMPTS = 4
+_READ_RETRY_DELAY_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -170,6 +178,23 @@ def _decode_token_bundle(raw: str) -> TokenBundle:
     )
 
 
+def _store_error(context: str, exc: Exception) -> CredentialStoreError:
+    """Build the actionable store error; the backend's numeric status (if any) aids diagnosis.
+
+    Only the exception type and an integer `exit_status` are surfaced -- never a message
+    that could embed stored content (issue #180, AC-BI-005).
+    """
+    status = getattr(exc, "exit_status", None)
+    detail = type(exc).__name__
+    if isinstance(status, int):
+        detail += f" (status {status})"
+    return CredentialStoreError(
+        msg=f"could not access the credential store for context '{context}'",
+        hint=f"the credential-storage backend raised {detail}; "
+        "check that it is available and unlocked",
+    )
+
+
 class PersistenceCredentialStore:
     """Msal-extensions-backed `CredentialStore`: an injected persistence factory (issue #123).
 
@@ -190,9 +215,19 @@ class PersistenceCredentialStore:
     an empty loaded string the same as "nothing stored" (D-123-4).
     """
 
-    def __init__(self, *, build_persistence: Callable[[str], PersistenceBackend]) -> None:
-        """Store the injected per-context persistence factory (D-123-2)."""
+    def __init__(
+        self,
+        *,
+        build_persistence: Callable[[str], PersistenceBackend],
+        read_retry_delay_seconds: float = _READ_RETRY_DELAY_SECONDS,
+    ) -> None:
+        """Store the injected per-context persistence factory (D-123-2).
+
+        `read_retry_delay_seconds` is the pause between `get_tokens` re-reads (issue #180);
+        tests pass `0` rather than patching the module constant.
+        """
         self._build_persistence = build_persistence
+        self._read_retry_delay_seconds = read_retry_delay_seconds
 
     def get_tokens(self, context: str) -> TokenBundle | None:
         """Return `context`'s `TokenBundle`, or `None` if none is stored (D-123-4).
@@ -205,17 +240,22 @@ class PersistenceCredentialStore:
         back into a `TokenBundle` here -- callers never see the raw string.
         """
         persistence = self._build_persistence(context)
-        try:
-            with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
-                raw = persistence.load()
-        except msal_extensions.persistence.PersistenceNotFound:
-            return None
-        except Exception as exc:
-            raise CredentialStoreError(
-                msg=f"could not access the credential store for context '{context}'",
-                hint=f"the credential-storage backend raised {type(exc).__name__}; "
-                "check that it is available and unlocked",
-            ) from exc
+        raw: str | None = None
+        for attempt in range(1, _READ_ATTEMPTS + 1):
+            last = attempt == _READ_ATTEMPTS
+            try:
+                with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
+                    raw = persistence.load()
+            except msal_extensions.persistence.PersistenceNotFound:
+                if last:
+                    return None
+            except Exception as exc:
+                if last:
+                    raise _store_error(context, exc) from exc
+            else:
+                break
+            time.sleep(self._read_retry_delay_seconds)
+        assert raw is not None  # noqa: S101  # loop exits only via break (raw set) or return/raise
         if raw == "":  # D-123-4: delete's empty-sentinel means "nothing stored"
             return None
         return _decode_token_bundle(raw)
@@ -232,11 +272,7 @@ class PersistenceCredentialStore:
             with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
                 persistence.save(_encode_token_bundle(tokens))
         except Exception as exc:
-            raise CredentialStoreError(
-                msg=f"could not access the credential store for context '{context}'",
-                hint=f"the credential-storage backend raised {type(exc).__name__}; "
-                "check that it is available and unlocked",
-            ) from exc
+            raise _store_error(context, exc) from exc
 
     def delete_tokens(self, context: str) -> None:
         """Remove `context`'s stored token bundle; a no-op-safe overwrite (D-123-4).
@@ -252,11 +288,7 @@ class PersistenceCredentialStore:
             with msal_extensions.CrossPlatLock(persistence.get_location() + ".lockfile"):
                 persistence.save("")
         except Exception as exc:
-            raise CredentialStoreError(
-                msg=f"could not access the credential store for context '{context}'",
-                hint=f"the credential-storage backend raised {type(exc).__name__}; "
-                "check that it is available and unlocked",
-            ) from exc
+            raise _store_error(context, exc) from exc
 
 
 def _build_production_persistence(context: str) -> PersistenceBackend:
