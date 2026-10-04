@@ -48,12 +48,20 @@ from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CuratedSourceUnavailableError,
     RestoreArtifactRejectedError,
+    RestoreInstrumentIdAmbiguousError,
+    RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
 )
 from ps_service.api.models import RestorationAcceptedResponse, RestorationStageOutcome
 from ps_service.audit import PsycopgAuditStore
 from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_artifact
-from ps_service.curated_source.errors import CuratedSourceFetchError
+from ps_service.curated_source.catalog_client import FetchCatalogCall, fetch_catalog
+from ps_service.curated_source.errors import (
+    CuratedSourceAmbiguousInstrumentIdError,
+    CuratedSourceFetchError,
+    CuratedSourceUnknownInstrumentIdError,
+)
+from ps_service.curated_source.instrument_lookup import resolve_canonical_instrument_id
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.export.models import InstrumentManifest
 from ps_service.logging.facade import emit_log_entry
@@ -153,6 +161,7 @@ class CatalogRestoreDependencies:
     """
 
     fetch_artifact: FetchArtifactCall
+    fetch_catalog: FetchCatalogCall
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
     open_db: Callable[[ServiceConfig], FalkorDB]
     single_tenant_graph_name: Callable[[ServiceConfig], str]
@@ -164,10 +173,13 @@ class CatalogRestoreInfra:
     """The true infra boundaries substitutable via the restore-from-catalog factory.
 
     :func:`build_default_restore_from_catalog_dependencies` lets a caller substitute exactly
-    these three (issue #163 Slice E) -- never ``restore`` itself.
+    these four (issue #163 Slice E; ``fetch_catalog`` added by issue #184) -- never ``restore``
+    itself.
 
-    Bundles ``fetch_artifact`` (the curated-content HTTP fetch), ``resolve_effective_source``
-    (the runtime-config-override-then-config-fallback resolution, fail closed), and ``open_db`` (the
+    Bundles ``fetch_artifact`` (the curated-content HTTP fetch), ``fetch_catalog`` (the
+    curated-catalog-listing HTTP fetch, used to resolve a requested instrument id
+    case-insensitively before the artifact fetch), ``resolve_effective_source`` (the
+    runtime-config-override-then-config-fallback resolution, fail closed), and ``open_db`` (the
     FalkorDB client construction) -- mirrors ``ingestion_orchestration.GraphOpeners``'s own
     "bundle every true infra boundary a factory has under one approved accessor" shape,
     generalised here to a mixed HTTP+FalkorDB set of boundaries rather than ``GraphOpeners``'s
@@ -178,6 +190,7 @@ class CatalogRestoreInfra:
     """
 
     fetch_artifact: FetchArtifactCall
+    fetch_catalog: FetchCatalogCall
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource]
     open_db: Callable[[ServiceConfig], FalkorDB]
 
@@ -387,7 +400,13 @@ def run_restoration_from_catalog_source(
     ``dependencies.resolve_effective_source`` (AC-BI-013) before
     ``dependencies.fetch_artifact`` is called -- an override read failure fails the request
     closed (``CatalogSourceOverrideUnavailableError``, AC-BI-010) rather than falling back
-    to ``config.curated_source_base_url``. The fetched artifact is passed to the
+    to ``config.curated_source_base_url``. Before the artifact fetch, ``request_body.
+    instrument_id`` is resolved case-insensitively against ``dependencies.fetch_catalog``'s
+    own listing (issue #184, AC-BI-001) via :func:`~ps_service.curated_source.
+    instrument_lookup.resolve_canonical_instrument_id`, and the canonical (catalog-cased) id
+    is used for both the artifact fetch and every downstream audit entry (AC-BI-006) -- a
+    ``catalog.json``-fetch failure surfaces through the same ``CuratedSourceUnavailableError``
+    path as an artifact-fetch failure always has (AC-BI-005). The fetched artifact is passed to the
     injected ``restore`` delegate unmodified -- the exact same D9 checksum /
     D10 schema_version verification :func:`run_restoration` relies on runs
     first and unconditionally inside that one shared delegate (never
@@ -422,6 +441,13 @@ def run_restoration_from_catalog_source(
         CuratedSourceUnavailableError: The configured source is unreachable,
             or the fetched artifact is missing/malformed (AC-BI-004/006) --
             502, naming the source and instrument.
+        RestoreInstrumentIdAmbiguousError: ``request_body.instrument_id`` matches more
+            than one catalog entry case-insensitively (issue #184, AC-BI-003) -- 409,
+            naming the requested id and every colliding canonical id; nothing is
+            fetched.
+        RestoreInstrumentIdNotFoundError: ``request_body.instrument_id`` matches no
+            catalog entry in any case (issue #184, AC-BI-004) -- 404, naming the
+            requested id and the closest candidate ids; nothing is fetched.
         RestoreArtifactRejectedError: The fetched artifact fails checksum
             (D9) / schema_version (D10) verification (422, AC-BI-007/009).
         RestoreStageFailedError: Any other restore failure, including a
@@ -432,9 +458,15 @@ def run_restoration_from_catalog_source(
     except RuntimeConfigError as exc:
         raise CatalogSourceOverrideUnavailableError from exc
     try:
-        fetched = dependencies.fetch_artifact(effective_source.url, request_body.instrument_id)
+        catalog_entries = dependencies.fetch_catalog(effective_source.url)
+        canonical_id = resolve_canonical_instrument_id(catalog_entries, request_body.instrument_id)
+        fetched = dependencies.fetch_artifact(effective_source.url, canonical_id)
     except CuratedSourceFetchError as exc:
         raise CuratedSourceUnavailableError(str(exc)) from exc
+    except CuratedSourceAmbiguousInstrumentIdError as exc:
+        raise RestoreInstrumentIdAmbiguousError(str(exc)) from exc
+    except CuratedSourceUnknownInstrumentIdError as exc:
+        raise RestoreInstrumentIdNotFoundError(str(exc)) from exc
     artifact = RestoreArtifact(
         manifest=fetched.manifest,
         baseline_blob=fetched.baseline_blob,
@@ -457,7 +489,7 @@ def run_restoration_from_catalog_source(
         raise RestoreArtifactRejectedError(str(exc)) from exc
     except Exception as exc:
         raise _classify_restore_failure(
-            exc, instrument_id=request_body.instrument_id, actor=actor, emitter=emitter
+            exc, instrument_id=canonical_id, actor=actor, emitter=emitter
         ) from exc
     return _to_accepted_response(outcome)
 
@@ -519,11 +551,12 @@ def _default_resolve_effective_source(config: ServiceConfig) -> EffectiveCatalog
 
 
 def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:
-    """Return the real curated-content fetch, effective-source resolution, and FalkorDB opener.
+    """Return the real artifact fetch, catalog fetch, source resolution, and FalkorDB opener.
 
     The *only* moving parts :func:`build_default_restore_from_catalog_dependencies` lets a
-    caller substitute (issue #163 Slice E) -- three true infra boundaries, never the real
-    ``restore_instrument`` business logic sitting on top of them. Extracted to its own
+    caller substitute (issue #163 Slice E; ``fetch_catalog`` added by issue #184) -- four true
+    infra boundaries, never the real ``restore_instrument`` business logic sitting on top of
+    them. Extracted to its own
     top-level function (rather than inlined in
     :func:`build_default_restore_from_catalog_dependencies`) specifically so it is its own,
     independently addressable module-level name: a caller-side ``monkeypatch.setattr(
@@ -542,11 +575,12 @@ def build_default_restore_from_catalog_infra() -> CatalogRestoreInfra:
 
     Returns:
         A :class:`CatalogRestoreInfra` bound to the production curated-content fetch step,
-        the production `resolve_effective_source` (issue #125, Slice 3), and the production
-        FalkorDB connection opener.
+        the production curated-catalog fetch step, the production `resolve_effective_source`
+        (issue #125, Slice 3), and the production FalkorDB connection opener.
     """
     return CatalogRestoreInfra(
         fetch_artifact=fetch_artifact,
+        fetch_catalog=fetch_catalog,
         resolve_effective_source=_default_resolve_effective_source,
         open_db=_default_open_db,
     )
@@ -592,6 +626,7 @@ def build_default_restore_from_catalog_dependencies(
     resolved_infra = infra or build_default_restore_from_catalog_infra()
     return CatalogRestoreDependencies(
         fetch_artifact=resolved_infra.fetch_artifact,
+        fetch_catalog=resolved_infra.fetch_catalog,
         resolve_effective_source=resolved_infra.resolve_effective_source,
         open_db=resolved_infra.open_db,
         single_tenant_graph_name=_default_single_tenant_graph_name,

@@ -34,6 +34,7 @@ from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.curated_source.artifact_client import fetch_artifact
+from ps_service.curated_source.catalog_client import fetch_catalog
 from ps_service.curated_source.resolve import EffectiveCatalogSource
 from ps_service.main import create_app
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
@@ -47,7 +48,9 @@ if TYPE_CHECKING:
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
     from fastapi import FastAPI
 
+    from ps_service.api.catalog import CuratedInstrumentEntry
     from ps_service.curated_source.artifact_client import FetchArtifactCall, FetchedArtifact
+    from ps_service.curated_source.catalog_client import FetchCatalogCall
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_service.restore.models import RestoreArtifact
 
@@ -84,9 +87,21 @@ def _configure_logging_for_catalog_restore_tests(  # pyright: ignore[reportUnuse
     """
 
 
+_VALID_CATALOG_ENTRY: dict[str, object] = {
+    "instrument_id": _INSTRUMENT_ID,
+    "celex": "32024R2847",
+    "title": "Cyber Resilience Act",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "short_name": "CRA",
+    "version": "1.0",
+}
+
+
 def _valid_transport() -> FakeCuratedArtifactTransport:
     return FakeCuratedArtifactTransport(
         {
+            "catalog.json": json.dumps([_VALID_CATALOG_ENTRY]).encode("utf-8"),
             "manifest.json": json.dumps(_VALID_MANIFEST).encode("utf-8"),
             "baseline.json": _BASELINE_BYTES,
             "native.json": _NATIVE_BYTES,
@@ -121,6 +136,7 @@ class _FakeCatalogRestoreStage:
         _ = (db, emitter)
         self.calls.append(
             {
+                "instrument_id": artifact.manifest.instrument_id,
                 "single_tenant_graph_name": single_tenant_graph_name,
                 "similarity_threshold": similarity_threshold,
                 "actor": actor,
@@ -143,6 +159,13 @@ def _fetch_artifact_through(transport: CuratedSourceTransport) -> FetchArtifactC
     return _call
 
 
+def _fetch_catalog_through(transport: CuratedSourceTransport) -> FetchCatalogCall:
+    def _call(base_url: str) -> tuple[CuratedInstrumentEntry, ...]:
+        return fetch_catalog(base_url, transport=transport)
+
+    return _call
+
+
 def _fake_dependencies(
     transport: CuratedSourceTransport, stage: _FakeCatalogRestoreStage
 ) -> CatalogRestoreDependencies:
@@ -151,6 +174,7 @@ def _fake_dependencies(
 
     return CatalogRestoreDependencies(
         fetch_artifact=_fetch_artifact_through(transport),
+        fetch_catalog=_fetch_catalog_through(transport),
         resolve_effective_source=_resolve_effective_source,
         open_db=lambda config: cast("FalkorDB", _FakeDb()),
         single_tenant_graph_name=lambda config: "policy_system",
@@ -449,3 +473,122 @@ def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> Non
 
     assert response.status_code == 200
     assert stage.calls[0]["owner"] is None
+
+
+# --- issue #184: case-insensitive instrument_id resolution against the catalog -------
+
+
+def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id() -> None:
+    """AC-BI-001: `cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
+    stage = _FakeCatalogRestoreStage()
+    transport = _valid_transport()
+    client = _client_with_fake(transport, stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": "cra-1.0"})
+
+    assert response.status_code == 200
+    assert response.json()["instrument_id"] == _INSTRUMENT_ID
+    requested_urls = [req.full_url for req in transport.requests]
+    assert any(f"/{_INSTRUMENT_ID}/manifest.json" in url for url in requested_urls)
+    assert not any("/cra-1.0/" in url for url in requested_urls)
+
+
+def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailable_error() -> None:
+    """AC-BI-005: a `catalog.json` fetch failure is the same 502, not a masked case error."""
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(FakeFailingCuratedSourceTransport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "curated_source_unavailable"
+    assert stage.calls == []
+
+
+def test_audit_delegate_receives_the_canonical_id_not_the_callers_spelling() -> None:
+    """AC-BI-006: the restore delegate's manifest carries the canonical id, not `cra-1.0`."""
+    stage = _FakeCatalogRestoreStage()
+    client = _client_with_fake(_valid_transport(), stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": "cra-1.0"})
+
+    assert response.status_code == 200
+    assert stage.calls[0]["instrument_id"] == _INSTRUMENT_ID
+
+
+_AMBIGUOUS_CATALOG_ENTRIES: list[dict[str, object]] = [
+    _VALID_CATALOG_ENTRY,
+    {**_VALID_CATALOG_ENTRY, "instrument_id": _INSTRUMENT_ID.lower()},
+]
+
+
+def _ambiguous_transport() -> FakeCuratedArtifactTransport:
+    return FakeCuratedArtifactTransport(
+        {
+            "catalog.json": json.dumps(_AMBIGUOUS_CATALOG_ENTRIES).encode("utf-8"),
+            "manifest.json": json.dumps(_VALID_MANIFEST).encode("utf-8"),
+            "baseline.json": _BASELINE_BYTES,
+            "native.json": _NATIVE_BYTES,
+        }
+    )
+
+
+def test_ambiguous_case_collision_is_rejected_with_409_and_never_fetches_the_artifact() -> None:
+    """AC-BI-003: two catalog entries differing only by case -> 409, nothing fetched.
+
+    Proven against both spellings a caller might use (`CRA-1.0` and `cra-1.0`): the
+    collision is present in the catalog either way, so neither spelling should ever
+    resolve to a single canonical id.
+    """
+    for requested_id in (_INSTRUMENT_ID, _INSTRUMENT_ID.lower()):
+        stage = _FakeCatalogRestoreStage()
+        transport = _ambiguous_transport()
+        client = _client_with_fake(transport, stage)
+
+        response = client.post("/restorations/from-catalog", json={"instrument_id": requested_id})
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "restore_instrument_id_ambiguous"
+        assert stage.calls == []
+        requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
+        assert requested_filenames == {"catalog.json"}
+
+
+_NO_MATCH_CATALOG_ENTRIES: list[dict[str, object]] = [
+    _VALID_CATALOG_ENTRY,
+    {
+        **_VALID_CATALOG_ENTRY,
+        "instrument_id": "GDPR-1.0",
+        "celex": "32016R0679",
+        "title": "General Data Protection Regulation",
+        "short_name": "GDPR",
+    },
+]
+
+
+def _no_match_transport() -> FakeCuratedArtifactTransport:
+    return FakeCuratedArtifactTransport(
+        {
+            "catalog.json": json.dumps(_NO_MATCH_CATALOG_ENTRIES).encode("utf-8"),
+            "manifest.json": json.dumps(_VALID_MANIFEST).encode("utf-8"),
+            "baseline.json": _BASELINE_BYTES,
+            "native.json": _NATIVE_BYTES,
+        }
+    )
+
+
+def test_no_catalog_match_in_any_case_returns_404_naming_closest_ids_and_never_fetches() -> None:
+    """AC-BI-004: no catalog entry matches any case -> 404, naming the closest id, no fetch."""
+    stage = _FakeCatalogRestoreStage()
+    transport = _no_match_transport()
+    client = _client_with_fake(transport, stage)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": "cra-9.9"})
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "restore_instrument_id_not_found"
+    assert _INSTRUMENT_ID in body["error"]["message"]
+    assert stage.calls == []
+    requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
+    assert requested_filenames == {"catalog.json"}

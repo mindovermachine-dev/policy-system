@@ -40,6 +40,8 @@ from ps_service.api.errors import (
     PipelineStageError,
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
+    RestoreInstrumentIdAmbiguousError,
+    RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
@@ -105,6 +107,8 @@ _SAFE_VERBATIM: tuple[type[ApiError], ...] = (
     IngestionConfigIncompleteError,
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
+    RestoreInstrumentIdAmbiguousError,
+    RestoreInstrumentIdNotFoundError,
     PendingReviewNotFoundError,
     ExportInstrumentNotFoundError,
     ExportConfigIncompleteError,
@@ -297,6 +301,16 @@ _API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
         "short_name_collision",
         status.HTTP_409_CONFLICT,
     ),
+    (
+        RestoreInstrumentIdAmbiguousError,
+        "restore_instrument_id_ambiguous",
+        status.HTTP_409_CONFLICT,
+    ),
+    (
+        RestoreInstrumentIdNotFoundError,
+        "restore_instrument_id_not_found",
+        status.HTTP_404_NOT_FOUND,
+    ),
 )
 
 
@@ -415,6 +429,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``PipelineStageError`` 502, ``RestoreStageFailedError`` 502,
     ``ExportStageFailedError`` 502, ``RequestValidationError`` 422,
     ``ShortNameCuratedMismatchError`` 409, ``ShortNameCollisionError`` 409,
+    ``RestoreInstrumentIdAmbiguousError`` 409,
+    ``RestoreInstrumentIdNotFoundError`` 404,
     everything else 500.
 
     Args:

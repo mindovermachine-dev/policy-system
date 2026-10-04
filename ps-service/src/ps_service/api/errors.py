@@ -214,6 +214,34 @@ class CuratedSourceUnavailableError(ApiError):
     """
 
 
+class RestoreInstrumentIdAmbiguousError(ApiError):
+    """A requested ``instrument_id`` matches more than one catalog entry case-insensitively.
+
+    The API-boundary translation of ``ps_service.curated_source.errors.
+    CuratedSourceAmbiguousInstrumentIdError`` (issue #184, AC-BI-003) --
+    raised by ``api.restore_orchestration.run_restoration_from_catalog_source``
+    before any artifact fetch is attempted, mirroring
+    ``ShortNameCollisionError``'s own "more than one thing claims this
+    identity" 409 precedent. Handled as HTTP 409; ``str(exc)`` is
+    domain-level (names the requested id and every colliding canonical id)
+    and surfaced verbatim.
+    """
+
+
+class RestoreInstrumentIdNotFoundError(ApiError):
+    """A requested ``instrument_id`` matches no catalog entry in any case.
+
+    The API-boundary translation of ``ps_service.curated_source.errors.
+    CuratedSourceUnknownInstrumentIdError`` (issue #184, AC-BI-004) --
+    raised by ``api.restore_orchestration.run_restoration_from_catalog_source``
+    before any artifact fetch is attempted, mirroring
+    ``CatalogIdentifierNotFoundError``/``ExportInstrumentNotFoundError``'s
+    existing 404 "not found" precedent. Handled as HTTP 404; ``str(exc)`` is
+    domain-level (names the requested id and the closest candidate ids) and
+    surfaced verbatim.
+    """
+
+
 class CatalogSourceOverrideUnavailableError(ApiError):
     """The catalog-source override could not be read (issue #130, AC-BI-010).
 

@@ -83,6 +83,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.company_merge.falkordb_client import single_tenant_graph_name
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.curated_source.artifact_client import fetch_artifact
+from ps_service.curated_source.catalog_client import fetch_catalog
 from ps_service.curated_source.resolve import EffectiveCatalogSource
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import SerializedGraph, SerializedNode
@@ -106,8 +107,10 @@ if TYPE_CHECKING:
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
+    from ps_service.api.catalog import CuratedInstrumentEntry
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.artifact_client import FetchArtifactCall, FetchedArtifact
+    from ps_service.curated_source.catalog_client import FetchCatalogCall
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -147,11 +150,23 @@ def _manifest(**overrides: object) -> dict[str, object]:
     return manifest
 
 
+_VALID_CATALOG_ENTRY: dict[str, object] = {
+    "instrument_id": _INSTRUMENT_ID,
+    "celex": "32024R2847",
+    "title": "Cyber Resilience Act",
+    "source_type": "external",
+    "jurisdiction": "EU",
+    "short_name": "CRA",
+    "version": "1.0",
+}
+
+
 def _transport_with(
     *, native_blob: bytes = _EMPTY_GRAPH_BYTES, **manifest_overrides: object
 ) -> FakeCuratedArtifactTransport:
     return FakeCuratedArtifactTransport(
         {
+            "catalog.json": json.dumps([_VALID_CATALOG_ENTRY]).encode("utf-8"),
             "manifest.json": json.dumps(_manifest(**manifest_overrides)).encode("utf-8"),
             "baseline.json": _EMPTY_GRAPH_BYTES,
             "native.json": native_blob,
@@ -184,6 +199,13 @@ def _content_violating_transport() -> FakeCuratedArtifactTransport:
 def _fetch_artifact_through(transport: CuratedSourceTransport) -> FetchArtifactCall:
     def _call(base_url: str, instrument_id: str) -> FetchedArtifact:
         return fetch_artifact(base_url, instrument_id, transport=transport)
+
+    return _call
+
+
+def _fetch_catalog_through(transport: CuratedSourceTransport) -> FetchCatalogCall:
+    def _call(base_url: str) -> tuple[CuratedInstrumentEntry, ...]:
+        return fetch_catalog(base_url, transport=transport)
 
     return _call
 
@@ -624,6 +646,7 @@ def _use_fake_restore_infra(
     *,
     open_db: Callable[[ServiceConfig], FalkorDB] | None = None,
     fetch_artifact_override: FetchArtifactCall | None = None,
+    fetch_catalog_override: FetchCatalogCall | None = None,
     resolve_effective_source: Callable[[ServiceConfig], EffectiveCatalogSource] | None = None,
 ) -> None:
     """Patch only the narrowed fetch/resolve/open_db boundary; the real factory wires the
@@ -643,6 +666,7 @@ def _use_fake_restore_infra(
     """
     infra = CatalogRestoreInfra(
         fetch_artifact=fetch_artifact_override or _fetch_artifact_through(transport),
+        fetch_catalog=fetch_catalog_override or _fetch_catalog_through(transport),
         resolve_effective_source=resolve_effective_source or _resolve_effective_source_stub,
         open_db=open_db or _default_open_db_stub,
     )
@@ -743,9 +767,148 @@ def test_happy_path_fetches_the_artifact_from_the_curated_source_not_a_local_fil
 
     assert result.is_error is False
     requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
-    assert requested_filenames == {"manifest.json", "baseline.json", "native.json"}
+    assert requested_filenames == {"catalog.json", "manifest.json", "baseline.json", "native.json"}
     for req in transport.requests:
+        if req.full_url.endswith("catalog.json"):
+            continue
         assert f"/{_INSTRUMENT_ID}/" in req.full_url
+
+
+# --- issue #184: case-insensitive instrument_id resolution against the catalog -------
+
+
+def test_lowercase_instrument_id_resolves_and_fetches_the_canonical_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-001: `cra-1.0` resolves against the catalog's `CRA-1.0` and fetches under it."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    transport = _valid_transport()
+    _use_fake_restore_infra(monkeypatch, transport)
+
+    result = _call_restore_instrument("cra-1.0")
+
+    assert result.is_error is False
+    body = json.loads(_text(result))
+    assert body["instrument_id"] == _INSTRUMENT_ID
+    requested_urls = [req.full_url for req in transport.requests]
+    assert any(f"/{_INSTRUMENT_ID}/manifest.json" in url for url in requested_urls)
+    assert not any("/cra-1.0/" in url for url in requested_urls)
+
+
+def test_catalog_fetch_failure_surfaces_as_the_existing_curated_source_unavailable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-005: a `catalog.json` fetch failure is the same error, not a masked case error."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, FakeFailingCuratedSourceTransport())
+
+    result = _call_restore_instrument()
+
+    assert result.is_error is False
+    assert _text(result).startswith("error: ")
+    assert "connection refused" in _text(result)
+
+
+def test_audit_delegate_receives_the_canonical_id_not_the_callers_spelling(
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+) -> None:
+    """AC-BI-006: the real restore delegate's own audit log entries carry the canonical id."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    emitter = configure()
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
+
+    result = _call_restore_instrument("cra-1.0")
+
+    assert result.is_error is False
+    emitter.flush()
+    restore_lines = _restore_log_lines(read_lines(resolve_default_log_path()))
+    assert all(line.get("entity_id") == _INSTRUMENT_ID for line in restore_lines)
+
+
+_AMBIGUOUS_CATALOG_ENTRIES: list[dict[str, object]] = [
+    _VALID_CATALOG_ENTRY,
+    {**_VALID_CATALOG_ENTRY, "instrument_id": _INSTRUMENT_ID.lower()},
+]
+
+
+def _ambiguous_transport() -> FakeCuratedArtifactTransport:
+    return FakeCuratedArtifactTransport(
+        {
+            "catalog.json": json.dumps(_AMBIGUOUS_CATALOG_ENTRIES).encode("utf-8"),
+            "manifest.json": json.dumps(_manifest()).encode("utf-8"),
+            "baseline.json": _EMPTY_GRAPH_BYTES,
+            "native.json": _EMPTY_GRAPH_BYTES,
+        }
+    )
+
+
+def test_ambiguous_case_collision_is_rejected_naming_both_colliding_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-003: two catalog entries differing only by case -> an `error: ` string naming both."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    transport = _ambiguous_transport()
+    _use_fake_restore_infra(monkeypatch, transport)
+
+    result = _call_restore_instrument("cra-1.0")
+
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert _INSTRUMENT_ID in text
+    assert _INSTRUMENT_ID.lower() in text
+    requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
+    assert requested_filenames == {"catalog.json"}
+
+
+_NO_MATCH_CATALOG_ENTRIES: list[dict[str, object]] = [
+    _VALID_CATALOG_ENTRY,
+    {
+        **_VALID_CATALOG_ENTRY,
+        "instrument_id": "GDPR-1.0",
+        "celex": "32016R0679",
+        "title": "General Data Protection Regulation",
+        "short_name": "GDPR",
+    },
+]
+
+
+def _no_match_transport() -> FakeCuratedArtifactTransport:
+    return FakeCuratedArtifactTransport(
+        {
+            "catalog.json": json.dumps(_NO_MATCH_CATALOG_ENTRIES).encode("utf-8"),
+            "manifest.json": json.dumps(_manifest()).encode("utf-8"),
+            "baseline.json": _EMPTY_GRAPH_BYTES,
+            "native.json": _EMPTY_GRAPH_BYTES,
+        }
+    )
+
+
+def test_no_catalog_match_in_any_case_is_rejected_naming_the_closest_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-004: no catalog entry matches any case -> an `error: ` string naming the closest id."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    transport = _no_match_transport()
+    _use_fake_restore_infra(monkeypatch, transport)
+
+    result = _call_restore_instrument("cra-9.9")
+
+    assert result.is_error is False
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert _INSTRUMENT_ID in text
+    requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
+    assert requested_filenames == {"catalog.json"}
 
 
 def test_happy_path_calls_the_restore_delegate_with_the_resolved_principal_as_actor(
@@ -1009,6 +1172,7 @@ def _internal_policy_transport() -> FakeCuratedArtifactTransport:
     )
     return FakeCuratedArtifactTransport(
         {
+            "catalog.json": json.dumps([_VALID_CATALOG_ENTRY]).encode("utf-8"),
             "manifest.json": json.dumps(manifest).encode("utf-8"),
             "baseline.json": graph_bytes,
             "native.json": graph_bytes,

@@ -31,3 +31,23 @@ class CuratedSourceFetchError(Exception):
     Always names the source URL and the specific failure (AC-BI-006) -- the
     caller never falls back to stale data on this error.
     """
+
+
+class CuratedSourceAmbiguousInstrumentIdError(Exception):
+    """A requested ``instrument_id`` matches more than one catalog entry case-insensitively.
+
+    Raised by :func:`ps_service.curated_source.instrument_lookup.
+    resolve_canonical_instrument_id` (issue #184, AC-BI-003) -- names the
+    requested id and every colliding canonical id. Nothing is fetched when
+    this is raised.
+    """
+
+
+class CuratedSourceUnknownInstrumentIdError(Exception):
+    """A requested ``instrument_id`` matches no catalog entry in any case.
+
+    Raised by :func:`ps_service.curated_source.instrument_lookup.
+    resolve_canonical_instrument_id` (issue #184, AC-BI-004) -- names the
+    requested id and the closest candidate ids in the catalog. Nothing is
+    fetched when this is raised.
+    """

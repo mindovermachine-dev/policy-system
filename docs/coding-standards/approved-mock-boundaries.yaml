@@ -43,7 +43,7 @@ falkordb:
   # the only piece of it a caller may substitute) -- mirrors `build_default_graph_openers`/
   # `build_default_near_miss_review_graph_opener` above exactly, generalised to a mixed
   # HTTP+FalkorDB boundary bundle (`CatalogRestoreInfra`) since this factory's true infra
-  # surface is three collaborators, not one.
+  # surface is four collaborators, not one (issue #184 adds `fetch_catalog` as the fourth).
   - ps_service.api.restore_orchestration.build_default_restore_from_catalog_infra
   # NOTE (Slice D/E, §5): mcp_interface's cypher/policy_lifecycle/near_miss/restore tools connect
   # via one of the above per-component clients — verify exact import path per call site at

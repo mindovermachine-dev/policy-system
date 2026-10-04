@@ -52,6 +52,8 @@ from ps_service.api.errors import (
     PendingReviewNotFoundError,
     PipelineStageError,
     RestoreArtifactRejectedError,
+    RestoreInstrumentIdAmbiguousError,
+    RestoreInstrumentIdNotFoundError,
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
@@ -1438,28 +1440,35 @@ def restore_instrument(
     """RestoreInstrumentFromCatalog: fetch and restore a curated instrument's artifact (#127).
 
     Runs in-process, exactly like `POST /restorations/from-catalog` does
-    (D-RESTORE-DELEGATE): fetches `instrument_id`'s manifest/baseline/native
-    artifact from the effective curated-content source (a persisted
-    override when one exists, else the configured env-var/default),
-    then restores it into the policy graph -- delegating directly to
-    `run_restoration_from_catalog_source`, the exact same function the REST
-    route calls, never reimplemented. `instrument_id` is validated against
-    the same charset/length bound ps-cli's own `restore instrument`
-    positional used, plus its explicit rejection of any `".."` substring
-    (AC-BI-005, D-INSTRUMENT-ID-STRICTNESS) -- rejected at the MCP schema
-    layer, before this tool's body ever runs.
+    (D-RESTORE-DELEGATE): resolves `instrument_id` case-insensitively against
+    the curated catalog (issue #184, AC-BI-001 -- e.g. `cra-1.0` resolves to
+    the catalog's own `CRA-1.0`), then fetches that canonical id's
+    manifest/baseline/native artifact from the effective curated-content
+    source (a persisted override when one exists, else the configured
+    env-var/default), then restores it into the policy graph -- delegating
+    directly to `run_restoration_from_catalog_source`, the exact same
+    function the REST route calls, never reimplemented. `instrument_id` is
+    validated against the same charset/length bound ps-cli's own `restore
+    instrument` positional used, plus its explicit rejection of any `".."`
+    substring (AC-BI-005, D-INSTRUMENT-ID-STRICTNESS) -- rejected at the MCP
+    schema layer, before this tool's body ever runs.
 
     On success, returns the same structured summary ps-cli's `restore
     instrument` used to print: `instrument_id` and one `stages` entry per
     completed restore stage, each carrying its own `stage`/`status`
     (AC-BI-004). Returns a string beginning `error: ` when the configured
     curated-content source is unreachable or the fetched artifact is
-    missing/malformed, when the fetched artifact fails checksum/
-    schema_version verification, when any other restore stage genuinely
-    fails (including a missing `PS_COMPANYMERGE_SIMILARITY_THRESHOLD`
-    configuration value), when the policy graph database cannot be reached,
-    or (this tool's own residual safety net) on any other unexpected
-    failure.
+    missing/malformed, when `instrument_id` matches more than one catalog
+    entry case-insensitively (issue #184, AC-BI-003 -- the error names every
+    colliding id and nothing is fetched), when `instrument_id` matches no
+    catalog entry in any case (issue #184, AC-BI-004 -- the error says no
+    catalog entry matches and names the closest candidate ids, and nothing
+    is fetched), when the fetched artifact fails
+    checksum/schema_version verification, when any other restore stage
+    genuinely fails (including a missing `PS_COMPANYMERGE_SIMILARITY_
+    THRESHOLD` configuration value), when the policy graph database cannot
+    be reached, or (this tool's own residual safety net) on any other
+    unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1495,6 +1504,8 @@ def restore_instrument(
         except (
             CatalogSourceOverrideUnavailableError,
             CuratedSourceUnavailableError,
+            RestoreInstrumentIdAmbiguousError,
+            RestoreInstrumentIdNotFoundError,
             RestoreArtifactRejectedError,
             RestoreStageFailedError,
         ) as exc:
