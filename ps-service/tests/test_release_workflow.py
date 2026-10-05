@@ -865,9 +865,9 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     anywhere else breaks this subsequence.
 
     Deliberately a subsequence match, not a full-body equality: the two arches are
-    pushed concurrently (each backgrounded, then `wait`ed on) to cut publish wallclock,
-    so the surrounding control flow (a helper function plus PID bookkeeping) differs
-    from a plain serial loop. The provenance chain this test protects is unaffected by
+    pushed one after another, each under a bounded retry loop (#192), so the
+    surrounding control flow (a helper function plus a retry loop) differs from a
+    plain serial loop. The provenance chain this test protects is unaffected by
     that — each arch still loads, tags and pushes only its own tarball.
     """
     publish = _job(_PUBLISH_JOB)
@@ -908,6 +908,29 @@ def test_publish_job_pushes_the_image_it_loaded_from_the_smoke_tested_tarball() 
     assert any(token.startswith("amd64") for token in tokens) and any(
         token.startswith("arm64") for token in tokens
     ), f"both matrix arches must actually drive the load-tag-push hop, got tokens {tokens}"
+
+
+def test_publish_job_pushes_arches_sequentially_with_bounded_retry() -> None:
+    """#192: concurrent per-arch pushes raced on GHCR (`unknown blob`); push serially, retried.
+
+    AC-CI-001: no backgrounding (`&`) and no `wait`, so the pushes cannot overlap.
+    AC-CI-002/AC-CI-003: a bounded retry loop whose exhaustion still fails the step.
+    """
+    publish = _job(_PUBLISH_JOB)
+    push_step = next(
+        step
+        for step in _steps_running(publish, "push")
+        if "docker" in _tokens(str(step.get("run", "")))
+    )
+    body = str(push_step.get("run", ""))
+    tokens = _tokens(body)
+
+    assert "wait" not in tokens, "per-arch pushes must not be awaited as background jobs"
+    assert not any(token.endswith("&") for token in tokens), (
+        "per-arch pushes must not be backgrounded"
+    )
+    assert "attempt" in tokens and "3" in tokens, "the push must be retried up to 3 times"
+    assert "exit" in tokens, "exhausting the retries must still fail the step"
 
 
 def _invokes_docker_build(body: str) -> bool:

@@ -147,19 +147,28 @@ jobs:
           path: /tmp/images
       - name: Push each architecture under its build tag
         run: |
+          # Sequential, not parallel: pushing both arch images concurrently to
+          # one GHCR repo intermittently failed with unknown blob (#192). Shared
+          # layers dedupe on the second push, so the cost is small. Pushes are
+          # idempotent, so a transient registry error is retried up to 3 times.
           push_one() {
             local arch="$1"
             docker image load -i "/tmp/images/ps-service-$arch.tar"
             docker image tag "ps-service:smoke-$arch" "$IMAGE:build-$arch"
             docker image push "$IMAGE:build-$arch"
           }
-          pids=()
           for arch in amd64 arm64; do
-            push_one "$arch" &
-            pids+=("$!")
-          done
-          for pid in "${pids[@]}"; do
-            wait "$pid"
+            for attempt in 1 2 3; do
+              if push_one "$arch"; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::push of build-$arch failed after 3 attempts"
+                exit 1
+              fi
+              echo "::warning::push of build-$arch failed (attempt $attempt of 3)"
+              sleep $((attempt * 10))
+            done
           done
       - name: Create the manifest list for the release tag and latest
         run: |
