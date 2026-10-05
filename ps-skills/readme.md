@@ -9,6 +9,7 @@ One of the client types users use to access Policy System is Agent Skills. The f
 - ps-graph-cleanup. This skill is the Compliance Officer's graph cleanup tool: it finds groups of near-duplicate Capabilities in the Company Policy Knowledge Graph so a human can decide which to merge, merges them (or duplicate Obligations) after a passkey approval, releases a Capability from a draft governing policy, and unmerges a Capability or Obligation merge from its audit snapshot. It requires an explicit ComplianceOfficer grant.
 - ps-get-catalog-listing. This skill lists every curated instrument (external and internal) available from the Policy System's configured curated-content source.
 - ps-restore-instrument. This skill fetches one curated instrument's artifact from the Policy System's configured curated-content source and restores it into the Company Policy Knowledge Graph, given its instrument_id.
+- ps-list-ingested. This skill lists every RegulatoryInstrument already ingested into the Company Policy Knowledge Graph, read from the live graph (unlike ps-get-catalog-listing, which lists the curated source before ingestion), so you can check what is there before deciding to ingest, restore, or author policy.
 
 ## Development of Policy System Skills
 
