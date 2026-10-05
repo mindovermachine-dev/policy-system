@@ -20,11 +20,17 @@ route, present and future, rather than the single representative route
 `create_app`'s own composition root is what's audited -- if a future route is
 added to `build_api_router()`/`create_app()` without going through
 `RestAuthMiddleware`, this test fails loudly by construction (it enumerates
-whatever `app.openapi()["paths"]` reports, not a hardcoded list).
+what the app reports, not a hardcoded list).
 
-Enumeration technique mirrors `test_app_wiring.py`'s own comment: on this
-FastAPI version, `app.routes` no longer carries a flattened `APIRoute` entry
-per mounted path, but `app.openapi()["paths"]` still does.
+Enumeration source (issue #117) is the **union** of two views, because neither
+alone is complete on this FastAPI version:
+
+- ``app.openapi()["paths"]`` carries every API route, but never routes with no
+  OpenAPI operation -- FastAPI's own ``/docs``, ``/redoc``, ``/openapi.json``
+  and ``/docs/oauth2-redirect`` are plain Starlette ``Route`` objects.
+- ``app.routes`` carries those Starlette-level routes, but sub-routers are
+  included lazily (an opaque ``_IncludedRouter``), so it no longer carries a
+  flattened ``APIRoute`` per path (see `test_app_wiring.py`'s own comment).
 
 ``/mcp`` is a `Starlette` `Mount`, not an `APIRoute` -- it never appears in
 `app.openapi()["paths"]`. `RestAuthMiddleware` deliberately exempts
@@ -70,6 +76,8 @@ from ps_test_support.mock_oidc_provider import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fastapi import FastAPI
+
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
 _AUDIENCE = "ps-service"
@@ -97,6 +105,13 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 _EXEMPT_PATHS = frozenset({"/health", "/ready"})
 _EXEMPT_PREFIX = "/.well-known/"
 _APPROVALS_PREFIX = "/approvals/"
+# `/mcp` is a `Mount` the middleware exempts (see this file's module docstring);
+# it appears in `app.routes`, so the union enumeration must skip it explicitly.
+_MCP_PREFIX = MCP_HTTP_MOUNT_PATH
+
+# FastAPI's auto-generated Starlette-level routes (issue #117): no OpenAPI
+# operation, so invisible to `app.openapi()["paths"]`.
+_FASTAPI_BUILTIN_PATHS = ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
 
 # Path parameters this audit substitutes into templated OpenAPI paths (e.g.
 # "/ingestions/{run_id}") to build a concrete, requestable URL. The values
@@ -155,7 +170,28 @@ def _config(provider: MockOidcProvider, **overrides: object) -> ServiceConfig:
 
 def _is_exempt(path: str) -> bool:
     """Mirror `RestAuthMiddleware`'s own exemption check, verbatim against AC-BI-011's wording."""
-    return path in _EXEMPT_PATHS or path.startswith((_EXEMPT_PREFIX, _APPROVALS_PREFIX))
+    return path in _EXEMPT_PATHS or path.startswith(
+        (_EXEMPT_PREFIX, _APPROVALS_PREFIX, _MCP_PREFIX)
+    )
+
+
+def _enumerate_routes(app: FastAPI) -> dict[str, set[str]]:
+    """Union of OpenAPI paths and Starlette-level `app.routes`: ``{path: {METHOD, ...}}``.
+
+    Starlette-level routes with no ``methods`` (e.g. a bare `Mount`) are probed with GET.
+    """
+    routes: dict[str, set[str]] = {}
+    for templated_path, path_item in app.openapi()["paths"].items():
+        routes.setdefault(templated_path, set()).update(
+            method.upper() for method in path_item if method in _HTTP_METHODS
+        )
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        if not isinstance(path, str):
+            continue
+        methods = getattr(route, "methods", None) or {"GET"}
+        routes.setdefault(path, set()).update(m for m in methods if m.lower() in _HTTP_METHODS)
+    return routes
 
 
 def _concretize(templated_path: str) -> str:
@@ -196,28 +232,44 @@ def test_every_non_exempt_route_requires_a_token(mock_oidc_provider: MockOidcPro
     """
     app = create_app(_config(mock_oidc_provider))
     client = TestClient(app)
-    schema = app.openapi()
+    routes = _enumerate_routes(app)
 
     checked: list[str] = []
-    for templated_path, path_item in schema["paths"].items():
+    for templated_path, methods in routes.items():
         if _is_exempt(templated_path):
             continue
         concrete_path = _concretize(templated_path)
-        for method in path_item:
-            if method not in _HTTP_METHODS:
-                continue
-            response = client.request(
-                method.upper(), concrete_path, json=_request_body(templated_path)
-            )
+        for method in sorted(methods):
+            response = client.request(method, concrete_path, json=_request_body(templated_path))
             assert response.status_code == 401, (
-                f"{method.upper()} {concrete_path} returned {response.status_code}, "
+                f"{method} {concrete_path} returned {response.status_code}, "
                 "expected 401 (default-deny, AC-BI-011)"
             )
-            checked.append(f"{method.upper()} {concrete_path}")
+            checked.append(f"{method} {concrete_path}")
 
     # A schema that suddenly reported zero non-exempt routes would make the loop
     # above vacuously pass -- guard against that silently swallowing a real gap.
     assert checked, "expected at least one non-exempt route to audit"
+    # Issue #117: the union must reach the routes `openapi()` alone never sees.
+    for builtin in _FASTAPI_BUILTIN_PATHS:
+        assert f"GET {builtin}" in checked, f"{builtin} missing from the audit enumeration"
+
+
+@pytest.mark.parametrize("path", _FASTAPI_BUILTIN_PATHS)
+def test_fastapi_builtin_routes_reject_unauthenticated_request_without_leaking(
+    mock_oidc_provider: MockOidcProvider, path: str
+) -> None:
+    """Issue #117 AC-BI-002/003: FastAPI's own docs routes are 401 with no token, and
+    the 401 body carries no token, key ids, or library internals (#58's no-leak contract).
+    """
+    client = TestClient(create_app(_config(mock_oidc_provider)))
+
+    response = client.get(path)
+
+    assert response.status_code == 401
+    body = response.text.lower()
+    for forbidden in ("traceback", "jwt", "jwks", "kid", "swagger", "openapi", "fastapi"):
+        assert forbidden not in body, f"{path} 401 body leaked {forbidden!r}: {response.text}"
 
 
 def test_open_allowlist_routes_remain_reachable_without_a_token(
