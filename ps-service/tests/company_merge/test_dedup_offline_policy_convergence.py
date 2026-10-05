@@ -130,6 +130,8 @@ def test_kind_defaults_to_capability_when_omitted() -> None:
 
         def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
             self.calls.append(q)
+            if "MERGED_INTO" in q:
+                return _FakeQueryResult([])
             if "(n:Capability) RETURN" in q:
                 return _FakeQueryResult([[existing_id, "Data Encryption Capability", None]])
             raise AssertionError(f"unexpected query issued: {q!r}")
@@ -147,5 +149,6 @@ def test_kind_defaults_to_capability_when_omitted() -> None:
     )
 
     assert result.resolutions[0].match_kind == "exact"
-    assert capability_graph.calls == ["MATCH (n:Capability) RETURN n.id, n.name, n.embedding"]
+    assert len(capability_graph.calls) == 2  # index read + tombstone redirect read (issue #190)
+    assert capability_graph.calls[0] == "MATCH (n:Capability) RETURN n.id, n.name, n.embedding"
     assert graph.calls == []  # the unused Policy-shaped fake was never touched

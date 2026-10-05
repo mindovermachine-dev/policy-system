@@ -67,11 +67,18 @@ request, not shown by default.
 
    **Active-only default.** For any entity in the chain whose status enum
    literally includes an `active` value — currently RegulatoryInstrument
-   (active\|superseded\|vacated), Requirement, PracticeArea, RiskPath,
-   Capability (all active\|deprecated) — filter it on `status = 'active'`
+   (active\|superseded\|vacated), Requirement, PracticeArea, RiskPath
+   (all active\|deprecated), Capability (active\|deprecated\|merged) —
+   filter it on `status = 'active'`
    automatically, independently per entity (they can diverge, e.g. a
    Requirement deprecated under an active RegulatoryInstrument), and
-   state each applied filter in the gate statement. This does not extend
+   state each applied filter in the gate statement. A Capability with
+   status `merged` is a tombstone — a duplicate a Compliance Officer
+   absorbed into a surviving Capability — and is never a live Capability,
+   so the default excludes it from every answer: its Obligations, coverage
+   and policy are counted on the survivor. Include tombstones only when the
+   user explicitly asks about merged duplicates or merge history, and say
+   so in the gate statement. This does not extend
    to Policy (draft\|approved\|deprecated) or Standard/Control
    (`implementation_status`: planned\|draft\|implemented\|reviewed\|
    deprecated) — ask explicitly instead. An entity with no status

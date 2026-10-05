@@ -90,6 +90,7 @@ graph LR
     PracticeArea -->|"OWNS"| Policy
     RiskPath -->|"MITIGATED_BY"| Capability
     Capability -->|"GOVERNED_BY"| Policy
+    Capability -->|"MERGED_INTO"| Capability
     Policy -->|"SUPPORTED_BY"| Standard
     Standard -->|"IMPLEMENTED_BY"| Control
     RiskPath -->|"VERIFIED_BY"| Control
@@ -173,6 +174,7 @@ full cross-model shape and provenance rationale at once.
 | `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
 | `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
 | `VERIFIED_BY` | RiskPath → Control | 1 : 0..* | — | 3 — classification layer |
+| `MERGED_INTO` | Capability → Capability | 0..1 : 0..* | — | n/a — redirect marker from a `merged` tombstone to its survivor, not a provenance fact; parallels `SUPERSEDED_BY`. Chains (a survivor later absorbed itself) are followed to the terminal Capability. |
 | `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived. For a human-authored Policy the edge is written when a fresh draft is created with `capability_ids`; a fork of an approved Policy does not write it — the edges move from the superseded Policy to the fork when the fork is approved |
 | `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 if Standard is human-authored; 2 (recoverable via `GOVERNED_BY` onward) if internal-SoP-derived |
 | `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 if Control is human-authored; 2 (recoverable via `SUPPORTED_BY` onward) if internal-SoP-derived |
@@ -292,7 +294,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 **Description:** A duty borne by **exactly one Role** — e.g. "Conduct Cybersecurity Risk Assessment" or "Report Security Incidents." An Obligation is a weak entity of its Role: it exists only in the context of the Role that bears it, and its identity is scoped accordingly (see below). Obligation is **not** a cross-regulation normalization point. GDPR's 72-hour breach-notice duty for Data Controllers and NIS2's 24-hour early-warning duty for Operators of Essential Services are *distinct* Obligations under *distinct* Roles — genuinely different duties, with different triggers, deadlines, and recipient authorities. They converge only further down the spine, where both `REQUIRES` the same "Incident Notification" Capability: [Capability](#capability), not Obligation, is where cross-source duties meet (see the [Worked Examples](#worked-examples)). Obligation defines the generic duty only; accountability for actually fulfilling it attaches at Policy (not yet in this document), where the duty is assigned to a concrete organizational owner.
 
-**Lifecycle:** Minted the first time one of a Role's Requirements states a duty not already captured for that Role; reused when another Requirement of the **same Role** states the same duty. Rarely modified once created. Not reference data shared across regulations — a semantically similar duty under a different regulation's Role is a different Obligation node.
+**Lifecycle:** Minted the first time one of a Role's Requirements states a duty not already captured for that Role; reused when another Requirement of the **same Role** states the same duty. Rarely modified once created. Not reference data shared across regulations — a semantically similar duty under a different regulation's Role is a different Obligation node. A Compliance Officer cleanup merge of two Obligations under the same Role unions the absorbed Obligation's `SATISFIED_BY` and `REQUIRES` edges onto the survivor, which keeps its single `HAS` Role, and deletes the absorbed Obligation (its full node and edge snapshot is held in the audit trail). The delete leaves a `MergedObligation` marker — a node carrying the absorbed `id` and `merged_into`, the survivor's id — so that a later ingest or restore that regenerates the absorbed Obligation attaches its edges to the survivor instead of minting it again; the marker is never counted as an Obligation, never appears in an artifact, and is removed when the merge is reversed.
 
 **Node label:** `Obligation`
 **Identity:** `obl_{slug}_{hash}` (e.g. `obl_risk_management_a8f3b1`) — content-derived from the duty statement **and the Role that bears it** (the Role it will link to via `HAS`), opaque hash suffix. This mirrors [Role](#role)'s own identity, which already folds in its defining RegulatoryInstrument. Scoping the hash to the Role is what makes "[exactly one Role per Obligation](#edge-catalog)" a structural guarantee rather than a rule extraction must be trusted to honour: two sources' duties can never collide onto one Obligation node, because their Roles are always distinct nodes. This is the same weak-entity identity pattern used for [Requirement](#requirement), [Standard](#standard), and [Control](#control) — a node that exists only in one parent's context encodes that parent in its identity. The defining-Role relationship is expressed only via the inbound `HAS` edge, never re-encoded as a substring of the ID.
@@ -376,7 +378,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Description:** A technical or organizational capacity that must exist to fulfill Obligations — e.g. "Data Encryption," "Access Control System," "Security Logging." Capability is the "how" to Obligation's "what": it lets an organization see commonalities across obligations that look different on paper, e.g. recognizing that both "Maintain Security Monitoring" (CRA) and "Ensure Logging of Access" (GDPR) require the same "Security Logging" capability. This is exactly the cross-regulation convergence the identity design below protects — hashing on `name` alone is what lets one Capability be required by many Obligations instead of fragmenting. Capability is the **first canonical, regulation-independent node on the compliance spine**: RegulatoryInstrument, Role, Requirement, and Obligation upstream are all regulation-scoped, and cross-source duties first meet here.
 
-**Lifecycle:** Either pre-populated as part of a canonical capability taxonomy, or minted when an Obligation requires a capability type that doesn't yet exist. A Capability is reused for a further Obligation only when its description covers that Obligation's whole duty; otherwise a more specific Capability is minted. Stable reference data once created — governed by Policy (not yet in this document), potentially across many business contexts.
+**Lifecycle:** Either pre-populated as part of a canonical capability taxonomy, or minted when an Obligation requires a capability type that doesn't yet exist. A Capability is reused for a further Obligation only when its description covers that Obligation's whole duty; otherwise a more specific Capability is minted. Stable reference data once created — governed by Policy (not yet in this document), potentially across many business contexts. Company Merge never deletes a Capability. A Compliance Officer cleanup merge absorbs a duplicate by tombstoning it (`status` `merged`, `MERGED_INTO` edge to the survivor); Company Merge resolves a Capability id that matches a tombstone to its survivor, so a later ingest or restore that regenerates the absorbed name attaches to the survivor instead of recreating the duplicate, and tombstones are never semantic-match candidates. Reversing the merge (unmerge) returns the tombstone to `active` and removes its `MERGED_INTO` edge.
 
 **Node label:** `Capability`
 **Identity:** `cap_{slug}_{hash}` (e.g. `cap_data_encryption_a8f3b1`) — content-derived from `name` alone, deliberately excluding any specific requiring Obligation. `ps-domain-concepts.md` describes this ID as derived from "capability name and related obligation content," but that would work against its own stated goal: Capability is required by 0..* Obligations (many-to-many), so baking one Obligation's content into the hash would fragment equivalent capabilities pulled in under different Obligations instead of collapsing them onto the same node. Deriving from `name` alone is what actually delivers cross-regulation convergence.
@@ -388,7 +390,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `name` | string | Yes | |
 | `description` | string | No | |
 | `type` | string | No | e.g. `technical`, `organizational` |
-| `status` | enum: `active` \| `deprecated` | No | |
+| `status` | enum: `active` \| `deprecated` \| `merged` | No | `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge, kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`. |
 | `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally. |
 
 #### Relationships
@@ -399,6 +401,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `COVERS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
 | `MITIGATED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
 | `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). A Capability has exactly one governing Policy at any time, including while its Policy is being superseded. |
+| `MERGED_INTO` (outbound) | Capability | 0..1 : 0..* | — | Present only on a `merged` tombstone; points at the survivor that absorbed it. |
+| `MERGED_INTO` (inbound) | Capability | 0..* : 0..1 | — | Tombstones that were absorbed into this Capability. |
 
 ---
 

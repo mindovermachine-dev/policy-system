@@ -184,6 +184,8 @@ class _FakeSingleTenantGraph:
         self.calls.append(q)
         if "(n:Obligation) RETURN n.id, n.text, n.embedding" in q:
             return _FakeQueryResult([])
+        if "MERGED_INTO" in q:
+            return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([])
         return _FakeQueryResult([])

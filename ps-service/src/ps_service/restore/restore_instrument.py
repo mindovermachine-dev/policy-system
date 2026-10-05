@@ -39,7 +39,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
-from ps_service.company_merge import graph_reader, graph_writer
+from ps_service.company_merge import graph_reader, graph_writer, obligation_redirect
 from ps_service.company_merge.dedup import resolve_capability_convergence_offline
 from ps_service.company_merge.falkordb_client import (
     select_graph as select_company_merge_graph,
@@ -398,6 +398,12 @@ def _run_baseline_merge(
         emitter=emitter,
     )
 
+    # issue #190 (H1): drop Obligations a cleanup merge absorbed, before any write, and map
+    # them to their terminal survivor so the rewiring below re-targets their edges.
+    baseline, obligation_redirects = obligation_redirect.resolve_obligation_redirects(
+        snapshot_graph, baseline, emitter=emitter
+    )
+
     graph_writer.persist_role_and_requirement_passthrough(
         snapshot_graph,
         baseline.regulatory_instrument_id,
@@ -413,6 +419,7 @@ def _run_baseline_merge(
     canonical_id_by_incoming_id = {
         resolution.incoming_id: resolution.canonical_id for resolution in dedup_result.resolutions
     }
+    canonical_id_by_incoming_id.update(obligation_redirects)
 
     # issue #183 -- the draft-governance import: Policy/Standard/Control written `draft`,
     # owned by the restoring caller, never converged (replaces issue #54 S6/B6's

@@ -13,7 +13,12 @@ from typing import get_args
 
 import pytest
 
-from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.export.models import (
+    SerializedEdge,
+    SerializedGraph,
+    SerializedNode,
+    SerializedPropertyValue,
+)
 from ps_service.ingestion.adapters.internal_seed.models import EdgeType, NodeLabel
 from ps_service.restore.errors import ArtifactContentRejectedError
 from ps_service.restore.schema_allowlist import (
@@ -289,4 +294,65 @@ def test_validate_serialized_graph_makes_no_graph_query_calls_before_raising() -
             graph,
             allowed_labels=NATIVE_ALLOWED_LABELS,
             allowed_relationship_types=NATIVE_ALLOWED_RELATIONSHIP_TYPES,
+        )
+
+
+def test_merged_into_is_in_no_allow_list() -> None:
+    """Issue #190: tombstones and redirects are never part of an artifact vocabulary."""
+    assert "MERGED_INTO" not in BASELINE_ALLOWED_RELATIONSHIP_TYPES
+    assert "MERGED_INTO" not in NATIVE_ALLOWED_RELATIONSHIP_TYPES
+    assert "MergedObligation" not in BASELINE_ALLOWED_LABELS
+    assert "MergedObligation" not in NATIVE_ALLOWED_LABELS
+
+
+@pytest.mark.parametrize("status", ["merged"])
+def test_validate_serialized_graph_rejects_a_merged_capability_tombstone(status: str) -> None:
+    graph = _graph(
+        nodes=(SerializedNode(label="Capability", properties={"id": "cap_x", "status": status}),)
+    )
+
+    with pytest.raises(ArtifactContentRejectedError, match=r"merged"):
+        validate_serialized_graph(
+            graph,
+            allowed_labels=BASELINE_ALLOWED_LABELS,
+            allowed_relationship_types=BASELINE_ALLOWED_RELATIONSHIP_TYPES,
+        )
+
+
+@pytest.mark.parametrize("status", ["active", "deprecated", None])
+def test_validate_serialized_graph_accepts_a_non_merged_capability(status: str | None) -> None:
+    properties: dict[str, SerializedPropertyValue] = {"id": "cap_x"}
+    if status is not None:
+        properties["status"] = status
+    graph = _graph(nodes=(SerializedNode(label="Capability", properties=properties),))
+
+    validate_serialized_graph(
+        graph,
+        allowed_labels=BASELINE_ALLOWED_LABELS,
+        allowed_relationship_types=BASELINE_ALLOWED_RELATIONSHIP_TYPES,
+    )
+
+
+@pytest.mark.parametrize(
+    ("labels", "relationships"),
+    [
+        (BASELINE_ALLOWED_LABELS, BASELINE_ALLOWED_RELATIONSHIP_TYPES),
+        (NATIVE_ALLOWED_LABELS, NATIVE_ALLOWED_RELATIONSHIP_TYPES),
+    ],
+)
+def test_validate_serialized_graph_rejects_a_merged_obligation_marker(
+    labels: frozenset[str], relationships: frozenset[str]
+) -> None:
+    """Issue #190 (H1): a `MergedObligation` marker exists only in a deployment's own graph."""
+    graph = _graph(
+        nodes=(
+            SerializedNode(
+                label="MergedObligation", properties={"id": "obl_x", "merged_into": "obl_y"}
+            ),
+        )
+    )
+
+    with pytest.raises(ArtifactContentRejectedError, match=r"MergedObligation"):
+        validate_serialized_graph(
+            graph, allowed_labels=labels, allowed_relationship_types=relationships
         )

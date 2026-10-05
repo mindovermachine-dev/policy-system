@@ -116,3 +116,36 @@ def test_content_violation_emits_started_then_failed_audit_entries(
         row["outcome"] for row in read_lines(log_path) if row["action"] == "restore_instrument"
     ]
     assert outcomes == ["started", "failed"]
+
+
+def test_baseline_with_a_merged_capability_is_rejected_before_any_db_call(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #190: an artifact cannot mint an orphan tombstone via `ON CREATE SET`."""
+    emitter, _log_path = make_emitter()
+    spy_db = _SpyDb()
+    baseline = SerializedGraph(
+        nodes=(
+            SerializedNode(label="RegulatoryInstrument", properties={"id": _INSTRUMENT_ID}),
+            SerializedNode(label="Capability", properties={"id": "cap_x", "status": "merged"}),
+        ),
+        edges=(),
+    )
+    artifact = build_restore_artifact(
+        instrument_id=_INSTRUMENT_ID,
+        short_name=_SHORT_NAME,
+        native_graph=_valid_native_graph(),
+        baseline_graph=baseline,
+    )
+
+    with pytest.raises(ArtifactContentRejectedError, match=r"merged"):
+        restore_instrument(
+            artifact,
+            db=cast("FalkorDB", spy_db),
+            single_tenant_graph_name=_NEVER_TOUCHED_SINGLE_TENANT,
+            similarity_threshold=0.9,
+            actor=_ACTOR,
+            emitter=emitter,
+        )
+
+    assert spy_db.touched == []

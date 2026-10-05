@@ -50,6 +50,8 @@ class _ScriptedSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(q)
+        if "MERGED_INTO" in q:
+            return _FakeQueryResult([])
         if "(n:Capability) RETURN" in q:
             return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")
@@ -117,7 +119,7 @@ def test_dedupe_canonical_nodes_aborts_with_zero_writes_on_embedding_failure(
             emitter=emitter,
         )
 
-    assert len(graph.calls) == 1
+    assert len(graph.calls) == 2  # index read + tombstone redirect read (issue #190)
     assert "RETURN" in graph.calls[0]
     assert "MERGE" not in graph.calls[0]
     assert "SET" not in graph.calls[0]

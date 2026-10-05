@@ -89,6 +89,7 @@ from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
+from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.audit.models import AuditQueryFilters
 from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
@@ -107,6 +108,25 @@ from ps_service.curated_source import store as catalog_source_store
 from ps_service.curated_source.catalog_client import build_default_curated_catalog_dependencies
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import resolve_effective_source
+from ps_service.graph_cleanup.dependencies import (
+    GraphCleanupDependencies,
+    build_default_graph_cleanup_dependencies,
+)
+from ps_service.graph_cleanup.discovery import resolve_min_similarity
+from ps_service.graph_cleanup.errors import (
+    GraphCleanupAcknowledgmentRequiredError,
+    GraphCleanupPersistenceError,
+    GraphCleanupValidationError,
+)
+from ps_service.graph_cleanup.service import (
+    check_cleanup_approval,
+    create_capability_merge_approval,
+    create_obligation_merge_approval,
+    create_release_governance_approval,
+    create_unmerge_approval,
+    find_capability_merge_candidates,
+    find_duplicate_obligations,
+)
 from ps_service.invitations.client import create_invitation
 from ps_service.invitations.errors import AuthentikInvitationError
 from ps_service.logging import (
@@ -543,6 +563,36 @@ def _resolve_base_url(ctx: Context) -> str:
     return f"{scheme}://{host}" if host else f"{scheme}://unknown"
 
 
+_CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
+    "error: graph cleanup requires a real authenticated caller"
+)
+
+
+def _require_cleanup_actor(config: ServiceConfig) -> tuple[str, str] | str:
+    """Gate every graph-cleanup tool (issue #190, AC-BI-001/002).
+
+    Returns the verified `(sub, iss)` of a caller holding an explicit
+    `ComplianceOfficer` grant, or an `error: ` string. Fail-closed by design:
+    unlike `restore_instrument`, the local-test bypass does NOT skip the check --
+    no verified bearer token means no actor means rejection (graph cleanup is a
+    privileged, accountable edit and a synthetic identity must never hold it).
+    `require_role` is exact-match for `ComplianceOfficer`, so SystemAdmin and
+    SystemOwner get no override, and a store outage denies rather than allows.
+    """
+    actor = _resolve_authz_actor(config)
+    if actor is None:
+        return _CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    try:
+        require_role(
+            actor,
+            minimum=AccessRole.COMPLIANCE_OFFICER,
+            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+        )
+    except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+        return f"error: {exc}"
+    return actor
+
+
 def _run_mcp_action(
     action: str,
     principal: str | None,
@@ -649,6 +699,16 @@ def _sanitize_graph_open[**P, R](opener: Callable[P, R]) -> Callable[P, R]:
             raise McpGraphUnavailableError(_GRAPH_UNAVAILABLE_DETAIL) from exc
 
     return _wrapped
+
+
+def _sanitize_cleanup_graph_open(
+    dependencies: GraphCleanupDependencies,
+) -> GraphCleanupDependencies:
+    """Wrap the cleanup graph opener so any failure sanitises to `McpGraphUnavailableError`."""
+    return dataclasses.replace(
+        dependencies,
+        open_single_tenant_graph=_sanitize_graph_open(dependencies.open_single_tenant_graph),
+    )
 
 
 def _sanitize_pipeline_graph_opens(dependencies: PipelineDependencies) -> PipelineDependencies:
@@ -3043,3 +3103,468 @@ def revert_policy_to_draft(
         }
 
     return _run_mcp_action("revert_policy_to_draft", principal, _body)
+
+
+@server.tool(name="find-capability-merge-candidates")
+def find_capability_merge_candidates_tool(
+    min_similarity: Annotated[float | None, Field(gt=0.5, le=1.0)] = None,
+) -> dict[str, object] | str:
+    """FindCapabilityMergeCandidates: list groups of active Capabilities that look like duplicates.
+
+    Compliance Officer graph cleanup (issue #190), read-only: nothing is
+    changed and no approval is created. Requires an explicit `ComplianceOfficer`
+    grant on a real authenticated session (no admin override, never available
+    under the local-test bypass).
+
+    `min_similarity` (greater than 0.5, at most 1.0) is the cosine similarity
+    of the Capabilities' already-cached embeddings at or above which two are
+    linked; when omitted, the configured Company Merge threshold applies, else
+    0.90. No embedding is fetched or computed by this tool.
+
+    Returns `{"groups": [{"basis", "merge_case", "policies_distinct", "members":
+    [{"id", "name", "obligation_count", "governing_policy"}, ...]}, ...]}`;
+    `basis` is `"name"` when every member's name is equal after case and
+    punctuation are ignored, else `"embedding"`. `governing_policy` is
+    `{"id", "title", "status"}` or `null`; `obligation_count` is the number of
+    Obligations requiring that Capability. `merge_case` is 1 (no member governed),
+    2 (exactly one governed) or 3 (two or more governed); `policies_distinct` is
+    true when the governed members name different Policies. Returns a string
+    beginning `error: ` when the
+    caller has no real authenticated session or lacks the `ComplianceOfficer`
+    role, when the authorization store or the policy graph cannot be reached,
+    or (this tool's own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            result = find_capability_merge_candidates(
+                graph,
+                min_similarity=resolve_min_similarity(
+                    min_similarity, config.company_merge_similarity_threshold
+                ),
+            )
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        except GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return result.model_dump()
+
+    return _run_mcp_action("find_capability_merge_candidates", principal, _body)
+
+
+@server.tool(name="find-duplicate-obligations")
+def find_duplicate_obligations_tool(role_id: str | None = None) -> dict[str, object] | str:
+    """FindDuplicateObligations: list groups of duplicate Obligations under one Role.
+
+    Compliance Officer graph cleanup (issue #190), read-only: nothing is
+    changed and no approval is created. Requires an explicit `ComplianceOfficer`
+    grant on a real authenticated session (no admin override, never available
+    under the local-test bypass).
+
+    Only Obligations under the same Role are grouped, and only when their text
+    is identical or near-identical once case and punctuation are ignored; the
+    same wording under two Roles is never grouped. `role_id`, when given, limits
+    the sweep to that Role.
+
+    Returns `{"groups": [{"role_id", "role_name", "basis", "members": [{"id",
+    "text", "requirements": [{"requirement_id", "source_ref"}, ...]}, ...]},
+    ...]}`; `basis` is `"identical_text"` or `"near_text"`. `source_ref` comes
+    from the `EXPRESSES` edge of each Requirement the Obligation satisfies.
+    Returns a string beginning `error: ` when the caller has no real
+    authenticated session or lacks the `ComplianceOfficer` role, when the
+    authorization store or the policy graph cannot be reached, or (this tool's
+    own residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            result = find_duplicate_obligations(graph, role_id=role_id)
+        except McpGraphUnavailableError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        except GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return result.model_dump()
+
+    return _run_mcp_action("find_duplicate_obligations", principal, _body)
+
+
+@server.tool(name="merge-capabilities")
+def merge_capabilities_tool(
+    survivor_id: Annotated[str, Field(min_length=1)],
+    absorbed_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+    *,
+    acknowledge_governance_change: bool = False,
+) -> dict[str, object] | str:
+    """MergeCapabilities: preview merging `absorbed_id` into `survivor_id` and request approval.
+
+    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
+    grant on a real authenticated session (no admin override, never available under the
+    local-test bypass). This call NEVER edits the graph: it returns a preview and creates
+    a pending passkey approval bound to this exact pair and to the state previewed. The
+    merge executes only when the officer opens `approval_url` in a browser and signs with a
+    passkey; `check-cleanup-approval` reports the outcome.
+
+    On execution the absorbed Capability's `REQUIRES`, `COVERS` and `MITIGATED_BY` edges move
+    to the survivor with no duplicate edges, and the absorbed node is kept as a tombstone
+    (`status` `merged`, `MERGED_INTO` the survivor), in one all-or-nothing write that is
+    audited first (`capability.merge`).
+
+    Merge case 1 (neither Capability has a governing Policy) needs nothing more. Case 2 (exactly
+    one is governed) changes which Capability that Policy governs: the first call, without
+    `acknowledge_governance_change`, returns the preview with `acknowledgment_required: true`
+    and a `message`, and creates NO approval; repeat the call with
+    `acknowledge_governance_change=true` after the Compliance Officer has explicitly accepted
+    that change, and the acknowledgment becomes part of the signed approval and the audit row
+    (`policy_case` 2). The preview's `governance` block names the policy (`id`, `title`,
+    `status`), `obligations_coverage_changed`, and the policy's governed set before and after;
+    an `approved` policy keeps its content and version. Case 3 (both governed by the SAME
+    policy) needs no acknowledgment: the absorbed capability's `GOVERNED_BY` edge is deleted and
+    the survivor's stays (`policy_case` 3). Two Capabilities governed by DIFFERENT policies are
+    rejected before any approval, with an error naming both policies and the
+    `release-capability-governance` step; when neither policy is a draft that step is not
+    available and the error states there is no completion path (a policy fork carries the whole
+    governed set).
+
+    Returns `{"preview": {"survivor_id", "survivor_name", "absorbed_id", "absorbed_name",
+    "policy_case", "edges_to_move": {"requires", "covers", "mitigated_by"},
+    "duplicate_edges_collapsed", "obligations_affected", "state_digest", "governance"},
+    "pending_approval_id", "approval_url", "expires_at"}` (`governance` is `null` in case 1),
+    or, for case 2 without the acknowledgment, `{"preview", "acknowledgment_required": true,
+    "message"}`. Returns a string beginning
+    `error: ` when the caller is not an authenticated Compliance Officer, when a side
+    is the same node, does not exist, is a `merged` tombstone or is not active, when the two
+    are governed by different policies, when the policy
+    graph database cannot be reached, or (this tool's own residual safety net) on any
+    other unexpected failure. No approval is created on any error.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_capability_merge_approval(
+                graph,
+                survivor_id=survivor_id,
+                absorbed_id=absorbed_id,
+                acknowledge_governance_change=acknowledge_governance_change,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=PsycopgPendingApprovalStore(config),
+            )
+        except GraphCleanupAcknowledgmentRequiredError as exc:
+            return {
+                "preview": exc.preview.model_dump(mode="json"),
+                "acknowledgment_required": True,
+                "message": str(exc),
+            }
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("merge_capabilities", principal, _body)
+
+
+@server.tool(name="merge-obligations")
+def merge_obligations_tool(
+    survivor_id: Annotated[str, Field(min_length=1)],
+    absorbed_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+) -> dict[str, object] | str:
+    """MergeObligations: preview merging `absorbed_id` into `survivor_id` and request approval.
+
+    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
+    grant on a real authenticated session (no admin override, never available under the
+    local-test bypass). This call NEVER edits the graph: it returns a preview and creates a
+    pending passkey approval bound to this exact pair and to the state previewed. The merge
+    executes only when the officer opens `approval_url` in a browser and signs with a passkey;
+    `check-cleanup-approval` reports the outcome.
+
+    Both Obligations must be borne by the SAME Role. On execution the absorbed Obligation's
+    `SATISFIED_BY` and `REQUIRES` edges union onto the survivor (no duplicate edges), the
+    survivor keeps its single `HAS` Role edge, and the absorbed Obligation is DELETED with its
+    full node and edge snapshot held in the audit row (`obligation.merge`), all in one
+    all-or-nothing write that is audited first. The delete leaves a `MergedObligation` marker
+    so a later ingest or restore that regenerates the absorbed Obligation attaches to the
+    survivor instead of recreating it.
+
+    Returns `{"preview": {"survivor_id", "survivor_text", "absorbed_id", "absorbed_text",
+    "role_id", "role_name", "edges_to_move": {"satisfied_by", "requires"},
+    "duplicate_edges_collapsed", "requirement_source_refs": [{"requirement_id",
+    "source_ref"}], "state_digest"}, "pending_approval_id", "approval_url", "expires_at"}`.
+    Returns a string beginning `error: ` when the caller is not an authenticated Compliance
+    Officer, when a side is the same node or does not exist, when the two Obligations are
+    under different Roles, when the policy graph database cannot be reached, or (this tool's
+    own residual safety net) on any other unexpected failure. No approval is created on any
+    error.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_obligation_merge_approval(
+                graph,
+                survivor_id=survivor_id,
+                absorbed_id=absorbed_id,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=PsycopgPendingApprovalStore(config),
+            )
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("merge_obligations", principal, _body)
+
+
+@server.tool(name="release-capability-governance")
+def release_capability_governance_tool(
+    capability_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+) -> dict[str, object] | str:
+    """ReleaseCapabilityGovernance: preview releasing a Capability from its draft policy.
+
+    Compliance Officer graph cleanup (issue #190). Requires an explicit `ComplianceOfficer`
+    grant on a real authenticated session (no admin override, never available under the
+    local-test bypass). This call NEVER edits the graph: it returns a preview and creates a
+    pending passkey approval bound to this capability, its governing policy and the state
+    previewed. The release executes only when the officer opens `approval_url` in a browser
+    and signs with a passkey; `check-cleanup-approval` reports the outcome.
+
+    Only a Capability governed by a `draft` Policy can be released: on execution its single
+    `GOVERNED_BY` edge to that Policy is deleted (the Capability and the Policy stay, the
+    Capability becomes ungoverned) in one guarded write that is audited first
+    (`capability.release_governance`, with a before/after snapshot). A `proposed` Policy is
+    rejected with a pointer to `revert-policy-to-draft`; an `approved` or `deprecated` Policy
+    is rejected with a pointer to the policy lifecycle, stating plainly that a fork carries
+    the whole governed set and so does not by itself free the Capability.
+
+    Returns `{"preview": {"capability_id", "capability_name", "policy_id", "policy_title",
+    "policy_status", "governed_set_before", "governed_set_after", "state_digest"},
+    "pending_approval_id", "approval_url", "expires_at"}`. Returns a string beginning
+    `error: ` when the caller is not an authenticated Compliance Officer, the Capability does
+    not exist, is a `merged` tombstone or not active, is not governed, or its governing policy
+    is not a draft, when the policy graph database cannot be reached, or (this tool's own
+    residual safety net) on any other unexpected failure. No approval is created on any error.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_release_governance_approval(
+                graph,
+                capability_id=capability_id,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=PsycopgPendingApprovalStore(config),
+            )
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("release_capability_governance", principal, _body)
+
+
+_AUDIT_UNREADABLE_MESSAGE = "error: the audit trail could not be read right now; try again shortly"
+
+
+@server.tool(name="unmerge")
+def unmerge_tool(
+    merged_id: Annotated[str, Field(min_length=1)],
+    ctx: Context,
+) -> dict[str, object] | str:
+    """Unmerge: preview reversing a Compliance Officer merge and request approval (issue #190).
+
+    Requires an explicit `ComplianceOfficer` grant on a real authenticated session (no admin
+    override, never available under the local-test bypass). `merged_id` is the id that was
+    absorbed by `merge-capabilities` (a `merged` Capability tombstone) or by `merge-obligations`
+    (a deleted Obligation). The merge is found in the audit trail (`capability.merge` or
+    `obligation.merge`): the newest `applied` row not followed by a `failed` row for the same
+    approval. This call NEVER edits the graph: it returns a preview and creates a pending passkey
+    approval bound to the merge it reverses and to the state previewed. The unmerge executes only
+    when the officer opens `approval_url` in a browser and signs with a passkey;
+    `check-cleanup-approval` reports the outcome.
+
+    Capability merge: the tombstone returns to `active` with its `MERGED_INTO` edge removed and
+    exactly the edges the merge moved off it are restored from the audit snapshot (the survivor
+    keeps any edge it already had before the merge). Edges added to the survivor since the merge
+    stay in place and are listed as `survivor_added_edges`.
+
+    Obligation merge: the deleted Obligation is recreated under its original id with its
+    properties, its `HAS` edge from the Role and exactly its `SATISFIED_BY` and `REQUIRES` edges
+    from the audit snapshot, and its `MergedObligation` marker is removed. The survivor's edges are
+    never removed (a union cannot be attributed): edges added since the merge are listed as
+    `survivor_added_edges` and those that may have come from the absorbed Obligation as
+    `survivor_edges_possibly_from_merge` (they may originate from the merge).
+
+    Either way the write is one guarded all-or-nothing statement that is audited first
+    (`capability.unmerge` or `obligation.unmerge`, with a before/after snapshot).
+
+    Returns `{"preview": {"kind": "capability" | "obligation", "merged_id", "survivor_id",
+    "merge_approval_id", "edges_to_restore", "survivor_added_edges", "state_digest", ...},
+    "pending_approval_id", "approval_url", "expires_at"}`; a capability preview also carries
+    `merged_name`, `survivor_name` and `edges_removed_from_survivor`, an obligation preview
+    `merged_text`, `survivor_text`, `role_id`, `survivor_edges_possibly_from_merge` and `note`.
+    Returns a string beginning `error: ` when the caller is not an authenticated Compliance
+    Officer, no merge of the id is in the audit trail, the merge cannot be reversed because of a
+    conflict (the survivor was merged away or re-pointed, its governance changed, a restored
+    edge's endpoint is gone, the Obligation exists again; each is explained), the audit trail or
+    the policy graph database cannot be reached, or (this tool's own residual safety net) on any
+    other unexpected failure. No approval is created on any error.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        dependencies = build_default_graph_cleanup_dependencies()
+        try:
+            graph = _sanitize_graph_open(dependencies.open_single_tenant_graph)(config)
+            approval = create_unmerge_approval(
+                graph,
+                dependencies.audit_store(config),
+                merged_id=merged_id,
+                actor=actor,
+                base_url=_resolve_base_url(ctx),
+                store=PsycopgPendingApprovalStore(config),
+            )
+        except GraphCleanupValidationError as exc:
+            return f"error: {exc}"
+        except McpGraphUnavailableError, GraphCleanupPersistenceError:
+            return _GRAPH_UNAVAILABLE_MESSAGE
+        except AuditPostgresUnavailableError, AuditPersistenceError:
+            return _AUDIT_UNREADABLE_MESSAGE
+        return {
+            "preview": approval.preview.model_dump(mode="json"),
+            "pending_approval_id": approval.pending_approval_id,
+            "approval_url": approval.approval_url,
+            "expires_at": approval.expires_at,
+        }
+
+    return _run_mcp_action("unmerge", principal, _body)
+
+
+_CLEANUP_APPROVAL_UNSETTLED_MESSAGE = (
+    "error: the approval status could not be settled right now; try again shortly"
+)
+
+
+@server.tool(name="check-cleanup-approval")
+def check_cleanup_approval_tool(
+    pending_approval_id: Annotated[str, Field(min_length=1)],
+) -> dict[str, object] | str:
+    """CheckCleanupApproval: status and outcome of a graph-cleanup passkey approval (issue #190).
+
+    Companion to `merge-capabilities`, `merge-obligations`, `release-capability-governance` and
+    `unmerge`:
+    the passkey ceremony happens in a browser, so this is the way to learn whether the approval
+    was signed and what the edit did. Requires an explicit `ComplianceOfficer` grant. Only the
+    officer who created the approval can see it; any other caller, or an unknown id, gets the
+    same not-found error.
+
+    `status` is `pending`, `expired` (the window elapsed unsigned, derived live) or `signed`.
+    `outcome` is `null` until the signed approval has run, then either the result
+    (`{"survivor_id", "absorbed_id", "merged": true}` for either merge tool,
+    `{"capability_id", "policy_id", "released": true}` for a release,
+    `{"merged_id", "survivor_id", "unmerged": true, "survivor_added_edges"}` for an unmerge
+    of either kind),
+    `{"error": <message>}`, or `{"reconciled": "applied"}`. A signed approval whose outcome
+    was never recorded is checked against the graph once it is more than five minutes past
+    its expiry and settled: if the
+    edit is present the outcome becomes `reconciled`; if not, a `failed` audit row is
+    recorded and the outcome becomes an error. An `applied` audit row followed by a `failed`
+    row for the same approval id means no edit occurred.
+
+    Returns `{"pending_approval_id", "status", "tool_name", "outcome"}`, or a string beginning
+    `error: ` when the caller is not an authenticated Compliance Officer, no such approval is
+    visible to the caller, settling it was not possible right now, or (this tool's own
+    residual safety net) on any other unexpected failure.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+
+    def _body() -> dict[str, object] | str:
+        actor = _require_cleanup_actor(config)
+        if isinstance(actor, str):
+            return actor
+        try:
+            status = check_cleanup_approval(
+                pending_approval_id=pending_approval_id,
+                actor=actor,
+                store=PsycopgPendingApprovalStore(config),
+                config=config,
+                dependencies=_sanitize_cleanup_graph_open(
+                    build_default_graph_cleanup_dependencies()
+                ),
+            )
+        except (
+            McpGraphUnavailableError,
+            GraphCleanupPersistenceError,
+            AuditPostgresUnavailableError,
+            AuditPersistenceError,
+        ):
+            return _CLEANUP_APPROVAL_UNSETTLED_MESSAGE
+        if status is None:
+            return f"error: no pending approval with id {pending_approval_id!r}"
+        return {
+            "pending_approval_id": status.pending_approval_id,
+            "status": status.status,
+            "tool_name": status.tool_name,
+            "outcome": status.outcome,
+        }
+
+    return _run_mcp_action("check_cleanup_approval", principal, _body)

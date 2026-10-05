@@ -71,7 +71,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ps_service.company_merge import dedup, graph_reader, graph_writer
+from ps_service.company_merge import dedup, graph_reader, graph_writer, obligation_redirect
 from ps_service.company_merge.errors import CompanyMergeConfigurationError
 from ps_service.company_merge.models import MergeResult
 from ps_service.company_merge.pending_review import persist_pending_reviews
@@ -265,6 +265,13 @@ def merge_baseline_graph(
         emitter=emitter,
     )
 
+    # issue #190 (H1): an Obligation a Compliance Officer cleanup merge absorbed is dropped
+    # from the baseline here, BEFORE any write, and mapped to its terminal survivor so the
+    # rewiring below lands its edges there instead of minting the duplicate again.
+    graph, obligation_redirects = obligation_redirect.resolve_obligation_redirects(
+        single_tenant_graph, graph, emitter=emitter
+    )
+
     # Only now, having completed the dedup pass with no exception, is
     # anything written -- "abort with no partial write" on a raised
     # LlmProviderError is therefore automatic, not enforced by a try/except.
@@ -292,6 +299,7 @@ def merge_baseline_graph(
         resolution.incoming_id: resolution.canonical_id
         for resolution in capability_dedup.resolutions
     }
+    canonical_id_by_incoming_id.update(obligation_redirects)
 
     # issue #54, S4 -- the Policy convergence + Standard/Control passthrough
     # pass, a structural no-op for an external-sourced baseline (empty

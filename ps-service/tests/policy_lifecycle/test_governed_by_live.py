@@ -248,3 +248,17 @@ def test_repoint_of_a_policy_with_no_standards_still_sets_its_status(
     assert applied is True
     assert _statuses(graph, "pol_bare_fork") == ["approved"]
     assert _governors(graph)["cap_live_a"] == ["pol_bare_fork"]
+
+
+def test_fresh_create_naming_a_merged_tombstone_writes_nothing_and_reads_it_as_absent(
+    graph: GraphHandle,
+) -> None:
+    graph.query("MATCH (c:Capability {id: 'cap_live_a'}) SET c.status = 'merged'")
+
+    assert read_capability_governors(graph, _CAPS) == {"cap_live_b": None}
+    written = create_policy_draft(
+        graph, policy_id="pol_tomb", title="Tomb", owner=_OWNER, capability_ids=_CAPS
+    )
+
+    assert written is False
+    assert _rows(graph, "MATCH (p:Policy {id: 'pol_tomb'}) RETURN p.id") == []

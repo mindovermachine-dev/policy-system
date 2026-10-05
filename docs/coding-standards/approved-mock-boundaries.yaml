@@ -38,6 +38,10 @@ falkordb:
   # internally (and the only piece of it a caller may substitute) -- mirrors
   # `build_default_graph_openers` above exactly.
   - ps_service.api.near_miss_review_orchestration.build_default_near_miss_review_graph_opener
+  # Issue #190 (graph cleanup): the narrowed graph-opener-only accessor
+  # `build_default_graph_cleanup_dependencies` delegates to -- zero business logic, sole
+  # FalkorDB connection surface of `ps_service.graph_cleanup`; mirrors the near-miss entry above.
+  - ps_service.graph_cleanup.dependencies.build_default_graph_cleanup_graph_opener
   # Slice E (issue #163): the narrowed fetch/effective-source/FalkorDB-opener-only accessor
   # `build_default_restore_from_catalog_dependencies` itself now delegates to internally (and
   # the only piece of it a caller may substitute) -- mirrors `build_default_graph_openers`/

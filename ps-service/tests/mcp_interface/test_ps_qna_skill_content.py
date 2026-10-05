@@ -56,3 +56,17 @@ def test_guardrails_section_names_null_status_fallback() -> None:
     text = _skill_text()
 
     assert "The null-status fallback" in text
+
+
+def test_active_only_default_lists_merged_capability_status() -> None:
+    text = _skill_text()
+
+    assert "Capability (active\\|deprecated\\|merged)" in text
+
+
+def test_active_only_default_excludes_merged_tombstones() -> None:
+    text = _skill_text()
+
+    assert "`merged` is a tombstone" in text
+    assert "the default excludes it from every answer" in text
+    assert "Include tombstones only when the user explicitly asks" in text

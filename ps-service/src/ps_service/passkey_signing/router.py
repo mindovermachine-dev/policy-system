@@ -56,7 +56,9 @@ from ps_service.api.near_miss_review_orchestration import (
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
+from ps_service.logging import emit_log_entry
 from ps_service.passkey_signing.error_handlers import reject, reject_on_webauthn_failure
+from ps_service.passkey_signing.executors import resolve_approval_executor
 from ps_service.passkey_signing.service import (
     _compute_sign_challenge,  # pyright: ignore[reportPrivateUsage]
     _require_pending_and_unexpired,  # pyright: ignore[reportPrivateUsage]
@@ -586,6 +588,44 @@ def _execute_merge_and_record_outcome(
     return outcome
 
 
+_NEAR_MISS_TOOL_NAME = "near_misses_resolve"
+_EXECUTOR_FAILED_MESSAGE = (
+    "this action could not be completed; if you still intend to proceed, ask for a new approval"
+)
+
+
+def _run_registered_executor_and_record_outcome(
+    *, row: PendingApprovalRow, store: PendingApprovalStore, config: ServiceConfig
+) -> dict[str, object]:
+    """Run the executor registered for `row.tool_name` and persist its outcome (issue #190).
+
+    The signature is already consumed. An unregistered `tool_name`, or an executor that
+    raises, stores one generic safe error -- the real reason is logged server-side only and
+    nothing is retried.
+    """
+    executor = resolve_approval_executor(row.tool_name)
+    outcome: dict[str, object] = {"error": _EXECUTOR_FAILED_MESSAGE}
+    if executor is None:
+        emit_log_entry(
+            component="passkey_signing",
+            action="sign_verify_executor",
+            outcome="failed",
+            extra={"pending_approval_id": row.id, "reason": "no_executor_registered"},
+        )
+    else:
+        try:
+            outcome = executor(row, config)
+        except Exception as exc:  # noqa: BLE001 -- the signature is consumed; an executor must never leak a raw failure through the HTTP boundary
+            emit_log_entry(
+                component="passkey_signing",
+                action="sign_verify_executor",
+                outcome="failed",
+                extra={"pending_approval_id": row.id, "reason": repr(exc)},
+            )
+    store.set_outcome(row.id, outcome)
+    return outcome
+
+
 async def post_sign_verify(
     pending_approval_id: str,
     request_body: _SignVerifyRequest,
@@ -676,9 +716,12 @@ async def post_sign_verify(
         credential_id=credential.credential_id, sign_count=verified.new_sign_count
     )
 
-    outcome = _execute_merge_and_record_outcome(
-        row=row, store=store, near_miss_dependencies=near_miss_dependencies, config=config
-    )
+    if row.tool_name == _NEAR_MISS_TOOL_NAME:
+        outcome = _execute_merge_and_record_outcome(
+            row=row, store=store, near_miss_dependencies=near_miss_dependencies, config=config
+        )
+    else:
+        outcome = _run_registered_executor_and_record_outcome(row=row, store=store, config=config)
     return {"status": "signed", **outcome}
 
 

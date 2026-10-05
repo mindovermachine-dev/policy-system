@@ -74,7 +74,12 @@ class _RecordedCall:
 # (Capability only, since #42) -- used to distinguish a "read" call from a
 # "write" call in a fake single-tenant graph's call log (test (b)'s
 # call-order proof).
-_READ_MARKERS = ("RETURN n.id, n.name, n.embedding", "RETURN n.id, n.title, n.embedding")
+_READ_MARKERS = (
+    "RETURN n.id, n.name, n.embedding",
+    "RETURN n.id, n.title, n.embedding",
+    "RETURN a.id, b.id",
+    "RETURN m.id, m.merged_into",
+)
 
 
 def _is_read_call(call: _RecordedCall) -> bool:
@@ -261,7 +266,11 @@ class _FakeSingleTenantGraph:
         policy_rows: list[object] | None = None,
         practice_area_rows: list[object] | None = None,
         risk_path_rows: list[object] | None = None,
+        merged_rows: list[object] | None = None,
     ) -> None:
+        # issue #190: `[tombstone_id, survivor_id]` rows answering the
+        # tombstone redirect read; empty by default (no tombstones).
+        self._merged_rows: list[object] = merged_rows or []
         self._obligations: dict[str, list[object]] = {}
         for row in obligation_rows or []:
             row_list = list(cast("list[object]", row))
@@ -299,6 +308,10 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
+        if "MERGED_INTO" in q:
+            return _FakeQueryResult([list(cast("list[object]", row)) for row in self._merged_rows])
+        if "MergedObligation" in q:  # issue #190: no cleanup-merge obligation markers
+            return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "(n:Policy) RETURN n.id, n.title, n.embedding" in q:
@@ -600,7 +613,7 @@ def test_both_dedup_reads_complete_before_any_write_call(
 
     read_positions = [i for i, call in enumerate(single_tenant.calls) if _is_read_call(call)]
     write_positions = [i for i, call in enumerate(single_tenant.calls) if not _is_read_call(call)]
-    assert len(read_positions) == 1
+    assert len(read_positions) == 3  # index + tombstone + obligation-marker reads (issue #190)
     assert write_positions
     assert max(read_positions) < min(write_positions)
 
@@ -1975,3 +1988,54 @@ def _classification_only_baseline_graph(
         risk_path_rows=risk_path_rows or [],
         covers_rows=covers_rows,
     )
+
+
+def test_incoming_capability_matching_a_tombstone_attaches_requires_to_the_survivor(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #190, AC-BI-008 (live half): the baseline regenerates a Capability whose id
+    is a `merged` tombstone in the single-tenant graph. No node is minted for it and the
+    incoming `REQUIRES` edge lands on the survivor.
+    """
+    emitter, _log_path = make_emitter()
+    absorbed_name = "Vulnerability Remediation Process"
+    absorbed_id = capability_id(absorbed_name)
+    survivor_name = "Vulnerability Remediation"
+    survivor_id = capability_id(survivor_name)
+    single_tenant = _FakeSingleTenantGraph(
+        capability_rows=[
+            [absorbed_id, absorbed_name, None],
+            [survivor_id, survivor_name, None],
+        ],
+        merged_rows=[[absorbed_id, survivor_id]],
+    )
+    role_id = "role_h_operator"
+    obligation_text = "Remediate vulnerabilities without delay."
+    obl_id = obligation_id(role_id, obligation_text)
+    baseline = _FakeBaselineGraph(
+        regulatory_instrument_properties={"id": "REG-H", "title": "Test Regulation REG-H"},
+        role_rows=[[role_id, "Operator", 0.9]],
+        requirement_rows=[["REG-H_req_art_1.1", "Must remediate.", "requirement", 0.9, role_id]],
+        obligation_rows=[[obl_id, obligation_text, 0.9]],
+        capability_rows=[[absorbed_id, absorbed_name, 0.8, None]],
+        defines_rows=[[role_id, "Article 1(1)"]],
+        expresses_rows=[["REG-H_req_art_1.1", "Article 1(1)"]],
+        has_rows=[[role_id, obl_id]],
+        satisfied_by_rows=[["REG-H_req_art_1.1", obl_id]],
+        requires_rows=[[obl_id, absorbed_id]],
+    )
+
+    result = merge_baseline_graph(
+        "REG-H",
+        baseline_graph=baseline,
+        single_tenant_graph=single_tenant,
+        embed_model=_MODEL,
+        similarity_threshold=_THRESHOLD,
+        emitter=emitter,
+    )
+
+    assert result.capability_canonical_ids == (survivor_id,)
+    assert single_tenant.calls_matching("MERGE (n:Capability {id: $id}) ON CREATE SET") == []
+    requires_writes = single_tenant.calls_matching("[:REQUIRES]")
+    assert any(c.params == {"source_id": obl_id, "target_id": survivor_id} for c in requires_writes)
+    assert not any(c.params and c.params.get("target_id") == absorbed_id for c in requires_writes)

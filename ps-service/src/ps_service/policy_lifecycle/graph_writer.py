@@ -435,7 +435,8 @@ def read_capability_governors(
     """Read which Policy (if any) currently governs each of `capability_ids` (issue #185).
 
     A pure read through the health-tracking wrapper. A Capability that does
-    not exist is absent from the result; an existing but ungoverned one maps
+    not exist, or is a `merged` tombstone (issue #190), is absent from the
+    result; an existing but ungoverned one maps
     to `None`.
 
     Args:
@@ -448,6 +449,7 @@ def read_capability_governors(
     result = _execute_query(
         graph,
         "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
+        "AND coalesce(cap.status,'active') <> 'merged' "
         "OPTIONAL MATCH (cap)-[:GOVERNED_BY]->(g:Policy) "
         "RETURN cap.id, g.id",
         params={"capability_ids": list(capability_ids)},
@@ -534,6 +536,7 @@ def create_policy_draft(
         claimed = _execute_query(
             graph,
             "MATCH (cap:Capability) WHERE cap.id IN $capability_ids "
+            "AND coalesce(cap.status,'active') <> 'merged' "
             "AND NOT (cap)-[:GOVERNED_BY]->(:Policy) "
             "WITH collect(cap) AS caps WHERE size(caps) = $expected "
             "MERGE (p:Policy {id: $policy_id}) SET p += $properties "

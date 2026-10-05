@@ -84,7 +84,10 @@ class _RecordedCall:
     params: dict[str, object] | None
 
 
-_READ_MARKERS = ("RETURN n.id, n.name, n.embedding",)  # Capability index only, since #42
+_READ_MARKERS = (
+    "RETURN n.id, n.name, n.embedding",  # Capability index only, since #42
+    "RETURN a.id, b.id",  # tombstone redirect read, issue #190
+)
 
 
 def _is_read_call(call: _RecordedCall) -> bool:
@@ -224,6 +227,8 @@ class _FakeSingleTenantGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         self.calls.append(_RecordedCall(q, params))
+        if "MERGED_INTO" in q or "MergedObligation" in q:  # issue #190: no tombstones/markers
+            return _FakeQueryResult([])
         if "(n:Capability) RETURN n.id, n.name, n.embedding" in q:
             return _FakeQueryResult([list(row) for row in self._capabilities.values()])
         if "MERGE (n:Obligation {id: $id}) ON CREATE SET" in q:

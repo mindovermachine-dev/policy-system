@@ -26,6 +26,14 @@ imported directly here, never reimplemented. See
 AST scan confirms no function named `capability_id`/`_hash`/`_slug` is ever
 defined anywhere in this package, plus a direct byte-for-byte comparison
 against `ps_service.domain_mapper.identity`'s own function.
+
+Issue #190: a Capability a Compliance Officer cleanup merge absorbed stays in
+the graph as a `merged` tombstone with a `MERGED_INTO` edge to its survivor.
+On both paths a tombstone is dropped from the active index (never an
+exact-match or semantic-match candidate), and an incoming Capability id that
+equals a tombstone id resolves through `MERGED_INTO` (chains followed to the
+terminal) to the survivor with `match_kind="redirected"`, so the absorbed
+duplicate is never minted again.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from ps_service.company_merge.errors import CompanyMergeValidationError
 from ps_service.company_merge.falkordb_client import (
     GraphHandle,  # noqa: TC001 — introspected at runtime by test_ac008_out_of_scope via typing.get_type_hints
 )
@@ -59,8 +68,10 @@ __all__ = [
     "capability_id",
     "dedupe_canonical_nodes",
     "find_best_semantic_match",
+    "follow_redirect",
     "policy_id",
     "read_existing_canonical_index",
+    "read_merge_redirects",
     "resolve_capability_convergence_offline",
     "resolve_exact_match",
 ]
@@ -115,6 +126,107 @@ def read_existing_canonical_index(
             )
         )
     return tuple(nodes)
+
+
+@dataclass(frozen=True, slots=True)
+class MergeRedirects:
+    """Capability tombstones read from the single-tenant graph (issue #190).
+
+    `redirects` maps each `merged` tombstone id to the id its `MERGED_INTO`
+    edge points at (one hop; chains are followed by `follow_redirect`).
+    `tombstone_ids` is every `status = 'merged'` Capability id, including a
+    tombstone with no `MERGED_INTO` edge (an integrity fault that
+    `follow_redirect` reports rather than hides).
+    """
+
+    redirects: dict[str, str]
+    tombstone_ids: frozenset[str]
+
+
+_EMPTY_REDIRECTS = MergeRedirects(redirects={}, tombstone_ids=frozenset())
+
+
+def read_merge_redirects(single_tenant_graph: GraphHandle) -> MergeRedirects:
+    """Read every `merged` Capability tombstone and its `MERGED_INTO` target (issue #190).
+
+    A tombstone is an absorbed duplicate kept in the graph by a Compliance
+    Officer cleanup merge. Read-only. A tombstone with no outbound
+    `MERGED_INTO` edge appears in `tombstone_ids` but not in `redirects`.
+    """
+    result = single_tenant_graph.query(
+        "MATCH (a:Capability {status: 'merged'}) "
+        "OPTIONAL MATCH (a)-[:MERGED_INTO]->(b:Capability) RETURN a.id, b.id"
+    )
+    rows = cast("list[list[object]]", result.result_set)
+    redirects: dict[str, str] = {}
+    tombstone_ids: set[str] = set()
+    for row in rows:
+        absorbed_id, survivor_id = row
+        tombstone_ids.add(cast("str", absorbed_id))
+        if survivor_id is not None:
+            redirects[cast("str", absorbed_id)] = cast("str", survivor_id)
+    return MergeRedirects(redirects=redirects, tombstone_ids=frozenset(tombstone_ids))
+
+
+def follow_redirect(
+    incoming_id: str, merge_redirects: MergeRedirects, active_ids: frozenset[str]
+) -> str:
+    """Follow `incoming_id`'s `MERGED_INTO` chain to its terminal active Capability.
+
+    Raises `CompanyMergeValidationError` (before any write) on a cycle, on a
+    tombstone with no `MERGED_INTO` edge, or on a terminal that is not an
+    active Capability in the graph.
+    """
+    seen: set[str] = set()
+    current = incoming_id
+    while current in merge_redirects.tombstone_ids:
+        if current in seen:
+            message = f"MERGED_INTO cycle detected at capability {current!r}"
+            raise CompanyMergeValidationError(message)
+        seen.add(current)
+        next_id = merge_redirects.redirects.get(current)
+        if next_id is None:
+            message = f"merged capability {current!r} has no MERGED_INTO edge"
+            raise CompanyMergeValidationError(message)
+        current = next_id
+    if current not in active_ids:
+        message = (
+            f"MERGED_INTO terminal {current!r} for {incoming_id!r} is not an active capability"
+        )
+        raise CompanyMergeValidationError(message)
+    return current
+
+
+def _read_dedup_index(
+    single_tenant_graph: GraphHandle, kind: Literal["Capability", "Policy"]
+) -> tuple[tuple[ExistingCanonicalNode, ...], MergeRedirects]:
+    """The active canonical index plus the tombstone redirects (issue #190).
+
+    Calls `read_existing_canonical_index` unchanged, then, for Capability
+    only, reads the `merged` tombstones and drops them from the index so a
+    tombstone is never an exact-match or semantic-match candidate. Policy
+    never has tombstones and issues no redirect read.
+    """
+    index = read_existing_canonical_index(single_tenant_graph, kind)
+    if kind != "Capability":
+        return index, _EMPTY_REDIRECTS
+    merge_redirects = read_merge_redirects(single_tenant_graph)
+    active = tuple(n for n in index if n.id not in merge_redirects.tombstone_ids)
+    return active, merge_redirects
+
+
+def _redirected_resolution(
+    node: BaselineNode,
+    merge_redirects: MergeRedirects,
+    working_index: dict[str, ExistingCanonicalNode],
+) -> CanonicalResolution | None:
+    """A `redirected` resolution when `node.id` is a tombstone id, else `None`."""
+    if node.id not in merge_redirects.tombstone_ids:
+        return None
+    terminal = follow_redirect(node.id, merge_redirects, frozenset(working_index))
+    return CanonicalResolution(
+        incoming_id=node.id, canonical_id=terminal, match_kind="redirected", embedding=None
+    )
 
 
 def resolve_exact_match(incoming_id: str, existing_ids: frozenset[str]) -> bool:
@@ -354,8 +466,9 @@ def dedupe_canonical_nodes(
     through, never deduped); it is passed straight to
     `read_existing_canonical_index` as its `label`.
 
-    Makes exactly one read call (`read_existing_canonical_index`) and never
-    a single write call -- "abort with no partial write" on a
+    Makes one read call (`read_existing_canonical_index`) plus, for
+    Capability only, one tombstone read (`read_merge_redirects`, issue #190),
+    and never a single write call -- "abort with no partial write" on a
     `LlmProviderError` from `find_best_semantic_match` is therefore
     automatically satisfied by construction, not by any try/except here.
 
@@ -400,7 +513,7 @@ def dedupe_canonical_nodes(
     `find_best_semantic_match`'s own docstring) or when the embedding was
     already cached going in.
     """
-    existing_index = read_existing_canonical_index(single_tenant_graph, kind)
+    existing_index, merge_redirects = _read_dedup_index(single_tenant_graph, kind)
     # Fixed at the start, never mutated -- distinguishes a genuinely
     # pre-existing canonical node (a backfill candidate) from one minted
     # later in this same run.
@@ -414,6 +527,11 @@ def dedupe_canonical_nodes(
     for node in incoming_nodes:
         node_text = _incoming_text(node, kind)
         existing_ids = frozenset(working_index)
+
+        redirected = _redirected_resolution(node, merge_redirects, working_index)
+        if redirected is not None:
+            resolutions.append(redirected)
+            continue
 
         if resolve_exact_match(node.id, existing_ids):
             resolutions.append(
@@ -650,7 +768,7 @@ def resolve_capability_convergence_offline(
     the live path (`_TEXT_PROPERTY_BY_LABEL`), so a restore's offline Policy
     convergence uses the identical text-property/read-query mapping.
     """
-    existing_index = read_existing_canonical_index(single_tenant_graph, kind)
+    existing_index, merge_redirects = _read_dedup_index(single_tenant_graph, kind)
     # Fixed at the start, never mutated -- mirrors dedupe_canonical_nodes's
     # own original_existing_ids snapshot (issue #30, AC-BI-003): distinguishes
     # a genuinely pre-existing canonical node from one minted later in this
@@ -663,6 +781,10 @@ def resolve_capability_convergence_offline(
 
     for node in incoming_nodes:
         node_text = _incoming_text(node, kind)
+        redirected = _redirected_resolution(node, merge_redirects, working_index)
+        if redirected is not None:
+            resolutions.append(redirected)
+            continue
         if resolve_exact_match(node.id, frozenset(working_index)):
             resolutions.append(
                 CanonicalResolution(

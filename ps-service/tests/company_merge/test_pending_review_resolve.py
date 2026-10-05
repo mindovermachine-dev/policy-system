@@ -196,9 +196,10 @@ def test_resolve_merge_query_has_distinct_after_every_foreach_c1_fix(
     Without this, `DETACH DELETE loser, rev` would run once per surviving
     row instead of once whenever the loser has more than one matching edge
     (e.g. >=2 Obligations REQUIRES-ing the same loser Capability -- the
-    domain's primary scenario, not an edge case). Exactly 4 FOREACH blocks
-    (REQUIRES, GOVERNED_BY from loser, GOVERNED_BY to loser, SUPPORTED_BY)
-    means exactly 4 `WITH DISTINCT winner, loser` occurrences.
+    domain's primary scenario, not an edge case). Exactly 5 FOREACH blocks
+    (REQUIRES, GOVERNED_BY from loser, GOVERNED_BY to loser, SUPPORTED_BY,
+    MERGED_INTO re-point -- issue #190) means exactly 5
+    `WITH DISTINCT winner, loser` occurrences.
     """
     emitter, _log_path = make_emitter()
     graph = _FakeGraph(results=_merge_results())
@@ -206,8 +207,8 @@ def test_resolve_merge_query_has_distinct_after_every_foreach_c1_fix(
     resolve_review(graph, "review_aaa", "merge", emitter=emitter)
 
     merge_query = graph.calls[2].query
-    assert merge_query.count("FOREACH") == 4
-    assert merge_query.count("WITH DISTINCT winner, loser") == 4
+    assert merge_query.count("FOREACH") == 5
+    assert merge_query.count("WITH DISTINCT winner, loser") == 5
     # No plain, un-DISTINCT `WITH winner, loser` should remain between blocks.
     assert "WITH winner, loser" not in merge_query.replace("WITH DISTINCT winner, loser", "")
 

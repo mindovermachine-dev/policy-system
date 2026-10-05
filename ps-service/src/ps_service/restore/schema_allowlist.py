@@ -120,6 +120,22 @@ def _validate_node_id(node_label: str, properties: Mapping[str, object]) -> None
         )
 
 
+def _validate_no_tombstone(node_label: str, properties: Mapping[str, object]) -> None:
+    """Reject a `Capability` carrying `status = 'merged'` (issue #190).
+
+    A tombstone exists only in a deployment's own graph, written by a Compliance
+    Officer cleanup merge. An artifact that carried one would mint an orphan
+    tombstone (`ON CREATE SET n += properties`) with no `MERGED_INTO` edge. Label
+    and relationship allow-lists already exclude `MERGED_INTO` and
+    `MergedObligation`; this is the one property-level rule.
+    """
+    if node_label == "Capability" and properties.get("status") == "merged":
+        raise ArtifactContentRejectedError(
+            f"Capability {properties.get('id')!r} has status 'merged': tombstones are never "
+            "part of an artifact"
+        )
+
+
 def validate_serialized_graph(
     graph: SerializedGraph,
     *,
@@ -136,7 +152,8 @@ def validate_serialized_graph(
     Raises `ArtifactContentRejectedError` on: a node/edge label or
     relationship_type outside its allow-list; a node whose
     `properties["id"]` is missing or not a string (`populate_graph`'s
-    edge-matching step depends on it existing).
+    edge-matching step depends on it existing); a `Capability` with
+    `status = 'merged'` (issue #190, `_validate_no_tombstone`).
     """
     for node in graph.nodes:
         if node.label not in allowed_labels:
@@ -144,6 +161,7 @@ def validate_serialized_graph(
                 f"node label {node.label!r} is not in the allow-list {sorted(allowed_labels)!r}"
             )
         _validate_node_id(node.label, node.properties)
+        _validate_no_tombstone(node.label, node.properties)
 
     for edge in graph.edges:
         if edge.relationship_type not in allowed_relationship_types:

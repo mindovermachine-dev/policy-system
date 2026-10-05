@@ -12,6 +12,7 @@
   - [Manage access roles](#manage-access-roles)
   - [Invite a new user](#invite-a-new-user)
   - [Review the audit trail](#review-the-audit-trail)
+  - [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)
   - [Assess EU-instrument applicability](#assess-eu-instrument-applicability)
 - [Role System](#role-system)
 - [Glossary](#glossary)
@@ -42,6 +43,7 @@ upgrade, rotate credentials, back up, or tear down an instance, see the
 | Grant, revoke, or list access roles | [Role System](#role-system) |
 | Invite a new user | [Invite a new user](#invite-a-new-user) |
 | Review who did what, to what, and when | [Review the audit trail](#review-the-audit-trail) |
+| Merge duplicate capabilities or obligations, release a capability from a draft policy, or reverse a merge | [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes) |
 | Find out which EU regulations might apply to a company | [Assess EU-instrument applicability](#assess-eu-instrument-applicability) |
 
 ---
@@ -262,6 +264,104 @@ read (no confirmation needed) but requires `SystemAdmin` or above; see
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-list-audit-events skill."_
 
+### Clean up duplicate graph nodes
+
+```text
+Find duplicate capabilities in the graph.
+```
+
+Ingestion can leave the same duty in the graph twice: near-identical Capabilities
+(for example several "Vulnerability Remediation" variants) or two Obligations under
+one Role with the same text. Duplicates inflate obligation counts and split policy
+coverage across variants. The `ps-graph-cleanup` skill lets a Compliance Officer
+find them, merge them, and reverse a merge, through the same MCP connector. Whether
+two nodes are the same duty is a judgement about regulatory meaning, so every
+change is a human decision, confirmed in your own words and signed with a
+passkey. It requires an explicit `ComplianceOfficer` grant on a real signed-in
+session; a `SystemOwner` or `SystemAdmin` without that grant is denied, and the
+local-test bypass never satisfies it. See [Role System](#role-system).
+
+**Discovery (read-only).** `find-capability-merge-candidates` returns groups of
+similar active Capabilities. Each member shows its id, name, obligation count and
+governing policy (or none), and each group shows how it was matched (`name`, or
+`embedding` similarity, a looser signal: read the names before treating a group as
+a duplicate) and its merge case. A Capability with no cached embedding can only be
+matched by name. `find-duplicate-obligations` returns groups of Obligations under
+the **same** Role with identical or near-identical text, each with the `source_ref`
+of its Requirements so you can check whether the regulation really states the duty
+twice. Identical wording under two different Roles is two duties and is never
+offered. Neither tool changes anything.
+
+**Merging two Capabilities.** Pick which one survives and which is absorbed. The
+tool previews the edges that move to the survivor, the obligations affected and the
+policy case, and creates a passkey approval bound to that exact pair and state. You
+confirm, open the approval link and sign with your passkey (the approval is valid
+for 15 minutes); then the skill checks the outcome. The absorbed Capability is not
+deleted: it stays in the graph as a `merged` tombstone with a `MERGED_INTO` link
+to the survivor, so a later ingest or restore that regenerates its name attaches
+to the survivor instead of recreating the duplicate. Which case applies depends on
+the governing policies:
+
+| Case | Situation | What you do |
+| --- | --- | --- |
+| 1 | Neither Capability has a governing policy | Confirm, then sign. |
+| 2 | Exactly one has a governing policy | The first call returns the preview only. Acknowledge the governance change (the policy ends up governing the survivor instead of the absorbed Capability; for an approved policy its governed set changes, its content and version do not); then the call returns the approval to sign. The acknowledgment is part of what you sign and of the audit record. |
+| 3, same policy | Both are governed by the same policy | Confirm, then sign; the absorbed Capability leaves that policy's governed set. |
+| 3, different policies | Both are governed, by different policies | Blocked before any approval exists. Release the absorbed Capability from its policy first (below). |
+
+**Merging two Obligations.** Only for two Obligations under the same Role; a pair
+across two Roles is rejected. The flow is the same (preview, confirm, passkey). The
+survivor keeps its single link to the Role and gains the absorbed Obligation's
+requirement and capability links. The absorbed Obligation is **deleted**, with its
+full node and edge snapshot kept in the audit record, and a small `MergedObligation`
+marker stays behind so a later ingest or restore attaches to the survivor instead of
+recreating it. The marker is not an Obligation and is never counted as one.
+
+**Releasing governance.** `release-capability-governance` removes the link between one
+Capability and its governing policy so a case 3 merge can proceed. It works only
+while that policy is a `draft`: a `proposed` policy can first be returned to draft
+(with the `ps-policy-lifecycle` skill's revert step); an `approved` or `deprecated` policy is rejected with a pointer
+to the policy lifecycle. It changes no Policy, Standard or Control.
+
+**Reversing a merge.** `unmerge` takes the id that was absorbed and restores it from
+the snapshot in the merge's audit record, after the same preview, confirmation and
+passkey approval. A Capability tombstone returns to `active` and its `MERGED_INTO`
+link is removed; a deleted Obligation is recreated under its original id and its
+marker is removed. Exactly the edges the merge moved are restored. Edges added to the
+survivor since the merge stay where they are and are listed in the preview. If the
+survivor has since changed in a way that would conflict (it was merged away, its
+governance changed, or a linked node is gone), the unmerge is rejected with an
+explanation and nothing is forced.
+
+**Passkey approval and interrupted approvals.** Nothing changes in the graph until
+you sign. Each change writes one audit record (actor, action, both ids, policy case,
+acknowledgment, approval id and a before/after snapshot) **before** the graph is
+touched; if the audit record cannot be written, the graph is not changed. Because the
+graph and the audit trail are separate stores, a graph failure after the audit record
+leaves an `applied` row followed by a `failed` row for the same approval id: that pair
+means no edit occurred. If you sign and the run is interrupted before its outcome is
+recorded, ask the skill to check the approval again: once it is more than five minutes
+past expiry, the check looks for the change in the graph and records it as applied, or
+records a `failed` row (`interrupted_no_effect`) if the change is absent. Read the
+records with [Review the audit trail](#review-the-audit-trail), filtering by the
+actions `capability.merge`, `obligation.merge`, `capability.release_governance`,
+`capability.unmerge` and `obligation.unmerge`.
+
+**Known limitation.** Two Capabilities governed by two **approved** policies cannot be
+merged yet: the policies differ, releasing works only on a draft, and amending an
+approved policy is done by forking it, but a fork carries the whole governed set, so it
+cannot drop one Capability. The tool says so plainly rather than offering a workaround.
+A follow-on change to let a fork draft drop a single Capability is tracked separately.
+
+**Tombstones and raw Cypher.** Queries through `ps-qna` count only active Capabilities,
+so a tombstone never surfaces as a live one. If you query the graph directly with the
+`cypher` tool, filter Capabilities on `status = 'active'` (a Capability with no
+`status` is also live); without that filter `merged` tombstones appear in the results.
+The packaged domain concepts describe the `merged` status and the `MERGED_INTO` edge.
+
+If the skill does not engage on its own, ask for it by name: _"Use the
+ps-graph-cleanup skill."_
+
 ### Assess EU-instrument applicability
 
 ```text
@@ -293,7 +393,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 | `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
-| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `restore_instrument`, `check_regulations`. No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
+| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
 Two safety rules apply to every grant or revoke, regardless of role:

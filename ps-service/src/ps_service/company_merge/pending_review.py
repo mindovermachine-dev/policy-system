@@ -97,6 +97,13 @@ _LIST_PENDING_REVIEWS_QUERY = (
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
 _DELETE_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) DELETE r"
 
+# Issue #190 -- a `merged` Capability tombstone is never a near-miss merge
+# side: the existence check treats it as gone (so a stale review naming one
+# is `StalePendingReviewError` before any write) and the merge write
+# re-points every inbound `MERGED_INTO` edge from the deleted loser onto the
+# winner, so no tombstone is left redirecting at a deleted node. For kind
+# Policy neither predicate nor pattern can match (no Policy is `merged`).
+#
 # CHANGES.md H2 -- one combined existence-check read, issued only for
 # decision="merge", after the shared _FIND_REVIEW_QUERY above already
 # confirmed the review itself exists. `{kind}` is templated (labels are
@@ -106,7 +113,9 @@ _DELETE_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) DELETE r"
 _MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE = (
     "MATCH (r:PendingReview {{id: $review_id}}) "
     "OPTIONAL MATCH (a:{kind} {{id: r.incoming_id}}) "
+    "WHERE coalesce(a.status, 'active') <> 'merged' "
     "OPTIONAL MATCH (b:{kind} {{id: r.nearest_existing_id}}) "
+    "WHERE coalesce(b.status, 'active') <> 'merged' "
     "RETURN r.incoming_id AS incoming_id, r.nearest_existing_id AS nearest_existing_id, "
     "a IS NOT NULL AS incoming_exists, b IS NOT NULL AS existing_exists"
 )
@@ -147,6 +156,10 @@ _MERGE_QUERY_TEMPLATE = (
     "OPTIONAL MATCH (loser)-[:SUPPORTED_BY]->(s:Standard) "
     "FOREACH (_x IN CASE WHEN s IS NOT NULL THEN [1] ELSE [] END | "
     "MERGE (winner)-[:SUPPORTED_BY]->(s)) "
+    "WITH DISTINCT winner, loser "
+    "OPTIONAL MATCH (t:Capability)-[:MERGED_INTO]->(loser) "
+    "FOREACH (_x IN CASE WHEN t IS NOT NULL THEN [1] ELSE [] END | "
+    "MERGE (t)-[:MERGED_INTO]->(winner)) "
     "WITH DISTINCT winner, loser "
     "MATCH (rev:PendingReview {{id: $review_id}}) "
     "DETACH DELETE loser, rev "

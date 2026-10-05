@@ -45,6 +45,8 @@ class _ScriptedFakeGraph:
         self._capability_rows = capability_rows
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        if "MERGED_INTO" in q:
+            return _FakeQueryResult([])
         if "(n:Capability) RETURN" in q:
             return _FakeQueryResult(self._capability_rows)
         raise AssertionError(f"unexpected query issued: {q!r}")

@@ -176,7 +176,7 @@ class CanonicalResolution:
 
     incoming_id: str
     canonical_id: str
-    match_kind: Literal["exact", "semantic", "new"]
+    match_kind: Literal["exact", "semantic", "new", "redirected"]
     embedding: tuple[float, ...] | None  # this node's OWN embedding, to be
     # written into its properties at mint time (match_kind == "new" only)
 

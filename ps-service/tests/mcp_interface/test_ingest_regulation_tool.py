@@ -341,6 +341,9 @@ class _MiniGraph:
             return _FakeQueryResult([[_FakeGraphNode(dict(next(iter(table.values()))))]])
         if q == _DERIVATION_READ_QUERY:
             return self._read_requirements_by_role()
+        if "MERGED_INTO" in q or "MergedObligation" in q:
+            # issue #190: the tombstone and obligation-marker reads -- no tombstones here.
+            return _FakeQueryResult([])
         if q == _MERGED_INSTRUMENT_EXISTS_QUERY:
             node_id = cast("str", params["id"])
             exists = node_id in self._nodes.get("RegulatoryInstrument", {})

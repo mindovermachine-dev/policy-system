@@ -40,8 +40,8 @@ def _skill_files() -> list[Path]:
     return sorted((_PLUGIN_DIR / "skills").glob("*/SKILL.md"))
 
 
-def test_plugin_tree_has_twelve_skills() -> None:
-    assert len(_skill_files()) == 12
+def test_plugin_tree_has_thirteen_skills() -> None:
+    assert len(_skill_files()) == 13
 
 
 def test_no_markdown_names_an_old_pattern() -> None:
