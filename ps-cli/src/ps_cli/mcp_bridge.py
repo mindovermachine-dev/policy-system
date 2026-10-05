@@ -23,6 +23,18 @@ authenticated) and a local-test/`PS_SERVICE_LOCAL_TEST_BYPASS` deployment
 mirroring `PsServiceClient`'s own unauthenticated-call shape) -- one plugin
 connector definition covers both, no separate local-only workaround needed.
 See `_resolve_access_token()`.
+
+Credential changes while the bridge runs (issue #181): the bridge reads the keychain at
+the first message and afterwards only when the credential's modification time moves
+(`bridge_credentials.BridgeCredentialView`), so a valid cached access token costs one
+`stat`, not a keychain read. A logout after the bridge had used a credential fails closed
+with the "no stored credentials" error and the `ps-cli auth login` hint (a context that
+never had one still forwards unauthenticated); a re-login drops the cached access token.
+A keychain read failing with -67701 falls back to the last-known refresh token, and a
+failed persist of a rotated refresh token is best-effort. Every keychain call is bounded
+(5 s) so one stall cannot block the single-threaded loop. Each forwarded message's log line
+reports `token_resolution_latency`, `upstream_latency` (when the POST ran) and the total
+`latency`. No log line or reply carries a token value.
 """
 
 from __future__ import annotations
@@ -37,6 +49,7 @@ from typing import TYPE_CHECKING, cast
 
 import httpx
 
+from ps_cli.bridge_credentials import BridgeCredentialView
 from ps_cli.config import load_config
 from ps_cli.credentials import build_credential_store
 from ps_cli.device_flow import AccessTokenCache, ensure_valid_access_token
@@ -48,7 +61,6 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import TextIO
 
-    from ps_cli.credentials import CredentialStore
     from ps_cli.targets import AuthOverrides
 
 _MCP_PATH = "/mcp/"
@@ -94,7 +106,7 @@ class _BridgeContext:
     context_name: str | None
     service_url: str
     auth_override: AuthOverrides | None
-    credential_store: CredentialStore
+    credential_store: BridgeCredentialView
     access_token_cache: AccessTokenCache
     log_file: TextIO | None
     # Issue #121 Slice 2: the same constructor-injection seam `PsServiceClient`
@@ -152,7 +164,7 @@ def _resolve_access_token(
     context_name: str | None,
     service_url: str,
     auth_override: AuthOverrides | None,
-    credential_store: CredentialStore,
+    credential_store: BridgeCredentialView,
     access_token_cache: AccessTokenCache,
     transport: httpx.BaseTransport | None = None,
 ) -> str | None:
@@ -173,15 +185,22 @@ def _resolve_access_token(
     `PS_SERVICE_LOCAL_TEST_BYPASS`, which has nothing to log into) -- proceed
     with no `Authorization` header, exactly as `mcp-remote` did for the old
     manual local-test workaround this module replaces. Checked via
-    `credential_store.get_tokens()` directly (a plain read, no refresh
-    attempt) rather than by inspecting `ensure_valid_access_token`'s
+    `credential_store.sync()`/`holds_credential` (a plain read of the stored credential,
+    no refresh attempt; since issue #181 stat-gated, so the keychain is read only at
+    the first message and when the credential's modification time moved) rather than
+    by inspecting `ensure_valid_access_token`'s
     exception, so this never conflates "nothing stored" with "something is
     stored but its refresh just failed" -- the latter still raises up to the
     caller, surfaced as a log line, not silently downgraded to unauthenticated
     (an expired/revoked session is a real problem worth surfacing, not a cue
     to guess that no auth was intended).
     """
-    if context_name is None or credential_store.get_tokens(context_name) is None:
+    if context_name is None:
+        return None
+    if credential_store.sync(context_name):
+        access_token_cache.token = None
+        access_token_cache.expires_at = None
+    if not credential_store.holds_credential and not credential_store.ever_seen:
         return None
     return ensure_valid_access_token(
         context=context_name,
@@ -290,6 +309,47 @@ def _ge400_reply(message_id: object, resp: httpx.Response) -> dict[str, object] 
     return _upstream_error_reply(message_id, resp)
 
 
+class _Phase:
+    """A started monotonic timer; `elapsed()` is the seconds since construction."""
+
+    def __init__(self) -> None:
+        self._start = time.monotonic()
+
+    def elapsed(self) -> float:
+        """Seconds since this timer started."""
+        return time.monotonic() - self._start
+
+
+def _latency_fields(*, token_resolution: float, total: float, upstream: float | None = None) -> str:
+    """Format the latency log fields (issue #181, AC-BI-009); `upstream` omitted when no POST ran.
+
+    `latency` stays the total so existing greps keep matching; the two split fields
+    attribute it to token resolution (keychain/IdP) versus the upstream POST.
+    """
+    fields = f"token_resolution_latency={token_resolution:.3f}s "
+    if upstream is not None:
+        fields += f"upstream_latency={upstream:.3f}s "
+    return fields + f"latency={total:.3f}s"
+
+
+def _auth_error_reply(message_id: object, exc: PsCliError) -> dict[str, object] | None:
+    """Build the JSON-RPC reply for a token-resolution failure (issues #119, #181).
+
+    Issue #119, AC-BI-005/007: surfaced to the MCP host as a real reply -- not a silent
+    no-response -- so Claude Desktop shows the actual cause. Only for a genuine request
+    (`message_id is not None`): a notification (JSON-RPC 2.0 §4.1) never gets a reply.
+    AC-BI-006: `str(exc)` is `PsCliError`'s own msg/hint text, which never carries a
+    token value (see `device_flow.py`'s own AC-BI-018 guarantee).
+    """
+    if message_id is None:
+        return None
+    return {
+        "jsonrpc": "2.0",
+        "id": message_id,
+        "error": {"code": _JSONRPC_AUTH_ERROR_CODE, "message": str(exc)},
+    }
+
+
 def _forward_message(
     client: httpx.Client,
     message: object,
@@ -307,15 +367,14 @@ def _forward_message(
     message from. Every failure is logged (stderr + `ctx.log_file`) and swallowed
     here, never raised, so one bad message never kills the whole proxy loop
     mid-session. Every outcome -- success included -- is logged with `method`/`id`
-    (never the message's `params`, which may carry sensitive content), outcome, latency,
+    (never the message's `params`, which may carry sensitive content), outcome, latency
+    (total, token-resolution and, when the POST ran, upstream -- issue #181, AC-BI-009),
     and the session id in play, per AC-BI-003/004; secrets (the bearer token) never
     appear in any logged line, per AC-BI-009.
     """
     method, message_id = _message_method_and_id(message)
-    start = time.monotonic()
-
-    def _elapsed() -> str:
-        return f"{time.monotonic() - start:.3f}s"
+    total = _Phase()
+    resolution = _Phase()
 
     try:
         token = _resolve_access_token(
@@ -327,29 +386,14 @@ def _forward_message(
             transport=ctx.transport,
         )
     except PsCliError as exc:
+        latency = _latency_fields(token_resolution=resolution.elapsed(), total=total.elapsed())
         _log(
             f"could not get access token: {exc} "
-            f"(method={method} id={message_id!r} latency={_elapsed()} session={session_id})",
+            f"(method={method} id={message_id!r} {latency} session={session_id})",
             log_file=ctx.log_file,
         )
-        # Issue #119, AC-BI-005/007: surface this to the MCP host as a real reply --
-        # not a silent no-response -- so Claude Desktop shows the actual cause instead
-        # of a generic failure. Only for a genuine request (`message_id is not None`):
-        # a notification (JSON-RPC 2.0 §4.1) must never get a reply at all, matching
-        # every other notification already handled by this loop.
-        if message_id is None:
-            return None, session_id
-        return (
-            {
-                "jsonrpc": "2.0",
-                "id": message_id,
-                # AC-BI-006: `str(exc)` is `PsCliError`'s own msg/hint text, which
-                # never carries a token value (see `device_flow.py`'s own AC-BI-018
-                # guarantee) -- no separate redaction needed here.
-                "error": {"code": _JSONRPC_AUTH_ERROR_CODE, "message": str(exc)},
-            },
-            session_id,
-        )
+        return _auth_error_reply(message_id, exc), session_id
+    token_resolution = resolution.elapsed()
 
     headers = {
         "Content-Type": "application/json",
@@ -360,22 +404,28 @@ def _forward_message(
     if session_id is not None:
         headers["Mcp-Session-Id"] = session_id
 
+    upstream = _Phase()
     try:
         resp = client.post(ctx.mcp_url, json=message, headers=headers)
     except httpx.HTTPError as exc:
+        latency = _latency_fields(
+            token_resolution=token_resolution, upstream=upstream.elapsed(), total=total.elapsed()
+        )
         _log(
             f"request to PS Service failed: {exc} "
-            f"(method={method} id={message_id!r} latency={_elapsed()} session={session_id})",
+            f"(method={method} id={message_id!r} {latency} session={session_id})",
             log_file=ctx.log_file,
         )
         return None, session_id
 
+    latency = _latency_fields(
+        token_resolution=token_resolution, upstream=upstream.elapsed(), total=total.elapsed()
+    )
     updated_session_id = resp.headers.get("mcp-session-id") or session_id
     if resp.status_code >= _HTTP_BAD_REQUEST:
         _log(
             f"PS Service returned {resp.status_code}: {resp.text[:500]} "
-            f"(method={method} id={message_id!r} latency={_elapsed()} "
-            f"session={updated_session_id})",
+            f"(method={method} id={message_id!r} {latency} session={updated_session_id})",
             log_file=ctx.log_file,
         )
         # Issue #120, AC-BI-004/005: surface this to the MCP host as a real reply --
@@ -386,7 +436,7 @@ def _forward_message(
 
     _log(
         f"forwarded: method={method} id={message_id!r} outcome=ok "
-        f"latency={_elapsed()} session={updated_session_id}",
+        f"{latency} session={updated_session_id}",
         log_file=ctx.log_file,
     )
     return _parse_response_body(resp), updated_session_id
@@ -437,12 +487,15 @@ def main(*, transport: httpx.BaseTransport | None = None) -> None:
     """
     config_dir = resolve_config_dir()
     config = load_config(config_dir=config_dir)
-    credential_store = build_credential_store()
     auth_override = resolve_auth_override(config, config_dir)
     mcp_url = config.service_url.rstrip("/") + _MCP_PATH
     context_name = config.context_name
 
     log_file = _open_log_file(config_dir / _LOG_FILE_NAME)
+    credential_store = BridgeCredentialView(
+        build_credential_store(),
+        logger=lambda message: _log(message, log_file=log_file),
+    )
     _log(
         f"starting: pid={os.getpid()} ppid={os.getppid()} "
         f"service_url={config.service_url} context={context_name!r}",

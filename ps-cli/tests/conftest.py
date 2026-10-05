@@ -50,6 +50,7 @@ free functions), now hooked at this seam.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import msal_extensions.persistence
@@ -58,6 +59,7 @@ import pytest
 from ps_cli import credentials
 
 if TYPE_CHECKING:
+    import threading
     from collections.abc import Callable
     from pathlib import Path
 
@@ -71,6 +73,15 @@ def _isolated_ps_cli_config_dir(  # pyright: ignore[reportUnusedFunction]  # pyt
     tests may still override PS_CLI_CONFIG_DIR or pass config_dir=... explicitly.
     """
     monkeypatch.setenv("PS_CLI_CONFIG_DIR", str(tmp_path / "isolated-ps-cli-config"))
+
+
+_GATE_CAP_SECONDS = 3.0
+
+
+def _wait_at(gate: threading.Event | None) -> None:
+    """Block at `gate` until a test sets it (capped), or return at once when it is `None`."""
+    if gate is not None:
+        gate.wait(timeout=_GATE_CAP_SECONDS)
 
 
 class InMemoryPersistenceBackend:
@@ -90,13 +101,51 @@ class InMemoryPersistenceBackend:
         """Start with nothing saved; `lock_path` is only used for `get_location()`."""
         self._lock_path = lock_path
         self._content: str | None = None
+        self._saves = 0
+        self.loads = 0
+        self.fail_load_with: Exception | None = None
+        self.fail_save_with: Exception | None = None
+        # Stall gates (issue #181, AC-BI-007): while set (not None), the matching call
+        # blocks until the test sets the Event (bounded by `_GATE_CAP_SECONDS` so a
+        # forgotten release can never hang the suite).
+        self.load_gate: threading.Event | None = None
+        self.load_delay_seconds = 0.0  # slow-keychain stand-in for latency-split tests
+        self.save_gate: threading.Event | None = None
+        self.mtime_gate: threading.Event | None = None
 
     def save(self, content: str) -> None:
-        """Save `content`, overwriting any existing value."""
+        """Save `content`, overwriting any existing value; bumps the fake mtime by 1.0.
+
+        Raises `fail_save_with` instead (nothing stored, mtime unchanged) while armed.
+        """
+        _wait_at(self.save_gate)
+        if self.fail_save_with is not None:
+            raise self.fail_save_with
         self._content = content
+        self._saves += 1
+
+    def time_last_modified(self) -> float:
+        """Deterministic stand-in for the signal-file mtime: 1.0 per `save`, no clock.
+
+        Raises `PersistenceNotFound` until the first `save`, like the real backends.
+        """
+        _wait_at(self.mtime_gate)
+        if self._saves == 0:
+            raise msal_extensions.persistence.PersistenceNotFound(
+                message="nothing saved yet", location=str(self._lock_path)
+            )
+        return float(self._saves)
 
     def load(self) -> str:
-        """Return the saved content, or raise `PersistenceNotFound` if never saved."""
+        """Return the saved content, or raise `PersistenceNotFound` if never saved.
+
+        Raises `fail_load_with` instead, on every call, while a test has it armed.
+        """
+        self.loads += 1
+        _wait_at(self.load_gate)
+        time.sleep(self.load_delay_seconds)
+        if self.fail_load_with is not None:
+            raise self.fail_load_with
         if self._content is None:
             raise msal_extensions.persistence.PersistenceNotFound(
                 message="nothing saved yet", location=str(self._lock_path)
@@ -138,9 +187,28 @@ class AlwaysRaisingPersistenceBackend:
         msg = "simulated non-msal-extensions persistence backend failure"
         raise OSError(msg)
 
+    def time_last_modified(self) -> float:
+        """Unconditionally raise a bare `OSError`."""
+        msg = "simulated non-msal-extensions persistence backend failure"
+        raise OSError(msg)
+
     def get_location(self) -> str:
         """Return this fake's bound lock path, as a string -- never raises."""
         return str(self._lock_path)
+
+
+class FakeKeychainError(OSError):
+    """Mimics `msal_extensions.osx.KeychainError`, which carries `exit_status`."""
+
+    def __init__(self, exit_status: int) -> None:
+        super().__init__()
+        self.exit_status = exit_status
+
+
+@pytest.fixture
+def fake_keychain_error() -> type[FakeKeychainError]:
+    """The `FakeKeychainError` class itself (conftest classes are fixture-injected only)."""
+    return FakeKeychainError
 
 
 @pytest.fixture

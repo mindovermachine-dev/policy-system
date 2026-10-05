@@ -51,7 +51,15 @@ class CredentialStoreError(PsCliError):
     be read or written (e.g. a locked keychain). Subclassing `PsCliError` leaves every
     existing `except PsCliError` site and its wording unchanged; `auth status` uses the
     type to report the store problem as-is instead of calling the credential unusable.
+    `status` is the backend's numeric status (e.g. macOS `-67701`) when it reported one --
+    a secret-free integer, mirroring `CannotVerifyError.detail` -- so callers can branch
+    on it without parsing text (issue #181).
     """
+
+    def __init__(self, *, msg: str, hint: str | None = None, status: int | None = None) -> None:
+        """Store the message, optional hint, and the backend's numeric `status` (or `None`)."""
+        self.status = status
+        super().__init__(msg=msg, hint=hint)
 
 
 def assert_contract(*, contract: bool, msg: str, hint: str | None = None) -> None:

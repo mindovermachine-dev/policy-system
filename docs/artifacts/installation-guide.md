@@ -851,6 +851,13 @@ For more detail, see [Evaluator installation, step 9](#9-install-the-policy-syst
 > `prod`, the plugin talks to this instance. The bridge sends the stored `prod` credential as an
 > `Authorization` header, like any other authenticated `ps-cli` call.
 
+> **Logout and login while Claude runs:** You do not need to restart Claude. After
+> `ps-cli auth logout`, the next plugin call fails with "no stored credentials" and tells you to
+> run `ps-cli auth login`. The bridge sends nothing without a credential. After
+> `ps-cli auth login`, the next call uses the new credential. The bridge writes a log to
+> `~/.config/ps-cli/mcp-bridge.log`. Each call line shows `token_resolution_latency` (time to get
+> the token) and `upstream_latency` (time PS Service took to answer).
+
 ### What is exposed (production)
 
 `deploy-ps-prod.sh` publishes PS Service and a **restricted** part of Authentik on one public

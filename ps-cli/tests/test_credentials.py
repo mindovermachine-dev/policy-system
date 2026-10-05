@@ -43,7 +43,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from conftest import AlwaysRaisingPersistenceBackend, InMemoryPersistenceBackend
+    from conftest import (
+        AlwaysRaisingPersistenceBackend,
+        FakeKeychainError,
+        InMemoryPersistenceBackend,
+    )
 
 _TOKENS = TokenBundle(refresh_token="refresh-tok", issuer="https://issuer.example")
 
@@ -57,6 +61,27 @@ def test_persistence_credential_store_happy_path_round_trips(
     store.set_tokens("dev", _TOKENS)
 
     assert store.get_tokens("dev") == _TOKENS
+
+
+def test_last_modified_returns_none_when_never_saved_and_moves_after_save(
+    build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend],
+) -> None:
+    """Issue #181 AC-BI-004: `last_modified` is the stat-only change signal -- `None`
+    before anything was ever saved, a value that moves on every later write (including
+    `delete_tokens`' empty-sentinel write), and never reads the stored content.
+    """
+    store = PersistenceCredentialStore(build_persistence=build_in_memory_persistence)
+    assert store.last_modified("dev") is None
+
+    store.set_tokens("dev", _TOKENS)
+    after_set = store.last_modified("dev")
+    store.delete_tokens("dev")
+    after_delete = store.last_modified("dev")
+
+    assert after_set is not None
+    assert after_delete is not None
+    assert after_delete > after_set
+    assert build_in_memory_persistence("dev").loads == 0
 
 
 def test_persistence_credential_store_persists_only_refresh_token_and_issuer(
@@ -354,6 +379,9 @@ class _FlakyReadPersistence:
     def save(self, content: str) -> None:
         self._content = content
 
+    def time_last_modified(self) -> float:
+        return 1.0
+
     def load(self) -> str:
         self.loads += 1
         if self._failures:
@@ -364,20 +392,12 @@ class _FlakyReadPersistence:
         return str(self._lock_path)
 
 
-class _FakeKeychainError(OSError):
-    """Mimics `msal_extensions.osx.KeychainError`, which carries `exit_status`."""
-
-    def __init__(self, exit_status: int) -> None:
-        super().__init__()
-        self.exit_status = exit_status
-
-
 def test_get_tokens_retries_a_transient_keychain_error_and_returns_the_rewritten_value(
-    tmp_path: Path,
+    tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
     """AC-BI-001/003: a read racing another process's rewrite (`-67701`) is retried."""
     encoded = credentials._encode_token_bundle(_TOKENS)  # pyright: ignore[reportPrivateUsage]
-    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [_FakeKeychainError(-67701)], encoded)
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [fake_keychain_error(-67701)], encoded)
     store = PersistenceCredentialStore(
         build_persistence=lambda _c: backend, read_retry_delay_seconds=0
     )
@@ -398,9 +418,11 @@ def test_get_tokens_retries_a_not_found_read_caught_mid_rewrite(tmp_path: Path) 
     assert store.get_tokens("dev") == _TOKENS
 
 
-def test_get_tokens_after_logout_returns_none_not_keychain_error(tmp_path: Path) -> None:
+def test_get_tokens_after_logout_returns_none_not_keychain_error(
+    tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
+) -> None:
     """AC-BI-002: a removed credential (empty sentinel) reads as 'nothing stored'."""
-    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [_FakeKeychainError(-67701)], "")
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", [fake_keychain_error(-67701)], "")
     store = PersistenceCredentialStore(
         build_persistence=lambda _c: backend, read_retry_delay_seconds=0
     )
@@ -409,12 +431,12 @@ def test_get_tokens_after_logout_returns_none_not_keychain_error(tmp_path: Path)
 
 
 def test_get_tokens_persistent_failure_still_fails_closed_with_status_and_no_token(
-    tmp_path: Path,
+    tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
 ) -> None:
     """AC-BI-004/005: a genuinely unavailable backend raises after bounded retries; the
     hint carries the numeric status and never a token value.
     """
-    failures: list[Exception] = [_FakeKeychainError(-25308) for _ in range(10)]
+    failures: list[Exception] = [fake_keychain_error(-25308) for _ in range(10)]
     backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "refresh-tok-secret")
     store = PersistenceCredentialStore(
         build_persistence=lambda _c: backend, read_retry_delay_seconds=0
@@ -426,6 +448,46 @@ def test_get_tokens_persistent_failure_still_fails_closed_with_status_and_no_tok
     assert backend.loads == credentials._READ_ATTEMPTS  # pyright: ignore[reportPrivateUsage]
     assert "-25308" in (excinfo.value.hint or "")
     assert "refresh-tok-secret" not in (excinfo.value.hint or "") + excinfo.value.msg
+
+
+def test_persistent_minus_67701_hint_says_auth_login_not_unlock(
+    tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
+) -> None:
+    """Issue #181 AC-BI-008: -67701 (errSecInvalidRecord) is not a locked keychain."""
+    failures: list[Exception] = [fake_keychain_error(-67701) for _ in range(10)]
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "refresh-tok-secret")
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    with pytest.raises(CredentialStoreError) as excinfo:
+        store.get_tokens("dev")
+
+    hint = excinfo.value.hint or ""
+    assert excinfo.value.status == -67701
+    assert "ps-cli auth login" in hint
+    assert "unlocked" not in hint
+    assert "(status -67701)" in hint
+
+
+def test_other_statuses_keep_the_unlock_hint(
+    tmp_path: Path, fake_keychain_error: type[FakeKeychainError]
+) -> None:
+    """Issue #181 AC-BI-008: every other status keeps the existing hint byte for byte."""
+    failures: list[Exception] = [fake_keychain_error(-25308) for _ in range(10)]
+    backend = _FlakyReadPersistence(tmp_path / "dev.bin", failures, "")
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+
+    with pytest.raises(CredentialStoreError) as excinfo:
+        store.get_tokens("dev")
+
+    assert excinfo.value.status == -25308
+    assert excinfo.value.hint == (
+        "the credential-storage backend raised FakeKeychainError (status -25308); "
+        "check that it is available and unlocked"
+    )
 
 
 @pytest.mark.integration
@@ -467,3 +529,61 @@ def test_live_keychain_reader_survives_concurrent_rewrites(tmp_path: Path) -> No
             capture_output=True,
         )
     assert failures == 0
+
+
+class _ContentEchoingPersistence:
+    """Every call raises an exception whose text embeds the stored content (issue #181).
+
+    Models a backend whose own error message carries the secret it just handled, so the
+    tests below prove `PersistenceCredentialStore` never relays that text.
+    """
+
+    def __init__(self, lock_path: Path, content: str, exit_status: int) -> None:
+        self._lock_path = lock_path
+        self._content = content
+        self._exit_status = exit_status
+
+    def _failure(self) -> OSError:
+        error = OSError(f"backend failed handling {self._content}")
+        error.exit_status = self._exit_status  # pyright: ignore[reportAttributeAccessIssue]  # mimics KeychainError
+        return error
+
+    def save(self, content: str) -> None:
+        del content
+        raise self._failure()
+
+    def time_last_modified(self) -> float:
+        raise self._failure()
+
+    def load(self) -> str:
+        raise self._failure()
+
+    def get_location(self) -> str:
+        return str(self._lock_path)
+
+
+@pytest.mark.parametrize("operation", ["get", "get_observed", "set", "delete", "last_modified"])
+def test_credential_store_error_str_and_repr_never_contain_stored_content(
+    tmp_path: Path, operation: str
+) -> None:
+    """Issue #181 AC-BI-010: a backend error echoing the secret is never relayed."""
+    secret = "RT-SENTINEL-9f3a"
+    backend = _ContentEchoingPersistence(tmp_path / "dev.bin", secret, -67701)
+    store = PersistenceCredentialStore(
+        build_persistence=lambda _c: backend, read_retry_delay_seconds=0
+    )
+    operations: dict[str, Callable[[], object]] = {
+        "get": lambda: store.get_tokens("dev"),
+        "get_observed": lambda: store.get_tokens_observed("dev"),
+        "set": lambda: store.set_tokens("dev", TokenBundle(refresh_token=secret, issuer="i")),
+        "delete": lambda: store.delete_tokens("dev"),
+        "last_modified": lambda: store.last_modified("dev"),
+    }
+
+    with pytest.raises(CredentialStoreError) as excinfo:
+        operations[operation]()
+
+    error = excinfo.value
+    surfaced = [str(error), repr(error), error.msg, error.hint or "", repr(error.args)]
+    assert not any(secret in text for text in surfaced)
+    assert error.status == -67701

@@ -577,5 +577,12 @@ connector needs no configuration of its own — it runs as a local `ps-cli-mcp-b
 process that reuses whichever `ps-cli` context is current, so every row above already
 governs it too.
 
+You do not need to restart Claude when you log in or out. After `ps-cli auth logout`, the next
+plugin call fails with "no stored credentials" and tells you to run `ps-cli auth login`. After
+`ps-cli auth login`, the next call uses the new credential. The bridge writes a log to
+`~/.config/ps-cli/mcp-bridge.log`. Each call line shows `token_resolution_latency` (time to get
+the token) and `upstream_latency` (time PS Service took to answer), so you can tell a slow
+credential store from a slow service.
+
 See the [Helm Chart Values Reference](./helm-chart-values-reference.md) for PS
 Service / chart-level configuration.

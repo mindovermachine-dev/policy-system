@@ -58,6 +58,19 @@ with the real `msal_extensions.build_encrypted_persistence`-backed factory,
 `_build_production_persistence` via `monkeypatch` (`conftest.py`'s
 `portable_persistence`/`unusable_persistence`) exactly as it previously hooked the old
 OS-credential-store library's free functions.
+
+Issue #181 (long-lived `ps-cli-mcp-bridge`): `PersistenceBackend` gains
+`time_last_modified()`, msal-extensions' stat-only change signal (the `credentials/<context>.bin`
+signal file's mtime, moved by every `save` on all three platforms, `delete_tokens`
+included). `PersistenceCredentialStore.last_modified()` exposes it through a per-context
+backend cached for the life of the store (so a stat per message does not rebuild the
+persistence), and `get_tokens_observed()` returns a `StoredRead` that keeps the logout
+sentinel (`empty`) apart from `not_found`. `ChangeAwareCredentialStore` is the stricter
+Protocol only the bridge needs. `CredentialStoreError` carries the backend's integer
+`status` and the hint is chosen from it (`_STATUS_HINTS`: -67701 `errSecInvalidRecord`
+points at `ps-cli auth login`, every other status keeps the "available and unlocked"
+text). Errors surface only the exception type name and that integer, never the backend's
+message, which could embed stored content.
 """
 
 from __future__ import annotations
@@ -65,7 +78,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 import msal_extensions
 import msal_extensions.persistence
@@ -150,6 +163,45 @@ class PersistenceBackend(Protocol):
         """Return the on-disk path this persistence instance stores (meta)data into."""
         ...
 
+    def time_last_modified(self) -> float:
+        """Return when this persistence was last written, as a stat-only cheap signal.
+
+        Issue #181: never reads the stored secret (the macOS Keychain backend stats a
+        signal file; libsecret likewise; Windows stats the data file itself). Raises
+        `msal_extensions.persistence.PersistenceNotFound` if never saved.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class StoredRead:
+    """Outcome of one `get_tokens_observed` read, keeping "empty" apart from "not found".
+
+    Issue #181 (CHANGES F-7): `get_tokens` collapses both to `None`, but a running bridge
+    must treat `empty` (the `delete_tokens` logout sentinel) as gone while a `not_found`
+    caught mid-rewrite is transient. `bundle` is set only when `kind == "bundle"`.
+    """
+
+    bundle: TokenBundle | None
+    kind: Literal["bundle", "empty", "not_found"]
+
+
+class ChangeAwareCredentialStore(CredentialStore, Protocol):
+    """A `CredentialStore` that can also report, cheaply, whether a context's credential changed.
+
+    Issue #181: the long-lived `ps-cli-mcp-bridge` needs a stat-only change signal so it
+    does not read the OS keychain on every forwarded message. Only the bridge needs this
+    stricter type -- every other `CredentialStore` consumer and fake is unaffected.
+    """
+
+    def last_modified(self, context: str) -> float | None:
+        """Return `context`'s credential modification time, or `None` if never saved."""
+        ...
+
+    def get_tokens_observed(self, context: str) -> StoredRead:
+        """Like `get_tokens`, but says whether `None` meant "empty sentinel" or "not found"."""
+        ...
+
 
 def _encode_token_bundle(tokens: TokenBundle) -> str:
     """JSON-encode `tokens` into the single opaque string a persistence backend accepts.
@@ -178,20 +230,37 @@ def _decode_token_bundle(raw: str) -> TokenBundle:
     )
 
 
+ERR_SEC_INVALID_RECORD = -67701  # macOS errSecInvalidRecord: not a locked keychain (issue #181)
+
+_DEFAULT_STORE_HINT = "check that it is available and unlocked"
+
+# Per-status remediation text; any status not listed (or none) uses `_DEFAULT_STORE_HINT`.
+_STATUS_HINTS: dict[int, str] = {
+    ERR_SEC_INVALID_RECORD: "the stored credential record is invalid; run `ps-cli auth login` "
+    "to store a new one",
+}
+
+
 def _store_error(context: str, exc: Exception) -> CredentialStoreError:
     """Build the actionable store error; the backend's numeric status (if any) aids diagnosis.
 
     Only the exception type and an integer `exit_status` are surfaced -- never a message
     that could embed stored content (issue #180, AC-BI-005).
     """
-    status = getattr(exc, "exit_status", None)
+    raw_status = getattr(exc, "exit_status", None)
+    status = raw_status if isinstance(raw_status, int) else None
     detail = type(exc).__name__
-    if isinstance(status, int):
+    if status is not None:
         detail += f" (status {status})"
+    remediation = (
+        _STATUS_HINTS.get(status, _DEFAULT_STORE_HINT)
+        if status is not None
+        else _DEFAULT_STORE_HINT
+    )
     return CredentialStoreError(
         msg=f"could not access the credential store for context '{context}'",
-        hint=f"the credential-storage backend raised {detail}; "
-        "check that it is available and unlocked",
+        hint=f"the credential-storage backend raised {detail}; {remediation}",
+        status=status,
     )
 
 
@@ -228,9 +297,32 @@ class PersistenceCredentialStore:
         """
         self._build_persistence = build_persistence
         self._read_retry_delay_seconds = read_retry_delay_seconds
+        self._stat_backends: dict[str, PersistenceBackend] = {}
+
+    def last_modified(self, context: str) -> float | None:
+        """Return when `context`'s credential was last written, without reading it (issue #181).
+
+        `None` when nothing was ever saved (`PersistenceNotFound`); any other backend
+        failure raises the same actionable `CredentialStoreError` as the read path. Uses
+        a per-context backend cached for the life of this store (a factory failure is
+        never cached), so a stat per message does not rebuild the persistence --
+        `get_tokens`/`set_tokens`/`delete_tokens` still build per call.
+        """
+        backend = self._stat_backends.get(context)
+        if backend is None:
+            backend = self._build_persistence(context)
+            self._stat_backends[context] = backend
+        try:
+            return backend.time_last_modified()
+        except msal_extensions.persistence.PersistenceNotFound:
+            return None
+        except Exception as exc:
+            raise _store_error(context, exc) from exc
 
     def get_tokens(self, context: str) -> TokenBundle | None:
         """Return `context`'s `TokenBundle`, or `None` if none is stored (D-123-4).
+
+        Delegates to `get_tokens_observed` (one retry loop), discarding its `kind`.
 
         Any exception from the backend other than `PersistenceNotFound` -- not only a
         `msal_extensions`-specific type (AC-BI-006: the real Windows/Linux failures
@@ -238,6 +330,13 @@ class PersistenceCredentialStore:
         as an actionable `PsCliError`; there is no fallback to fall back to any more
         (AC-BI-007/008). The persistence backend's own opaque string is JSON-decoded
         back into a `TokenBundle` here -- callers never see the raw string.
+        """
+        return self.get_tokens_observed(context).bundle
+
+    def get_tokens_observed(self, context: str) -> StoredRead:
+        """Read `context`'s credential, reporting `bundle`/`empty`/`not_found` (issue #181).
+
+        Same retry loop and error handling as `get_tokens` (which delegates here).
         """
         persistence = self._build_persistence(context)
         raw: str | None = None
@@ -248,7 +347,7 @@ class PersistenceCredentialStore:
                     raw = persistence.load()
             except msal_extensions.persistence.PersistenceNotFound:
                 if last:
-                    return None
+                    return StoredRead(bundle=None, kind="not_found")
             except Exception as exc:
                 if last:
                     raise _store_error(context, exc) from exc
@@ -257,8 +356,8 @@ class PersistenceCredentialStore:
             time.sleep(self._read_retry_delay_seconds)
         assert raw is not None  # noqa: S101  # loop exits only via break (raw set) or return/raise
         if raw == "":  # D-123-4: delete's empty-sentinel means "nothing stored"
-            return None
-        return _decode_token_bundle(raw)
+            return StoredRead(bundle=None, kind="empty")
+        return StoredRead(bundle=_decode_token_bundle(raw), kind="bundle")
 
     def set_tokens(self, context: str, tokens: TokenBundle) -> None:
         """Store `tokens` for `context` (AC-BI-006/007/008).
@@ -325,7 +424,7 @@ def _build_production_persistence(context: str) -> PersistenceBackend:
         ) from exc
 
 
-def build_credential_store() -> CredentialStore:
+def build_credential_store() -> PersistenceCredentialStore:
     """Build the default `CredentialStore`: `PersistenceCredentialStore`, no fallback.
 
     Issue #121 (AC-BI-008): any storage failure now raises `PsCliError` instead of
