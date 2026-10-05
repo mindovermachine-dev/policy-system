@@ -26,6 +26,11 @@ from ps_service.domain_mapper.derivation import (
 from ps_service.domain_mapper.errors import DomainMapperDerivationError
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import CapabilityDecision, ObligationNode, RoleRequirements
+from ps_service.domain_mapper.prompts import (
+    CAPABILITY_DERIVATION_SYSTEM_PROMPT,
+    CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT,
+    OBLIGATION_DERIVATION_SYSTEM_PROMPT,
+)
 from ps_service.llm_interface.errors import LlmProviderError
 from ps_service.logging import bind_run_context
 
@@ -33,7 +38,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from domain_mapper._fakes import MakeEmitter, ReadLines
+    from ps_service.domain_mapper.models import DerivationResult
     from ps_service.llm_interface.client import CompletionCaller
+    from ps_service.logging import LogEmitter
 
 
 def _model_response(content: str) -> ModelResponse:
@@ -71,6 +78,25 @@ def _scripted_sequential_call_completion(responses: list[str | Exception]) -> Co
         if isinstance(next_item, Exception):
             raise next_item
         return _model_response(next_item)
+
+    return _call
+
+
+def _recording_sequential_call_completion(
+    responses: list[str], recorded_messages: list[list[dict[str, str]]]
+) -> CompletionCaller:
+    """A `CompletionCaller` fake that returns `responses` in order (like
+    `_scripted_sequential_call_completion`) and appends each call's
+    `messages` to `recorded_messages`, so a test can assert on what was
+    actually sent to the LLM boundary. Raises on an unscripted extra call.
+    """
+    remaining = list(responses)
+
+    def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+        if not remaining:
+            raise AssertionError("no more scripted responses -- unexpected extra LLM call")
+        recorded_messages.append([dict(message) for message in messages])
+        return _model_response(remaining.pop(0))
 
     return _call
 
@@ -451,6 +477,56 @@ def _capability_multi_mint_response(
     )
 
 
+def _reuse_accept_response(confidence: float | None = 0.9) -> str:
+    return json.dumps(
+        {"verdict": "accept", "new_name": None, "new_description": None, "confidence": confidence}
+    )
+
+
+type _RecordedByPrompt = dict[str, list[list[dict[str, str]]]]
+
+
+def _prompt_routed_call_completion(
+    *,
+    obligation: list[str],
+    capability: list[str],
+    verification: list[str | Exception],
+) -> tuple[CompletionCaller, _RecordedByPrompt]:
+    """A `CompletionCaller` fake that routes each call on its system prompt
+    (`messages[0]["content"]`) to the matching scripted queue -- obligation
+    derivation, capability derivation or reuse verification -- and records
+    each call's `messages` per queue, in call order. Raises `AssertionError`
+    on an unknown system prompt or an unscripted call (the same technique as
+    `test_ingest_regulation_tool.py`'s prompt-routed fake).
+    """
+    routes = {
+        OBLIGATION_DERIVATION_SYSTEM_PROMPT: "obligation",
+        CAPABILITY_DERIVATION_SYSTEM_PROMPT: "capability",
+        CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT: "verification",
+    }
+    queues: dict[str, list[str | Exception]] = {
+        "obligation": [*obligation],
+        "capability": [*capability],
+        "verification": [*verification],
+    }
+    recorded: _RecordedByPrompt = {"obligation": [], "capability": [], "verification": []}
+
+    def _call(*, model: str, messages: list[dict[str, str]], timeout: float) -> ModelResponse:
+        route = routes.get(messages[0]["content"])
+        if route is None:
+            raise AssertionError("unknown system prompt -- unexpected LLM call")
+        queue = queues[route]
+        if not queue:
+            raise AssertionError(f"no more scripted {route} responses -- unexpected extra call")
+        recorded[route].append([dict(message) for message in messages])
+        next_item = queue.pop(0)
+        if isinstance(next_item, Exception):
+            raise next_item
+        return _model_response(next_item)
+
+    return _call, recorded
+
+
 def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capability(
     make_emitter: MakeEmitter,
 ) -> None:
@@ -461,7 +537,8 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
     shared Capability node, with TWO REQUIRES edges, one per Obligation.
     Both calls MINT (not match) on purpose -- proving the CODE-level
     registry, not the model, guarantees convergence, mirroring
-    _resolve_obligation_id's own same-Role reuse philosophy.
+    _resolve_obligation_id's own same-Role reuse philosophy. B's identical
+    mint is verified as a reuse (#187) and accepted.
     """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
@@ -469,6 +546,7 @@ def test_derive_capabilities_two_distinct_obligations_converge_on_shared_capabil
         [
             _capability_mint_response(capability_name),
             _capability_mint_response(capability_name),
+            _reuse_accept_response(),
         ]
     )
 
@@ -564,7 +642,8 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
     """A response that explicitly MATCHES an already-registered Capability
     (rather than re-minting identical text) resolves to the same node --
     the ordinary, model-cooperative convergence path, complementing the
-    code-guaranteed convergence proven above.
+    code-guaranteed convergence proven above. B's match is verified as a
+    reuse (#187) and accepted.
     """
     emitter, _log_path = make_emitter()
     minted_name = "Access Control System"
@@ -573,6 +652,7 @@ def test_derive_capabilities_match_response_reuses_registry_entry(
         [
             _capability_mint_response(minted_name),
             _capability_match_response(minted_id),
+            _reuse_accept_response(),
         ]
     )
 
@@ -642,6 +722,7 @@ def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malfo
     neither poisons nor skips the whole-run registry state built up by A
     and consumed by B: A and B still converge onto ONE shared Capability
     node with TWO REQUIRES edges, and C alone is surfaced as unmatched.
+    B's identical mint is verified as a reuse (#187) and accepted.
     """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
@@ -650,6 +731,7 @@ def test_derive_capabilities_two_of_three_obligations_converge_despite_one_malfo
             _capability_mint_response(capability_name),
             "{not valid json",
             _capability_mint_response(capability_name),
+            _reuse_accept_response(),
         ]
     )
 
@@ -712,7 +794,8 @@ def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch
     alone is surfaced as unmatched with no Capability node or REQUIRES edge of its own --
     proving _process_obligation's except DomainMapperDerivationError catch
     (derivation.py:598-609) reaches this specific well-formed-but-unresolvable trigger,
-    not just malformed JSON.
+    not just malformed JSON. B's identical mint is verified as a reuse (#187) and
+    accepted.
     """
     emitter, _log_path = make_emitter()
     capability_name = "Access Control System"
@@ -721,6 +804,7 @@ def test_derive_capabilities_hallucinated_capability_match_isolated_within_batch
             _capability_mint_response(capability_name),
             _capability_match_response(_HALLUCINATED_CAPABILITY_ID),
             _capability_mint_response(capability_name),
+            _reuse_accept_response(),
         ]
     )
 
@@ -758,7 +842,9 @@ def test_derive_capabilities_hallucinated_capability_match_emits_unmatched_log_e
     Mirrors test_derive_capabilities_emits_unmatched_log_entry's assertion shape
     (test_derivation.py:555-574), the issue #64 precedent for this exact log-assertion
     style, extended to a 3-Obligation batch so "exactly one" is actually exercised
-    against a run where other entries could plausibly appear.
+    against a run where other entries could plausibly appear. B's identical mint is
+    verified as a reuse (#187) and accepted; that verdict line has
+    outcome="reuse_accepted", so "exactly one unmatched" still holds.
     """
     emitter, log_path = make_emitter()
     capability_name = "Access Control System"
@@ -767,6 +853,7 @@ def test_derive_capabilities_hallucinated_capability_match_emits_unmatched_log_e
             _capability_mint_response(capability_name),
             _capability_match_response(_HALLUCINATED_CAPABILITY_ID),
             _capability_mint_response(capability_name),
+            _reuse_accept_response(),
         ]
     )
 
@@ -1207,3 +1294,766 @@ def test_derive_obligations_and_capabilities_dangling_role_id_raises_before_any_
     assert "CRA_req_art_13.1" in str(exc_info.value)
     assert "role_ghost_999" in str(exc_info.value)
     assert baseline_graph.calls == []
+
+
+def test_derive_obligations_and_capabilities_renders_registry_with_id_name_and_description(
+    make_emitter: MakeEmitter,
+) -> None:
+    """AC-BI-001/002: the capability call sees each prior registry entry as
+    `id: name — description` (or `(no description)`) inside
+    `<capability_registry>`, and a `None` description never errors.
+    """
+    emitter, _log_path = make_emitter()
+    rows: list[list[object]] = [
+        [
+            "CRA_req_art_13.1",
+            "Restrict access to the product.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ],
+        [
+            "CRA_req_art_13.2",
+            "Record security-relevant events.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ],
+        [
+            "CRA_req_art_13.3",
+            "Notify the authority of incidents.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ],
+    ]
+    baseline_graph = _FakeBaselineGraph(rows)
+    access_description = "Mechanisms that restrict who can access a product or system."
+    recorded_messages: list[list[dict[str, str]]] = []
+    call_completion = _recording_sequential_call_completion(
+        [
+            _mint_response("Restrict Product Access"),
+            _mint_response("Record Security Events"),
+            _mint_response("Notify Authority Of Incidents"),
+            _capability_mint_response("Access Control System", access_description),
+            _capability_mint_response("Security Logging", None),
+            _capability_mint_response("Regulatory Notification Workflow", "Notify regulators."),
+        ],
+        recorded_messages,
+    )
+
+    derive_obligations_and_capabilities(
+        "CRA-1.0",
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    third_capability_user_message = recorded_messages[5][1]["content"]
+    assert "<capability_registry>" in third_capability_user_message
+    registry_block = third_capability_user_message.split("<capability_registry>")[1].split(
+        "</capability_registry>"
+    )[0]
+    assert (
+        f"{capability_id('Access Control System')}: Access Control System — {access_description}"
+        in registry_block
+    )
+    assert (
+        f"{capability_id('Security Logging')}: Security Logging — (no description)"
+        in registry_block
+    )
+    assert len(_find_edge_calls(baseline_graph, "REQUIRES")) == 3
+
+
+# ---------------------------------------------------------------------------
+# #187: per-reuse verification (accept path). Driven through the public entry
+# point with `_prompt_routed_call_completion` and `_FakeBaselineGraph`; one
+# Requirement per Obligation, all under `_ROLE_MANUFACTURER`, minted in
+# document order, so Capability calls happen in that same order (A, B, ...).
+
+_OBLIGATION_TEXT_A = "Restrict Access To The Product"
+_OBLIGATION_TEXT_B = "Maintain Organisational Structure For Continuity"
+_ACCESS_CONTROL_NAME = "Access Control System"
+_ACCESS_CONTROL_DESCRIPTION = "Controls access."
+_ACCESS_CONTROL_ID = capability_id(_ACCESS_CONTROL_NAME)
+
+
+def _manufacturer_requirement_rows(count: int) -> list[list[object]]:
+    return [
+        [
+            f"CRA_req_art_20.{index}",
+            f"Requirement duty number {index}.",
+            _ROLE_MANUFACTURER,
+            _ROLE_MANUFACTURER,
+            "Manufacturer",
+        ]
+        for index in range(1, count + 1)
+    ]
+
+
+def _derive_through_entry_point(
+    *,
+    obligation_texts: list[str],
+    capability: list[str],
+    verification: list[str | Exception],
+    emitter: LogEmitter,
+) -> tuple[DerivationResult, _FakeBaselineGraph, _RecordedByPrompt, list[str]]:
+    baseline_graph = _FakeBaselineGraph(_manufacturer_requirement_rows(len(obligation_texts)))
+    call_completion, recorded = _prompt_routed_call_completion(
+        obligation=[_mint_response(text) for text in obligation_texts],
+        capability=capability,
+        verification=verification,
+    )
+    result = derive_obligations_and_capabilities(
+        "CRA-1.0",
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+    obligation_ids = [obligation_id(_ROLE_MANUFACTURER, text) for text in obligation_texts]
+    return result, baseline_graph, recorded, obligation_ids
+
+
+def _requires_pairs(graph: _FakeBaselineGraph) -> set[tuple[object, object]]:
+    return {
+        (call.params["source_id"], call.params["target_id"])
+        for call in _find_edge_calls(graph, "REQUIRES")
+        if call.params
+    }
+
+
+def _requires_targets_from(graph: _FakeBaselineGraph, source_id: str) -> set[object]:
+    return {target for source, target in _requires_pairs(graph) if source == source_id}
+
+
+def _reuse_scenario(
+    emitter: LogEmitter,
+) -> tuple[DerivationResult, _FakeBaselineGraph, _RecordedByPrompt, list[str]]:
+    """A mints X ("Access Control System"); B proposes reuse of X; accept."""
+    return _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+        ],
+        verification=[_reuse_accept_response()],
+        emitter=emitter,
+    )
+
+
+def test_derive_obligations_and_capabilities_reuse_proposal_makes_exactly_one_verification_call(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-003: B's reuse proposal triggers exactly one verification
+    call; A's first mint triggers none (the one call carries B's duty text).
+    """
+    emitter, _log_path = make_emitter()
+
+    _result, _graph, recorded, _ids = _reuse_scenario(emitter)
+
+    assert len(recorded["capability"]) == 2
+    assert len(recorded["verification"]) == 1
+    verification_user_content = recorded["verification"][0][1]["content"]
+    assert _OBLIGATION_TEXT_B in verification_user_content
+    assert _OBLIGATION_TEXT_A not in verification_user_content
+
+
+def test_derive_obligations_and_capabilities_mint_proposals_make_no_verification_call(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-003 (mint half, A-M1 rewrite): two first mints of distinct
+    names are not reuses, so no verification call is made.
+    """
+    emitter, _log_path = make_emitter()
+    security_logging_id = capability_id("Security Logging")
+
+    result, graph, recorded, (id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_mint_response("Security Logging", "Logs security events."),
+        ],
+        verification=[],
+        emitter=emitter,
+    )
+
+    assert len(recorded["verification"]) == 0
+    assert result.capability_node_ids == (_ACCESS_CONTROL_ID, security_logging_id)
+    assert _requires_pairs(graph) == {(id_a, _ACCESS_CONTROL_ID), (id_b, security_logging_id)}
+    assert result.unmatched_obligation_ids == ()
+
+
+@pytest.mark.parametrize(
+    "b_name",
+    [
+        pytest.param("Internal Controls", id="exact_name"),
+        pytest.param("internal controls", id="case_variant"),
+    ],
+)
+def test_derive_obligations_and_capabilities_mint_of_existing_capability_name_is_verified_as_reuse(
+    b_name: str, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#187 A-M1: B's "mint" of a name already in the registry (exactly or
+    case-insensitively -- `capability_id` lower-cases) attaches to the
+    existing Capability, so it is verified exactly like a reuse, against the
+    registry's own name and description.
+    """
+    emitter, log_path = make_emitter()
+    existing_description = "Maintains the internal control framework."
+    internal_controls_id = capability_id("Internal Controls")
+
+    result, graph, recorded, (_id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response("Internal Controls", existing_description),
+            _capability_mint_response(b_name, "Something else."),
+        ],
+        verification=[_reuse_accept_response()],
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert len(recorded["verification"]) == 1
+    verification_user_content = recorded["verification"][0][1]["content"]
+    assert "<capability_name>Internal Controls</capability_name>" in verification_user_content
+    description_block = verification_user_content.split("<capability_description>")[1].split(
+        "</capability_description>"
+    )[0]
+    assert existing_description in description_block
+    assert result.capability_node_ids == (internal_controls_id,)
+    assert _requires_targets_from(graph, id_b) == {internal_controls_id}
+    verdict_lines = [
+        line for line in read_lines(log_path) if line.get("action") == "verify_capability_reuse"
+    ]
+    assert len(verdict_lines) == 1
+    assert verdict_lines[0]["entity_id"] == [id_b, internal_controls_id]
+    assert verdict_lines[0]["outcome"] == "reuse_accepted"
+
+
+def test_derive_obligations_and_capabilities_accepted_reuse_keeps_existing_capability(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-004: an accepted reuse attaches B to the existing
+    Capability X and mints nothing new.
+    """
+    emitter, _log_path = make_emitter()
+
+    result, graph, _recorded, (_id_a, id_b) = _reuse_scenario(emitter)
+
+    assert result.capability_node_ids == (_ACCESS_CONTROL_ID,)
+    assert (id_b, _ACCESS_CONTROL_ID) in _requires_pairs(graph)
+    assert result.unmatched_obligation_ids == ()
+
+
+def test_derive_capabilities_accepted_reuse_keeps_existing_capability_node(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-004 at `_derive_capabilities` level: B's edge targets X
+    and the run still holds exactly one Capability node.
+    """
+    emitter, _log_path = make_emitter()
+    call_completion, _recorded = _prompt_routed_call_completion(
+        obligation=[],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+        ],
+        verification=[_reuse_accept_response()],
+    )
+
+    capability_nodes, requires_edges, _unmatched = _derive_capabilities(
+        (_OBLIGATION_A, _OBLIGATION_B),
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert len(capability_nodes) == 1
+    edges_from_b = [e for e in requires_edges if e.obligation_node_id == _OBLIGATION_B.id]
+    assert [e.capability_node_id for e in edges_from_b] == [_ACCESS_CONTROL_ID]
+
+
+def test_reuse_verification_messages_delimit_obligation_text_and_description_as_untrusted(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-007: the verification call carries the Obligation text and
+    the Capability's name/description only as tag-delimited user content,
+    never in the system prompt.
+    """
+    emitter, _log_path = make_emitter()
+
+    _result, _graph, recorded, _ids = _reuse_scenario(emitter)
+
+    system_message, user_message = recorded["verification"][0]
+    assert system_message["role"] == "system"
+    assert system_message["content"] == CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
+    user_content = user_message["content"]
+    assert f"<obligation_text>\n{_OBLIGATION_TEXT_B}\n</obligation_text>" in user_content
+    assert f"<capability_name>{_ACCESS_CONTROL_NAME}</capability_name>" in user_content
+    assert (
+        f"<capability_description>{_ACCESS_CONTROL_DESCRIPTION}</capability_description>"
+        in user_content
+    )
+    assert _OBLIGATION_TEXT_B not in system_message["content"]
+    assert _ACCESS_CONTROL_DESCRIPTION not in system_message["content"]
+
+
+def test_derive_obligations_and_capabilities_logs_accepted_reuse_verdict(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#187 AC-BI-011 (accept half): exactly one verdict line, keyed by
+    (B, X), outcome "reuse_accepted", with no reject-only keys.
+    """
+    emitter, log_path = make_emitter()
+
+    _result, _graph, _recorded, (_id_a, id_b) = _reuse_scenario(emitter)
+    emitter.flush()
+
+    verdict_lines = [
+        line for line in read_lines(log_path) if line.get("action") == "verify_capability_reuse"
+    ]
+    assert len(verdict_lines) == 1
+    line = verdict_lines[0]
+    assert line["component"] == "domain_mapper"
+    assert line["entity_id"] == [id_b, _ACCESS_CONTROL_ID]
+    assert line["outcome"] == "reuse_accepted"
+    assert "minted_capability_id" not in line
+    assert "extra" not in line
+
+
+# ---------------------------------------------------------------------------
+# #187: per-reuse verification (reject path).
+
+_CONTINUITY_NAME = "Organisational Continuity Structure"
+_CONTINUITY_DESCRIPTION = "Maintains the organisational structure needed for continuity."
+_CONTINUITY_ID = capability_id(_CONTINUITY_NAME)
+
+
+def _reuse_reject_response(
+    new_name: str, new_description: str = "Covers the duty.", confidence: float = 0.8
+) -> str:
+    return json.dumps(
+        {
+            "verdict": "reject",
+            "new_name": new_name,
+            "new_description": new_description,
+            "confidence": confidence,
+        }
+    )
+
+
+def _rejected_reuse_scenario(
+    emitter: LogEmitter,
+) -> tuple[DerivationResult, _FakeBaselineGraph, _RecordedByPrompt, list[str]]:
+    """A mints X ("Access Control System"); B proposes reuse of X; the
+    verifier rejects and names "Organisational Continuity Structure".
+    """
+    return _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+        ],
+        verification=[_reuse_reject_response(_CONTINUITY_NAME, _CONTINUITY_DESCRIPTION)],
+        emitter=emitter,
+    )
+
+
+def _capability_node_writes(graph: _FakeBaselineGraph) -> dict[object, object]:
+    return {
+        call.params["id"]: call.params["properties"]
+        for call in graph.calls
+        if call.params and "MERGE (n:Capability" in call.query
+    }
+
+
+def test_derive_obligations_and_capabilities_rejected_reuse_mints_verifier_capability(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-005: a rejected reuse mints the verifier's more specific
+    Capability (its description, status "active") and attaches B to it --
+    never to X -- while A keeps its edge to X.
+    """
+    emitter, _log_path = make_emitter()
+
+    result, graph, _recorded, (id_a, id_b) = _rejected_reuse_scenario(emitter)
+
+    minted_properties = _capability_node_writes(graph)[_CONTINUITY_ID]
+    assert isinstance(minted_properties, dict)
+    assert minted_properties["description"] == _CONTINUITY_DESCRIPTION
+    assert minted_properties["status"] == "active"
+    assert _requires_targets_from(graph, id_b) == {_CONTINUITY_ID}
+    assert (id_a, _ACCESS_CONTROL_ID) in _requires_pairs(graph)
+    assert result.capability_node_ids == (_ACCESS_CONTROL_ID, _CONTINUITY_ID)
+    assert result.unmatched_obligation_ids == ()
+
+
+def test_derive_obligations_and_capabilities_logs_rejected_reuse_verdict(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#187 AC-BI-011 (reject half): exactly one verdict line, keyed by
+    (B, X), outcome "reuse_rejected", carrying the minted id as a top-level
+    key (A-m5: `extra` is flattened, never nested).
+    """
+    emitter, log_path = make_emitter()
+
+    _result, _graph, _recorded, (_id_a, id_b) = _rejected_reuse_scenario(emitter)
+    emitter.flush()
+
+    verdict_lines = [
+        line for line in read_lines(log_path) if line.get("action") == "verify_capability_reuse"
+    ]
+    assert len(verdict_lines) == 1
+    line = verdict_lines[0]
+    assert line["entity_id"] == [id_b, _ACCESS_CONTROL_ID]
+    assert line["outcome"] == "reuse_rejected"
+    assert line["minted_capability_id"] == _CONTINUITY_ID
+    assert "extra" not in line
+
+
+def test_derive_obligations_and_capabilities_mint_of_existing_capability_name_rejected_mints_verifier_capability(  # noqa: E501
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 A-M1: B's "mint" of a name already in the registry is verified
+    as a reuse; on reject, B attaches to the verifier's Capability instead
+    of X, and A keeps X.
+    """
+    emitter, _log_path = make_emitter()
+    internal_controls_id = capability_id("Internal Controls")
+    liquidity_id = capability_id("Liquidity Control Procedures")
+
+    result, graph, _recorded, (id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response(
+                "Internal Controls", "Maintains the internal control framework."
+            ),
+            _capability_mint_response("Internal Controls", "Something else."),
+        ],
+        verification=[
+            _reuse_reject_response("Liquidity Control Procedures", "Controls liquidity risk.")
+        ],
+        emitter=emitter,
+    )
+
+    assert _requires_targets_from(graph, id_b) == {liquidity_id}
+    assert (id_a, internal_controls_id) in _requires_pairs(graph)
+    assert result.capability_node_ids == (internal_controls_id, liquidity_id)
+
+
+_OBLIGATION_TEXT_C = "Review Privileged Access And Retain Audit Trails"
+_SECURITY_LOGGING_NAME = "Security Logging"
+_SECURITY_LOGGING_ID = capability_id(_SECURITY_LOGGING_NAME)
+
+
+@pytest.mark.parametrize(
+    ("verification", "rejected_id", "expected_c_targets"),
+    [
+        pytest.param(
+            [_reuse_reject_response("Privileged Access Review"), _reuse_accept_response()],
+            _ACCESS_CONTROL_ID,
+            {capability_id("Privileged Access Review"), _SECURITY_LOGGING_ID},
+            id="reject_first",
+        ),
+        pytest.param(
+            [_reuse_accept_response(), _reuse_reject_response("Audit Trail Retention")],
+            _SECURITY_LOGGING_ID,
+            {_ACCESS_CONTROL_ID, capability_id("Audit Trail Retention")},
+            id="reject_second",
+        ),
+    ],
+)
+def test_derive_obligations_and_capabilities_multiple_reuses_in_one_response_are_verified_independently(  # noqa: E501
+    verification: list[str | Exception],
+    rejected_id: str,
+    expected_c_targets: set[object],
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-006: each reuse in one response gets its own verification
+    call, and each verdict decides only its own proposal.
+    """
+    emitter, _log_path = make_emitter()
+    reuse_both = json.dumps(
+        {
+            "capabilities": [
+                {
+                    "matched_existing_id": _ACCESS_CONTROL_ID,
+                    "new_name": None,
+                    "new_description": None,
+                    "confidence": 0.9,
+                },
+                {
+                    "matched_existing_id": _SECURITY_LOGGING_ID,
+                    "new_name": None,
+                    "new_description": None,
+                    "confidence": 0.9,
+                },
+            ]
+        }
+    )
+
+    result, graph, recorded, (_id_a, _id_b, id_c) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B, _OBLIGATION_TEXT_C],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_mint_response(_SECURITY_LOGGING_NAME, "Logs security events."),
+            reuse_both,
+        ],
+        verification=verification,
+        emitter=emitter,
+    )
+
+    assert len(recorded["verification"]) == 2
+    c_targets = {
+        call.params["target_id"]
+        for call in _find_edge_calls(graph, "REQUIRES")
+        if call.params and call.params["source_id"] == id_c
+    }
+    assert c_targets == expected_c_targets
+    assert rejected_id not in c_targets
+    assert result.unmatched_obligation_ids == ()
+
+
+_OBLIGATION_TEXT_D = "Log Security Relevant Events"
+_INCIDENT_REPORTING_ID = capability_id("Incident Reporting Workflow")
+
+
+@pytest.mark.parametrize(
+    "new_name",
+    [
+        pytest.param("Security Logging", id="exact_name"),
+        pytest.param("security logging", id="case_variant"),
+    ],
+)
+def test_derive_obligations_and_capabilities_verifier_minted_name_colliding_with_registry_marks_unmatched(  # noqa: E501
+    new_name: str, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#187 AC-BI-009: a verifier "mint" whose id is already in the registry
+    (exactly or case-insensitively; `capability_id` does not normalise
+    whitespace, so there is no whitespace case) marks B unmatched -- no
+    retry, no second verification call -- and the run continues with C.
+    """
+    emitter, log_path = make_emitter()
+
+    result, graph, recorded, (_id_a, _id_d, id_b, id_c) = _derive_through_entry_point(
+        obligation_texts=[
+            _OBLIGATION_TEXT_A,
+            _OBLIGATION_TEXT_D,
+            _OBLIGATION_TEXT_B,
+            _OBLIGATION_TEXT_C,
+        ],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_mint_response(_SECURITY_LOGGING_NAME, "Logs security events."),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+            _capability_mint_response("Incident Reporting Workflow", "Reports incidents."),
+        ],
+        verification=[_reuse_reject_response(new_name)],
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert len(recorded["verification"]) == 1
+    assert result.unmatched_obligation_ids == (id_b,)
+    assert _requires_targets_from(graph, id_b) == set()
+    assert (id_c, _INCIDENT_REPORTING_ID) in _requires_pairs(graph)
+    lines = read_lines(log_path)
+    unmatched_lines = [line for line in lines if line.get("outcome") == "unmatched"]
+    assert len(unmatched_lines) == 1
+    assert unmatched_lines[0]["entity_id"] == id_b
+    verdict_lines = [line for line in lines if line.get("action") == "verify_capability_reuse"]
+    assert len(verdict_lines) == 1
+    verdict_line = verdict_lines[0]
+    assert verdict_line["outcome"] == "reuse_rejected"
+    assert verdict_line["collision"] is True
+    assert verdict_line["proposed_capability_id"] == _SECURITY_LOGGING_ID
+    assert "minted_capability_id" not in verdict_line
+
+
+def test_derive_obligations_and_capabilities_verifier_mint_equal_to_same_response_mint_converges_on_one_capability(  # noqa: E501
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 A-m6: when the verifier mints the same Capability as another mint
+    in B's own response, the run holds that Capability once and B attaches
+    only to it (a duplicate REQUIRES entry is harmless -- the writer MERGEs).
+    """
+    emitter, _log_path = make_emitter()
+    mint_and_reuse = json.dumps(
+        {
+            "capabilities": [
+                {
+                    "matched_existing_id": None,
+                    "new_name": _CONTINUITY_NAME,
+                    "new_description": "Maintains continuity structure.",
+                    "confidence": 0.9,
+                },
+                {
+                    "matched_existing_id": _ACCESS_CONTROL_ID,
+                    "new_name": None,
+                    "new_description": None,
+                    "confidence": 0.9,
+                },
+            ]
+        }
+    )
+
+    result, graph, _recorded, (_id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            mint_and_reuse,
+        ],
+        verification=[_reuse_reject_response(_CONTINUITY_NAME)],
+        emitter=emitter,
+    )
+
+    assert result.capability_node_ids.count(_CONTINUITY_ID) == 1
+    assert _requires_targets_from(graph, id_b) == {_CONTINUITY_ID}
+    assert result.unmatched_obligation_ids == ()
+
+
+# ---------------------------------------------------------------------------
+# #187: malformed verification responses (AC-BI-008, characterisation pins --
+# the phase-1 catch and two-phase atomicity landed with S2/S3).
+
+
+@pytest.mark.parametrize(
+    "malformed_verification",
+    [
+        pytest.param("{not valid json", id="invalid_json"),
+        pytest.param(
+            json.dumps({"new_name": "Organisational Continuity Structure", "confidence": 0.8}),
+            id="missing_verdict",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "verdict": "reject",
+                    "new_name": None,
+                    "new_description": "Covers the duty.",
+                    "confidence": 0.8,
+                }
+            ),
+            id="reject_without_new_name",
+        ),
+        pytest.param(json.dumps({"verdict": "maybe"}), id="unknown_verdict"),
+    ],
+)
+def test_derive_obligations_and_capabilities_malformed_reuse_verification_marks_obligation_unmatched(  # noqa: E501
+    malformed_verification: str, make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#187 AC-BI-008: a malformed verification response for B's reuse marks
+    B unmatched with no REQUIRES edge, and the run continues with C.
+    """
+    emitter, log_path = make_emitter()
+
+    result, graph, _recorded, (_id_a, id_b, id_c) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B, _OBLIGATION_TEXT_C],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+            _capability_mint_response("Incident Reporting Workflow", "Reports incidents."),
+        ],
+        verification=[malformed_verification],
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert result.unmatched_obligation_ids == (id_b,)
+    assert _requires_targets_from(graph, id_b) == set()
+    assert (id_c, _INCIDENT_REPORTING_ID) in _requires_pairs(graph)
+    unmatched_lines = [line for line in read_lines(log_path) if line.get("outcome") == "unmatched"]
+    assert len(unmatched_lines) == 1
+    assert unmatched_lines[0]["entity_id"] == id_b
+    assert unmatched_lines[0]["action"] == "derive_obligations_and_capabilities"
+
+
+def test_derive_capabilities_malformed_second_reuse_verification_drops_all_edges_for_that_obligation(  # noqa: E501
+    make_emitter: MakeEmitter,
+) -> None:
+    """#187 AC-BI-008 atomicity guard: C's first reuse is accepted but its
+    second verification is malformed, so C gets no REQUIRES edge at all,
+    and A's and B's Capabilities and edges are unchanged.
+    """
+    emitter, _log_path = make_emitter()
+    reuse_both = json.dumps(
+        {
+            "capabilities": [
+                {
+                    "matched_existing_id": _ACCESS_CONTROL_ID,
+                    "new_name": None,
+                    "new_description": None,
+                    "confidence": 0.9,
+                },
+                {
+                    "matched_existing_id": _SECURITY_LOGGING_ID,
+                    "new_name": None,
+                    "new_description": None,
+                    "confidence": 0.9,
+                },
+            ]
+        }
+    )
+
+    result, graph, _recorded, (id_a, id_b, id_c) = _derive_through_entry_point(
+        obligation_texts=[_OBLIGATION_TEXT_A, _OBLIGATION_TEXT_B, _OBLIGATION_TEXT_C],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_mint_response(_SECURITY_LOGGING_NAME, "Logs security events."),
+            reuse_both,
+        ],
+        verification=[_reuse_accept_response(), "{not valid json"],
+        emitter=emitter,
+    )
+
+    assert result.unmatched_obligation_ids == (id_c,)
+    assert _requires_targets_from(graph, id_c) == set()
+    assert _requires_pairs(graph) == {(id_a, _ACCESS_CONTROL_ID), (id_b, _SECURITY_LOGGING_ID)}
+    assert result.capability_node_ids == (_ACCESS_CONTROL_ID, _SECURITY_LOGGING_ID)
+
+
+# ---------------------------------------------------------------------------
+# #187: provider failure during verification (AC-BI-010, characterisation pin).
+
+
+@pytest.mark.parametrize(
+    "verification_failure",
+    [
+        pytest.param(
+            openai.APIConnectionError(request=httpx.Request("POST", "https://example.invalid")),
+            id="api_connection_error",
+        ),
+        pytest.param("", id="empty_completion_content"),
+    ],
+)
+def test_derive_obligations_and_capabilities_reuse_verification_provider_error_aborts_run(
+    verification_failure: str | Exception, make_emitter: MakeEmitter
+) -> None:
+    """#187 AC-BI-010: an `LlmProviderError` from a verification call is
+    never caught -- it aborts the whole run before persistence, so no
+    REQUIRES/HAS/SATISFIED_BY edge is written.
+    """
+    emitter, _log_path = make_emitter()
+    baseline_graph = _FakeBaselineGraph(_manufacturer_requirement_rows(2))
+    call_completion, _recorded = _prompt_routed_call_completion(
+        obligation=[_mint_response(_OBLIGATION_TEXT_A), _mint_response(_OBLIGATION_TEXT_B)],
+        capability=[
+            _capability_mint_response(_ACCESS_CONTROL_NAME, _ACCESS_CONTROL_DESCRIPTION),
+            _capability_match_response(_ACCESS_CONTROL_ID),
+        ],
+        verification=[verification_failure],
+    )
+
+    with pytest.raises(LlmProviderError):
+        derive_obligations_and_capabilities(
+            "CRA-1.0",
+            baseline_graph=baseline_graph,
+            model="fake-model",
+            call_completion=call_completion,
+            emitter=emitter,
+        )
+
+    for relationship_type in ("REQUIRES", "HAS", "SATISFIED_BY"):
+        assert _find_edge_calls(baseline_graph, relationship_type) == []

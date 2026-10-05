@@ -13,13 +13,17 @@ from ps_service.domain_mapper.errors import (
 from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
+    CapabilityReuseVerdict,
     DefinedTermCandidate,
     ExtractionUnit,
     ObligationAssignment,
     RequirementCandidate,
 )
 from ps_service.domain_mapper.prompts import (
+    CAPABILITY_DERIVATION_SYSTEM_PROMPT,
+    CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT,
     parse_capability_response,
+    parse_capability_reuse_verdict,
     parse_definitions_response,
     parse_extraction_response,
     parse_obligation_response,
@@ -413,6 +417,7 @@ def test_parse_capability_response_single_mint_derives_id_from_new_name() -> Non
     assert decision.name == "Security Logging"
     assert decision.description == "Logs security-relevant events."
     assert decision.confidence == 0.7
+    assert decision.is_reuse is False
 
 
 def test_parse_capability_response_multi_capability_response_returns_two_decisions() -> None:
@@ -485,3 +490,168 @@ def test_parse_capability_response_missing_confidence_raises_typed_error() -> No
     with pytest.raises(DomainMapperDerivationError) as exc_info:
         parse_capability_response(payload, _OBLIGATION_NODE_ID, {})
     assert _OBLIGATION_NODE_ID in str(exc_info.value)
+
+
+def test_capability_derivation_prompt_requires_whole_duty_coverage_for_reuse() -> None:
+    """AC-BI-002: reuse only when the description covers the whole duty;
+    otherwise mint a more specific Capability. JSON contract unchanged.
+    """
+    assert "whole duty" in CAPABILITY_DERIVATION_SYSTEM_PROMPT
+    assert "more specific" in CAPABILITY_DERIVATION_SYSTEM_PROMPT
+    for contract_key in ("matched_existing_id", "new_name", "new_description", "confidence"):
+        assert contract_key in CAPABILITY_DERIVATION_SYSTEM_PROMPT
+
+
+def test_parse_capability_response_match_item_is_marked_as_reuse() -> None:
+    """#187 AC-BI-003: a matched-existing item is a reuse proposal, so it is
+    marked for verification.
+    """
+    payload = _capability_payload(_match_item(_EXISTING_CAPABILITY_ID))
+
+    decisions = parse_capability_response(payload, _OBLIGATION_NODE_ID, _CAPABILITY_REGISTRY)
+
+    assert decisions[0].is_reuse is True
+
+
+def test_parse_capability_response_mint_of_registry_name_is_marked_as_reuse() -> None:
+    """#187 A-M1: a "mint" whose capability_id is already registered attaches
+    to the existing Capability, so it is a reuse carrying the registry's own
+    name and description (the model's new_description is discarded).
+    """
+    payload = _capability_payload(_mint_item(_EXISTING_CAPABILITY_NAME, "Other text."))
+
+    decisions = parse_capability_response(payload, _OBLIGATION_NODE_ID, _CAPABILITY_REGISTRY)
+
+    decision = decisions[0]
+    assert decision.is_reuse is True
+    assert decision.capability_node_id == _EXISTING_CAPABILITY_ID
+    assert decision.description == _EXISTING_CAPABILITY_DESCRIPTION
+
+
+def test_capability_reuse_verification_prompt_states_whole_duty_rule_and_json_contract() -> None:
+    assert "whole duty" in CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
+    for contract_key in ("verdict", "new_name", "new_description", "confidence"):
+        assert contract_key in CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
+
+
+def test_parse_capability_reuse_verdict_accept_returns_accept_verdict() -> None:
+    text = json.dumps(
+        {"verdict": "accept", "new_name": None, "new_description": None, "confidence": 0.9}
+    )
+
+    verdict = parse_capability_reuse_verdict(text, _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID)
+
+    assert isinstance(verdict, CapabilityReuseVerdict)
+    assert verdict.verdict == "accept"
+    assert verdict.new_name is None
+    assert verdict.new_description is None
+
+
+def test_parse_capability_reuse_verdict_accept_without_confidence_returns_accept_verdict() -> None:
+    """A-m7: confidence is optional on accept."""
+    text = json.dumps({"verdict": "accept"})
+
+    verdict = parse_capability_reuse_verdict(text, _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID)
+
+    assert verdict.verdict == "accept"
+    assert verdict.confidence is None
+
+
+@pytest.mark.parametrize(
+    "response_text",
+    [
+        pytest.param("{not valid json", id="invalid_json"),
+        pytest.param(json.dumps(["accept"]), id="non_object"),
+        pytest.param(json.dumps({"new_name": "X", "confidence": 0.8}), id="missing_verdict"),
+        pytest.param(json.dumps({"verdict": "maybe"}), id="unknown_verdict"),
+    ],
+)
+def test_parse_capability_reuse_verdict_malformed_response_raises_naming_both_ids(
+    response_text: str,
+) -> None:
+    with pytest.raises(DomainMapperDerivationError) as exc_info:
+        parse_capability_reuse_verdict(response_text, _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID)
+    assert _OBLIGATION_NODE_ID in str(exc_info.value)
+    assert _EXISTING_CAPABILITY_ID in str(exc_info.value)
+
+
+def test_parse_capability_reuse_verdict_reject_with_name_description_and_confidence_returns_reject_verdict() -> (  # noqa: E501
+    None
+):
+    text = json.dumps(
+        {
+            "verdict": "reject",
+            "new_name": "Organisational Continuity Structure",
+            "new_description": "Maintains continuity structure.",
+            "confidence": 0.8,
+        }
+    )
+
+    verdict = parse_capability_reuse_verdict(text, _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID)
+
+    assert verdict.verdict == "reject"
+    assert verdict.new_name == "Organisational Continuity Structure"
+    assert verdict.new_description == "Maintains continuity structure."
+    assert verdict.confidence == 0.8
+
+
+def _reject_payload(**overrides: object) -> str:
+    payload: dict[str, object] = {
+        "verdict": "reject",
+        "new_name": "Organisational Continuity Structure",
+        "new_description": "Maintains continuity structure.",
+        "confidence": 0.8,
+    }
+    payload.update(overrides)
+    return json.dumps({key: value for key, value in payload.items() if value is not ...})
+
+
+@pytest.mark.parametrize(
+    "new_name", [pytest.param(None, id="null"), pytest.param("  ", id="empty")]
+)
+def test_parse_capability_reuse_verdict_reject_without_new_name_raises_naming_both_ids(
+    new_name: str | None,
+) -> None:
+    with pytest.raises(DomainMapperDerivationError) as exc_info:
+        parse_capability_reuse_verdict(
+            _reject_payload(new_name=new_name), _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID
+        )
+    assert _OBLIGATION_NODE_ID in str(exc_info.value)
+    assert _EXISTING_CAPABILITY_ID in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "new_description", [pytest.param(None, id="null"), pytest.param("", id="empty")]
+)
+def test_parse_capability_reuse_verdict_reject_without_new_description_raises_naming_both_ids(
+    new_description: str | None,
+) -> None:
+    with pytest.raises(DomainMapperDerivationError) as exc_info:
+        parse_capability_reuse_verdict(
+            _reject_payload(new_description=new_description),
+            _OBLIGATION_NODE_ID,
+            _EXISTING_CAPABILITY_ID,
+        )
+    assert _OBLIGATION_NODE_ID in str(exc_info.value)
+    assert _EXISTING_CAPABILITY_ID in str(exc_info.value)
+
+
+def test_parse_capability_reuse_verdict_reject_without_confidence_raises_naming_both_ids() -> None:
+    """A-m7: confidence is required on reject."""
+    with pytest.raises(DomainMapperDerivationError) as exc_info:
+        parse_capability_reuse_verdict(
+            _reject_payload(confidence=...), _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID
+        )
+    assert _OBLIGATION_NODE_ID in str(exc_info.value)
+    assert _EXISTING_CAPABILITY_ID in str(exc_info.value)
+
+
+def test_parse_capability_reuse_verdict_reject_with_out_of_range_confidence_raises_naming_both_ids() -> (  # noqa: E501
+    None
+):
+    with pytest.raises(DomainMapperDerivationError) as exc_info:
+        parse_capability_reuse_verdict(
+            _reject_payload(confidence=1.5), _OBLIGATION_NODE_ID, _EXISTING_CAPABILITY_ID
+        )
+    assert _OBLIGATION_NODE_ID in str(exc_info.value)
+    assert _EXISTING_CAPABILITY_ID in str(exc_info.value)

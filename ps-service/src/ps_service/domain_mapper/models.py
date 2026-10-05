@@ -247,7 +247,10 @@ class RequirementSatisfiedByEdge:
 class CapabilityDecision(BaseModel):
     """Stage-3 LLM output — one per Capability a distinct Obligation requires.
 
-    PLAN_REVIEWED.md §7.4.
+    PLAN_REVIEWED.md §7.4. `is_reuse` (#187) marks a decision that attaches
+    the Obligation to a Capability already in the whole-run registry -- a
+    matched-existing item, or a mint whose `capability_id` is already
+    registered -- so it is verified before it is applied.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -257,6 +260,24 @@ class CapabilityDecision(BaseModel):
     name: str
     description: str | None
     confidence: float = Field(ge=0.0, le=1.0)
+    is_reuse: bool = False
+
+
+class CapabilityReuseVerdict(BaseModel):
+    """Reuse-verification LLM output -- one per reuse proposal (#187).
+
+    `accept` keeps the proposed existing Capability. `reject` carries the
+    more specific Capability (`new_name`/`new_description`) to mint instead,
+    plus its `confidence`. `parse_capability_reuse_verdict` enforces the
+    reject-only requirements.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    verdict: Literal["accept", "reject"]
+    new_name: str | None = None
+    new_description: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 @dataclass(frozen=True, slots=True)

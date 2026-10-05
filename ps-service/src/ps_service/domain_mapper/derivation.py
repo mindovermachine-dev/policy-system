@@ -36,7 +36,7 @@ from ps_service.domain_mapper.errors import DomainMapperDerivationError
 from ps_service.domain_mapper.graph_writer import (
     persist_obligation_and_capability_graph,
 )
-from ps_service.domain_mapper.identity import obligation_id
+from ps_service.domain_mapper.identity import capability_id, obligation_id
 from ps_service.domain_mapper.models import (
     CapabilityDecision,
     CapabilityNode,
@@ -50,8 +50,10 @@ from ps_service.domain_mapper.models import (
 )
 from ps_service.domain_mapper.prompts import (
     CAPABILITY_DERIVATION_SYSTEM_PROMPT,
+    CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT,
     OBLIGATION_DERIVATION_SYSTEM_PROMPT,
     parse_capability_response,
+    parse_capability_reuse_verdict,
     parse_obligation_response,
 )
 from ps_service.llm_interface.completion import route_completion
@@ -59,11 +61,15 @@ from ps_service.llm_interface.models import ChatMessage
 from ps_service.logging import LogEmitter, emit_log_entry
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ps_service.domain_mapper.falkordb_client import GraphHandle
+    from ps_service.domain_mapper.models import CapabilityReuseVerdict
     from ps_service.llm_interface.client import CompletionCaller
 
 _COMPONENT = "domain_mapper"
 _ACTION = "derive_obligations_and_capabilities"
+_VERIFY_REUSE_ACTION = "verify_capability_reuse"
 
 _READ_REQUIREMENTS_BY_ROLE_QUERY = (
     "MATCH (req:Requirement) "
@@ -586,17 +592,31 @@ def _process_obligation(
     call_completion: CompletionCaller | None,
     emitter: LogEmitter | None,
 ) -> None:
-    """One distinct Obligation's Capability mint-or-match decision.
+    """One distinct Obligation's Capability mint-or-match decision, in two phases.
+
+    1. **Resolve** (#187): derive the Obligation's `CapabilityDecision`s,
+       then send each reuse proposal (`is_reuse`) through `_verify_reuse`
+       -- one verification call per reuse; first mints pass through
+       unverified. Nothing in `state` changes during this phase.
+    2. **Apply**: register any new Capability and append the `REQUIRES`
+       edges.
 
     Mirrors `_process_requirement`'s isolation shape exactly (issue #64):
-    a `DomainMapperDerivationError` from a malformed/unparseable response is
-    caught here, one level up from `_derive_capabilities_for_obligation`
-    (which does not catch it itself), and unified with the
-    "surfaced, not silently dropped" outcome via `_mark_capability_unmatched`.
-    Mutates `state` in place.
+    a `DomainMapperDerivationError` raised anywhere in the Resolve phase (a
+    malformed derivation response or a malformed verification response) is
+    caught here, before any state change, and unified with the "surfaced,
+    not silently dropped" outcome via `_mark_capability_unmatched` -- so the
+    Obligation is atomic: it gets either all of its `REQUIRES` edges or
+    none. An `LlmProviderError` is never caught. Mutates `state` in place.
+
+    Converge: if a verifier mints the same id as another mint in the same
+    response, the apply loop creates the node once (registry guard), but
+    `requires_edges` holds the `(obligation, capability)` pair twice (no
+    edge dedup). This is harmless: the writer issues
+    `MERGE (s)-[:REQUIRES]->(t)`, so FalkorDB holds one edge.
     """
     try:
-        decisions = _derive_capabilities_for_obligation(
+        proposed_decisions = _derive_capabilities_for_obligation(
             obligation_node_id=obligation_node_id,
             obligation_text=obligation_text,
             registry=state.registry,
@@ -604,6 +624,19 @@ def _process_obligation(
             call_completion=call_completion,
             emitter=emitter,
         )
+        decisions = [
+            _verify_reuse(
+                decision,
+                obligation_text=obligation_text,
+                registry=state.registry,
+                model=model,
+                call_completion=call_completion,
+                emitter=emitter,
+            )
+            if decision.is_reuse
+            else decision
+            for decision in proposed_decisions
+        ]
     except DomainMapperDerivationError:
         _mark_capability_unmatched(obligation_node_id, state, emitter)
         return
@@ -621,6 +654,137 @@ def _process_obligation(
                 capability_node_id=decision.capability_node_id,
             )
         )
+
+
+def _verify_reuse(
+    decision: CapabilityDecision,
+    *,
+    obligation_text: str,
+    registry: Mapping[str, tuple[str, str | None]],
+    model: str,
+    call_completion: CompletionCaller | None,
+    emitter: LogEmitter | None,
+) -> CapabilityDecision:
+    """Verify one reuse proposal with exactly one LLM call (#187).
+
+    1. One `route_completion` call judging whether the proposed existing
+       Capability's description covers the Obligation's whole duty.
+    2. `parse_capability_reuse_verdict` -- a malformed verdict raises
+       `DomainMapperDerivationError` and emits no verdict line.
+    3. On `accept`: emit `outcome="reuse_accepted"`, then return `decision`
+       unchanged (same Capability, no registry change; the first-pass
+       confidence is kept).
+    4. On `reject`: `minted_id = capability_id(verdict.new_name)`.
+       - If `minted_id` is already in `registry` (the verifier "minted" an
+         existing Capability, exactly or case-insensitively): emit
+         `outcome="reuse_rejected"` with `collision=True` and
+         `proposed_capability_id`, then raise `DomainMapperDerivationError`
+         -- the Obligation is marked unmatched; no retry, no second call.
+       - Otherwise: emit `outcome="reuse_rejected"` with
+         `minted_capability_id`, then return a new non-reuse
+         `CapabilityDecision` carrying the verifier's name, description and
+         confidence.
+
+    Design note (confidence): `reject` requires a `confidence` in [0, 1],
+    because the verifier-minted `CapabilityDecision` needs one and
+    `CapabilityDecision.confidence` has no default; a missing or invalid
+    value takes the malformed -> unmatched route. On `accept` the verdict's
+    `confidence` is optional and ignored: the decision keeps the first-pass
+    confidence. Like `new_description`, this is stricter than AC-BI-008's
+    wording.
+
+    An `LlmProviderError` is never caught.
+    """
+    messages = _build_reuse_verification_messages(
+        obligation_text=obligation_text,
+        capability_name=decision.name,
+        capability_description=decision.description,
+    )
+    completion = route_completion(
+        messages, model=model, call_completion=call_completion, emitter=emitter
+    )
+    verdict = parse_capability_reuse_verdict(
+        completion.text, decision.obligation_node_id, decision.capability_node_id
+    )
+    if verdict.verdict == "accept":
+        _emit_reuse_verdict(
+            decision.obligation_node_id,
+            decision.capability_node_id,
+            outcome="reuse_accepted",
+            extra=None,
+            emitter=emitter,
+        )
+        return decision
+    return _mint_verifier_capability(decision, verdict, registry=registry, emitter=emitter)
+
+
+def _mint_verifier_capability(
+    decision: CapabilityDecision,
+    verdict: CapabilityReuseVerdict,
+    *,
+    registry: Mapping[str, tuple[str, str | None]],
+    emitter: LogEmitter | None,
+) -> CapabilityDecision:
+    """Turn a rejected reuse into a decision minting the verifier's Capability (#187).
+
+    Raises `DomainMapperDerivationError` when the verifier's Capability is
+    already in `registry` (a collision), after emitting its audit line.
+    """
+    # `parse_capability_reuse_verdict` guarantees a reject carries a
+    # non-empty `new_name` and a `confidence`; the model types them as
+    # optional only because `accept` leaves them null.
+    new_name = cast("str", verdict.new_name)
+    minted_id = capability_id(new_name)
+    if minted_id in registry:
+        _emit_reuse_verdict(
+            decision.obligation_node_id,
+            decision.capability_node_id,
+            outcome="reuse_rejected",
+            extra={"collision": True, "proposed_capability_id": minted_id},
+            emitter=emitter,
+        )
+        raise DomainMapperDerivationError(
+            f"reuse verification for obligation {decision.obligation_node_id!r} rejected "
+            f"capability {decision.capability_node_id!r} but proposed {minted_id!r}, which is "
+            "already in the capability registry"
+        )
+    _emit_reuse_verdict(
+        decision.obligation_node_id,
+        decision.capability_node_id,
+        outcome="reuse_rejected",
+        extra={"minted_capability_id": minted_id},
+        emitter=emitter,
+    )
+    return CapabilityDecision(
+        obligation_node_id=decision.obligation_node_id,
+        capability_node_id=minted_id,
+        name=new_name,
+        description=verdict.new_description,
+        confidence=cast("float", verdict.confidence),
+        is_reuse=False,
+    )
+
+
+def _emit_reuse_verdict(
+    obligation_node_id: str,
+    matched_capability_id: str,
+    *,
+    outcome: str,
+    extra: Mapping[str, object] | None,
+    emitter: LogEmitter | None,
+) -> None:
+    """Emit one `verify_capability_reuse` audit line keyed by (Obligation, matched Capability).
+
+    `extra` keys are flattened into top-level keys of the JSON log line.
+    """
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_VERIFY_REUSE_ACTION,
+        entity_id=(obligation_node_id, matched_capability_id),
+        outcome=outcome,
+        extra=extra,
+        emitter=emitter,
+    )
 
 
 def _mark_capability_unmatched(
@@ -709,18 +873,49 @@ def _build_capability_messages(
 
     The duty text and the WHOLE-run Capability registry built so far are
     clearly delimited from the system prompt's instructions (L2's
-    untrusted-content rule).
+    untrusted-content rule). Each registry entry is rendered as
+    `id: name — description` (or `— (no description)`), so the model can
+    judge whether an existing Capability covers the Obligation's whole duty.
     """
     registry_text = (
-        "\n".join(f"- {cid}: {name}" for cid, (name, _description) in registry.items()) or "(empty)"
+        "\n".join(
+            f"- {cid}: {name} — {description or '(no description)'}"
+            for cid, (name, description) in registry.items()
+        )
+        or "(empty)"
     )
     user_content = (
         "<obligation_text>\n"
         f"{obligation_text}\n"
         "</obligation_text>\n\n"
-        f"Existing Capability registry:\n{registry_text}"
+        "<capability_registry>\n"
+        f"{registry_text}\n"
+        "</capability_registry>"
     )
     return [
         ChatMessage(role="system", content=CAPABILITY_DERIVATION_SYSTEM_PROMPT),
+        ChatMessage(role="user", content=user_content),
+    ]
+
+
+def _build_reuse_verification_messages(
+    *, obligation_text: str, capability_name: str, capability_description: str | None
+) -> list[ChatMessage]:
+    """System prompt + one user message carrying one Obligation/Capability pair (#187).
+
+    The duty text and the Capability's name/description are delimited by
+    their own tags in the user message and never placed in the system
+    prompt (L2's untrusted-content rule).
+    """
+    user_content = (
+        "<obligation_text>\n"
+        f"{obligation_text}\n"
+        "</obligation_text>\n\n"
+        f"<capability_name>{capability_name}</capability_name>\n"
+        f"<capability_description>{capability_description or '(no description)'}"
+        "</capability_description>"
+    )
+    return [
+        ChatMessage(role="system", content=CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT),
         ChatMessage(role="user", content=user_content),
     ]
