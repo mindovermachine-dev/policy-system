@@ -194,9 +194,15 @@ What obligations does the Cyber Resilience Act place on manufacturers,
 and which of our policies cover them?
 ```
 
-The `ps-qna` skill grounds itself against the domain model, writes read-only Cypher,
-retrieves from the graph, and constructs an answer that cites what it retrieved. If
-the graph cannot answer, it says so rather than filling the gap from model recall.
+The `ps-qna` skill first states back, in plain language, what it understands you're
+asking and its scope, and asks you to confirm or correct it — nothing is queried
+until you confirm. Once confirmed, it queries the live knowledge graph, verifies the
+answer, and prints short status lines while it works. The answer cites a source
+reference for each claim and ends with one line confirming the graph was queried
+live and whether the answer held up under verification. If the graph cannot answer,
+it says so rather than filling the gap from model recall. Ask for the underlying
+query, the retrieved data, or the verification detail if you want to see the work
+behind the answer.
 
 If the skill does not engage on its own, ask for it by name: _"Use the ps-qna skill."_
 
