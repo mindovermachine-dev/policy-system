@@ -1624,6 +1624,134 @@ def test_derive_obligations_and_capabilities_logs_accepted_reuse_verdict(
 
 
 # ---------------------------------------------------------------------------
+# #191: recalibrated reuse verification (accept path), real #187 DORA cases.
+
+_EU_REPORTING_NAME = "EU Regulatory Reporting"
+_EU_REPORTING_DESCRIPTION = (
+    "Ability to submit required legal or regulatory notifications and reports to EU "
+    "authorities in compliance with applicable rules."
+)
+_EU_REPORTING_ID = capability_id(_EU_REPORTING_NAME)
+_EU_LAWS_OBLIGATION_TEXT = "Notify Implementing Laws and Provisions to EU Authorities"
+_ICT_INCIDENT_OBLIGATION_TEXT = "Report Major ICT-Related Incidents to the Competent Authority"
+_SUBSUMPTION_GUIDANCE = "A broader description can cover a narrower duty"
+
+
+def test_derive_obligations_and_capabilities_accepts_broader_eu_regulatory_reporting_for_ict_incident_reporting_duty(  # noqa: E501
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#191 AC-BI-001/AC-BI-003: the #187 DORA subsumption case
+    (dora-reingest-187.jsonl:1053). B's narrower ICT-incident reporting duty
+    is proposed for reuse of the broader "EU Regulatory Reporting"; the
+    verifier accepts, so B attaches to it and "Incident Reporting" is never
+    minted. Q7: A's mint of EU Regulatory Reporting is first-pass here,
+    whereas in the real run it came from a verifier mint; that is irrelevant
+    to B's decision.
+
+    The red step proves only that the recalibrated guidance is the system
+    prompt recorded at the LLM boundary (implied by the prompt pin, since the
+    fake routes on identity); the verdict is scripted, so behavioural proof
+    that a real model now accepts lives in test_reuse_verification_live.py (S4).
+    """
+    emitter, log_path = make_emitter()
+
+    result, graph, recorded, (id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_EU_LAWS_OBLIGATION_TEXT, _ICT_INCIDENT_OBLIGATION_TEXT],
+        capability=[
+            _capability_mint_response(_EU_REPORTING_NAME, _EU_REPORTING_DESCRIPTION),
+            _capability_match_response(_EU_REPORTING_ID),
+        ],
+        verification=[_reuse_accept_response()],
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert len(recorded["verification"]) == 1
+    system_message, user_message = recorded["verification"][0]
+    assert _SUBSUMPTION_GUIDANCE in system_message["content"]
+    assert user_message["content"] == (
+        f"<obligation_text>\n{_ICT_INCIDENT_OBLIGATION_TEXT}\n</obligation_text>\n\n"
+        f"<capability_name>{_EU_REPORTING_NAME}</capability_name>\n"
+        f"<capability_description>{_EU_REPORTING_DESCRIPTION}</capability_description>"
+    )
+    verdict_lines = [
+        line for line in read_lines(log_path) if line.get("action") == "verify_capability_reuse"
+    ]
+    assert len(verdict_lines) == 1
+    assert verdict_lines[0]["entity_id"] == [id_b, _EU_REPORTING_ID]
+    assert verdict_lines[0]["outcome"] == "reuse_accepted"
+    assert "minted_capability_id" not in verdict_lines[0]
+    assert result.capability_node_ids == (_EU_REPORTING_ID,)
+    assert capability_id("Incident Reporting") not in _capability_node_writes(graph)
+    assert _requires_targets_from(graph, id_b) == {_EU_REPORTING_ID}
+    assert _requires_pairs(graph) == {(id_a, _EU_REPORTING_ID), (id_b, _EU_REPORTING_ID)}
+    assert result.unmatched_obligation_ids == ()
+
+
+_ICT_OP_RISK_NAME = "ICT Operational Risk Management"
+_ICT_OP_RISK_DESCRIPTION = (
+    "Ability to identify, assess, monitor, and control operational risks arising from "
+    "ICT systems, processes, and services."
+)
+_ICT_OP_RISK_ID = capability_id(_ICT_OP_RISK_NAME)
+_ICT_EXPERTISE_OBLIGATION_TEXT = "Have Expertise in ICT Matters and Operational Risk"
+_OP_RISK_OBLIGATION_TEXT = (
+    "Identify and Minimise Operational Risks Through Appropriate Systems, Controls, and Procedures"
+)
+_DOMAIN_QUALIFIER_GUIDANCE = "A domain qualifier alone does not make two capacities distinct"
+
+
+def test_derive_obligations_and_capabilities_accepts_ict_operational_risk_management_for_unqualified_operational_risk_duty(  # noqa: E501
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """#191 AC-BI-002/AC-BI-004: the #187 DORA domain-qualifier case
+    (dora-reingest-187.jsonl:1904). B's unqualified operational-risk duty is
+    proposed for reuse of the existing, ICT-scoped "ICT Operational Risk
+    Management"; the verifier accepts, so B attaches to it and "Operational
+    Risk Management" is never minted. Direction follows the raw #187 log
+    (PLAN.md G4), not the issue prose, per user decision C1(b), CHANGES.md.
+
+    The red step proves only that the recalibrated guidance is the system
+    prompt recorded at the LLM boundary (implied by the prompt pin, since the
+    fake routes on identity); the verdict is scripted, so behavioural proof
+    that a real model now accepts lives in test_reuse_verification_live.py (S4).
+    """
+    emitter, log_path = make_emitter()
+
+    result, graph, recorded, (id_a, id_b) = _derive_through_entry_point(
+        obligation_texts=[_ICT_EXPERTISE_OBLIGATION_TEXT, _OP_RISK_OBLIGATION_TEXT],
+        capability=[
+            _capability_mint_response(_ICT_OP_RISK_NAME, _ICT_OP_RISK_DESCRIPTION),
+            _capability_match_response(_ICT_OP_RISK_ID),
+        ],
+        verification=[_reuse_accept_response()],
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert len(recorded["verification"]) == 1
+    system_message, user_message = recorded["verification"][0]
+    assert _DOMAIN_QUALIFIER_GUIDANCE in system_message["content"]
+    assert user_message["content"] == (
+        f"<obligation_text>\n{_OP_RISK_OBLIGATION_TEXT}\n</obligation_text>\n\n"
+        f"<capability_name>{_ICT_OP_RISK_NAME}</capability_name>\n"
+        f"<capability_description>{_ICT_OP_RISK_DESCRIPTION}</capability_description>"
+    )
+    verdict_lines = [
+        line for line in read_lines(log_path) if line.get("action") == "verify_capability_reuse"
+    ]
+    assert len(verdict_lines) == 1
+    assert verdict_lines[0]["entity_id"] == [id_b, _ICT_OP_RISK_ID]
+    assert verdict_lines[0]["outcome"] == "reuse_accepted"
+    assert "minted_capability_id" not in verdict_lines[0]
+    assert result.capability_node_ids == (_ICT_OP_RISK_ID,)
+    assert capability_id("Operational Risk Management") not in _capability_node_writes(graph)
+    assert _requires_targets_from(graph, id_b) == {_ICT_OP_RISK_ID}
+    assert _requires_pairs(graph) == {(id_a, _ICT_OP_RISK_ID), (id_b, _ICT_OP_RISK_ID)}
+    assert result.unmatched_obligation_ids == ()
+
+
+# ---------------------------------------------------------------------------
 # #187: per-reuse verification (reject path).
 
 _CONTINUITY_NAME = "Organisational Continuity Structure"

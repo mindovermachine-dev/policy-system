@@ -534,6 +534,64 @@ def test_capability_reuse_verification_prompt_states_whole_duty_rule_and_json_co
         assert contract_key in CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
 
 
+def test_capability_reuse_verification_prompt_lets_broader_description_cover_narrower_duty() -> (
+    None
+):
+    """#191 AC-BI-001: the verifier is told that a broader description can
+    cover a narrower duty, judged by the description rather than the name,
+    while partial overlap and over-general descriptions still do not count.
+    """
+    for phrase in (
+        "A broader description can cover a narrower duty",
+        "not by how its name is worded",
+        "does not reach",
+        "partial overlap is not enough",
+        "whole duty",
+        "too general to cover a specific duty",
+        "Reuse is the default",
+    ):
+        assert phrase in CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
+
+
+def test_capability_reuse_verification_prompt_treats_domain_qualifier_alone_as_not_distinct() -> (
+    None
+):
+    """#191 AC-BI-002: the verifier is told that a domain qualifier such as
+    "ICT" names the setting, not a different ability, in either direction,
+    while capacities naming different domains are still distinct.
+    """
+    for phrase in (
+        "A domain qualifier alone does not make two capacities distinct",
+        "present on one side, absent on the other",
+        "name different domains",
+        "not a different ability",
+        "not confined to",
+    ):
+        assert phrase in CAPABILITY_REUSE_VERIFICATION_SYSTEM_PROMPT
+
+
+def test_parse_capability_reuse_verdict_accepts_ict_incident_reporting_under_eu_regulatory_reporting() -> (  # noqa: E501
+    None
+):
+    """#191 AC-BI-003: characterisation pin (green from the start). An
+    "accept" for the #187 DORA subsumption pair parses to an accept verdict
+    under the real Obligation and Capability ids.
+    """
+    text = json.dumps(
+        {"verdict": "accept", "new_name": None, "new_description": None, "confidence": 0.9}
+    )
+
+    verdict = parse_capability_reuse_verdict(
+        text,
+        "obl_report_major_ict_related_incidents_to_the_competent_authority_db689a",
+        "cap_eu_regulatory_reporting_16d668",
+    )
+
+    assert verdict.verdict == "accept"
+    assert verdict.new_name is None
+    assert verdict.new_description is None
+
+
 def test_parse_capability_reuse_verdict_accept_returns_accept_verdict() -> None:
     text = json.dumps(
         {"verdict": "accept", "new_name": None, "new_description": None, "confidence": 0.9}
