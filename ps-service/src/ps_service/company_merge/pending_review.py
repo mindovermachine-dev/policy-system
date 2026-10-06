@@ -11,7 +11,9 @@ render or act on it (PLAN.md §2.1/§4.1).
 Slice 2 (AC-BI-003) adds `list_pending_reviews`: every `PendingReview` node
 IS unresolved by construction (a resolved one is deleted outright, never
 soft-status-changed, PLAN.md §2.1/§4.2) -- so no `WHERE status = 'pending'`
-filter is needed. This is a read, so -- mirroring `graph_reader.py`'s own
+filter is needed. It does filter on *resolvability* since issue #196
+(Cause 8): see that function's own docstring.
+This is a read, so -- mirroring `graph_reader.py`'s own
 "every query here is read-only, no dependency-health wrapper" convention --
 it calls `single_tenant_graph.query(...)` directly, not through
 `_execute_query` (which stays reserved for this module's writes).
@@ -88,8 +90,28 @@ if TYPE_CHECKING:
 
 __all__ = ["list_pending_reviews", "persist_pending_reviews", "resolve_review"]
 
+# Issue #196 (Cause 8): the two `MATCH`es apply the same predicate
+# `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` below enforces -- both referenced
+# nodes still exist, under the review's own `kind`, and neither is a `merged`
+# tombstone. Without them this query reported every `PendingReview` node
+# unconditionally, so a review the merge path would refuse was still offered:
+# it consumed a passkey approval, raised `StalePendingReviewError` at sign
+# time and -- since that path deliberately makes no graph changes (H2) -- was
+# never retired, staying listed forever while every retry failed identically.
+#
+# Plain (not OPTIONAL) `MATCH` is what performs the filtering: a review whose
+# node is gone simply produces no row. The label cannot be a static `:{kind}`
+# here the way it can in the merge check, because one query spans both kinds,
+# so the label is tested with `r.kind IN labels(a)` instead -- verified
+# against a real FalkorDB, along with the `coalesce(status, 'active')` default
+# for a node carrying no `status` property at all.
 _LIST_PENDING_REVIEWS_QUERY = (
-    "MATCH (r:PendingReview) RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
+    "MATCH (r:PendingReview) "
+    "MATCH (a) WHERE a.id = r.incoming_id AND r.kind IN labels(a) "
+    "AND coalesce(a.status, 'active') <> 'merged' "
+    "MATCH (b) WHERE b.id = r.nearest_existing_id AND r.kind IN labels(b) "
+    "AND coalesce(b.status, 'active') <> 'merged' "
+    "RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
     "r.nearest_existing_id, r.nearest_existing_text, r.similarity, r.created_at "
     "ORDER BY r.created_at ASC"
 )
@@ -234,13 +256,21 @@ def persist_pending_reviews(
 
 
 def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingReviewRecord, ...]:
-    """Every unresolved `PendingReview`, in `created_at` order (AC-BI-003).
+    """Every *resolvable* unresolved `PendingReview`, in `created_at` order (AC-BI-003).
 
     Every `PendingReview` node IS unresolved by construction (§2.1: a
     resolved one is deleted outright, never soft-status-changed) -- no
     `WHERE status = 'pending'` filter is needed, though the `status`
     property is still written at persist time (forward-compatibility /
     observability for an operator inspecting the graph directly).
+
+    Unresolved is not the same as resolvable, though: issue #196 (Cause 8)
+    added the same both-nodes-exist/neither-is-a-`merged`-tombstone predicate
+    the merge path enforces, because a review only this read accepted was
+    offered to a Compliance Officer, consumed a passkey approval, then failed
+    as stale at sign time without ever being retired -- listed forever, with
+    every retry failing identically. A review excluded here is not deleted;
+    the next similarity sweep recreates the candidate if it still applies.
     """
     result = single_tenant_graph.query(_LIST_PENDING_REVIEWS_QUERY)
     rows = cast("list[list[object]]", result.result_set)

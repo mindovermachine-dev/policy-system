@@ -240,6 +240,7 @@ def _enroll(
     *,
     actor_subject: str = _ACTOR_SUBJECT,
     sign_count: int = 0,
+    rp_id: str = _RP_ID,
 ) -> SigningCredentialRow:
     return credential_store.create_signing_credential(
         actor_subject=actor_subject,
@@ -247,6 +248,7 @@ def _enroll(
         credential_id=authenticator.credential_id,
         public_key=authenticator.cose_public_key,
         sign_count=sign_count,
+        rp_id=rp_id,
     )
 
 

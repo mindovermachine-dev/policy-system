@@ -73,6 +73,7 @@ from ps_service.passkey_signing.store import (
 from ps_service.passkey_signing.webauthn_rp import (
     build_authentication_options,
     build_registration_options,
+    rp_id_and_origin,
     verify_authentication,
     verify_registration,
 )
@@ -212,7 +213,11 @@ _SHELL_HTML = """\
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (response) {
-      if (!response.ok) { throw new Error("request failed"); }
+      if (!response.ok) {
+        var rejected = new Error("request rejected");
+        rejected.fromServer = true;
+        throw rejected;
+      }
       return response.json();
     });
   }
@@ -275,11 +280,31 @@ _SHELL_HTML = """\
   postJson("/summary", { code: code }).then(function (summary) {
     render("<p>Preparing your passkey&hellip;</p>");
     var ceremony = summary.needs_enrollment ? runEnrollment().then(runSigning) : runSigning();
-    return ceremony.then(function () {
+    return ceremony.then(function (result) {
+      // A signed response still carries an `error` when the signature was
+      // valid but the action it authorised could not be completed; saying
+      // "Approved" there would report a merge that never happened. The
+      // server's own message is not interpolated: `render` assigns
+      // innerHTML and an executor outcome is not trusted markup.
+      if (result && result.error) {
+        render("<p>Your approval was signed, but the action it authorised could not " +
+          "be completed, and nothing was changed. Ask for a new approval.</p>");
+        return;
+      }
       render("<p>Approved. You may close this window.</p>");
     });
-  }).catch(function () {
-    render("<p>This approval link is no longer valid.</p>");
+  }).catch(function (error) {
+    if (error && error.fromServer) {
+      render("<p>This approval link is no longer valid.</p>");
+      return;
+    }
+    // The server accepted the link; the browser's own passkey step failed
+    // (e.g. a WebAuthn SecurityError on an IP-address host such as 127.0.0.1).
+    var detail = error && error.name ? " (" + error.name + ")" : "";
+    render("<p>Your browser could not complete the passkey step" + detail + ". " +
+      "The link itself is still valid. Passkeys do not work on an IP address; " +
+      "if the address bar shows one, open this link using a hostname such as " +
+      "localhost instead.</p>");
   });
 })();
 </script>
@@ -313,6 +338,7 @@ async def get_approval_shell(pending_approval_id: str) -> HTMLResponse:
 async def post_approval_summary(
     pending_approval_id: str,
     request_body: _ApprovalCodeRequest,
+    http_request: Request,
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     credential_store: Annotated[SigningCredentialStore, Depends(provide_signing_credential_store)],
 ) -> dict[str, object]:
@@ -325,6 +351,9 @@ async def post_approval_summary(
     Args:
         pending_approval_id: The `id` path segment.
         request_body: `{"code": str}`.
+        http_request: The raw request, for `rp_id` derivation --
+            `needs_enrollment` is answered per host, not per actor alone
+            (issue #196).
         store: The pending-approval store (injected; overridden in tests).
         credential_store: The signing-credential store (injected; overridden
             in tests).
@@ -342,8 +371,12 @@ async def post_approval_summary(
         code=request_body.code,
         action="approval_summary",
     )
+    # Scoped to this request's own `rp_id` (issue #196): a credential enrolled
+    # on another host cannot sign here, so it must not report this actor as
+    # already enrolled and strand them with no way to enroll again.
+    rp_id, _origin = rp_id_and_origin(http_request)
     needs_enrollment = not credential_store.has_any_for_actor(
-        actor_subject=row.actor_subject, actor_issuer=row.actor_issuer
+        actor_subject=row.actor_subject, actor_issuer=row.actor_issuer, rp_id=rp_id
     )
     return {
         "status": row.status,
@@ -436,12 +469,14 @@ async def post_enroll_verify(
         verified = verify_registration(
             request=http_request, row=row, credential=request_body.credential
         )
+    enrolled_rp_id, _origin = rp_id_and_origin(http_request)
     credential_store.create_signing_credential(
         actor_subject=row.actor_subject,
         actor_issuer=row.actor_issuer,
         credential_id=verified.credential_id,
         public_key=verified.credential_public_key,
         sign_count=verified.sign_count,
+        rp_id=enrolled_rp_id,
     )
     return {"status": "enrolled"}
 
@@ -488,8 +523,11 @@ async def post_sign_options(
         action="sign_options",
     )
     challenge = _compute_sign_challenge(row)
+    # Only this host's own credentials: advertising one enrolled elsewhere
+    # leaves the authenticator with nothing to match (issue #196).
+    sign_rp_id, _origin = rp_id_and_origin(http_request)
     allow_credentials = credential_store.list_for_actor(
-        actor_subject=row.actor_subject, actor_issuer=row.actor_issuer
+        actor_subject=row.actor_subject, actor_issuer=row.actor_issuer, rp_id=sign_rp_id
     )
     options = build_authentication_options(
         request=http_request, challenge=challenge, allow_credentials=allow_credentials
@@ -547,6 +585,26 @@ def _resolve_credential_for_signing(
     return credential
 
 
+_MERGE_FAILED_MESSAGE = (
+    "this action could not be completed; if you still intend to merge, ask for a new approval"
+)
+
+
+def _log_merge_failure(*, pending_approval_id: str, review_id: str | None, reason: str) -> None:
+    """Record why a signed merge did nothing (AC-BI-006).
+
+    `extra` carries the approval id, the review id when the row had one, and
+    the reason -- never the `code`, the credential or any passkey material
+    (AC-BI-001).
+    """
+    extra: dict[str, object] = {"pending_approval_id": pending_approval_id, "reason": reason}
+    if review_id is not None:
+        extra["review_id"] = review_id
+    emit_log_entry(
+        component="passkey_signing", action="sign_verify_merge", outcome="failed", extra=extra
+    )
+
+
 def _execute_merge_and_record_outcome(
     *,
     row: PendingApprovalRow,
@@ -566,6 +624,7 @@ def _execute_merge_and_record_outcome(
     """
     review_id = row.normalized_args.get("review_id")
     if not isinstance(review_id, str):
+        _log_merge_failure(pending_approval_id=row.id, review_id=None, reason="missing_review_id")
         outcome: dict[str, object] = {
             "error": "pending approval is missing its review_id; the merge could not be run"
         }
@@ -575,13 +634,14 @@ def _execute_merge_and_record_outcome(
         result = run_resolve_near_miss(
             review_id, "merge", config=config, dependencies=near_miss_dependencies
         )
-    except PendingReviewNotFoundError:
-        outcome = {
-            "error": (
-                "this action could not be completed; if you still intend to merge, "
-                "ask for a new approval"
-            )
-        }
+    except PendingReviewNotFoundError as exc:
+        # The response and stored outcome stay generic; without this the
+        # reason a signed merge did nothing is recorded nowhere.
+        _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=str(exc))
+        outcome = {"error": _MERGE_FAILED_MESSAGE}
+    except Exception as exc:  # noqa: BLE001 -- the signature is already consumed by now, so letting a `CompanyMergePersistenceError`/`redis.RedisError`/`CompanyMergeConfigurationError`/`IndexError` escape would store no outcome, log nothing, and 500 the caller into the shell's "this approval link is no longer valid" (AC-BI-012). Not silent: `_log_merge_failure` records the real exception server-side.
+        _log_merge_failure(pending_approval_id=row.id, review_id=review_id, reason=repr(exc))
+        outcome = {"error": _MERGE_FAILED_MESSAGE}
     else:
         outcome = {"winner_id": result.winner_id, "loser_id": result.loser_id}
     store.set_outcome(row.id, outcome)

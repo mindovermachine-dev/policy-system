@@ -40,22 +40,34 @@ class SigningCredentialStore(Protocol):
         credential_id: bytes,
         public_key: bytes,
         sign_count: int,
+        rp_id: str | None,
     ) -> SigningCredentialRow:
-        """Insert a newly-enrolled credential; return the created row."""
+        """Insert a newly-enrolled credential; return the created row.
+
+        `rp_id` is the relying-party id the enrollment ceremony actually ran
+        under, so the credential can later be matched to the host presenting
+        the approval link (issue #196).
+        """
         ...
 
     def list_for_actor(
-        self, *, actor_subject: str, actor_issuer: str
+        self, *, actor_subject: str, actor_issuer: str, rp_id: str
     ) -> tuple[SigningCredentialRow, ...]:
-        """Return every enrolled credential for `(actor_subject, actor_issuer)`."""
+        """Return this actor's credentials enrolled under `rp_id`.
+
+        Scoped to one `rp_id` (issue #196): a credential enrolled elsewhere
+        cannot produce an assertion here, so advertising it in
+        `allowCredentials` only yields an unexplained browser-side failure.
+        """
         ...
 
-    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str) -> bool:
-        """Return whether at least one credential is enrolled for this actor.
+    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str, rp_id: str) -> bool:
+        """Return whether at least one credential is enrolled for this actor under `rp_id`.
 
         Backs `POST /approvals/{id}/summary`'s `needs_enrollment` field
         (CHANGES.md F2) and AC-BI-003's "opening a pending approval guides
-        them through one-time self-serve enrollment" branch.
+        them through one-time self-serve enrollment" branch -- which must
+        trigger again on a host this actor has not enrolled on (issue #196).
         """
         ...
 
@@ -84,19 +96,25 @@ __all__ = [
 
 _INSERT_SIGNING_CREDENTIAL = """
 INSERT INTO signing_credentials (
-    actor_subject, actor_issuer, credential_id, public_key, sign_count
+    actor_subject, actor_issuer, credential_id, public_key, sign_count, rp_id
 ) VALUES (
-    %(actor_subject)s, %(actor_issuer)s, %(credential_id)s, %(public_key)s, %(sign_count)s
+    %(actor_subject)s, %(actor_issuer)s, %(credential_id)s, %(public_key)s, %(sign_count)s,
+    %(rp_id)s
 )
-RETURNING id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at
+RETURNING id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at,
+    rp_id
 """
 
 _SELECT_COLUMNS = (
-    "id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at"
+    "id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at, rp_id"
 )
+# `rp_id = %(rp_id)s` excludes a NULL `rp_id` on its own (SQL three-valued
+# logic), which is exactly the wanted behaviour for a row predating the column
+# (AC-BI-015) -- no explicit IS NOT NULL needed.
 _SELECT_BY_ACTOR = (
     f"SELECT {_SELECT_COLUMNS} FROM signing_credentials "  # noqa: S608 - fixed literal, no interpolated user input
-    "WHERE actor_subject = %(actor_subject)s AND actor_issuer = %(actor_issuer)s"
+    "WHERE actor_subject = %(actor_subject)s AND actor_issuer = %(actor_issuer)s "
+    "AND rp_id = %(rp_id)s"
 )
 _SELECT_BY_CREDENTIAL_ID = (
     f"SELECT {_SELECT_COLUMNS} FROM signing_credentials "  # noqa: S608 - fixed literal, no interpolated user input
@@ -114,9 +132,16 @@ def _row_from_record(record: Sequence[object]) -> SigningCredentialRow:
     `cast()` is unavoidable at exactly this one boundary, mirroring
     `store._row_from_record`'s own documented rationale (L2 cast() policy).
     """
-    (row_id, actor_subject, actor_issuer, credential_id, public_key, sign_count, created_at) = (
-        record
-    )
+    (
+        row_id,
+        actor_subject,
+        actor_issuer,
+        credential_id,
+        public_key,
+        sign_count,
+        created_at,
+        rp_id,
+    ) = record
     return SigningCredentialRow(
         id=str(row_id),
         actor_subject=cast("str", actor_subject),
@@ -125,6 +150,7 @@ def _row_from_record(record: Sequence[object]) -> SigningCredentialRow:
         public_key=cast("bytes", public_key),
         sign_count=cast("int", sign_count),
         created_at=cast("datetime", created_at),
+        rp_id=cast("str | None", rp_id),
     )
 
 
@@ -148,6 +174,7 @@ class PsycopgSigningCredentialStore:
         credential_id: bytes,
         public_key: bytes,
         sign_count: int,
+        rp_id: str | None,
     ) -> SigningCredentialRow:
         """Insert a newly-enrolled credential; return the created row."""
         try:
@@ -160,6 +187,7 @@ class PsycopgSigningCredentialStore:
                         "credential_id": credential_id,
                         "public_key": public_key,
                         "sign_count": sign_count,
+                        "rp_id": rp_id,
                     },
                 )
                 record = cur.fetchone()
@@ -174,14 +202,18 @@ class PsycopgSigningCredentialStore:
         return _row_from_record(record)
 
     def list_for_actor(
-        self, *, actor_subject: str, actor_issuer: str
+        self, *, actor_subject: str, actor_issuer: str, rp_id: str
     ) -> tuple[SigningCredentialRow, ...]:
-        """Return every enrolled credential for `(actor_subject, actor_issuer)`."""
+        """Return this actor's credentials enrolled under `rp_id`."""
         try:
             with connect_from_config(self._config) as conn, conn.cursor() as cur:
                 cur.execute(
                     _SELECT_BY_ACTOR,
-                    {"actor_subject": actor_subject, "actor_issuer": actor_issuer},
+                    {
+                        "actor_subject": actor_subject,
+                        "actor_issuer": actor_issuer,
+                        "rp_id": rp_id,
+                    },
                 )
                 records = cur.fetchall()
         except psycopg.Error as exc:
@@ -190,9 +222,11 @@ class PsycopgSigningCredentialStore:
             ) from exc
         return tuple(_row_from_record(record) for record in records)
 
-    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str) -> bool:
-        """Return whether at least one credential is enrolled for this actor."""
-        return bool(self.list_for_actor(actor_subject=actor_subject, actor_issuer=actor_issuer))
+    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str, rp_id: str) -> bool:
+        """Return whether at least one credential is enrolled for this actor under `rp_id`."""
+        return bool(
+            self.list_for_actor(actor_subject=actor_subject, actor_issuer=actor_issuer, rp_id=rp_id)
+        )
 
     def get_by_credential_id(self, credential_id: bytes) -> SigningCredentialRow | None:
         """Return the row whose `credential_id` matches, or `None` if none exists."""

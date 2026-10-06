@@ -282,6 +282,20 @@ class _FakePendingApprovalStore:
                 return row
         return None
 
+    def mark_signed(self, pending_approval_id: str) -> bool:
+        """Mirror of `_fakes.FakePendingApprovalStore.mark_signed` (see class docstring)."""
+        row = self._rows_by_id.get(pending_approval_id)
+        if row is None or row.status != "pending":
+            return False
+        self._rows_by_id[pending_approval_id] = dataclasses.replace(row, status="signed")
+        return True
+
+    def set_outcome(self, pending_approval_id: str, outcome: dict[str, object]) -> None:
+        """Mirror of `_fakes.FakePendingApprovalStore.set_outcome` (see class docstring)."""
+        row = self._rows_by_id.get(pending_approval_id)
+        if row is not None:
+            self._rows_by_id[pending_approval_id] = dataclasses.replace(row, outcome=outcome)
+
 
 # --- issue #163 Slice D: script the real `pending_review.list_pending_reviews`/
 # `resolve_review` functions against a structural `GraphHandle` fake, rather than
@@ -725,6 +739,43 @@ def test_check_approval_reports_pending_for_a_freshly_created_approval(
     assert body["decision"] == "merge"
     assert body["winner_id"] is None
     assert body["loser_id"] is None
+
+
+def test_check_approval_reports_the_recorded_error_for_a_failed_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-BI-013 on the MCP surface: the compliance officer polls this tool, so
+    a signed approval whose merge stored `{"error": ...}` must report that
+    reason here too. Reporting only null `winner_id`/`loser_id` left "the
+    merge failed" indistinguishable from "the merge is done".
+    """
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    store = _FakePendingApprovalStore()
+    monkeypatch.setattr(mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(store))
+    row, _code = store.create_pending_approval(
+        tool_name="near_misses_resolve",
+        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={},
+    )
+    assert store.mark_signed(row.id)
+    store.set_outcome(row.id, {"error": "this action could not be completed"})
+
+    with _verified_actor():
+        check_result = asyncio.run(
+            mcp_server.server.call_tool(
+                "near_misses_check_approval", {"pending_approval_id": row.id}
+            )
+        )
+
+    assert isinstance(check_result, CallToolResult)
+    assert check_result.is_error is False
+    body = json.loads(_text(check_result))
+    assert body["status"] == "signed"
+    assert body["winner_id"] is None
+    assert body["error"] == "this action could not be completed"
 
 
 def test_check_approval_unknown_id_gets_generic_not_found(

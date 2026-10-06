@@ -456,6 +456,64 @@ def test_post_resolve_merge_approval_url_carries_the_code_only_after_the_fragmen
     assert code != body["pending_approval_id"]
 
 
+def test_post_resolve_merge_approval_url_rewrites_a_loopback_ip_host_to_localhost() -> None:
+    """Issue #196: a browser refuses `navigator.credentials.create()` on a
+    `127.0.0.1` host (WebAuthn's `rp_id` must be a domain), so the link a
+    local bind hands out names `localhost` instead -- the same machine, in a
+    spelling that can actually be signed. The port is preserved.
+    """
+    client = _client_for_resolve(
+        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
+    )
+
+    response = client.post(
+        "/near-misses/review_aaa/resolve",
+        json={"decision": "merge"},
+        headers={"Host": "127.0.0.1:8000"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approval_url"].startswith("http://localhost:8000/approvals/")
+
+
+def test_post_resolve_merge_approval_url_rewrites_the_ipv6_loopback_literal_to_localhost() -> None:
+    """Issue #196, bracketed-IPv6 half: `[::1]` is no more a domain than
+    `127.0.0.1` is, and its port survives the rewrite too.
+    """
+    client = _client_for_resolve(
+        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
+    )
+
+    response = client.post(
+        "/near-misses/review_aaa/resolve",
+        json={"decision": "merge"},
+        headers={"Host": "[::1]:8000"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approval_url"].startswith("http://localhost:8000/approvals/")
+
+
+def test_post_resolve_merge_approval_url_leaves_a_non_loopback_host_untouched() -> None:
+    """Issue #196's bright line: only loopback literals are rewritten. A
+    `kind` NodePort or LAN address names a machine `localhost` would not
+    reach, so rewriting it would break a link that is merely unsignable --
+    the shell page explains that case instead.
+    """
+    client = _client_for_resolve(
+        _unexpected_resolve_review, records=(_record("review_aaa"),), principal=_principal()
+    )
+
+    response = client.post(
+        "/near-misses/review_aaa/resolve",
+        json={"decision": "merge"},
+        headers={"Host": "10.1.2.3:30080"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["approval_url"].startswith("http://10.1.2.3:30080/approvals/")
+
+
 def test_get_approval_status_reports_pending_for_a_freshly_created_approval() -> None:
     store = _FakePendingApprovalStore()
     client = _client_for_resolve(
@@ -478,6 +536,60 @@ def test_get_approval_status_reports_pending_for_a_freshly_created_approval() ->
     assert body["decision"] == "merge"
     assert body["winner_id"] is None
     assert body["loser_id"] is None
+
+
+def test_get_approval_status_reports_the_recorded_error_for_a_failed_merge() -> None:
+    """AC-BI-013: a signed approval whose merge could not run stores
+    `{"error": ...}` as its outcome, but the status read used to report only
+    `winner_id`/`loser_id`. Both were null for three different situations --
+    merge crashed before recording anything, merge failed with a reason
+    recorded, merge genuinely produced nulls -- so neither a compliance
+    officer nor an operator could tell a failure from a success.
+    """
+    store = _FakePendingApprovalStore()
+    row, _code = store.create_pending_approval(
+        tool_name="near_misses_resolve",
+        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={},
+    )
+    assert store.mark_signed(row.id)
+    store.set_outcome(row.id, {"error": "this action could not be completed"})
+    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
+
+    response = client.get(f"/near-misses/approvals/{row.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "signed"
+    assert body["winner_id"] is None
+    assert body["loser_id"] is None
+    assert body["error"] == "this action could not be completed"
+
+
+def test_get_approval_status_reports_no_error_for_a_successful_merge() -> None:
+    """AC-BI-013's other half: `error` stays absent/null on the happy path, so
+    its presence is itself the failure signal.
+    """
+    store = _FakePendingApprovalStore()
+    row, _code = store.create_pending_approval(
+        tool_name="near_misses_resolve",
+        normalized_args={"review_id": "review_aaa", "decision": "merge"},
+        actor_subject=_ACTOR_SUBJECT,
+        actor_issuer=_ACTOR_ISSUER,
+        display_summary={},
+    )
+    assert store.mark_signed(row.id)
+    store.set_outcome(row.id, {"winner_id": "capability_winner", "loser_id": "capability_loser"})
+    client = _client_for_resolve(_unexpected_resolve_review, principal=_principal(), store=store)
+
+    response = client.get(f"/near-misses/approvals/{row.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["winner_id"] == "capability_winner"
+    assert body["error"] is None
 
 
 def test_get_approval_status_unauthenticated_gets_404() -> None:

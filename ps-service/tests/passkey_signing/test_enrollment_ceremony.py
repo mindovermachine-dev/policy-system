@@ -223,10 +223,10 @@ def test_enrollment_verify_persists_a_credential_for_the_approvals_actor() -> No
     assert verify_response.status_code == 200
     assert verify_response.json() == {"status": "enrolled"}
     assert credential_store.has_any_for_actor(
-        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER
+        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER, rp_id=_RP_ID
     )
     enrolled = credential_store.list_for_actor(
-        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER
+        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER, rp_id=_RP_ID
     )
     assert len(enrolled) == 1
     assert enrolled[0].sign_count == 0
@@ -267,7 +267,7 @@ def test_enroll_options_and_verify_reject_a_wrong_code_with_the_generic_error() 
     assert verify_response.status_code == 404
     assert verify_response.json()["error"]["code"] == _INVALID_ERROR_CODE
     assert not credential_store.has_any_for_actor(
-        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER
+        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER, rp_id=_RP_ID
     )
 
 

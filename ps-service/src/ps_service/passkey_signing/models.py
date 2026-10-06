@@ -63,3 +63,11 @@ class SigningCredentialRow:
     public_key: bytes
     sign_count: int
     created_at: datetime
+    rp_id: str | None = None
+    """The WebAuthn `rp_id` this credential was enrolled under (issue #196).
+
+    A credential only works for the RP id that created it, so this scopes
+    `needs_enrollment`/`allowCredentials` to the host the browser is actually
+    on. `None` for a row written before the column existed: unprovable, so
+    never offered and never enrollment-suppressing (AC-BI-015).
+    """

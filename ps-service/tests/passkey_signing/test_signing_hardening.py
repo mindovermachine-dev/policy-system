@@ -437,7 +437,7 @@ def test_malformed_enroll_verify_payload_is_rejected_generically_not_as_a_500(
     assert body["error"]["code"] == _INVALID_ERROR_CODE
     assert body["error"]["message"] == "This approval link is no longer valid."
     assert not credential_store.has_any_for_actor(
-        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER
+        actor_subject=_ACTOR_SUBJECT, actor_issuer=_ACTOR_ISSUER, rp_id=_RP_ID
     )
 
     emitter.flush()

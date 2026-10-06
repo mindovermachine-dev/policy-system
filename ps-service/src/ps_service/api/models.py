@@ -404,6 +404,7 @@ class PendingApprovalStatusResponse(BaseModel):
     decision: str | None = None
     winner_id: str | None = None
     loser_id: str | None = None
+    error: str | None = None
 
 
 class ProtectedResourceMetadata(BaseModel):

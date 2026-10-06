@@ -137,6 +137,10 @@ class PendingApprovalStatus:
     decision: str | None
     winner_id: str | None
     loser_id: str | None
+    error: str | None
+    """The stored outcome's safe error message when the signature was valid but
+    the action it authorised could not be completed (AC-BI-013). Without it,
+    null `winner_id`/`loser_id` could not be told apart from a failure."""
 
 
 def _live_status(row: PendingApprovalRow) -> Literal["pending", "expired", "signed"]:
@@ -191,9 +195,11 @@ def check_pending_approval(
     status = _live_status(row)
     winner_id: str | None = None
     loser_id: str | None = None
+    error: str | None = None
     if status == "signed" and row.outcome is not None:
         winner_id = _string_or_none(row.outcome.get("winner_id"))
         loser_id = _string_or_none(row.outcome.get("loser_id"))
+        error = _string_or_none(row.outcome.get("error"))
     return PendingApprovalStatus(
         pending_approval_id=row.id,
         status=status,
@@ -201,6 +207,7 @@ def check_pending_approval(
         decision=_string_or_none(row.normalized_args.get("decision")),
         winner_id=winner_id,
         loser_id=loser_id,
+        error=error,
     )
 
 

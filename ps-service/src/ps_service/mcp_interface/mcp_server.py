@@ -140,6 +140,7 @@ from ps_service.mcp_interface.errors import (
 )
 from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import PsycopgPendingApprovalStore
+from ps_service.passkey_signing.webauthn_rp import signable_link_host
 from ps_service.policy_lifecycle.errors import (
     PolicyCapabilityAlreadyGovernedError,
     PolicyCapabilityNotFoundError,
@@ -550,6 +551,11 @@ def _resolve_base_url(ctx: Context) -> str:
     a fixed placeholder when no request is bound to this call at all --
     never reachable via the real Streamable HTTP transport; only a bare,
     context-less test-only tool invocation hits this branch.
+
+    `signable_link_host` then rewrites a loopback IP literal to `localhost`,
+    without which the link a local bind produces could not be signed at all
+    (issue #196) -- the same substitution `api.routes._approval_base_url`
+    applies, so both transports hand out equally signable links.
     """
     try:
         request = ctx.request_context.request
@@ -558,7 +564,7 @@ def _resolve_base_url(ctx: Context) -> str:
     scheme = getattr(getattr(request, "url", None), "scheme", None) or "http"
     headers = getattr(request, "headers", None)
     host = headers.get("host", "") if headers is not None else ""
-    return f"{scheme}://{host}" if host else f"{scheme}://unknown"
+    return f"{scheme}://{signable_link_host(host)}" if host else f"{scheme}://unknown"
 
 
 _CLEANUP_REQUIRES_AUTHENTICATED_CALLER_MESSAGE = (
@@ -1146,6 +1152,7 @@ def near_misses_check_approval(
             "decision": status.decision,
             "winner_id": status.winner_id,
             "loser_id": status.loser_id,
+            "error": status.error,
         }
 
     return _run_mcp_action("near_misses_check_approval", principal, _body)

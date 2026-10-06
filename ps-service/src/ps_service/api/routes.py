@@ -90,6 +90,7 @@ from ps_service.passkey_signing.service import check_pending_approval, create_me
 from ps_service.passkey_signing.store import (
     PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
+from ps_service.passkey_signing.webauthn_rp import signable_link_host
 from ps_service.runtime_config import RuntimeConfigError
 
 if TYPE_CHECKING:
@@ -498,9 +499,11 @@ def _approval_base_url(request: Request) -> str:
     Mirrors `ps_service.auth.middleware._resource_metadata_url`'s own
     "scheme + host off the live request, never hardcoded" pattern, so the
     link works correctly under a local dev bind, a `kind` NodePort, and a
-    prod ClusterIP+Ingress alike.
+    prod ClusterIP+Ingress alike. `signable_link_host` then rewrites a
+    loopback IP literal to `localhost`, without which the link a local bind
+    produces could not be signed at all (issue #196).
     """
-    return f"{request.url.scheme}://{request.url.netloc}"
+    return f"{request.url.scheme}://{signable_link_host(request.url.netloc)}"
 
 
 async def resolve_near_miss(
@@ -623,6 +626,7 @@ async def check_merge_pending_approval(
         decision=status.decision,
         winner_id=status.winner_id,
         loser_id=status.loser_id,
+        error=status.error,
     )
 
 

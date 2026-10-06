@@ -123,6 +123,7 @@ class FakeSigningCredentialStore:
         credential_id: bytes,
         public_key: bytes,
         sign_count: int,
+        rp_id: str | None,
     ) -> SigningCredentialRow:
         """Insert a newly-enrolled credential; return the created row."""
         row = SigningCredentialRow(
@@ -133,23 +134,32 @@ class FakeSigningCredentialStore:
             public_key=public_key,
             sign_count=sign_count,
             created_at=datetime.now(UTC),
+            rp_id=rp_id,
         )
         self._rows.append(row)
         return row
 
     def list_for_actor(
-        self, *, actor_subject: str, actor_issuer: str
+        self, *, actor_subject: str, actor_issuer: str, rp_id: str
     ) -> tuple[SigningCredentialRow, ...]:
-        """Return every enrolled credential for `(actor_subject, actor_issuer)`."""
+        """Return this actor's credentials enrolled under `rp_id`.
+
+        A `None` `rp_id` row never matches, mirroring the real store's
+        `rp_id = %(rp_id)s` three-valued-logic behaviour (AC-BI-015).
+        """
         return tuple(
             row
             for row in self._rows
-            if row.actor_subject == actor_subject and row.actor_issuer == actor_issuer
+            if row.actor_subject == actor_subject
+            and row.actor_issuer == actor_issuer
+            and row.rp_id == rp_id
         )
 
-    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str) -> bool:
-        """Return whether at least one credential is enrolled for this actor."""
-        return bool(self.list_for_actor(actor_subject=actor_subject, actor_issuer=actor_issuer))
+    def has_any_for_actor(self, *, actor_subject: str, actor_issuer: str, rp_id: str) -> bool:
+        """Return whether at least one credential is enrolled for this actor under `rp_id`."""
+        return bool(
+            self.list_for_actor(actor_subject=actor_subject, actor_issuer=actor_issuer, rp_id=rp_id)
+        )
 
     def get_by_credential_id(self, credential_id: bytes) -> SigningCredentialRow | None:
         """Return the row whose `credential_id` matches, or `None` if none exists."""

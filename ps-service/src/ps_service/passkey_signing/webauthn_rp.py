@@ -55,6 +55,51 @@ def rp_id_and_origin(request: Request) -> tuple[str, str]:
     return rp_id, origin
 
 
+_LOOPBACK_IP_LITERALS = frozenset({"127.0.0.1", "::1"})
+"""The two loopback spellings that are not domains, and so are rejected as an
+`rp_id`. `localhost` -- the third spelling `ps_service.main._LOOPBACK_HOSTS`
+recognizes -- is already valid, and is what both map onto."""
+
+_SIGNABLE_LOOPBACK_HOST = "localhost"
+
+
+def signable_link_host(netloc: str) -> str:
+    """Return `netloc` with a loopback IP literal rewritten to `localhost`.
+
+    WebAuthn's `rp_id` must be a domain, so a browser raises `SecurityError`
+    on `navigator.credentials.create()` for a `127.0.0.1`/`::1` host --
+    making an approval link built off such a host unsignable (issue #196,
+    whose `config._DEFAULT_HOST` is that IPv4 literal). `rp_id_and_origin`
+    above deliberately does *not* apply this: it must keep deriving both
+    values verbatim from whatever host the browser actually used, since
+    `origin` is compared byte-for-byte against `clientDataJSON.origin`. The
+    substitution belongs where a *link* is first built instead, so the
+    browser is pointed at a signable spelling of the same machine to begin
+    with.
+
+    Only loopback literals are rewritten. Any other IP host (a `kind`
+    NodePort, a LAN address) names a machine `localhost` would not reach, so
+    it is returned untouched -- still unsignable, and the companion-browser
+    shell says so rather than claiming the link is invalid.
+
+    Args:
+        netloc: A `host[:port]` as it appears in a live request, including
+            the bracketed IPv6 form (`[::1]:8000`).
+
+    Returns:
+        The `netloc` to put in an approval link, port preserved.
+    """
+    if netloc.startswith("["):
+        bracketed_host, _, port = netloc.partition("]")
+        host = bracketed_host.removeprefix("[")
+    else:
+        host, _, raw_port = netloc.partition(":")
+        port = f":{raw_port}" if raw_port else ""
+    if host not in _LOOPBACK_IP_LITERALS:
+        return netloc
+    return f"{_SIGNABLE_LOOPBACK_HOST}{port}"
+
+
 def enrollment_challenge(row: PendingApprovalRow) -> bytes:
     """Deterministically derive this row's one-time WebAuthn registration challenge.
 
