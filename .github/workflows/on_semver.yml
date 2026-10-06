@@ -104,7 +104,7 @@ jobs:
         env:
           PS_CONTAINER_CLI: docker
           PS_CONTAINER_IMAGE_REF: ps-service:smoke-${{ matrix.arch }}
-        run: uv run pytest ps-service/tests/test_container_image.py -m container_image -q
+        run: uv run pytest ps-service/tests/test_container_image.py -m container_image -q -n0
       - name: Export the smoke-tested image
         env:
           ARCH: ${{ matrix.arch }}

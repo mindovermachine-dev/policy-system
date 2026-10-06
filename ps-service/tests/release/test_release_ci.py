@@ -2,12 +2,18 @@
 
 AC-BI-011 requires the classifier's unit tests to "pass in CI"; until slice S4b nothing in CI
 ran pytest at all (PLAN A-24). The default suite is hermetic (DECISIONS F-03), so the whole of
-`uv run pytest -q -n auto --dist=loadscope` -- not only `ps-service/tests/release` -- becomes a
-trunk-worthy check.
+`uv run pytest -q` -- not only `ps-service/tests/release` -- becomes a trunk-worthy check.
+
+Issue #197: the xdist flags (`-n`, `--dist`) moved out of that command into `addopts` in the root
+`pyproject.toml`, the single source of truth shared with a bare local `pytest`. The command no
+longer pins them, so this file instead pins that `addopts` still enables xdist: dropping `-n`
+there would silently serialize both the gate and every local run. (`test_release_workflow.py`
+pins the release smoke step's own `-n0`.)
 """
 
 from __future__ import annotations
 
+import tomllib
 from typing import TYPE_CHECKING, cast
 
 import yaml
@@ -17,7 +23,8 @@ if TYPE_CHECKING:
 
 INSITU_FILE = ".insitu.yml"
 PYTEST_CHECK_ID = "pytest"
-PYTEST_COMMAND = "uv run pytest -q -n auto --dist=loadscope"
+PYTEST_COMMAND = "uv run pytest -q"
+PYPROJECT_FILE = "pyproject.toml"
 TRUNK_WORTHY_WAVE = "trunk-worthy"
 POST_CREATE_WAVE = "post-create"
 PREP_RUNNER_WAVE = "prep-runner"
@@ -54,6 +61,15 @@ def test_trunk_worthy_wave_runs_the_default_pytest_suite(repo_root: Path) -> Non
     assert TRUNK_WORTHY_WAVE in waves, f"no `{TRUNK_WORTHY_WAVE}` wave in {INSITU_FILE}"
     wave_checks = cast("list[str]", waves[TRUNK_WORTHY_WAVE]["checks"])
     assert PYTEST_CHECK_ID in wave_checks, f"`{TRUNK_WORTHY_WAVE}` does not run `{PYTEST_CHECK_ID}`"
+
+
+def test_root_pytest_addopts_enables_xdist_so_the_gate_and_a_bare_run_stay_parallel(
+    repo_root: Path,
+) -> None:
+    pyproject = tomllib.loads((repo_root / PYPROJECT_FILE).read_text(encoding="utf-8"))
+    addopts = cast("list[str]", pyproject["tool"]["pytest"]["ini_options"]["addopts"])
+
+    assert "-n" in addopts, f"`addopts` in {PYPROJECT_FILE} no longer enables xdist (`-n`)"
 
 
 def test_post_create_and_prep_runner_waves_install_helm(repo_root: Path) -> None:

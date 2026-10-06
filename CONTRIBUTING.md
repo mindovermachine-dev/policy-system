@@ -91,11 +91,24 @@ hook; a violation blocks the commit and fails CI.
 When implementing code use TDD as the default way to ensure appropriate test coverage.
 
 Run the default suite — everything except the slow, environment-dependent marker
-groups, which are opt-out on the command line:
+groups. A bare `pytest` already does this and runs in parallel across all cores
+(`pytest-xdist`, configured once in `addopts` in the root `pyproject.toml`, the same
+setting the `trunk-worthy` gate uses):
 
 ```bash
-uv run pytest -m "not integration and not llm_live and not cellar_live and not falkordb_live and not postgres_live and not container_image"
+uv run pytest
 ```
+
+Pass `-n0` to run serially in a single process, for example under `pdb` or with `-s`:
+
+```bash
+uv run pytest -n0 -s ps-service/tests/path/to/test_file.py
+```
+
+Selecting a live marker group with `-m` (for example `-m falkordb_live`) runs in a single
+process automatically, because those tests share external services and are not safe to run
+concurrently. Passing `-n` explicitly together with a live marker overrides that and is
+unsupported.
 
 Run the full local gate exactly as CI does:
 

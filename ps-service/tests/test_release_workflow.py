@@ -788,6 +788,7 @@ def test_smoke_test_step_runs_the_container_image_module_against_the_built_tag()
         "-m",
         "container_image",
         "-q",
+        "-n0",  # issue #197: addopts enables xdist; the smoke step starts containers, stay serial
     ]
     assert _mapping(smoke[0], "env").get("PS_CONTAINER_IMAGE_REF") == _SMOKE_TAG_EXPRESSION, (
         "the smoke test must target the tag the build step produced"
