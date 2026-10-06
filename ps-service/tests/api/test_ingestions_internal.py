@@ -220,18 +220,17 @@ def test_internal_source_request_still_forbids_an_unexpected_short_name_field() 
     assert response.status_code == 422
 
 
-def test_internal_ingestion_never_calls_validate_and_resolve_catalog_entry() -> None:
-    """Issue #146 AC-BI-009: ``routes.py``'s ``if request_body.source == "internal":``
-    early-return (untouched by every #146 slice) never reaches the new
-    curated-mismatch/collision validation -- proving it is provably unreached
-    on this path, not merely untested.
+def test_internal_ingestion_never_calls_resolve_ingestion_entry() -> None:
+    """Issue #146 AC-BI-009 / issue #193: ``routes.py``'s ``if request_body.source == "internal":``
+    early-return never reaches ``resolve_ingestion_entry`` (the CELEX-existence and
+    ``short_name``-collision identity checks) -- proving it is provably unreached on
+    this path, not merely untested.
 
-    The real, unpatched ``validate_and_resolve_catalog_entry`` is left in
-    place (never called for ``source="internal"``, so its being real is
-    inert either way); non-invocation is proven by *state* instead of an
-    exploding double -- ``validate_and_resolve_catalog_entry``'s own graph-
-    side collision check is the only thing in this pipeline that would ever
-    query ``fake.single_tenant``, so an empty ``fake.single_tenant.calls``
+    The real, unpatched ``resolve_ingestion_entry`` is left in place (never called
+    for ``source="internal"``, so its being real is inert either way); non-invocation
+    is proven by *state* instead of an exploding double -- its graph-side checks are
+    the only things in this pipeline that would ever query ``fake.single_tenant``
+    before the pipeline's own stages run, so an empty ``fake.single_tenant.calls``
     proves it never ran, mirroring
     ``test_post_ingestions_internal_succeeds_end_to_end``'s own AC-BI-005
     assertion just above.

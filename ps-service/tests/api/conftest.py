@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from api._fakes import install_default_cellar_stub_unless_live
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 from ps_service.main import create_app
@@ -95,3 +96,16 @@ def app_config() -> ServiceConfig:
 def client(app_config: ServiceConfig) -> TestClient:
     """A bare ``TestClient`` over an app built from ``app_config`` (``lifespan`` not entered)."""
     return TestClient(create_app(app_config))
+
+
+@pytest.fixture(autouse=True)
+def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest autouse fixture — invoked by name-collection, never referenced in-module
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stub the Cellar fetch boundary for every non-live test (issue #193, CHANGES.md H1).
+
+    Every ingestion request now resolves via Cellar, so a test that reaches the
+    ingest handler with a fake pipeline must never hit the real service.
+    Skipped for tests carrying a live marker; a per-test patch overrides it.
+    """
+    install_default_cellar_stub_unless_live(request, monkeypatch)

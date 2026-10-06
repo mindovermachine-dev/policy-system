@@ -61,7 +61,11 @@ from datetime import date
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from api._fakes import FakeGraphHandle, build_fake_pipeline_dependencies
+from api._fakes import (
+    FakePipeline,
+    build_fake_pipeline_dependencies,
+    install_compliance_officer_grant,
+)
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
@@ -72,21 +76,21 @@ from starlette.applications import Starlette
 
 from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry, find_by_celex
-from ps_service.api.errors import ShortNameCollisionError
+from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import (
+    _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key (issue #193), mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key, mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _SHORT_NAME_COLLISION_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key
     GraphOpeners,
     PipelineAdapters,
     PipelineDependencies,
     PipelineStages,
-    validate_and_resolve_catalog_entry,
 )
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.models import AccessRole
 from ps_service.company_merge.merge import merge_baseline_graph
-from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
+from ps_service.config import LOCAL_TEST_PRINCIPAL_ID, ServiceConfig
 from ps_service.domain_mapper.derivation import derive_obligations_and_capabilities
 from ps_service.domain_mapper.extraction import extract_roles_and_requirements
 from ps_service.domain_mapper.models import ExtractionUnit
@@ -99,6 +103,7 @@ from ps_service.domain_mapper.prompts import (
 from ps_service.ingestion.adapters.errors import CellarNotFoundError
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
+    IngestResult,
     RegulatoryInstrumentMetadata,
     StructuralEdge,
     StructuralNode,
@@ -106,6 +111,7 @@ from ps_service.ingestion.models import (
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
+from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import (
     MCP_HTTP_MOUNT_PATH,
@@ -144,7 +150,8 @@ _CURATED_ENTRY = _curated_cra_entry()
 _CELEX = _CURATED_ENTRY.celex
 _SHORT_NAME = _CURATED_ENTRY.short_name
 _VERSION = _CURATED_ENTRY.version
-_RID = f"{_SHORT_NAME}-{_VERSION}"
+# Issue #193: ingestion normalizes the short_name to upper case, so the id is `CRA-1.0`.
+_RID = f"{_SHORT_NAME.upper()}-{_VERSION}"
 
 # --- Slice 1.2 fixtures: a CELEX absent from the curated catalog, resolved via
 # Cellar/ELI -- mirrors tests/api/test_ingestion_orchestration.py's own
@@ -344,10 +351,23 @@ class _MiniGraph:
         if "MERGED_INTO" in q or "MergedObligation" in q:
             # issue #190: the tombstone and obligation-marker reads -- no tombstones here.
             return _FakeQueryResult([])
+        if q == _CELEX_EXISTS_QUERY:
+            # `{celex: $celex}` match (issue #193): the id of the node carrying that CELEX.
+            matches = [
+                node_id
+                for node_id, node in self._nodes.get("RegulatoryInstrument", {}).items()
+                if node.get("celex") == params["celex"]
+            ]
+            return _FakeQueryResult([[matches[0]]] if matches else [])
         if q == _MERGED_INSTRUMENT_EXISTS_QUERY:
-            node_id = cast("str", params["id"])
-            exists = node_id in self._nodes.get("RegulatoryInstrument", {})
-            return _FakeQueryResult([[node_id]] if exists else [])
+            # `toUpper(n.id) = $id` (issue #193, M2): emulate the case-insensitive match.
+            wanted = cast("str", params["id"])
+            matches = [
+                node_id
+                for node_id in self._nodes.get("RegulatoryInstrument", {})
+                if node_id.upper() == wanted
+            ]
+            return _FakeQueryResult([[matches[0]]] if matches else [])
         if q == _SHORT_NAME_COLLISION_QUERY:
             prefix = cast("str", params["prefix"])
             celex = params["celex"]
@@ -355,7 +375,7 @@ class _MiniGraph:
                 [
                     [node_id, node.get("celex")]
                     for node_id, node in self._nodes.get("RegulatoryInstrument", {}).items()
-                    if node_id.startswith(prefix)
+                    if node_id.upper().startswith(prefix)  # `toUpper(n.id) STARTS WITH` (#193)
                     and node.get("celex") is not None
                     and node.get("celex") != celex
                 ]
@@ -479,14 +499,19 @@ class _MiniGraph:
 
 
 def _mini_graph_openers(
-    native: _MiniGraph, baseline: _MiniGraph, single_tenant: _MiniGraph
+    native: _MiniGraph,
+    baseline: _MiniGraph,
+    single_tenant: _MiniGraph,
+    opened_short_names: list[tuple[str, str]],
 ) -> GraphOpeners:
     def _open_native(config: object, short_name: str) -> _MiniGraph:
-        _ = (config, short_name)
+        _ = config
+        opened_short_names.append(("native", short_name))
         return native
 
     def _open_baseline(config: object, short_name: str) -> _MiniGraph:
-        _ = (config, short_name)
+        _ = config
+        opened_short_names.append(("baseline", short_name))
         return baseline
 
     def _open_single_tenant(config: object) -> _MiniGraph:
@@ -705,6 +730,7 @@ class RealPipelineFixture:
     native: _MiniGraph
     baseline: _MiniGraph
     single_tenant: _MiniGraph
+    opened_short_names: list[tuple[str, str]]
 
 
 def _use_real_pipeline_stages(
@@ -728,12 +754,35 @@ def _use_real_pipeline_stages(
     same way, directly.
     """
     stage_order: list[str] = []
+    opened_short_names: list[tuple[str, str]] = []
     native = _MiniGraph()
     baseline = _MiniGraph()
     single_tenant = _MiniGraph()
     fake_call_completion = _fake_call_completion(
         fail_capability_derivation=fail_capability_derivation
     )
+
+    def _ingest(
+        identifier: str,
+        short_name: str,
+        *,
+        version: str,
+        adapter: object,
+        graph: object,
+        run_id: str | None = None,
+        emitter: object = None,
+    ) -> IngestResult:
+        # The resolver now supplies a CellarEliAdapter; keep the recording fake at the boundary.
+        _ = adapter
+        return ingest_regulatory_instrument(
+            identifier,
+            short_name,
+            version=version,
+            adapter=_RecordingIngestionAdapter(stage_order),
+            graph=graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
+            run_id=run_id,
+            emitter=emitter,  # pyright: ignore[reportArgumentType]
+        )
 
     def _extract(
         regulatory_instrument_id: str,
@@ -795,9 +844,9 @@ def _use_real_pipeline_stages(
         )
 
     dependencies = PipelineDependencies(
-        graphs=_mini_graph_openers(native, baseline, single_tenant),
+        graphs=_mini_graph_openers(native, baseline, single_tenant, opened_short_names),
         stages=PipelineStages(
-            ingest=ingest_regulatory_instrument,
+            ingest=_ingest,  # pyright: ignore[reportArgumentType] -- structural IngestStage
             extract=_extract,
             derive=_derive,
             merge=_merge,
@@ -829,7 +878,11 @@ def _use_real_pipeline_stages(
     # `.orchestrator/tracker/issue-163/IMPL_SLICE_20.md`.
     monkeypatch.setattr(mcp_server, "build_default_pipeline_dependencies", lambda: dependencies)
     return RealPipelineFixture(
-        stage_order=stage_order, native=native, baseline=baseline, single_tenant=single_tenant
+        stage_order=stage_order,
+        native=native,
+        baseline=baseline,
+        single_tenant=single_tenant,
+        opened_short_names=opened_short_names,
     )
 
 
@@ -1044,42 +1097,100 @@ def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_prin
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
-def test_curated_celex_mismatched_short_name_is_rejected_before_the_pipeline_runs(
+def test_mcp_curated_celex_with_non_catalog_short_name_is_accepted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-SHORTNAME-CURATED-MISMATCH: a caller-supplied `short_name` that does
-    not match the curated entry's own value is rejected with the named error
-    string, and no stage ever runs.
-
-    Issue #145: this test predates the tool's authz gate and never set the
-    local-test bypass (harmless before the gate existed, since nothing else
-    in the un-gated body needed it) -- now required, like every sibling
-    body-logic test in this file, so the call reaches D-SHORTNAME-CURATED-MISMATCH
-    at all rather than being denied first by the new gate.
+    """Issue #193 AC-BI-001 (MCP side): a curated CELEX asked for under a short_name
+    that is not the catalog's own is no longer rejected -- the catalog is not
+    consulted, the CELEX resolves via Cellar and runs under the caller's name
+    (normalized to upper case).
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     configure()
-    fake = build_fake_pipeline_dependencies(rid="cra-1.0")
-    _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
+    fixture = _use_real_pipeline_stages(monkeypatch)
 
-    result = _call_ingest_regulation(_CELEX, "not-the-real-short-name")
+    result = _call_ingest_regulation(_CELEX, "mycra")
 
     assert result.is_error is False
-    assert _text(result) == (
-        f"error: CELEX {_CELEX} is curated under short_name '{_SHORT_NAME}'; "
-        "pass that value, not 'not-the-real-short-name'"
+    body = json.loads(_text(result))
+    assert body["regulatory_instrument_id"] == f"MYCRA-{_VERSION}"
+    assert body["outcome"] == "fresh"
+    assert fixture.native.has_node("RegulatoryInstrument", f"MYCRA-{_VERSION}")
+
+
+def test_mcp_lowercase_short_name_is_stored_as_uppercase_id_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #193 AC-BI-005 (MCP side, CHANGES.md M4): the real ``ingest_regulatory_instrument``
+    run through the MCP tool with lowercase ``cra`` writes node ``CRA-1.0`` (not
+    ``cra-1.0``), and both graph openers receive the normalized ``"CRA"`` -- the
+    graph *names* they build stay lowercase (user decision, DECISIONS.md T1/D5).
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fixture = _use_real_pipeline_stages(monkeypatch)
+
+    result = _call_ingest_regulation(_CELEX, "cra")
+
+    assert result.is_error is False
+    assert fixture.native.has_node("RegulatoryInstrument", "CRA-1.0")
+    assert not fixture.native.has_node("RegulatoryInstrument", "cra-1.0")
+    assert ("native", "CRA") in fixture.opened_short_names
+    assert ("baseline", "CRA") in fixture.opened_short_names
+    assert {name for _kind, name in fixture.opened_short_names} == {"CRA"}
+
+
+def test_mcp_existing_celex_returns_error_string_naming_existing_short_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #193 AC-BI-003 (MCP side): a CELEX already in the graph is rejected under
+    any short_name with the existing short_name named, before any stage runs.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fake = build_fake_pipeline_dependencies(celex_row="cra-1.0")
+    _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
+
+    result = _call_ingest_regulation(_CELEX, "othername")
+
+    assert result.is_error is False
+    assert _text(result) == f"error: CELEX {_CELEX} is already ingested as short_name 'cra'"
+    assert fake.recorder.calls == []
+
+
+def test_mcp_celex_check_graph_failure_returns_stage_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #193 AC-BI-007 (MCP side): a failing CELEX-existence query fails closed as the
+    ``celex_check`` stage error -- never read as "not ingested" -- with no raw detail
+    leaked, and no pipeline stage runs.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fake = build_fake_pipeline_dependencies(
+        celex_error=RuntimeError("boom -- must never reach the caller")
     )
+    _use_fake_graph_openers_only(monkeypatch, fake.dependencies.graphs)
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    assert _text(result) == "error: celex_check stage failed: celex_check failed"
     assert fake.recorder.calls == []
 
 
 def test_short_name_collision_with_an_already_ingested_different_celex_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #146 AC-BI-006: a non-curated CELEX whose ``short_name`` is already
+    """Issue #146 AC-BI-006 / issue #193 AC-BI-004: a CELEX whose ``short_name`` is already
     recorded in the single-tenant graph under a *different* CELEX is rejected with
     the named error string, before any pipeline stage runs -- MCP parity with
-    ``POST /ingestions``'s own graph-side collision check.
+    ``POST /ingestions``'s own graph-side collision check. The message echoes the
+    normalized (upper-case) short_name.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1092,44 +1203,9 @@ def test_short_name_collision_with_an_already_ingested_different_celex_is_reject
 
     assert result.is_error is False
     assert _text(result) == (
-        f"error: short_name '{given_short_name}' is already claimed by CELEX 32024R0001"
+        f"error: short_name '{given_short_name.upper()}' is already claimed by CELEX 32024R0001"
     )
     assert fake.recorder.calls == []
-
-
-def test_short_name_collision_with_a_curated_catalog_entry_is_rejected() -> None:
-    """Issue #146 AC-BI-006: a curated CELEX whose own ``short_name`` is already
-    claimed by a *different* curated entry is rejected with the named error string,
-    before any pipeline stage runs -- the catalog-side collision check.
-
-    Issue #163 Slice C / AUDIT.md §2 case 11: the real curated catalog can
-    never itself produce this collision (no two curated entries share a
-    ``short_name``, by construction), so exercising this branch needs a
-    fixture catalog -- previously injected by monkeypatching the module-global
-    ``ps_service.api.catalog.REGULATION_CATALOG`` constant (a DI-gap smell
-    per the ruling, not a legitimate mock-boundary substitution). Now that
-    ``validate_and_resolve_catalog_entry`` takes a real ``catalog`` parameter,
-    this test calls it directly with the fixture -- the same real function
-    the MCP tool's own (unpatched) `_resolve_and_ingest` calls, exercised at
-    its own natural unit boundary rather than through a full tool round-trip
-    that has no client-facing seam for this fixture at all.
-    """
-    fixture = (
-        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
-        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
-    )
-
-    with pytest.raises(ShortNameCollisionError) as exc_info:
-        validate_and_resolve_catalog_entry(
-            "32024R0001",
-            "shared-name",
-            single_tenant_graph=FakeGraphHandle(),
-            catalog=fixture,
-        )
-
-    assert str(exc_info.value) == (
-        "short_name 'shared-name' is already claimed by CELEX 32024R0002"
-    )
 
 
 def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_identical_short_name(
@@ -1154,13 +1230,13 @@ def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_iden
     own cached xhtml/rdf bytes, is never itself faked (it wasn't before
     either: the pre-Slice-20 `FakeIngestStage` never called its own
     `adapter` argument at all, so this real adapter's parse was already
-    exercised-but-unasserted). Since both calls resolve to the identical
-    `regulatory_instrument_id` (the actual #96 regression proof), the
-    SECOND call's real pre-flight check (`_is_already_merged`, issue #135)
-    now genuinely finds the first call's real merge already persisted in
-    the shared single-tenant graph and short-circuits -- a stronger, real
-    proof of convergence than the old recorder-based per-call kwarg check,
-    which only ever inspected a hand-written fake's own call log.
+    exercised-but-unasserted).
+
+    Issue #193: the FIRST call ingests under the caller's short_name (upper-cased)
+    and writes the CELEX into the shared single-tenant graph; the SECOND call is
+    rejected by the CELEX-existence check with an error naming that same
+    short_name -- re-ingest is refused rather than silently forked or no-op'd
+    (the title drift on the second call is never even fetched).
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1190,19 +1266,131 @@ def test_non_curated_celex_repeated_ingestion_with_drifting_titles_resolves_iden
     second = _call_ingest_regulation(_NONCURATED_CELEX, given_short_name)
 
     assert first.is_error is False
-    assert second.is_error is False
     first_body = json.loads(_text(first))
-    second_body = json.loads(_text(second))
-    assert first_body["regulatory_instrument_id"] == second_body["regulatory_instrument_id"]
     assert first_body["outcome"] == "fresh"
-    assert second_body["outcome"] == "already_ingested"
+    assert first_body["regulatory_instrument_id"] == f"{given_short_name.upper()}-1.0"
+    assert _text(second) == (
+        f"error: CELEX {_NONCURATED_CELEX} is already ingested as short_name "
+        f"'{given_short_name.upper()}'"
+    )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ParityScenario:
+    """One request/outcome pair both entry points must answer identically (AC-BI-014)."""
+
+    celex: str
+    short_name: str
+    celex_row: str | None = None
+    celex_error: Exception | None = None
+    collision_row: tuple[str, str] | None = None
+    cellar_not_found: bool = False
+
+
+_PARITY_SCENARIOS = {
+    "accepted": _ParityScenario(_CELEX, "cra"),
+    "accepted_under_a_non_catalog_short_name": _ParityScenario(_CELEX, "mycra"),
+    "celex_already_ingested": _ParityScenario(_CELEX, "othername", celex_row="CRA-1.0"),
+    "short_name_collision": _ParityScenario(
+        _NONCURATED_CELEX, "cra", collision_row=("CRA-1.0", "32024R0001")
+    ),
+    "cellar_not_found": _ParityScenario(_NONCURATED_CELEX, "fixture", cellar_not_found=True),
+    "celex_check_failure": _ParityScenario(
+        _CELEX, "cra", celex_error=RuntimeError("boom -- must never reach the caller")
+    ),
+}
+
+
+def _rest_app_config() -> ServiceConfig:
+    return ServiceConfig(
+        host="127.0.0.1",
+        port=8000,
+        graceful_shutdown_seconds=10,
+        logging_dir=None,
+        llm_interface_model="azure/gpt-4o",
+        llm_interface_embed_model="azure/text-embedding-3-large",
+        company_merge_similarity_threshold=0.83,
+        is_local_test_bypass_active=True,
+        authentik_api_token="test-authentik-token",
+        authentik_base_url="https://authentik.example.com",
+    )
+
+
+def _parity_fake(scenario: _ParityScenario) -> FakePipeline:
+    return build_fake_pipeline_dependencies(
+        rid=f"{scenario.short_name.upper()}-1.0",
+        celex_row=scenario.celex_row,
+        celex_error=scenario.celex_error,
+        collision_row=scenario.collision_row,
+    )
+
+
+@pytest.mark.parametrize("scenario_id", list(_PARITY_SCENARIOS))
+def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
+    monkeypatch: pytest.MonkeyPatch, scenario_id: str
+) -> None:
+    """Issue #193 AC-BI-014: ``POST /ingestions`` and the ``ingest_regulation`` MCP tool both
+    call ``resolve_ingestion_entry``, so for the same CELEX/short_name and the same graph and
+    Cellar state they accept or reject identically -- the MCP ``error: <message>`` string
+    equals the REST error body's own message, and an accepted request yields the same
+    instrument id, source, outcome and stage list.
+    """
+    scenario = _PARITY_SCENARIOS[scenario_id]
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    if scenario.cellar_not_found:
+
+        def _not_found_fetch(celex: str) -> bytes:
+            raise CellarNotFoundError(f"CELEX {celex!r} was not found on Cellar/ELI")
+
+        monkeypatch.setattr("ps_service.api.ingestion_orchestration.fetch_xhtml", _not_found_fetch)
+    rest_fake = _parity_fake(scenario)
+    mcp_fake = _parity_fake(scenario)
+    # detroit-exception: DI-wiring factory, not a business collaborator -- the MCP side runs the
+    # same fake bundle the REST side injects via `dependency_overrides`, exactly as
+    # `_use_real_pipeline_stages` substitutes it.
+    monkeypatch.setattr(
+        mcp_server, "build_default_pipeline_dependencies", lambda: mcp_fake.dependencies
+    )
+    install_compliance_officer_grant(monkeypatch, granted=True)
+    app = create_app(_rest_app_config())
+    app.dependency_overrides[provide_pipeline_dependencies] = lambda: rest_fake.dependencies
+
+    rest_response = TestClient(app, raise_server_exceptions=False).post(
+        "/ingestions",
+        json={"source": "catalog", "celex": scenario.celex, "short_name": scenario.short_name},
+    )
+    mcp_text = _text(_call_ingest_regulation(scenario.celex, scenario.short_name))
+
+    rest_body = rest_response.json()
+    if rest_response.status_code == 200:
+        mcp_body = json.loads(mcp_text)
+        for body in (rest_body, mcp_body):
+            body.pop("run_id")
+        assert mcp_body == rest_body
+        assert mcp_fake.recorder.order == rest_fake.recorder.order
+    else:
+        error = rest_body["error"]
+        # A stage failure's REST body carries the stage separately; the MCP string is
+        # `PipelineStageError`'s own `str()`, `"<stage> stage failed: <reason>"`.
+        expected_message = (
+            f"{error['failing_stage']} stage failed: {error['message']}"
+            if error.get("failing_stage")
+            else error["message"]
+        )
+        assert mcp_text == f"error: {expected_message}"
+        assert mcp_fake.recorder.order == rest_fake.recorder.order == []
 
 
 def test_non_curated_celex_not_found_on_cellar_returns_catalog_identifier_not_found_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D-SANITIZE-UNEXPECTED: a CELEX absent from both the curated catalog and
-    Cellar/ELI returns `error: <str(exc)>` verbatim, and no stage ever runs.
+    """D-SANITIZE-UNEXPECTED: a CELEX Cellar/ELI does not know returns
+    `error: <str(exc)>` verbatim, and no stage ever runs.
+
+    Issue #193: the message names only the CELEX and Cellar/ELI -- it no longer
+    claims a curated catalog was consulted.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1218,10 +1406,7 @@ def test_non_curated_celex_not_found_on_cellar_returns_catalog_identifier_not_fo
     result = _call_ingest_regulation(_NONCURATED_CELEX, "some-short-name")
 
     assert result.is_error is False
-    expected = (
-        f"No curated regulation has CELEX {_NONCURATED_CELEX!r}, "
-        "and it does not exist on Cellar/ELI."
-    )
+    expected = f"CELEX {_NONCURATED_CELEX!r} does not exist on Cellar/ELI."
     assert _text(result) == f"error: {expected}"
     assert fake.recorder.calls == []
 
@@ -1394,7 +1579,7 @@ def test_collision_check_query_failure_surfaces_as_pipeline_stage_error_not_grap
     but the collision-check *query itself* fails, that failure never touches
     `_sanitize_graph_open` (which only wraps the open) -- it is caught by
     `check_short_name_collision`'s own `_run_stage` wrapping inside
-    `validate_and_resolve_catalog_entry`, becomes a `PipelineStageError`, and
+    `resolve_ingestion_entry`, becomes a `PipelineStageError`, and
     is caught by `_resolve_and_ingest`'s existing
     `except (..., PipelineStageError)` clause, surfacing as
     `f"error: {exc}"` with the real stage-failure text -- distinct from the

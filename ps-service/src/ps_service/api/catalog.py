@@ -27,38 +27,12 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import TYPE_CHECKING, Literal, cast
 
+from ps_service.api.catalog_entry import CatalogEntry
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from importlib.resources.abc import Traversable
     from pathlib import Path
-
-
-@dataclass(frozen=True, slots=True)
-class CatalogEntry:
-    """One curated EU regulatory instrument -- unchanged shape (pre-#66).
-
-    Kept exactly as before (celex required, four fields) for
-    ``REGULATION_CATALOG``'s/``find_by_celex``'s/``POST /ingestions``'s
-    existing, CELEX-only contract (D12) -- including
-    ``ingestion_orchestration.py``'s existing positional Cellar-fallback
-    construction, ``CatalogEntry(celex, metadata.title, short_name,
-    metadata.version)``, which stays valid unchanged. An internal-source
-    instrument (D15, no CELEX at all) is never represented as a
-    :class:`CatalogEntry` -- see :class:`CuratedInstrumentEntry` for the
-    unfiltered, ``GET /catalog``-facing shape.
-
-    Attributes:
-        celex: The 10-character CELEX identifier, e.g. ``"32024R2847"``.
-        title: The human-readable instrument title.
-        short_name: Internal short name driving graph naming, e.g. ``"cra"``.
-        version: Internal catalog version forming the RegulatoryInstrument id
-            ``f"{short_name}-{version}"``.
-    """
-
-    celex: str
-    title: str
-    short_name: str
-    version: str
 
 
 @dataclass(frozen=True, slots=True)

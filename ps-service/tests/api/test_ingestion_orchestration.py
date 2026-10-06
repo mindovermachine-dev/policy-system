@@ -25,23 +25,27 @@ from api._fakes import (
     MakeEmitter,
     ReadLines,
     build_fake_pipeline_dependencies,
+    default_cellar_rdf,
+    default_cellar_xhtml,
 )
 from ps_service.api.catalog import CatalogEntry
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
+    CelexAlreadyIngestedError,
     IngestionConfigIncompleteError,
     PipelineStageError,
     ShortNameCollisionError,
-    ShortNameCuratedMismatchError,
 )
 from ps_service.api.ingestion_orchestration import (
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _is_already_merged,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     check_short_name_collision,
+    normalize_short_name,
+    resolve_ingestion_entry,
     resolve_via_cellar,
     run_catalog_ingestion_pipeline,
-    validate_and_resolve_catalog_entry,
 )
 from ps_service.api.run_status import get_stage
 from ps_service.company_merge.models import MergeResult, NearMissPair
@@ -472,100 +476,281 @@ def test_run_catalog_ingestion_pipeline_falls_back_to_default_adapter_when_omitt
     assert isinstance(fake.recorder.calls[0].kwargs["adapter"], FakeIngestionAdapter)
 
 
-# --- validate_and_resolve_catalog_entry (issue #146, AC-BI-004) --------------
-
-# A real curated CELEX/short_name pair from curated-content/catalog.json --
-# exercises the real REGULATION_CATALOG, not a monkeypatched one, mirroring
-# tests/api/test_catalog.py's own convention for the negative/positive cases.
+# A real curated CELEX, used as an ordinary CELEX by the `resolve_ingestion_entry` tests
+# below (issue #193: the catalog is never consulted by the ingest path).
 _CURATED_CELEX = "32024R2847"
-_CURATED_SHORT_NAME = "cra"
 
 
-def test_validate_and_resolve_catalog_entry_returns_the_curated_entry_on_exact_match() -> None:
-    """AC-BI-004: a curated CELEX whose ``short_name`` matches the catalog's own value
-    resolves to that entry -- issuing exactly one graph query, the collision check
-    (issue #146, AC-BI-006), which the empty-results fake reports as "no collision".
+# --- resolve_ingestion_entry (issue #193, S1) --------------------------------
+
+
+def test_resolve_ingestion_entry_resolves_a_curated_celex_via_cellar_under_the_callers_short_name(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-001: a curated CELEX is resolved through Cellar -- both documents
+    fetched once -- under the caller's own ``short_name``, after exactly one graph query
+    (the short_name collision check). The returned resolution carries the entry and the
+    fetch-once adapter.
     """
     graph = FakeGraphHandle()
+    emitter, _ = make_emitter()
+    fetch = _CountingFetch(default_cellar_xhtml(_CURATED_CELEX))
+    fetch_rdf = _CountingFetch(default_cellar_rdf(_CURATED_CELEX))
 
-    entry = validate_and_resolve_catalog_entry(
-        _CURATED_CELEX, _CURATED_SHORT_NAME, single_tenant_graph=graph
+    resolution = resolve_ingestion_entry(
+        _CURATED_CELEX,
+        "mycra",
+        single_tenant_graph=graph,
+        emitter=emitter,
+        cellar_fetch=fetch,
+        cellar_fetch_rdf=fetch_rdf,
     )
 
-    assert entry is not None
-    assert entry.celex == _CURATED_CELEX
-    assert entry.short_name == _CURATED_SHORT_NAME
-    assert len(graph.calls) == 1
-    assert graph.calls[0].params == {"prefix": f"{_CURATED_SHORT_NAME}-", "celex": _CURATED_CELEX}
+    assert resolution.entry.celex == _CURATED_CELEX
+    assert resolution.entry.short_name == "MYCRA"
+    assert (fetch.call_count, fetch_rdf.call_count) == (1, 1)
+    assert graph.calls[-1].params == {"prefix": "MYCRA-", "celex": _CURATED_CELEX}
 
 
-def test_validate_and_resolve_catalog_entry_raises_on_curated_mismatch() -> None:
-    """AC-BI-004: a curated CELEX whose caller-supplied ``short_name`` doesn't match the
-    catalog's own value is rejected before any graph is opened, with the exact message
-    text the pre-#146 MCP tool's own mismatch branch used.
+def test_resolve_ingestion_entry_rejects_a_claimed_short_name_before_any_cellar_fetch(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 D1 ordering: the graph collision check runs before Cellar, so a doomed
+    request never reaches the network.
     """
-    graph = FakeGraphHandle()
-
-    with pytest.raises(ShortNameCuratedMismatchError) as exc_info:
-        validate_and_resolve_catalog_entry(
-            _CURATED_CELEX, "not-the-real-short-name", single_tenant_graph=graph
-        )
-
-    assert str(exc_info.value) == (
-        f"CELEX {_CURATED_CELEX} is curated under short_name '{_CURATED_SHORT_NAME}'; "
-        "pass that value, not 'not-the-real-short-name'"
-    )
-    assert graph.calls == []
-
-
-def test_validate_and_resolve_catalog_entry_raises_on_curated_short_name_collision() -> None:
-    """Issue #146 AC-BI-006: a curated CELEX whose own ``short_name`` is already claimed
-    by a *different* curated entry is rejected before any graph is opened.
-
-    The real curated catalog can never produce this scenario itself (no two
-    curated entries share a ``short_name`` by construction --
-    ``tests/api/test_catalog.py::test_no_two_curated_entries_share_a_short_name``
-    proves the invariant), so this passes its own fixture tuple via
-    ``validate_and_resolve_catalog_entry``'s ``catalog=`` parameter (AUDIT.md
-    §2 case 11's DI-gap fix) instead of monkeypatching the module-level
-    ``REGULATION_CATALOG`` constant. Replaces
-    ``tests/api/test_ingestions_catalog.py``'s former
-    ``test_short_name_collision_with_a_curated_catalog_entry_is_rejected``,
-    an HTTP round-trip through ``POST /ingestions`` that had no other reason
-    to exist once the real function itself is directly, monkeypatch-free
-    testable -- mirroring the equivalent fix already applied to this same
-    function's MCP-side callers (issue #163 Slice C).
-    """
-    fixture = (
-        CatalogEntry("32024R0001", "Fixture One", "shared-name", "1.0"),
-        CatalogEntry("32024R0002", "Fixture Two", "shared-name", "1.0"),
-    )
-    graph = FakeGraphHandle()
+    graph = FakeGraphHandle([FakeQueryResult([]), FakeQueryResult([["mycra-1.0", "32024R0001"]])])
+    emitter, _ = make_emitter()
+    fetch = _CountingFetch(_FIXTURE_REGULATION_A)
+    fetch_rdf = _CountingFetch(_RDF_FIXTURE_REGULATION_A)
 
     with pytest.raises(ShortNameCollisionError) as exc_info:
-        validate_and_resolve_catalog_entry(
-            "32024R0001", "shared-name", single_tenant_graph=graph, catalog=fixture
+        resolve_ingestion_entry(
+            _CURATED_CELEX,
+            "mycra",
+            single_tenant_graph=graph,
+            emitter=emitter,
+            cellar_fetch=fetch,
+            cellar_fetch_rdf=fetch_rdf,
         )
 
-    assert str(exc_info.value) == "short_name 'shared-name' is already claimed by CELEX 32024R0002"
-    assert graph.calls == []
+    assert str(exc_info.value) == "short_name 'MYCRA' is already claimed by CELEX 32024R0001"
+    assert (fetch.call_count, fetch_rdf.call_count) == (0, 0)
 
 
-def test_validate_and_resolve_catalog_entry_returns_none_for_a_non_curated_celex() -> None:
-    """A CELEX absent from the curated catalog resolves to ``None`` -- the caller
-    (``routes.create_ingestion``/``mcp_server.ingest_regulation``) then falls back to
-    ``resolve_via_cellar``. The graph-side collision check (issue #146) still runs --
-    it is independent of whether ``celex`` is curated -- and reports no collision.
+def test_resolve_ingestion_entry_collision_check_failure_fails_closed_before_cellar(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-007 (collision half): a graph failure in the collision check is a
+    ``PipelineStageError`` naming ``collision_check``, never "no collision", and Cellar
+    is never reached.
+    """
+    graph = build_fake_pipeline_dependencies(collision_error=RuntimeError("boom")).single_tenant
+    emitter, _ = make_emitter()
+    fetch = _CountingFetch(_FIXTURE_REGULATION_A)
+
+    with pytest.raises(PipelineStageError) as exc_info:
+        resolve_ingestion_entry(
+            _CURATED_CELEX,
+            "mycra",
+            single_tenant_graph=graph,
+            emitter=emitter,
+            cellar_fetch=fetch,
+        )
+
+    assert exc_info.value.stage == "collision_check"
+    assert fetch.call_count == 0
+
+
+def test_resolve_ingestion_entry_not_found_message_names_the_celex_without_the_catalog(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-008/013: a CELEX Cellar does not know raises the not-found error
+    naming the CELEX; the message no longer claims a curated catalog was consulted.
+    """
+
+    def _not_found(celex: str) -> bytes:
+        raise CellarNotFoundError(f"CELEX {celex!r} was not found on Cellar/ELI")
+
+    emitter, _ = make_emitter()
+
+    with pytest.raises(CatalogIdentifierNotFoundError) as exc_info:
+        resolve_ingestion_entry(
+            _CURATED_CELEX,
+            "mycra",
+            single_tenant_graph=FakeGraphHandle(),
+            emitter=emitter,
+            cellar_fetch=_not_found,
+        )
+
+    assert _CURATED_CELEX in str(exc_info.value)
+    assert "curated" not in str(exc_info.value)
+
+
+def test_resolve_ingestion_entry_checks_celex_then_collision_then_cellar(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 D1 ordering: CELEX-existence query first, then the short_name collision
+    query, then Cellar -- a request doomed by the graph never reaches the network.
+    """
+    graph = FakeGraphHandle()
+    emitter, _ = make_emitter()
+    fetch = _CountingFetch(default_cellar_xhtml(_CURATED_CELEX))
+    fetch_rdf = _CountingFetch(default_cellar_rdf(_CURATED_CELEX))
+
+    resolve_ingestion_entry(
+        _CURATED_CELEX,
+        "mycra",
+        single_tenant_graph=graph,
+        emitter=emitter,
+        cellar_fetch=fetch,
+        cellar_fetch_rdf=fetch_rdf,
+    )
+
+    assert [call.params for call in graph.calls] == [
+        {"celex": _CURATED_CELEX},
+        {"prefix": "MYCRA-", "celex": _CURATED_CELEX},
+    ]
+
+
+def test_resolve_ingestion_entry_rejects_an_ingested_celex_before_collision_check_and_cellar(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-003: an already-ingested CELEX raises ``CelexAlreadyIngestedError``
+    naming the existing short_name, with no collision query and no Cellar fetch.
+    """
+    graph = FakeGraphHandle([FakeQueryResult([["cra-1.0"]])])
+    emitter, _ = make_emitter()
+    fetch = _CountingFetch(_FIXTURE_REGULATION_A)
+
+    with pytest.raises(CelexAlreadyIngestedError) as exc_info:
+        resolve_ingestion_entry(
+            _CURATED_CELEX,
+            "mycra",
+            single_tenant_graph=graph,
+            emitter=emitter,
+            cellar_fetch=fetch,
+        )
+
+    assert str(exc_info.value) == f"CELEX {_CURATED_CELEX} is already ingested as short_name 'cra'"
+    assert len(graph.calls) == 1
+    assert fetch.call_count == 0
+
+
+def test_resolve_ingestion_entry_celex_check_failure_fails_closed_naming_celex_check(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-007: a graph failure in the CELEX check is a ``PipelineStageError``
+    with stage ``celex_check`` (the collision check keeps ``collision_check``).
+    """
+    graph = FakeGraphHandle(error=RuntimeError("boom"))
+    emitter, _ = make_emitter()
+
+    with pytest.raises(PipelineStageError) as exc_info:
+        resolve_ingestion_entry(_CURATED_CELEX, "mycra", single_tenant_graph=graph, emitter=emitter)
+
+    assert exc_info.value.stage == "celex_check"
+
+
+def test_resolve_ingestion_entry_logs_celex_rejection_with_only_safe_fields(
+    make_emitter: MakeEmitter, read_lines: ReadLines
+) -> None:
+    """Issue #193 D7 / AC-BI-008: the rejection is logged as ``ingestion_identity_check``
+    with outcome ``rejected_celex_exists`` carrying only the CELEX, short_name and the
+    existing short_name -- no Cypher, no exception text.
+    """
+    graph = FakeGraphHandle([FakeQueryResult([["cra-1.0"]])])
+    emitter, log_path = make_emitter()
+
+    with pytest.raises(CelexAlreadyIngestedError):
+        resolve_ingestion_entry(_CURATED_CELEX, "mycra", single_tenant_graph=graph, emitter=emitter)
+
+    emitter.flush()
+
+    entries = [e for e in read_lines(log_path) if e.get("action") == "ingestion_identity_check"]
+    assert len(entries) == 1
+    assert entries[0]["outcome"] == "rejected_celex_exists"
+    assert entries[0]["celex"] == _CURATED_CELEX
+    assert entries[0]["short_name"] == "MYCRA"
+    assert entries[0]["existing_short_name"] == "cra"
+    assert "MATCH" not in str(entries[0])
+
+
+# --- short_name normalization + case-insensitivity (issue #193, S3) ----------
+
+
+def test_check_short_name_collision_compares_case_insensitively() -> None:
+    """Issue #193 AC-BI-004: ``cra`` matches a recorded ``CRA-1.0`` (and the reverse); the
+    Python compare is on the upper-cased short name segment.
+    """
+    graph = FakeGraphHandle(
+        [FakeQueryResult([["CRA-1.0", "32024R0001"]]), FakeQueryResult([["cra-1.0", "32024R0001"]])]
+    )
+
+    lower_vs_upper = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="cra"
+    )
+    upper_vs_lower = check_short_name_collision(
+        cast("GraphHandle", graph), celex="32024R2847", short_name="CRA"
+    )
+
+    assert lower_vs_upper == "32024R0001"
+    assert upper_vs_lower == "32024R0001"
+
+
+def test_collision_check_param_prefix_is_uppercase_and_query_is_case_insensitive() -> None:
+    """Issue #193 AC-BI-004 / M2 / M6: the collision query upper-cases the stored id
+    (``toUpper(n.id)``) and is parameterized with an upper-case prefix, whatever case the
+    caller passed.
     """
     graph = FakeGraphHandle()
 
-    entry = validate_and_resolve_catalog_entry(
-        _NONCURATED_CELEX, "whatever-short-name", single_tenant_graph=graph
+    check_short_name_collision(cast("GraphHandle", graph), celex="32024R2847", short_name="cra")
+
+    assert "toUpper(n.id) STARTS WITH $prefix" in graph.calls[0].query
+    assert graph.calls[0].params == {"prefix": "CRA-", "celex": "32024R2847"}
+
+
+def test_preflight_query_is_case_insensitive_so_a_legacy_lowercase_node_is_caught() -> None:
+    """Issue #193 M2: the legacy celex-less preflight matches ``toUpper(n.id)`` against an
+    upper-cased id, so a legacy ``cra-1.0`` node is found when ``CRA-1.0`` is ingested.
+    """
+    graph = FakeGraphHandle([FakeQueryResult([["cra-1.0"]])])
+
+    found = _is_already_merged(cast("GraphHandle", graph), "CRA-1.0")
+
+    assert found is True
+    assert "toUpper(n.id) = $id" in graph.calls[0].query
+    assert graph.calls[0].params == {"id": "CRA-1.0"}
+
+
+def test_normalize_short_name_uppercases() -> None:
+    """Issue #193 D3: the public normalizer upper-cases (and is idempotent)."""
+    assert normalize_short_name("cra") == "CRA"
+    assert normalize_short_name("Cra") == "CRA"
+    assert normalize_short_name("CRA") == "CRA"
+
+
+def test_resolve_ingestion_entry_normalizes_the_short_name_for_checks_and_entry(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Issue #193 AC-BI-005: ``resolve_ingestion_entry`` normalizes once at the top; the
+    collision query, the returned entry and (by construction) every downstream consumer
+    see the upper-case short_name.
+    """
+    graph = FakeGraphHandle()
+    emitter, _ = make_emitter()
+
+    resolution = resolve_ingestion_entry(
+        _CURATED_CELEX,
+        "cra",
+        single_tenant_graph=graph,
+        emitter=emitter,
+        cellar_fetch=_CountingFetch(default_cellar_xhtml(_CURATED_CELEX)),
+        cellar_fetch_rdf=_CountingFetch(default_cellar_rdf(_CURATED_CELEX)),
     )
 
-    assert entry is None
-    assert len(graph.calls) == 1
-    assert graph.calls[0].params == {"prefix": "whatever-short-name-", "celex": _NONCURATED_CELEX}
+    assert resolution.entry.short_name == "CRA"
+    assert graph.calls[-1].params == {"prefix": "CRA-", "celex": _CURATED_CELEX}
 
 
 # --- resolve_via_cellar (AC-BI-003/004/005/006/007) --------------------------

@@ -40,10 +40,9 @@ from ps_service.api.errors import (
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
-    resolve_via_cellar,
+    resolve_ingestion_entry,
     run_catalog_ingestion_pipeline,
     run_internal_ingestion_pipeline,
-    validate_and_resolve_catalog_entry,
 )
 from ps_service.api.models import (
     CatalogInstrumentEntry,
@@ -95,7 +94,6 @@ from ps_service.runtime_config import RuntimeConfigError
 
 if TYPE_CHECKING:
     from ps_service.api.ingestion_orchestration import IngestionOutcome
-    from ps_service.ingestion.adapters.base import IngestionAdapter
 
 
 def _to_accepted_response(run_id: str, outcome: IngestionOutcome) -> IngestionAcceptedResponse:
@@ -134,19 +132,15 @@ async def create_ingestion(
     the ``source == "internal"`` branch has already returned, before any
     Cellar/catalog pipeline dispatch begins; an unprivileged or unauthenticated
     caller gets a 403 (``AccessDeniedError``) with no pipeline call made. The
-    catalog path then calls ``validate_and_resolve_catalog_entry`` (issue #146,
-    AC-BI-004/005) -- the same shared function the ``ingest_regulation`` MCP
-    tool calls -- which rejects a curated CELEX whose caller-supplied
-    ``short_name`` doesn't match the catalog's own value, before any pipeline
-    graph is opened. A CELEX absent from the curated catalog falls back to a
-    Cellar/ELI existence lookup (``resolve_via_cellar``, also off the event
-    loop, called with the request's own ``short_name`` so it is used verbatim
-    and never derived from the fetched title -- issue #146 AC-BI-002/003)
-    before the pipeline runs -- a genuine miss on both sources 404s
-    (AC-BI-005/006), a resolved CELEX runs the same pipeline a curated one
-    would (AC-BI-003/004), fetching the document at most once for the whole
-    request (AC-BI-006). A stage failure -- including a Cellar/ELI outage
-    during resolution -- surfaces as a 502 naming the failing stage
+    catalog path then calls ``resolve_ingestion_entry`` (issue #193) -- the same
+    shared function the ``ingest_regulation`` MCP tool calls. It rejects a
+    ``short_name`` already claimed by a different CELEX in the live graph, then
+    resolves *every* CELEX -- curated or not, the catalog is never consulted --
+    through Cellar/ELI under the request's own ``short_name``, used verbatim, before
+    the pipeline runs. A CELEX Cellar does not know 404s, a resolved CELEX runs the
+    pipeline, and the document is fetched at most once for the whole request
+    (AC-BI-006). A stage failure -- including a Cellar/ELI outage during resolution --
+    surfaces as a 502 naming the failing stage
     (AC-BI-007/008). A ``source: "internal"`` request carries the intake
     document's content directly in the body (issue #91 -- no server-side path
     resolution) and runs the internal-seed pipeline (issue #54, S2): today,
@@ -172,10 +166,9 @@ async def create_ingestion(
     Raises:
         AccessDeniedError: The caller (catalog path only) lacks
             ``ComplianceOfficer`` (403; issue #145).
-        CatalogIdentifierNotFoundError: The CELEX is absent from the curated
-            catalog and does not exist on Cellar/ELI either (404).
-        ShortNameCuratedMismatchError: A curated CELEX's request ``short_name``
-            doesn't match the catalog's own value (409).
+        CatalogIdentifierNotFoundError: The CELEX does not exist on Cellar/ELI (404).
+        ShortNameCollisionError: The request's ``short_name`` is already claimed by
+            a different CELEX in the graph (409).
         InternalSeedValidationError: The internal request's document fails
             structural or shape validation (422).
         PipelineStageError: A pipeline stage raised (502).
@@ -194,27 +187,20 @@ async def create_ingestion(
     await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)
     effective_run_id = request_body.run_id or run_id
     single_tenant_graph = await run_in_threadpool(dependencies.graphs.single_tenant, config)
-    entry = await run_in_threadpool(
-        validate_and_resolve_catalog_entry,
+    resolution = await run_in_threadpool(
+        resolve_ingestion_entry,
         request_body.celex,
         request_body.short_name,
         single_tenant_graph=single_tenant_graph,
     )
-    ingestion_adapter: IngestionAdapter | None = None
-    if entry is None:
-        resolution = await run_in_threadpool(
-            resolve_via_cellar, request_body.celex, short_name=request_body.short_name
-        )
-        entry = resolution.entry
-        ingestion_adapter = resolution.adapter
     outcome = await run_in_threadpool(
         run_catalog_ingestion_pipeline,
-        entry,
+        resolution.entry,
         config=config,
         run_id=effective_run_id,
         caller=caller,
         dependencies=dependencies,
-        ingestion_adapter=ingestion_adapter,
+        ingestion_adapter=resolution.adapter,
     )
     return _to_accepted_response(effective_run_id, outcome)
 

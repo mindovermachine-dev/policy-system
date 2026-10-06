@@ -45,6 +45,7 @@ from ps_service.api.errors import (
     AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
     CatalogSourceOverrideUnavailableError,
+    CelexAlreadyIngestedError,
     CuratedSourceUnavailableError,
     IngestionConfigIncompleteError,
     InvalidAccessRoleError,
@@ -57,16 +58,14 @@ from ps_service.api.errors import (
     RestoreStageFailedError,
     SelfGrantOrRevokeBlockedError,
     ShortNameCollisionError,
-    ShortNameCuratedMismatchError,
     SystemOwnerFloorViolationError,
 )
 from ps_service.api.ingestion_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
     GraphOpeners,
     build_default_pipeline_dependencies,
-    resolve_via_cellar,
+    resolve_ingestion_entry,
     run_catalog_ingestion_pipeline,
-    validate_and_resolve_catalog_entry,
 )
 from ps_service.api.ingestion_orchestration import (
     SHORT_NAME_PATTERN as _SHORT_NAME_PATTERN,  # shared w/ api/models.py's short_name (#146)
@@ -230,7 +229,6 @@ if TYPE_CHECKING:
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
-    from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
@@ -798,46 +796,40 @@ def _resolve_and_ingest(
     principal: str | None,
     run_id: str,
 ) -> dict[str, object] | str:
-    """Validate/resolve the catalog entry, run the pipeline, and map its exceptions.
+    """Resolve the request's identity, run the pipeline, and map its exceptions.
 
-    Calls `validate_and_resolve_catalog_entry` (issue #146, AC-BI-004/005/006)
-    -- the same shared function `routes.create_ingestion` calls -- against the
-    single-tenant graph opened from this call's own sanitized dependency
-    bundle. That function raises `ShortNameCuratedMismatchError` when `celex`
-    is curated and its own `short_name` doesn't match the caller-supplied
-    one, or `ShortNameCollisionError` when `short_name` is already claimed by
-    a different CELEX (curated or already-ingested); otherwise it returns the
-    matching `CatalogEntry` or `None`. A `None` return means `celex` must be
-    resolved against Cellar/ELI first (issue #96 -- `short_name` is used
-    verbatim, never derived). Any exception this function does not itself
-    catch is the residual D-SANITIZE-UNEXPECTED row, left to
-    `_run_mcp_action`'s own safety net.
+    Calls `resolve_ingestion_entry` (issue #193, AC-BI-014) -- the same shared
+    function `routes.create_ingestion` calls -- against the single-tenant graph
+    opened from this call's own sanitized dependency bundle. Identity is decided
+    by the live graph and Cellar/ELI, never by the curated catalog: the function
+    raises `CelexAlreadyIngestedError` when `celex` is already in the graph and
+    `ShortNameCollisionError` when `short_name` is already claimed by a different
+    CELEX; otherwise it resolves `celex` against Cellar/ELI under the normalized
+    `short_name` (used verbatim, never derived from the fetched title, issue #96)
+    and returns the entry plus the adapter bound to the fetched document. Any
+    exception this function does not itself catch is the residual
+    D-SANITIZE-UNEXPECTED row, left to `_run_mcp_action`'s own safety net.
     """
-    ingestion_adapter: IngestionAdapter | None = None
     try:
         dependencies = _sanitize_pipeline_graph_opens(build_default_pipeline_dependencies())
         single_tenant_graph = dependencies.graphs.single_tenant(config)
-        entry = validate_and_resolve_catalog_entry(
+        resolution = resolve_ingestion_entry(
             celex, short_name, single_tenant_graph=single_tenant_graph
         )
-        if entry is None:
-            resolution = resolve_via_cellar(celex, short_name=short_name)
-            entry = resolution.entry
-            ingestion_adapter = resolution.adapter
         outcome = run_catalog_ingestion_pipeline(
-            entry,
+            resolution.entry,
             config=config,
             run_id=run_id,
             caller=principal or "unknown",
             dependencies=dependencies,
-            ingestion_adapter=ingestion_adapter,
+            ingestion_adapter=resolution.adapter,
         )
     except (
         CatalogIdentifierNotFoundError,
+        CelexAlreadyIngestedError,
         IngestionConfigIncompleteError,
         PipelineStageError,
         ShortNameCollisionError,
-        ShortNameCuratedMismatchError,
     ) as exc:
         return f"error: {exc}"
     except McpGraphUnavailableError:
@@ -854,29 +846,26 @@ def ingest_regulation(
 
     Runs the full external pipeline (Ingestion -> Domain Mapper -> Company
     Merge) for `celex`, in-process, exactly like `POST /ingestions` does for
-    a `source: "catalog"` request. `short_name` is always required (issue
-    #96): for a CELEX already in the curated catalog, it must equal that
-    entry's own canonical short name exactly -- pass a different value and
-    the call is rejected with a named error rather than silently
-    substituting the catalog's own value. For a CELEX outside the curated
-    catalog, `short_name` is resolved against Cellar/ELI and used verbatim
-    (issue #96's fix: nothing is derived from the fetched title, so the same
-    CELEX ingested twice never forks into two differently-named graphs).
+    a `source: "catalog"` request. `short_name` is always required and is
+    normalized to upper case (so `cra` and `CRA` are the same name); the
+    ingested instrument is `<SHORT_NAME>-<version>`. Any valid CELEX is
+    resolved against Cellar/ELI and ingested under the `short_name` you give,
+    used verbatim -- nothing is derived from the fetched title, so the same
+    CELEX never forks into two differently-named graphs.
 
     On success, returns the same structured summary `POST /ingestions`
     returns: `run_id`, `regulatory_instrument_id`, `source`, and one
     `stages` entry per completed pipeline stage (ingestion, extraction,
     derivation, merge) with its own small integer `summary`. Returns a
-    string beginning `error: ` when: `short_name` does not match a curated
-    CELEX's own value; `short_name` is already claimed by a different CELEX
-    (curated or already-ingested); `celex` exists in neither the curated
-    catalog nor Cellar/ELI; the LLM Interface dependency is currently
+    string beginning `error: ` when: `celex` is already ingested in the
+    compliance graph (under any `short_name`); `short_name` is already
+    claimed, in any letter case, by a different CELEX; `celex` does not
+    exist on Cellar/ELI; the LLM Interface dependency is currently
     unhealthy (checked before any graph is opened or the pipeline is
     called); the service configuration is missing an LLM/embedding model
-    or similarity threshold;
-    the policy graph database cannot be reached; a pipeline stage genuinely
-    fails mid-run; or (this tool's own residual safety net) on any other
-    unexpected failure.
+    or similarity threshold; the policy graph database cannot be reached;
+    a pipeline stage genuinely fails mid-run; or (this tool's own residual
+    safety net) on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)

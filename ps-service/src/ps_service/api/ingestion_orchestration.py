@@ -38,22 +38,18 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
-from ps_service.api.catalog import (
-    CatalogEntry,
-    find_by_celex,
-    find_short_name_collision,
-)
+from ps_service.api.catalog_entry import CatalogEntry
 from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; IMPL_4 deviation 1 sanctions reuse
     is_safe_verbatim,
 )
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
+    CelexAlreadyIngestedError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PipelineStageError,
     ShortNameCollisionError,
-    ShortNameCuratedMismatchError,
 )
 from ps_service.api.run_status import clear_stage, set_stage
 from ps_service.config import missing_ingestion_config_fields
@@ -400,119 +396,19 @@ def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | No
         raise _classify_stage_failure(name, exc, emitter=emitter) from exc
 
 
-# --- curated-mismatch validation (issue #146, Slice 2) ---
-
-
-def validate_and_resolve_catalog_entry(
-    celex: str,
-    short_name: str,
-    *,
-    single_tenant_graph: GraphHandle,
-    emitter: LogEmitter | None = None,
-    catalog: tuple[CatalogEntry, ...] | None = None,
-) -> CatalogEntry | None:
-    """Validate a caller-supplied ``short_name`` against the curated catalog and the graph.
-
-    Shared by ``routes.create_ingestion`` and the ``ingest_regulation`` MCP
-    tool (issue #146, AC-BI-004/005/006) -- one function, called from both
-    entry points, so a curated-CELEX mismatch or a cross-instrument
-    ``short_name`` collision is rejected with byte-identical semantics
-    everywhere, before any pipeline graph is opened. Three checks run in
-    order, each short-circuiting the rest:
-
-    1. Looks up ``celex`` in the curated catalog; when found and its own
-       ``short_name`` doesn't match the caller-supplied one, raises
-       :class:`~ps_service.api.errors.ShortNameCuratedMismatchError` carrying
-       the same message text the pre-#146 ``mcp_server.py`` mismatch branch
-       used verbatim (AC-BI-004).
-    2. Calls :func:`~ps_service.api.catalog.find_short_name_collision` --
-       ``short_name`` already claimed by a *different* curated CELEX raises
-       :class:`~ps_service.api.errors.ShortNameCollisionError` (AC-BI-006).
-    3. Calls :func:`check_short_name_collision` against ``single_tenant_graph``,
-       wrapped in :func:`_run_stage` (the same per-stage failure wrapper the
-       pipeline's own stages use) so a genuine I/O failure during this check
-       fails closed as a :class:`~ps_service.api.errors.PipelineStageError`,
-       never silently treated as "no collision". The wrapped thunk calls
-       *only* :func:`check_short_name_collision` -- it never raises
-       ``ShortNameCollisionError`` itself, since ``_run_stage`` reclassifies
-       any exception a wrapped thunk raises into a ``PipelineStageError``;
-       raising the domain error from inside the thunk would misreport a real
-       collision as a transient stage failure. ``ShortNameCollisionError`` is
-       raised here, in the caller, only after ``_run_stage`` returns a
-       non-``None`` conflicting CELEX.
-
-    This call's own ``single_tenant_graph`` open (at both entry points, before
-    this function is called) and ``run_catalog_ingestion_pipeline``'s later,
-    independent ``_is_already_merged`` preflight open are two separate
-    FalkorDB client constructions -- not lazy (``FalkorDB.__init__`` issues a
-    real ``conn.info(section="server")`` round-trip), but the extra
-    single-digit-millisecond cost is negligible against this pipeline's own
-    end-to-end SLA, and threading one handle through both call sites would
-    require changing ``run_catalog_ingestion_pipeline``'s public signature for
-    no measurable benefit.
-
-    Args:
-        celex: The request's CELEX identifier.
-        short_name: The request's caller-supplied ``short_name``.
-        single_tenant_graph: The already-opened single-tenant graph, queried
-            by the graph-side collision check.
-        emitter: Optional explicit log emitter, used by the graph-side
-            collision check's own ``_run_stage`` failure logging.
-        catalog: The curated catalog to validate against. ``None`` (the
-            default -- every real caller) resolves to the real, packaged
-            :data:`~ps_service.api.catalog.REGULATION_CATALOG`. A test that
-            needs a curated/curated ``short_name`` collision -- a scenario
-            the real curated catalog can never produce, since it has no
-            duplicate ``short_name``s by construction -- passes its own
-            fixture tuple here instead of monkeypatching the module-level
-            constant (AUDIT.md §2 case 11: a DI-gap smell, not a legitimate
-            mock-boundary substitution -- the fix is a real parameter).
-
-    Returns:
-        The matching :class:`CatalogEntry` if ``celex`` is curated, else
-        ``None``.
-
-    Raises:
-        ShortNameCuratedMismatchError: ``celex`` is curated and its own
-            ``short_name`` doesn't equal the caller-supplied one.
-        ShortNameCollisionError: ``short_name`` is already claimed by a
-            different CELEX, curated or already-ingested.
-        PipelineStageError: The graph-side collision check itself fails
-            (e.g. the graph is unreachable).
-    """
-    entry = find_by_celex(celex, catalog=catalog)
-    if entry is not None and entry.short_name != short_name:
-        raise ShortNameCuratedMismatchError(
-            f"CELEX {celex} is curated under short_name '{entry.short_name}'; "
-            f"pass that value, not '{short_name}'"
-        )
-    catalog_collision = find_short_name_collision(short_name, celex, catalog=catalog)
-    if catalog_collision is not None:
-        raise ShortNameCollisionError(
-            f"short_name '{short_name}' is already claimed by CELEX {catalog_collision.celex}"
-        )
-    colliding_celex = _run_stage(
-        "collision_check",
-        lambda: check_short_name_collision(single_tenant_graph, celex=celex, short_name=short_name),
-        emitter=emitter,
-    )
-    if colliding_celex is not None:
-        raise ShortNameCollisionError(
-            f"short_name '{short_name}' is already claimed by CELEX {colliding_celex}"
-        )
-    return entry
-
-
 # --- Cellar-fallback existence resolution (D1/D2/D3, AC-BI-003/004/005/006/007) ---
 
 
 @dataclass(frozen=True, slots=True)
-class _CellarResolution:
-    """A non-curated CELEX resolved via Cellar/ELI, plus its fetch-once adapter.
+class CellarResolution:
+    """A CELEX resolved via Cellar/ELI, plus its fetch-once adapter.
 
-    ``entry`` is a :class:`CatalogEntry` built exactly as a curated one is, so
-    downstream code (``_execute_catalog_stages``, graph naming, id
-    construction) cannot tell the two apart. ``adapter`` is a
+    ``entry`` is a :class:`CatalogEntry` carrying the CELEX, the fetched title and
+    version, and the caller's ``short_name``, which downstream code
+    (``_execute_catalog_stages``, graph naming, id construction) consumes.
+    Public because both ingestion entry points (``routes.create_ingestion`` and the
+    ``ingest_regulation`` MCP tool) receive it from
+    :func:`resolve_ingestion_entry`. ``adapter`` is a
     :class:`CellarEliAdapter` whose fetch step replays the bytes already
     retrieved during resolution -- the AC-BI-006 fetch-once mechanism (D2).
     """
@@ -527,15 +423,14 @@ def resolve_via_cellar(
     short_name: str | None = None,
     cellar_fetch: Callable[[str], bytes] | None = None,
     cellar_fetch_rdf: Callable[[str], bytes] | None = None,
-) -> _CellarResolution:
-    """Resolve a CELEX absent from the curated catalog against Cellar/ELI.
+) -> CellarResolution:
+    """Resolve a CELEX against Cellar/ELI.
 
     Fetches the XHTML document once (``cellar_fetch``) and the RDF/XML
     metadata document once (``cellar_fetch_rdf``), extracts bibliographic
     metadata from both, and resolves a ``short_name`` -- all *before* the
-    pipeline ever runs (D1), so a curated and a Cellar-resolved
-    :class:`CatalogEntry` are indistinguishable to
-    ``run_catalog_ingestion_pipeline``. The returned adapter's fetch steps
+    pipeline ever runs (D1), so the resolved :class:`CatalogEntry` is ready
+    for ``run_catalog_ingestion_pipeline``. The returned adapter's fetch steps
     replay both already-fetched byte strings, so Stage 1 never re-fetches
     either (D2, AC-BI-006) -- proven by counting fakes in this function's
     own tests, not just documented here. Without this second cached-bytes
@@ -575,12 +470,12 @@ def resolve_via_cellar(
             resolving to the module-level :func:`fetch_rdf` name.
 
     Returns:
-        A :class:`_CellarResolution` pairing the resolved entry with a
+        A :class:`CellarResolution` pairing the resolved entry with a
         cached-bytes :class:`CellarEliAdapter`.
 
     Raises:
         CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI
-            either (a genuine 404, distinguished from an outage -- AC-BI-005).
+            (a genuine 404, distinguished from an outage -- AC-BI-005).
         PipelineStageError: The Cellar/ELI fetch failed for any other reason,
             or the fetched document could not be turned into valid metadata
             (an unparseable structure, an unsupported CELEX type code, or an
@@ -593,7 +488,7 @@ def resolve_via_cellar(
         xhtml = fetch(celex)
         rdf = fetch_rdf_(celex)
     except CellarNotFoundError as exc:
-        message = f"No curated regulation has CELEX {celex!r}, and it does not exist on Cellar/ELI."
+        message = f"CELEX {celex!r} does not exist on Cellar/ELI."
         raise CatalogIdentifierNotFoundError(message) from exc
     except Exception as exc:
         raise _classify_stage_failure("ingestion", exc) from exc
@@ -616,7 +511,200 @@ def resolve_via_cellar(
     )
     entry = CatalogEntry(celex, metadata.title, resolved_short_name, metadata.version)
     adapter = CellarEliAdapter(fetch=lambda _identifier: xhtml, fetch_rdf=lambda _identifier: rdf)
-    return _CellarResolution(entry=entry, adapter=adapter)
+    return CellarResolution(entry=entry, adapter=adapter)
+
+
+def normalize_short_name(short_name: str) -> str:
+    """Return the canonical (upper-case) form of a caller-supplied ``short_name``.
+
+    Applied once, at the top of :func:`resolve_ingestion_entry`, so every
+    downstream consumer of the ingest path (collision check, id construction,
+    the ingest stage, the graph openers) sees one spelling. Deliberately NOT
+    applied in the request validators, in ``ingestion/pipeline.py`` or in the
+    graph-name builders: restore and the change-check sweep share those, and the
+    graph names stay lowercase by user decision (issue #193, DECISIONS.md T1).
+
+    Args:
+        short_name: The caller-supplied short name, any case.
+
+    Returns:
+        ``short_name`` upper-cased.
+    """
+    return short_name.upper()
+
+
+def resolve_ingestion_entry(
+    celex: str,
+    short_name: str,
+    *,
+    single_tenant_graph: GraphHandle,
+    emitter: LogEmitter | None = None,
+    cellar_fetch: Callable[[str], bytes] | None = None,
+    cellar_fetch_rdf: Callable[[str], bytes] | None = None,
+) -> CellarResolution:
+    """Resolve one ingestion request's identity -- the single shared entry-point function.
+
+    Called by both ``routes.create_ingestion`` and the ``ingest_regulation`` MCP
+    tool (issue #193, AC-BI-014), so both entry points reach identical outcomes.
+    Identity is decided by the live graph and Cellar -- never by the curated
+    catalog. Checks run in order, graph first so a request that is doomed by the
+    graph never reaches the network:
+
+    1. The CELEX-existence check (:func:`_reject_if_celex_already_ingested`): a
+       CELEX already in the graph is rejected under any ``short_name``.
+    2. The graph-side ``short_name`` collision check
+       (:func:`check_short_name_collision`), wrapped in :func:`_run_stage` so a
+       genuine I/O failure fails closed as a :class:`PipelineStageError` rather
+       than being read as "no collision". The wrapped thunk only *reads*;
+       :class:`ShortNameCollisionError` is raised here, in the caller, because
+       ``_run_stage`` would reclassify an exception raised inside the thunk.
+    3. :func:`resolve_via_cellar` under the normalized ``short_name``.
+
+    Args:
+        celex: The request's CELEX identifier.
+        short_name: The request's caller-supplied ``short_name``.
+        single_tenant_graph: The already-opened single-tenant graph, read by the
+            collision check.
+        emitter: Optional explicit log emitter.
+        cellar_fetch: Optional Cellar/ELI XHTML fetch callable (test seam).
+        cellar_fetch_rdf: Optional Cellar/ELI RDF/XML fetch callable (test seam).
+
+    Returns:
+        The :class:`CellarResolution` for ``celex`` under ``short_name``.
+
+    Raises:
+        CelexAlreadyIngestedError: ``celex`` is already in the graph.
+        ShortNameCollisionError: ``short_name`` is already claimed by a
+            different CELEX in the graph.
+        CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI.
+        PipelineStageError: The CELEX check, the collision check or the Cellar
+            resolution failed.
+    """
+    short_name = normalize_short_name(short_name)
+    _reject_if_celex_already_ingested(
+        celex, short_name, single_tenant_graph=single_tenant_graph, emitter=emitter
+    )
+    _reject_if_short_name_claimed(
+        celex, short_name, single_tenant_graph=single_tenant_graph, emitter=emitter
+    )
+    resolution = resolve_via_cellar(
+        celex, short_name=short_name, cellar_fetch=cellar_fetch, cellar_fetch_rdf=cellar_fetch_rdf
+    )
+    _emit_identity_check("passed", celex, short_name, emitter=emitter)
+    return resolution
+
+
+_CELEX_EXISTS_QUERY = "MATCH (n:RegulatoryInstrument {celex: $celex}) RETURN n.id LIMIT 1"
+
+
+def _reject_if_celex_already_ingested(
+    celex: str,
+    short_name: str,
+    *,
+    single_tenant_graph: GraphHandle,
+    emitter: LogEmitter | None,
+) -> None:
+    """Raise :class:`CelexAlreadyIngestedError` if the graph already holds ``celex``.
+
+    Queries only the passed single-tenant handle (AC-BI-006), inside
+    :func:`_run_stage` so a genuine I/O failure fails closed as a
+    ``celex_check`` :class:`PipelineStageError` rather than being read as "not
+    ingested". The thunk only reads; the rejection is raised here, in the
+    caller, because ``_run_stage`` would reclassify an exception raised inside it.
+    """
+    try:
+        existing_id = _run_stage(
+            "celex_check",
+            lambda: _find_instrument_id_by_celex(single_tenant_graph, celex),
+            emitter=emitter,
+        )
+    except PipelineStageError:
+        _emit_identity_check("failed", celex, short_name, emitter=emitter)
+        raise
+    if existing_id is not None:
+        existing_short_name = existing_id.rpartition("-")[0]
+        _emit_identity_check(
+            "rejected_celex_exists",
+            celex,
+            short_name,
+            emitter=emitter,
+            extra={"existing_short_name": existing_short_name},
+        )
+        raise CelexAlreadyIngestedError(
+            f"CELEX {celex} is already ingested as short_name '{existing_short_name}'"
+        )
+
+
+def _find_instrument_id_by_celex(single_tenant_graph: GraphHandle, celex: str) -> str | None:
+    """Return the id of the ``RegulatoryInstrument`` recorded for ``celex``, or ``None``."""
+    result = single_tenant_graph.query(_CELEX_EXISTS_QUERY, params={"celex": celex})
+    rows = cast("list[list[object]]", result.result_set)
+    if not rows:
+        return None
+    return cast("str", rows[0][0])
+
+
+def _reject_if_short_name_claimed(
+    celex: str,
+    short_name: str,
+    *,
+    single_tenant_graph: GraphHandle,
+    emitter: LogEmitter | None,
+) -> None:
+    """Raise :class:`ShortNameCollisionError` if a different CELEX already claims ``short_name``."""
+    try:
+        colliding_celex = _run_stage(
+            "collision_check",
+            lambda: check_short_name_collision(
+                single_tenant_graph, celex=celex, short_name=short_name
+            ),
+            emitter=emitter,
+        )
+    except PipelineStageError:
+        _emit_identity_check("failed", celex, short_name, emitter=emitter)
+        raise
+    if colliding_celex is not None:
+        _emit_identity_check(
+            "rejected_short_name_claimed",
+            celex,
+            short_name,
+            emitter=emitter,
+            extra={"conflicting_celex": colliding_celex},
+        )
+        raise ShortNameCollisionError(
+            f"short_name '{short_name}' is already claimed by CELEX {colliding_celex}"
+        )
+
+
+def _emit_identity_check(
+    outcome: str,
+    celex: str,
+    short_name: str,
+    *,
+    emitter: LogEmitter | None,
+    extra: dict[str, object] | None = None,
+) -> None:
+    """Emit one ``ingestion_identity_check`` log entry (PLAN D7).
+
+    Carries only the CELEX, the ``short_name`` and the conflicting CELEX -- never
+    raw Cypher, exception text, or another tenant's data. The run id comes from
+    the bound request context.
+
+    Args:
+        outcome: ``"passed"``, ``"rejected_celex_exists"``,
+            ``"rejected_short_name_claimed"`` or ``"failed"``.
+        celex: The request's CELEX.
+        short_name: The request's ``short_name``.
+        emitter: Optional explicit emitter; otherwise the process default.
+        extra: Further safe fields, merged over ``celex``/``short_name``.
+    """
+    emit_log_entry(
+        component=_COMPONENT,
+        action="ingestion_identity_check",
+        outcome=outcome,
+        extra={"celex": celex, "short_name": short_name, **(extra or {})},
+        emitter=emitter,
+    )
 
 
 # --- run outcome ---
@@ -736,7 +824,9 @@ def _emit_run(
 
 # --- pre-flight already-merged check (issue #135) ---
 
-_MERGED_INSTRUMENT_EXISTS_QUERY = "MATCH (n:RegulatoryInstrument {id: $id}) RETURN n.id"
+_MERGED_INSTRUMENT_EXISTS_QUERY = (
+    "MATCH (n:RegulatoryInstrument) WHERE toUpper(n.id) = $id RETURN n.id LIMIT 1"
+)
 
 
 def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_id: str) -> bool:
@@ -753,13 +843,15 @@ def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_i
     Args:
         single_tenant_graph: The already-opened single-tenant graph.
         regulatory_instrument_id: The ``{short_name}-{version}`` id the
-            catalog pipeline would ingest under.
+            catalog pipeline would ingest under. Matched case-insensitively
+            (``toUpper(n.id) = $id``), so a legacy lowercase celex-less node is
+            found for its upper-case successor id (issue #193, M2).
 
     Returns:
         ``True`` if a matching ``RegulatoryInstrument`` node exists.
     """
     result = single_tenant_graph.query(
-        _MERGED_INSTRUMENT_EXISTS_QUERY, params={"id": regulatory_instrument_id}
+        _MERGED_INSTRUMENT_EXISTS_QUERY, params={"id": regulatory_instrument_id.upper()}
     )
     rows = cast("list[list[object]]", result.result_set)
     return len(rows) > 0
@@ -778,7 +870,7 @@ def _is_already_merged(single_tenant_graph: GraphHandle, regulatory_instrument_i
 # signature for no measurable benefit.
 
 _SHORT_NAME_COLLISION_QUERY = (
-    "MATCH (n:RegulatoryInstrument) WHERE n.id STARTS WITH $prefix "
+    "MATCH (n:RegulatoryInstrument) WHERE toUpper(n.id) STARTS WITH $prefix "
     "AND n.celex IS NOT NULL AND n.celex <> $celex RETURN n.id, n.celex"
 )
 
@@ -799,21 +891,25 @@ def check_short_name_collision(
         single_tenant_graph: The already-opened single-tenant graph.
         celex: The CELEX the caller supplied -- a candidate sharing this same
             CELEX is not a collision (excluded server-side via `n.celex <> $celex`).
-        short_name: The caller-supplied short name to check.
+        short_name: The caller-supplied short name to check. Compared
+            case-insensitively: it is upper-cased here (idempotent for an
+            already-normalized value), as is each stored id (``toUpper``), so
+            ``cra`` collides with a recorded ``CRA-1.0`` (issue #193, AC-BI-004).
 
     Returns:
         The conflicting CELEX, or ``None`` if no other-CELEX instrument is
-        recorded under this exact short name.
+        recorded under this short name, ignoring case.
     """
+    normalized = normalize_short_name(short_name)
     result = single_tenant_graph.query(
-        _SHORT_NAME_COLLISION_QUERY, params={"prefix": f"{short_name}-", "celex": celex}
+        _SHORT_NAME_COLLISION_QUERY, params={"prefix": f"{normalized}-", "celex": celex}
     )
     rows = cast("list[list[object]]", result.result_set)
     for row in rows:
         candidate_id = cast("str", row[0])
         conflicting_celex = cast("str", row[1])
         recorded_short_name, _separator, _version = candidate_id.rpartition("-")
-        if recorded_short_name == short_name:
+        if normalize_short_name(recorded_short_name) == normalized:
             return conflicting_celex
     return None
 

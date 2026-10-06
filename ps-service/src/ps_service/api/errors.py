@@ -19,9 +19,9 @@ class ApiError(Exception):
 
 
 class CatalogIdentifierNotFoundError(ApiError):
-    """A ``POST /ingestions`` catalog request named a CELEX absent from the curated catalog.
+    """A ``POST /ingestions`` request named a CELEX that does not exist on Cellar/ELI.
 
-    Raised by the route before any pipeline stage runs (AC-BI-006). Handled as
+    Raised by the Cellar resolver before any pipeline stage runs (AC-BI-006). Handled as
     HTTP 404; ``str(exc)`` is domain-level and surfaced verbatim.
     """
 
@@ -345,30 +345,30 @@ class AuthorizationStoreUnavailableError(ApiError):
     """
 
 
-class ShortNameCuratedMismatchError(ApiError):
-    """A caller-supplied ``short_name`` doesn't match a curated CELEX's own canonical value.
+class CelexAlreadyIngestedError(ApiError):
+    """A CELEX is already present in the live graph (issue #193, AC-BI-003).
 
-    Raised by ``ingestion_orchestration.validate_and_resolve_catalog_entry``
-    before any graph is opened (AC-BI-004) -- shared by ``POST /ingestions``
-    and the ``ingest_regulation`` MCP tool, so both entry points reject a
-    curated-CELEX mismatch with byte-identical semantics. Handled as HTTP
-    409; ``str(exc)`` is domain-level and surfaced verbatim.
+    Raised by ``ingestion_orchestration.resolve_ingestion_entry`` before any
+    pipeline stage runs -- shared by ``POST /ingestions`` and the
+    ``ingest_regulation`` MCP tool, so both entry points reject a re-ingest of
+    an already-ingested CELEX (under any ``short_name``, including the same
+    one) with byte-identical semantics. The message names only the CELEX and
+    the short_name it is already ingested under. Handled as HTTP 409;
+    ``str(exc)`` is domain-level and surfaced verbatim.
     """
 
 
 class ShortNameCollisionError(ApiError):
     """A ``short_name`` is already claimed by a different instrument (a different CELEX).
 
-    Raised by ``ingestion_orchestration.validate_and_resolve_catalog_entry`` before
-    any pipeline graph is opened (AC-BI-006) -- covers both a curated-catalog
-    collision (``catalog.find_short_name_collision``, a different curated entry
-    already using this ``short_name``) and an already-ingested non-curated
-    instrument (``ingestion_orchestration.check_short_name_collision``, a
-    different CELEX already recorded in the graph under this exact
-    ``short_name``). Shared by ``POST /ingestions`` and the ``ingest_regulation``
-    MCP tool, so both entry points reject a cross-instrument collision with
-    byte-identical semantics. Handled as HTTP 409; ``str(exc)`` is domain-level
-    and surfaced verbatim.
+    Raised by ``ingestion_orchestration.resolve_ingestion_entry`` before any
+    pipeline stage runs. The check reads only the live graph
+    (``ingestion_orchestration.check_short_name_collision``): a different CELEX
+    already recorded under this ``short_name``, compared case-insensitively. The
+    curated catalog is never consulted. Shared by ``POST /ingestions`` and the
+    ``ingest_regulation`` MCP tool, so both entry points reject a
+    cross-instrument collision with byte-identical semantics. Handled as HTTP
+    409; ``str(exc)`` is domain-level and surfaced verbatim.
     """
 
 

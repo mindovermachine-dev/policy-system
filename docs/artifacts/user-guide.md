@@ -150,6 +150,9 @@ Desktop](#using-claude-desktop---code)), not `ps-cli`: ask Claude to ingest the
 regulation, e.g. _"Use the ps-ingest-regulation skill to ingest 32016R0679 as
 gdpr."_ The skill always asks for both the CELEX identifier and a `short_name`,
 even for a curated regulation — never guess `short_name` on the user's behalf.
+The `short_name` is normalized to upper case (`cra` is stored as `CRA`), and the
+ingestion is rejected when that CELEX is already ingested in the graph, under any
+`short_name`, or when the `short_name` is already claimed by a different CELEX.
 
 To find a regulation's CELEX identifier:
 

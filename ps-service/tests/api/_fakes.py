@@ -23,11 +23,12 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn, Protocol, Self
+from typing import TYPE_CHECKING, NoReturn, Protocol, Self, cast
 
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.ingestion_orchestration import (
+    _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key, mirrors this module's own precedent for cross-module private reuse
     _SHORT_NAME_COLLISION_QUERY,  # pyright: ignore[reportPrivateUsage] -- query-text dispatch key
     GraphOpeners,
@@ -452,6 +453,8 @@ def build_fake_pipeline_dependencies(
     preflight_error: Exception | None = None,
     collision_row: tuple[str, str] | None = None,
     collision_error: Exception | None = None,
+    celex_row: str | None = None,
+    celex_error: Exception | None = None,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -481,6 +484,11 @@ def build_fake_pipeline_dependencies(
         collision_error: If set, the single-tenant graph's collision-check
             query raises this instead of returning (issue #146, mirrors
             ``preflight_error``).
+        celex_row: If set, the ``RegulatoryInstrument.id`` the single-tenant
+            graph's CELEX-existence query (issue #193, ``_CELEX_EXISTS_QUERY``)
+            returns -- simulating a CELEX already ingested under that id.
+        celex_error: If set, the CELEX-existence query raises this instead of
+            returning (issue #193, AC-BI-007 -- e.g. a graph-unreachable error).
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
@@ -490,11 +498,11 @@ def build_fake_pipeline_dependencies(
     native = FakeGraphHandle()
     baseline = FakeGraphHandle()
     # `single_tenant` is dispatched by query text (`responses_by_query`/
-    # `errors_by_query`), not a FIFO queue: `validate_and_resolve_catalog_entry`'s
-    # graph-side collision check and `run_catalog_ingestion_pipeline`'s own
+    # `errors_by_query`), not a FIFO queue: `resolve_ingestion_entry`'s
+    # graph-side CELEX and collision checks and `run_catalog_ingestion_pipeline`'s own
     # `_is_already_merged` pre-flight check both query this same fake, but a
     # caller that invokes `run_catalog_ingestion_pipeline` directly (most of
-    # this module's own unit tests) never reaches the collision check at all --
+    # this module's own unit tests) never reaches those checks at all --
     # so the number and order of calls this fake sees is caller-dependent, and
     # only a by-query-text dispatch (mirroring how a real, stateful FalkorDB
     # graph actually answers each distinct query) serves both shapes correctly.
@@ -505,6 +513,10 @@ def build_fake_pipeline_dependencies(
         responses_by_query[_SHORT_NAME_COLLISION_QUERY] = FakeQueryResult([[instrument_id, celex]])
     if collision_error is not None:
         errors_by_query[_SHORT_NAME_COLLISION_QUERY] = collision_error
+    if celex_row is not None:
+        responses_by_query[_CELEX_EXISTS_QUERY] = FakeQueryResult([[celex_row]])
+    if celex_error is not None:
+        errors_by_query[_CELEX_EXISTS_QUERY] = celex_error
     if preflight_hit:
         responses_by_query[_MERGED_INSTRUMENT_EXISTS_QUERY] = FakeQueryResult([["existing-id"]])
     if preflight_error is not None:
@@ -555,6 +567,81 @@ def build_fake_pipeline_dependencies(
         baseline=baseline,
         single_tenant=single_tenant,
     )
+
+
+# --- default Cellar stub (issue #193, CHANGES.md H1/Appendix H1) -------------
+#
+# After #193 every catalog-source ingestion request resolves its CELEX through
+# `resolve_via_cellar` -- there is no curated fast path that skips the network.
+# A test that POSTs `/ingestions` (or calls the `ingest_regulation` MCP tool)
+# with a fake pipeline and no fetch patch of its own would therefore reach the
+# real Cellar/ELI service. One shared default stub at the fetch boundary, installed
+# by an autouse fixture in each affected conftest, closes that for every file at
+# once; an explicit per-test `monkeypatch.setattr` still wins (later call).
+
+
+def default_cellar_xhtml(celex: str) -> bytes:
+    """A minimal Regulation-shaped Cellar XHTML document titled for ``celex``."""
+    return f"""
+<html xmlns="http://www.w3.org/1999/xhtml">
+<body>
+<div class="eli-container" id="enc_1">
+<div class="eli-main-title">Stub Regulation {celex}</div>
+<div class="eli-subdivision" id="cpt_I">
+<div class="eli-title" id="cpt_I.tit_1">CHAPTER I General provisions</div>
+<div class="eli-subdivision" id="art_1">
+<div class="eli-title" id="art_1.tit_1">Article 1 Entry into force and application</div>
+<div>This Regulation shall enter into force on the twentieth day following
+publication. It shall apply from 1 January 2030.</div>
+</div>
+</div>
+</div>
+</body>
+</html>
+""".encode()
+
+
+def default_cellar_rdf(celex: str) -> bytes:
+    """A minimal Cellar RDF/XML metadata document whose own subject is ``celex``."""
+    return f"""<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:j.0="http://publications.europa.eu/ontology/cdm#">
+<rdf:Description rdf:about="http://publications.europa.eu/resource/celex/{celex}">
+<j.0:resource_legal_id_celex rdf:datatype="http://www.w3.org/2001/XMLSchema#string">{celex}</j.0:resource_legal_id_celex>
+<j.0:date_entry-into-force rdf:datatype="http://www.w3.org/2001/XMLSchema#date">2030-01-01</j.0:date_entry-into-force>
+</rdf:Description>
+</rdf:RDF>
+""".encode()
+
+
+def install_default_cellar_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``fetch_xhtml``/``fetch_rdf`` as ``ingestion_orchestration`` resolves them.
+
+    The stub serves a well-formed regulation document and RDF for whatever
+    CELEX is asked for, so ``resolve_via_cellar`` succeeds with version ``1.0``
+    and never touches the network. A test that needs a Cellar outage, a 404, or
+    call counting installs its own patch afterwards, which overrides this one.
+
+    Args:
+        monkeypatch: The test's ``pytest.MonkeyPatch`` fixture.
+    """
+    monkeypatch.setattr("ps_service.api.ingestion_orchestration.fetch_xhtml", default_cellar_xhtml)
+    monkeypatch.setattr("ps_service.api.ingestion_orchestration.fetch_rdf", default_cellar_rdf)
+
+
+def install_default_cellar_stub_unless_live(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Install the default Cellar stub unless the test carries an environment-live marker.
+
+    Shared body of the ``_default_cellar_stub`` autouse fixtures in
+    ``tests/api/conftest.py`` and ``tests/mcp_interface/conftest.py``.
+    """
+    live_markers = ("cellar_live", "falkordb_live", "llm_live", "integration")
+    node = cast("pytest.Item", request.node)
+    if any(node.get_closest_marker(marker) is not None for marker in live_markers):
+        return
+    install_default_cellar_stub(monkeypatch)
 
 
 # --- change-check fakes (issue #73, PLAN.md §4 Slice 2) ---------------------

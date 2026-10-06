@@ -18,6 +18,7 @@ executed proof over Slice 2-5's already-shipped single-pass loop (PLAN.md
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,7 @@ from api._fakes import (
     FakeIngestionAdapter,
     build_fake_change_check_dependencies,
 )
-from ps_service.api.catalog import CatalogEntry
+from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.change_check_orchestration import run_change_check_sweep
 from ps_service.change_monitor.models import (
     AmendmentFinding,
@@ -694,3 +695,46 @@ def test_sweep_result_instrument_count_equals_read_tracked_instruments_count_exa
 
     assert len(result.instruments) == 4
     assert [o.instrument_id for o in result.instruments] == ["A", "B", "C", "D"]
+
+
+def test_change_check_sweep_still_resolves_via_catalog_find_by_celex_and_canonical_short_name(
+    app_config: ServiceConfig,
+    make_emitter: MakeEmitter,
+) -> None:
+    """CHARACTERIZATION (issue #193, AC-BI-010; passes before and after the change).
+
+    The sweep resolves a finding's CELEX through the real catalog ``find_by_celex``
+    and re-ingests under the catalog's own canonical (lowercase) ``short_name``,
+    opening that exact native graph name. Ingest-side short_name normalization
+    (#193) must not leak into the sweep: it would open ``CRA_native`` beside the
+    ``cra_native`` graph the original ingest and restore wrote.
+    """
+    emitter, _ = make_emitter()
+    expected = find_by_celex("32024R2847")
+    assert expected is not None
+    assert expected.short_name == "cra"
+    reingestion_result = ReingestionOutcome(
+        prior_regulatory_instrument_id="CRA-0.9",
+        new_regulatory_instrument_id="CRA-1.0",
+        run_id="ingest-run-1",
+        outcome="superseded",
+        ingest_counts={},
+    )
+    fake = build_fake_change_check_dependencies(
+        tracked=(_node("CRA-1.0"),),
+        poll_report=PollReport(
+            findings=(_amendment_finding("CRA-1.0"),),
+            polled_count=1,
+            failed_ids=(),
+            unconfigured_ids=(),
+        ),
+        reingestion_result=reingestion_result,
+    )
+    dependencies = replace(fake.dependencies, find_catalog_entry=find_by_celex)
+
+    run_change_check_sweep(
+        config=app_config, run_id="r1", dependencies=dependencies, emitter=emitter
+    )
+
+    assert fake.open_native_short_names == [expected.short_name]
+    assert [call.short_name for call in fake.trigger_reingestion_calls] == [expected.short_name]

@@ -427,6 +427,11 @@ class _FakeStagingFalkorDB:
             self._graphs[name] = _FakeStagedGraph()
         return self._graphs[name]
 
+    @property
+    def graph_names(self) -> frozenset[str]:
+        """The graph keys currently present (staged keys are renamed away on finalize)."""
+        return frozenset(self._graphs)
+
 
 def _fake_db() -> FalkorDB:
     return cast("FalkorDB", _FakeStagingFalkorDB(_SINGLE_TENANT_GRAPH_NAME))
@@ -781,3 +786,48 @@ def test_failed_entry_recorded_with_no_succeeded_entry_when_merge_step_raises(
     # Issue #125/D-AUDIT: no `source` was passed -- the upload path's audit
     # log shape stays byte-identical, including on the failure path.
     assert "source" not in failed_entry
+
+
+def test_restore_of_lowercase_curated_short_name_still_targets_lowercase_graphs(
+    make_emitter: MakeEmitter,
+) -> None:
+    """CHARACTERIZATION (issue #193, AC-BI-009; passes before and after the change).
+
+    A curated manifest carrying the lowercase ``short_name`` ``cra`` restores into
+    ``cra_native``/``cra_baseline`` and records the uppercase instrument id
+    ``CRA-1.0``. Ingest-side short_name normalization (#193) must never reach the
+    restore path: FalkorDB keys are case-sensitive, so any uppercase graph name here
+    would fork from the ``cra_native`` graph the sweep and ingestion open.
+    """
+    baseline_bytes = _EMPTY_GRAPH_BYTES
+    manifest = InstrumentManifest(
+        instrument_id="CRA-1.0",
+        celex="32024R2847",
+        title="Cyber Resilience Act",
+        short_name="cra",
+        version="1.0",
+        source_type="external",
+        jurisdiction=None,
+        schema_version=DOMAIN_SCHEMA_VERSION,
+        exported_at="2026-09-04T00:00:00Z",
+        baseline_sha256=checksum_bytes(baseline_bytes),
+        native_sha256=checksum_bytes(_EMPTY_GRAPH_BYTES),
+    )
+    artifact = RestoreArtifact(
+        manifest=manifest, baseline_blob=baseline_bytes, native_blob=_EMPTY_GRAPH_BYTES
+    )
+    db = _FakeStagingFalkorDB(_SINGLE_TENANT_GRAPH_NAME)
+    emitter, _ = make_emitter()
+
+    outcome = restore_instrument(
+        artifact,
+        db=cast("FalkorDB", db),
+        single_tenant_graph_name=_SINGLE_TENANT_GRAPH_NAME,
+        similarity_threshold=0.9,
+        actor=_ACTOR,
+        emitter=emitter,
+    )
+
+    assert outcome.instrument_id == "CRA-1.0"
+    assert {"cra_native", "cra_baseline"} <= db.graph_names
+    assert not {"CRA_native", "CRA_baseline"} & db.graph_names

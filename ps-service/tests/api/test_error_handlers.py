@@ -25,10 +25,12 @@ from ps_service.api.error_handlers import (
 )
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
+    CelexAlreadyIngestedError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PendingReviewNotFoundError,
     PipelineStageError,
+    ShortNameCollisionError,
 )
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
 
@@ -248,3 +250,39 @@ def test_api_errors_map_to_their_documented_status_codes() -> None:
     for exc, expected_status in cases:
         client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
         assert client.get("/boom").status_code == expected_status
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_status", "expected_code"),
+    [
+        (
+            CelexAlreadyIngestedError("CELEX 32024R2847 is already ingested as short_name 'CRA'"),
+            409,
+            "celex_already_ingested",
+        ),
+        (
+            ShortNameCollisionError("short_name 'CRA' is already claimed by CELEX 32022R2554"),
+            409,
+            "short_name_collision",
+        ),
+    ],
+)
+def test_ingest_identity_rejections_map_to_409_with_their_own_code_and_verbatim_message(
+    exc: Exception, expected_status: int, expected_code: str
+) -> None:
+    """Issue #193 (deliverable 4): both identity rejections are 409s that surface ``str(exc)``."""
+    client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == expected_status
+    assert response.json()["error"]["code"] == expected_code
+    assert response.json()["error"]["message"] == str(exc)
+
+
+def test_curated_mismatch_error_no_longer_exists() -> None:
+    """Issue #193: a caller's short_name is never cross-checked against the catalog."""
+    import ps_service.api.errors as api_errors
+
+    assert not hasattr(api_errors, "ShortNameCuratedMismatchError")
+    assert not hasattr(error_handlers_module, "ShortNameCuratedMismatchError")
