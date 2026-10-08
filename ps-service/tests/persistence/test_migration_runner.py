@@ -26,6 +26,7 @@ import pytest
 from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import load_config
+from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
 from ps_service.persistence import (
     MigrationSource,
     StatePostgresMigrationApplyError,
@@ -53,6 +54,7 @@ STATE_MIGRATION_SOURCES = [
     MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
     MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
     MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
+    MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
 ]
 
 _CREATE_TABLE = re.compile(r"^\s*CREATE\s+TABLE\s+(\w+)", re.IGNORECASE | re.MULTILINE)
@@ -127,6 +129,9 @@ def test_each_component_migration_creates_only_its_own_tables() -> None:
     assert _tables_created_by(RUNTIME_CONFIG_MIGRATIONS_DIR) == {
         "0001_runtime_config.sql": {"runtime_config"}
     }
+    assert _tables_created_by(INGESTION_RUNS_MIGRATIONS_DIR) == {
+        "0001_ingestion_runs.sql": {"ingestion_runs"}
+    }
 
 
 def test_migration_sql_files_contain_no_semicolon_inside_comments() -> None:
@@ -171,17 +176,20 @@ def test_empty_database_gets_one_migration_per_component_and_no_legacy_objects()
         "0001_audit_events.sql",
         "0001_access_role_assignments.sql",
         "0001_runtime_config.sql",
+        "0001_ingestion_runs.sql",
     ]
     assert tables == {
         "audit_events",
         "access_role_assignments",
         "runtime_config",
+        "ingestion_runs",
         "ps_schema_migrations",
     }
     assert tracked == {
         ("audit", "0001_audit_events.sql"),
         ("authz", "0001_access_role_assignments.sql"),
         ("runtime_config", "0001_runtime_config.sql"),
+        ("ingestion_runs", "0001_ingestion_runs.sql"),
     }
 
 
@@ -197,7 +205,7 @@ def test_second_run_applies_nothing() -> None:
         _cleanup_isolated_schema(conn, schema)
 
     assert second == []
-    assert len(tracked) == 3
+    assert len(tracked) == 4
 
 
 @pytest.mark.postgres_live
@@ -264,10 +272,11 @@ def test_apply_emits_success_entry_naming_applied_files(
         "audit/0001_audit_events.sql",
         "authz/0001_access_role_assignments.sql",
         "runtime_config/0001_runtime_config.sql",
+        "ingestion_runs/0001_ingestion_runs.sql",
     ]
     assert first["already_applied"] == 0
     assert second["applied"] == []
-    assert second["already_applied"] == 3
+    assert second["already_applied"] == 4
 
 
 @pytest.mark.postgres_live

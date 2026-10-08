@@ -61,6 +61,7 @@ def test_load_config_no_relevant_env_vars_returns_default_service_config(
     monkeypatch.delenv("PS_SERVICE_MAX_REQUEST_BODY_BYTES", raising=False)
     monkeypatch.delenv("PS_QUERY_TIMEOUT_MS", raising=False)
     monkeypatch.delenv("PS_QUERY_ROW_CAP", raising=False)
+    monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
     monkeypatch.delenv("PS_CURATEDSOURCE_URL", raising=False)
     monkeypatch.delenv("PS_CURATEDSOURCE_ALLOW_INSECURE_HTTP", raising=False)
     monkeypatch.delenv("PS_PASSKEYSIGNING_POSTGRES_HOST", raising=False)
@@ -558,6 +559,36 @@ def test_load_config_raises_service_configuration_error_for_invalid_ps_query_row
     monkeypatch.setenv("PS_QUERY_ROW_CAP", invalid_query_row_cap)
 
     with pytest.raises(ServiceConfigurationError):
+        load_config()
+
+
+def test_load_config_with_no_ps_ingestionruns_max_in_flight_set_defaults_to_1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No `PS_INGESTIONRUNS_MAX_IN_FLIGHT` set -> defaults to 1 (AC-BI-012)."""
+    monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
+
+    assert load_config().ingestion_runs_max_in_flight == 1
+
+
+def test_load_config_honors_ps_ingestionruns_max_in_flight_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PS_INGESTIONRUNS_MAX_IN_FLIGHT` override takes effect (AC-BI-012)."""
+    monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", "3")
+
+    assert load_config().ingestion_runs_max_in_flight == 3
+
+
+@pytest.mark.parametrize("invalid_cap", ["not-a-number", "0", "-1"])
+def test_load_config_raises_for_invalid_ps_ingestionruns_max_in_flight(
+    invalid_cap: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-integer, zero or negative `PS_INGESTIONRUNS_MAX_IN_FLIGHT` fails closed (AC-BI-012)."""
+    monkeypatch.setenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", invalid_cap)
+
+    with pytest.raises(ServiceConfigurationError, match="PS_INGESTIONRUNS_MAX_IN_FLIGHT"):
         load_config()
 
 

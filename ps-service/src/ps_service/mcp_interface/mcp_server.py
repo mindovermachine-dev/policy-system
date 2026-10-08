@@ -63,6 +63,7 @@ from ps_service.api.errors import (
 from ps_service.api.ingestion_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  -- shared failure-reason cap; D-AUDIT-WRAPPER reuses it for `_run_mcp_action`'s own truncation, mirrors change_check_orchestration.py's own cross-module private-import convention
     GraphOpeners,
+    _require_ingestion_config,  # pyright: ignore[reportPrivateUsage]  -- issue #194 AC-BI-010: the identical config-completeness check, reused so the error text can never drift
     build_default_pipeline_dependencies,
     resolve_ingestion_entry,
     run_catalog_ingestion_pipeline,
@@ -74,6 +75,8 @@ from ps_service.api.models import (
     CatalogInstrumentEntry,
     CatalogRestorationRequest,
     CuratedCatalogResponse,
+    IngestionRunStatusResponse,
+    StartIngestionResponse,
 )
 from ps_service.api.near_miss_review_orchestration import (
     build_default_near_miss_review_dependencies,
@@ -88,6 +91,7 @@ from ps_service.api.routes import (
     _to_accepted_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: reuse the REST wire-shaping helper verbatim so the MCP and REST paths can never silently drift, mirrors change_check_orchestration.py's own cross-module private-import convention
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
+from ps_service.api.run_status import get_stage
 from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
 from ps_service.audit.models import AuditQueryFilters
 from ps_service.audit.store import PsycopgAuditStore
@@ -125,6 +129,18 @@ from ps_service.graph_cleanup.service import (
     create_unmerge_approval,
     find_capability_merge_candidates,
     find_duplicate_obligations,
+)
+from ps_service.ingestion_runs import IngestionRunStoreError, PsycopgIngestionRunStore
+from ps_service.ingestion_runs.audit_actions import INGESTION_RUN_RECONCILER_ACTOR
+from ps_service.ingestion_runs.dispatch import (
+    is_run_in_flight,
+    release_run_slot,
+    reserve_run_slot,
+    start_background_run,
+)
+from ps_service.ingestion_runs.errors import (
+    IngestionRunAlreadyInProgressError,
+    IngestionRunCapacityExceededError,
 )
 from ps_service.invitations.client import create_invitation
 from ps_service.invitations.errors import AuthentikInvitationError
@@ -222,6 +238,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from importlib.resources.abc import Traversable
 
+    from ps_service.api.catalog_entry import CatalogEntry
     from ps_service.api.change_check_orchestration import ChangeCheckDependencies
     from ps_service.api.ingestion_orchestration import PipelineDependencies
     from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
@@ -230,6 +247,8 @@ if TYPE_CHECKING:
     from ps_service.authz.models import AccessRoleAssignmentRow
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
+    from ps_service.ingestion.adapters.base import IngestionAdapter
+    from ps_service.ingestion_runs import IngestionRunRow, IngestionRunStore
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
@@ -603,8 +622,9 @@ def _run_mcp_action(
     body: Callable[[], dict[str, object] | str],
     *,
     entity_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, object] | str:
-    """Run one MCP tool body inside a fresh run context, with a uniform audit triad.
+    """Run one MCP tool body inside a run context, with a uniform audit triad.
 
     D-AUDIT-WRAPPER: the shared logging/run-id helper every action-taking MCP
     tool (`ingest_regulation`, `check_regulations`, `near_misses_list`,
@@ -640,18 +660,23 @@ def _run_mcp_action(
             `LogEntry.entity_id` stays unset exactly as it did before this
             parameter existed; zero behavior change for any tool that
             doesn't pass it.
+        run_id: The run id to bind instead of a freshly generated uuid4
+            (issue #194). Only the background half of `start_ingestion`
+            passes it, so the worker thread's log entries carry the same id
+            as the submitting call, the `ingestion_runs` row and the live
+            stage registry. `None` (every other caller) generates a uuid4.
 
     Returns:
         `body`'s return value unchanged on success or a handled `error:`
         string; the fixed generic error string if `body` raised.
     """
     principal_extra = principal or "unknown"
-    with bind_run_context() as run_id:
+    with bind_run_context(run_id) as bound_run_id:
         emit_log_entry(
             component=_COMPONENT,
             action=action,
             outcome="started",
-            run_id=run_id,
+            run_id=bound_run_id,
             entity_id=entity_id,
             extra={"principal": principal_extra},
         )
@@ -662,7 +687,7 @@ def _run_mcp_action(
                 component=_COMPONENT,
                 action=action,
                 outcome="failed",
-                run_id=run_id,
+                run_id=bound_run_id,
                 entity_id=entity_id,
                 extra={"principal": principal_extra, "detail": repr(exc)},
             )
@@ -672,7 +697,7 @@ def _run_mcp_action(
                 component=_COMPONENT,
                 action=action,
                 outcome="failed",
-                run_id=run_id,
+                run_id=bound_run_id,
                 entity_id=entity_id,
                 extra={"principal": principal_extra, "reason": result[:_STAGE_REASON_MAX_LEN]},
             )
@@ -681,7 +706,7 @@ def _run_mcp_action(
             component=_COMPONENT,
             action=action,
             outcome="succeeded",
-            run_id=run_id,
+            run_id=bound_run_id,
             entity_id=entity_id,
             extra={"principal": principal_extra},
         )
@@ -794,15 +819,38 @@ def _sanitize_restore_graph_opens(
     return dataclasses.replace(dependencies, open_db=_sanitize_graph_open(dependencies.open_db))
 
 
-def _resolve_and_ingest(
-    celex: str,
-    short_name: str,
-    *,
-    config: ServiceConfig,
-    principal: str | None,
-    run_id: str,
-) -> dict[str, object] | str:
-    """Resolve the request's identity, run the pipeline, and map its exceptions.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PreparedCatalogIngestion:
+    """A validated, resolved catalog-ingestion request, ready for `run_catalog_ingestion_pipeline`.
+
+    Issue #194 S1: the hand-off between `_prepare_catalog_ingestion` (the fast,
+    synchronous validation/resolution half of `_resolve_and_ingest`) and
+    `_run_prepared_catalog_ingestion` (the blocking pipeline-run half), so the
+    validation half can be shared by any tool that needs it without
+    duplicating it. `dependencies` is the same sanitized bundle the
+    single-tenant graph was opened from, reused unchanged for the run.
+    """
+
+    entry: CatalogEntry
+    ingestion_adapter: IngestionAdapter | None
+    dependencies: PipelineDependencies
+
+
+# The exact five domain exceptions `_resolve_and_ingest` has always mapped to
+# `f"error: {exc}"` -- shared by both of its halves so the map can never drift.
+_CATALOG_INGESTION_ERRORS = (
+    CatalogIdentifierNotFoundError,
+    CelexAlreadyIngestedError,
+    IngestionConfigIncompleteError,
+    PipelineStageError,
+    ShortNameCollisionError,
+)
+
+
+def _prepare_catalog_ingestion(
+    celex: str, short_name: str, *, config: ServiceConfig
+) -> _PreparedCatalogIngestion | str:
+    """Resolve the request's identity against the single-tenant graph (no pipeline run).
 
     Calls `resolve_ingestion_entry` (issue #193, AC-BI-014) -- the same shared
     function `routes.create_ingestion` calls -- against the single-tenant graph
@@ -812,9 +860,10 @@ def _resolve_and_ingest(
     `ShortNameCollisionError` when `short_name` is already claimed by a different
     CELEX; otherwise it resolves `celex` against Cellar/ELI under the normalized
     `short_name` (used verbatim, never derived from the fetched title, issue #96)
-    and returns the entry plus the adapter bound to the fetched document. Any
-    exception this function does not itself catch is the residual
-    D-SANITIZE-UNEXPECTED row, left to `_run_mcp_action`'s own safety net.
+    and returns the entry plus the adapter bound to the fetched document.
+    Returns the prepared request, or the named `error:` string. Any exception
+    this function does not itself catch is the residual D-SANITIZE-UNEXPECTED
+    row, left to `_run_mcp_action`'s own safety net.
     """
     try:
         dependencies = _sanitize_pipeline_graph_opens(build_default_pipeline_dependencies())
@@ -822,25 +871,68 @@ def _resolve_and_ingest(
         resolution = resolve_ingestion_entry(
             celex, short_name, single_tenant_graph=single_tenant_graph
         )
+    except _CATALOG_INGESTION_ERRORS as exc:
+        return f"error: {exc}"
+    except McpGraphUnavailableError:
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    return _PreparedCatalogIngestion(
+        entry=resolution.entry,
+        ingestion_adapter=resolution.adapter,
+        dependencies=dependencies,
+    )
+
+
+def _run_prepared_catalog_ingestion(
+    prepared: _PreparedCatalogIngestion,
+    *,
+    config: ServiceConfig,
+    principal: str | None,
+    run_id: str,
+) -> dict[str, object] | str:
+    """Run the pipeline for an already-prepared request, and map its exceptions.
+
+    Same exception map as `_prepare_catalog_ingestion`; the response shaping
+    (`_to_accepted_response`, looked up as a module global at call time) stays
+    outside the `try`, exactly as it always was in `_resolve_and_ingest`.
+    """
+    try:
         outcome = run_catalog_ingestion_pipeline(
-            resolution.entry,
+            prepared.entry,
             config=config,
             run_id=run_id,
             caller=principal or "unknown",
-            dependencies=dependencies,
-            ingestion_adapter=resolution.adapter,
+            dependencies=prepared.dependencies,
+            ingestion_adapter=prepared.ingestion_adapter,
         )
-    except (
-        CatalogIdentifierNotFoundError,
-        CelexAlreadyIngestedError,
-        IngestionConfigIncompleteError,
-        PipelineStageError,
-        ShortNameCollisionError,
-    ) as exc:
+    except _CATALOG_INGESTION_ERRORS as exc:
         return f"error: {exc}"
     except McpGraphUnavailableError:
         return _GRAPH_UNAVAILABLE_MESSAGE
     return _to_accepted_response(run_id, outcome).model_dump()
+
+
+def _resolve_and_ingest(
+    celex: str,
+    short_name: str,
+    *,
+    config: ServiceConfig,
+    principal: str | None,
+    run_id: str,
+) -> dict[str, object] | str:
+    """Validate/resolve the catalog entry, run the pipeline, and map its exceptions.
+
+    Issue #194 S1: a pure composition of `_prepare_catalog_ingestion` (the
+    validation/resolution half) and `_run_prepared_catalog_ingestion` (the
+    blocking pipeline-run half), in that order -- every statement, its
+    exception mapping and its ordering are unchanged from the single-function
+    form, so `ingest_regulation`'s behaviour is unchanged (AC-BI-018).
+    """
+    prepared = _prepare_catalog_ingestion(celex, short_name, config=config)
+    if isinstance(prepared, str):
+        return prepared
+    return _run_prepared_catalog_ingestion(
+        prepared, config=config, principal=principal, run_id=run_id
+    )
 
 
 @server.tool()
@@ -901,6 +993,297 @@ def ingest_regulation(
         )
 
     return _run_mcp_action("ingest_regulation", principal, _body)
+
+
+def _require_compliance_officer_unless_bypass(
+    config: ServiceConfig, actor: tuple[str, str] | None
+) -> str | None:
+    """The `ComplianceOfficer` gate shared by `start_ingestion` and `get_ingestion_status`.
+
+    Issue #194: the same checks, in the same order, as the inline gate at the top of
+    `ingest_regulation`'s body (which keeps its own copy), so every catalog-ingestion tool
+    denies a caller identically. Returns the `error:` string to hand back, or `None` when the
+    caller may proceed. Under the local-test bypass nothing is checked.
+    """
+    if config.is_local_test_bypass_active:
+        return None
+    if actor is None:
+        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    try:
+        require_role(
+            actor,
+            minimum=AccessRole.COMPLIANCE_OFFICER,
+            store=PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config)),
+        )
+    except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
+        return f"error: {exc}"
+    return None
+
+
+_BACKGROUND_INGESTION_ACTION = "background_ingestion_run"
+_RECONCILE_ACTION = "ingestion_run_reconcile"
+_RECONCILER_AUDIT_ACTOR = (INGESTION_RUN_RECONCILER_ACTOR, INGESTION_RUN_RECONCILER_ACTOR)
+"""Audit actor of a run completed by a status poll rather than by its own worker (OQ-7)."""
+_INTERRUPTED_RUN_MESSAGE = (
+    "error: the ingestion run was interrupted before it finished; its outcome is unknown"
+)
+
+
+def _emit_best_effort_failure(action: str, run_id: str, **extra: object) -> None:
+    """Log one `mcp_interface` `failed` entry for `run_id`; never raise.
+
+    For failures on a worker thread, where nobody can be told: a process with no configured
+    emitter must still finish recording the run's outcome.
+    """
+    with contextlib.suppress(LoggingLifecycleError):
+        emit_log_entry(
+            component=_COMPONENT,
+            action=action,
+            outcome="failed",
+            run_id=run_id,
+            extra=dict(extra),
+        )
+
+
+def _record_ingestion_run_outcome(
+    store: IngestionRunStore, *, run_id: str, result: dict[str, object] | str
+) -> None:
+    """Write the run's one terminal row: `failed` for an `error:` string, else `succeeded`.
+
+    The write is a single-winner compare-and-swap, so a row is never terminal twice (AC-BI-008).
+    A failed write is logged (exception class only, never host detail) and swallowed: nothing
+    may escape the worker unlogged, and the row simply stays `running`.
+    """
+    try:
+        if isinstance(result, str):
+            store.complete_run(run_id, status="failed", result=None, error=result)
+        else:
+            store.complete_run(run_id, status="succeeded", result=result, error=None)
+    except Exception as exc:  # noqa: BLE001 -- nothing may escape the worker unlogged; the row stays `running`
+        _emit_best_effort_failure(_BACKGROUND_INGESTION_ACTION, run_id, reason=type(exc).__name__)
+
+
+def _execute_background_ingestion(
+    prepared: _PreparedCatalogIngestion,
+    *,
+    run_id: str,
+    config: ServiceConfig,
+    principal: str | None,
+    store: IngestionRunStore,
+) -> None:
+    """Run the prepared pipeline on the worker thread, then record its outcome (AC-BI-008/014).
+
+    The pipeline call goes through `_run_mcp_action` so the run gets its own correlated
+    started/succeeded/failed log lines under the submitted `run_id` and every unexpected
+    exception is sanitized exactly as for a blocking tool call. The outer `except` is the
+    last-resort net: the run's row must never be left `running` by an exception.
+    """
+    try:
+        result = _run_mcp_action(
+            _BACKGROUND_INGESTION_ACTION,
+            principal,
+            lambda: _run_prepared_catalog_ingestion(
+                prepared, config=config, principal=principal, run_id=run_id
+            ),
+            run_id=run_id,
+        )
+    except Exception as exc:  # noqa: BLE001 -- AC-BI-014 last-resort net: the row must never stay 'running'
+        _emit_best_effort_failure(
+            _BACKGROUND_INGESTION_ACTION, run_id, principal=principal or "unknown", detail=repr(exc)
+        )
+        result = _UNEXPECTED_ERROR_MESSAGE
+    _record_ingestion_run_outcome(store, run_id=run_id, result=result)
+
+
+def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> IngestionRunRow:
+    """Mark a `running` row no in-process worker holds as failed (interrupted), then re-read it.
+
+    A declared, idempotent side effect of `get_ingestion_status` (AC-BI-014): the row is
+    `running` yet its worker is gone (its terminal write failed, or the process restarted), so
+    it would otherwise be reported `running` forever. The write is a single-winner
+    compare-and-swap, a no-op if the worker finished first. It never fails the poll: any store
+    error is logged (exception class only) and the row is returned unchanged.
+    """
+    if row.status != "running" or is_run_in_flight(row.run_id):
+        return row
+    try:
+        store.complete_run(
+            row.run_id,
+            status="failed",
+            result=None,
+            error=_INTERRUPTED_RUN_MESSAGE,
+            audit_actor=_RECONCILER_AUDIT_ACTOR,
+        )
+        reread = store.get_run(row.run_id)
+    except Exception as exc:  # noqa: BLE001 -- a failed reconciliation must never become the poll's failure
+        _emit_best_effort_failure(_RECONCILE_ACTION, row.run_id, reason=type(exc).__name__)
+        return row
+    return reread if reread is not None else row
+
+
+def _check_ingestion_config(config: ServiceConfig) -> str | None:
+    """Return the `error:` text when the pipeline config is incomplete, else `None`.
+
+    `start_ingestion` runs this synchronously so an incomplete configuration is reported to the
+    caller exactly as `ingest_regulation` reports it (the pipeline's own first step), instead of
+    surfacing only later as a failed background run (AC-BI-010).
+    """
+    try:
+        _require_ingestion_config(config)
+    except IngestionConfigIncompleteError as exc:
+        return f"error: {exc}"
+    return None
+
+
+def _submit_ingestion_run(
+    prepared: _PreparedCatalogIngestion,
+    *,
+    run_id: str,
+    config: ServiceConfig,
+    principal: str | None,
+    actor: tuple[str, str] | None,
+    store: IngestionRunStore,
+) -> dict[str, object] | str:
+    """Record the run, start its worker thread and return at once (AC-BI-003/005).
+
+    The slot is reserved atomically (duplicate `short_name` and the in-flight cap are checked
+    before anything is written) and released on any failure before the worker starts, so no
+    exception can leak a slot.
+    """
+    try:
+        reserve_run_slot(
+            run_id,
+            short_name=prepared.entry.short_name,
+            max_in_flight_runs=config.ingestion_runs_max_in_flight,
+        )
+    except (IngestionRunCapacityExceededError, IngestionRunAlreadyInProgressError) as exc:
+        return f"error: {exc}"
+    try:
+        store.create_run(
+            run_id=run_id,
+            celex=prepared.entry.celex,
+            short_name=prepared.entry.short_name,
+            actor=_catalog_source_audit_actor(actor),
+        )
+        start_background_run(
+            run_id,
+            functools.partial(
+                _execute_background_ingestion,
+                prepared,
+                run_id=run_id,
+                config=config,
+                principal=principal,
+                store=store,
+            ),
+        )
+    except IngestionRunStoreError as exc:
+        release_run_slot(run_id)
+        return f"error: {exc}"
+    except BaseException:
+        release_run_slot(run_id)  # no leaked slot on any non-store error; a no-op if already freed
+        raise
+    return StartIngestionResponse(run_id=run_id, status="running").model_dump()
+
+
+def _ingestion_run_status_response(run_id: str, row: IngestionRunRow | None) -> dict[str, object]:
+    """Shape one run row (or its absence) as the single five-key `get_ingestion_status` payload."""
+    if row is None:
+        return IngestionRunStatusResponse(
+            run_id=run_id, status="unknown", stage=None, result=None, error=None
+        ).model_dump()
+    return IngestionRunStatusResponse(
+        run_id=row.run_id,
+        status=row.status,
+        stage=get_stage(row.run_id) if row.status == "running" else None,
+        result=row.result,
+        error=row.error,
+    ).model_dump()
+
+
+@server.tool()
+def start_ingestion(
+    celex: Annotated[str, Field(min_length=10, max_length=10, pattern=_CELEX_PATTERN)],
+    short_name: Annotated[str, Field(pattern=_SHORT_NAME_PATTERN)],
+) -> dict[str, object] | str:
+    """StartIngestion: start ingesting one EU regulation by CELEX and return at once.
+
+    Takes exactly the inputs `ingest_regulation` takes, and runs the same fast
+    validation synchronously, but does not wait for the multi-minute pipeline
+    (Ingestion -> Domain Mapper -> Company Merge): it records the run, starts it on a
+    background thread and returns `{"run_id", "status": "running"}` immediately. Poll
+    `get_ingestion_status` with that `run_id` for the live stage and the final result.
+
+    Returns a string beginning `error: ` when the caller lacks the ComplianceOfficer role, or
+    for any pre-flight failure `ingest_regulation` reports (`short_name` mismatch or
+    collision, `celex` not found in the curated catalog or on Cellar/ELI, LLM Interface
+    unhealthy, the policy graph database unreachable), or when the run could not be recorded
+    or the run store is unavailable. A failure inside the pipeline itself is reported later,
+    by `get_ingestion_status`.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        denied = _require_compliance_officer_unless_bypass(config, actor)
+        if denied is not None:
+            return denied
+        if not dependency_health.is_healthy(dependency_health.LLM_INTERFACE):
+            return _LLM_INTERFACE_UNAVAILABLE_MESSAGE
+        prepared = _prepare_catalog_ingestion(celex, short_name, config=config)
+        if isinstance(prepared, str):
+            return prepared
+        incomplete = _check_ingestion_config(config)
+        if incomplete is not None:
+            return incomplete
+        # `_run_mcp_action` always binds a run_id before calling this closure, so
+        # `current_run_id()` is never `None` here -- the `""` fallback only satisfies the
+        # type checker, as in `ingest_regulation`. This is the id the row, the live-stage
+        # registry, the pipeline's log lines and the worker's log lines all share.
+        run_id = current_run_id() or ""
+        return _submit_ingestion_run(
+            prepared,
+            run_id=run_id,
+            config=config,
+            principal=principal,
+            actor=actor,
+            store=PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config)),
+        )
+
+    return _run_mcp_action("start_ingestion", principal, _body)
+
+
+@server.tool()
+def get_ingestion_status(
+    run_id: Annotated[str, Field(min_length=1, max_length=64)],
+) -> dict[str, object] | str:
+    """GetIngestionStatus: report a `start_ingestion` run's progress and final result.
+
+    Returns one fixed shape for every outcome: `run_id`, `status` (`running`, `succeeded`,
+    `failed`, or `unknown` for an id that was never submitted), `stage` (the stage a running
+    run is executing, when known), `result` (on success, the same summary `ingest_regulation`
+    returns) and `error` (on failure, the same `error: ...` text `ingest_regulation` would have
+    returned). Requires the ComplianceOfficer role, checked before any lookup. Returns a string
+    beginning `error: ` when the caller lacks the role or the run store is unavailable.
+    """
+    config = load_config()
+    principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
+
+    def _body() -> dict[str, object] | str:
+        denied = _require_compliance_officer_unless_bypass(config, actor)
+        if denied is not None:
+            return denied
+        store = PsycopgIngestionRunStore(config, audit_store=PsycopgAuditStore(config))
+        try:
+            row = store.get_run(run_id)
+        except IngestionRunStoreError as exc:
+            return f"error: {exc}"
+        if row is not None:
+            row = _reconcile_orphaned_run(store, row)
+        return _ingestion_run_status_response(run_id, row)
+
+    return _run_mcp_action("get_ingestion_status", principal, _body)
 
 
 @server.tool()

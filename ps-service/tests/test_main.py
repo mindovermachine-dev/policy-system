@@ -1449,6 +1449,7 @@ def test_state_migrations_run_at_startup_apply_every_component_baseline() -> Non
         ("audit", "0001_audit_events.sql"),
         ("authz", "0001_access_role_assignments.sql"),
         ("runtime_config", "0001_runtime_config.sql"),
+        ("ingestion_runs", "0001_ingestion_runs.sql"),
     } <= tracked
 
 

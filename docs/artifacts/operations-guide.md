@@ -328,7 +328,7 @@ PVC) hosting two databases, each with its own role and its own credentials Secre
 
 | Database | Role | Holds | Password Secret (key) |
 | --- | --- | --- | --- |
-| `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), and the `ps_schema_migrations` tracking table | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
+| `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), and the `ps_schema_migrations` tracking table | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
 | `ps_signing` | `ps_signing` | Passkey Signing data (`pending_approvals`, `signing_credentials`) and its own `schema_migrations` tracking table | `policy-system-ps-postgres-signing-credentials` (`PS_PASSKEYSIGNING_POSTGRES_PASSWORD`) |
 
 PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and

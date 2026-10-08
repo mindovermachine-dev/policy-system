@@ -50,6 +50,7 @@ from ps_service.ingestion.adapters.cellar_eli.fetch import (
 from ps_service.ingestion.falkordb_client import (
     check_connectivity_from_config as check_falkordb_connectivity,
 )
+from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
 from ps_service.invitations.startup import require_authentik_credential_configured
 from ps_service.llm_interface import (
     check_connectivity as check_llm_interface_connectivity,
@@ -291,6 +292,7 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
                     MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
                     MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
                     MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
+                    MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
                 ],
             )
     except Exception as exc:

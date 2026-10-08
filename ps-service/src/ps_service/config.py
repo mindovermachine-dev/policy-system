@@ -28,6 +28,7 @@ _DEFAULT_STATE_POSTGRES_PORT = 5432
 _DEFAULT_MAX_REQUEST_BODY_BYTES = 104_857_600  # 100 MiB (CHANGES.md OQ7)
 _DEFAULT_QUERY_TIMEOUT_MS = 5000
 _DEFAULT_QUERY_ROW_CAP = 1000
+_DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT = 1
 # D-DEFAULT-URL (issue #125, AC-BI-001): this repo's own public GitHub remote,
 # `raw.githubusercontent.com`-served, at the default branch's `curated-content/`
 # tree -- the same layout `ps_cli.catalog_repo` already reads locally
@@ -175,6 +176,7 @@ class ServiceConfig:
     max_request_body_bytes: int = _DEFAULT_MAX_REQUEST_BODY_BYTES
     query_timeout_ms: int = _DEFAULT_QUERY_TIMEOUT_MS
     query_row_cap: int = _DEFAULT_QUERY_ROW_CAP
+    ingestion_runs_max_in_flight: int = _DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT
     auth_issuer: str | None = None
     auth_audience: str | None = None
     auth_cli_client_id: str | None = None
@@ -378,6 +380,24 @@ def _parse_query_row_cap(raw: str) -> int:
         message = f"PS_QUERY_ROW_CAP must be positive, got {query_row_cap}"
         raise ServiceConfigurationError(message)
     return query_row_cap
+
+
+def _parse_ingestion_runs_max_in_flight(raw: str) -> int:
+    """Parse and range-check `PS_INGESTIONRUNS_MAX_IN_FLIGHT`, failing closed on any bad value.
+
+    The most ingestion runs `start_ingestion` lets execute concurrently in this process; a
+    submission over the cap is rejected with a named rate-limit error. Same validation shape
+    as `_parse_query_row_cap` (parse, then positivity check).
+    """
+    try:
+        max_in_flight = int(raw)
+    except ValueError as exc:
+        message = f"PS_INGESTIONRUNS_MAX_IN_FLIGHT must be an integer, got {raw!r}"
+        raise ServiceConfigurationError(message) from exc
+    if max_in_flight <= 0:
+        message = f"PS_INGESTIONRUNS_MAX_IN_FLIGHT must be positive, got {max_in_flight}"
+        raise ServiceConfigurationError(message)
+    return max_in_flight
 
 
 def _parse_local_test_bypass(raw: str | None) -> bool:
@@ -839,6 +859,11 @@ def load_config() -> ServiceConfig:
         max_request_body_bytes=max_request_body_bytes,
         query_timeout_ms=query_timeout_ms,
         query_row_cap=query_row_cap,
+        ingestion_runs_max_in_flight=_parse_ingestion_runs_max_in_flight(
+            os.environ.get(
+                "PS_INGESTIONRUNS_MAX_IN_FLIGHT", str(_DEFAULT_INGESTION_RUNS_MAX_IN_FLIGHT)
+            )
+        ),
         auth_issuer=auth_issuer,
         auth_audience=auth_audience,
         auth_cli_client_id=auth_cli_client_id,

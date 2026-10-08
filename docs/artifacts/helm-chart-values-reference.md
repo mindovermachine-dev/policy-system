@@ -194,7 +194,7 @@ listed.
 
 PS Service keeps its durable state in one PostgreSQL server (issue #130) holding two
 databases, each with its own least-privilege role: `ps_state` (audit events, authz,
-runtime configuration) and `ps_signing` (Passkey Signing: pending merge approvals and
+runtime configuration, ingestion run status) and `ps_signing` (Passkey Signing: pending merge approvals and
 enrolled WebAuthn credentials). It is **distinct from FalkorDB and from Authentik's own
 bundled Postgres** (AC-BI-006): its own Deployment/Service/PVC/NetworkPolicy/Secrets,
 never a shared PVC, NetworkPolicy selector, or credential Secret with either. Unlike

@@ -545,6 +545,11 @@ def test_denied_grant_produces_exactly_one_rejected_audit_event() -> None:
 def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
     """AC-BI-012, self-revoke-blocked denial: a real `revoke_role` call where the actor
     targets their own subject writes exactly one rejected `access_role.revoke` audit event.
+
+    Post-#182 `block_self_target` exempts a `SystemOwner` from the self-grant/revoke block
+    except for revoking `SystemOwner` itself, and a non-`SystemOwner` is turned away by RBAC
+    before the self-target rule is reached -- so the only reachable self-revoke denial is a
+    `SystemOwner` revoking their own `SystemOwner` role.
     """
     _require_configured_postgres()
     config = load_config()
@@ -553,9 +558,8 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
 
     actor_subject = _unique_subject("self-revoke-actor")
     store = PsycopgAccessRoleStore(config, audit_store=PsycopgAuditStore(config))
-    # Setup (not under test): give the actor SystemOwner directly, the RBAC floor
-    # a SystemAdmin-revoke requires -- block_self_target must fire before RBAC would
-    # otherwise let this through.
+    # Setup (not under test): give the actor SystemOwner directly. RBAC lets them revoke
+    # SystemOwner, and block_self_target must still fire before the floor check.
     store.grant(
         actor=(actor_subject, _ACTOR_ISSUER),
         target=(actor_subject, _ACTOR_ISSUER),
@@ -566,7 +570,7 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
         revoke_role(
             actor=(actor_subject, _ACTOR_ISSUER),
             target_subject=actor_subject,
-            access_role="SystemAdmin",
+            access_role="SystemOwner",
             store=store,
             issuer=_ACTOR_ISSUER,
         )
@@ -581,7 +585,7 @@ def test_denied_self_revoke_produces_exactly_one_rejected_audit_event() -> None:
             actor_subject,
             _ACTOR_ISSUER,
             "rejected",
-            {"access_role": "SystemAdmin", "reason_code": "self_revoke_blocked"},
+            {"access_role": "SystemOwner", "reason_code": "self_revoke_blocked"},
         )
     ]
 

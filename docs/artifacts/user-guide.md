@@ -153,6 +153,11 @@ even for a curated regulation — never guess `short_name` on the user's behalf.
 The `short_name` is normalized to upper case (`cra` is stored as `CRA`), and the
 ingestion is rejected when that CELEX is already ingested in the graph, under any
 `short_name`, or when the `short_name` is already claimed by a different CELEX.
+The skill submits the run and then tells you each time the pipeline moves to its
+next stage (ingestion, extraction, derivation, merge) instead of waiting
+silently. A full run typically takes several minutes. If a run outlasts the
+skill's poll budget (20 status checks), it gives you the run id; ask it to
+"check run <run_id>" later to pick the run up again without resubmitting.
 
 To find a regulation's CELEX identifier:
 
@@ -396,7 +401,7 @@ Beyond that baseline, PS Service enforces four additional roles:
 | `SystemOwner` | Automatically, once — the first authenticated caller whose identity (`sub` + `iss`) matches the one the operator configured at deploy time (`psService.authzBootstrapOwner`; the deploy scripts set it to the owner's email), not simply whoever calls first: any other caller who reaches an empty instance first is granted nothing. Never grantable afterward; exactly one exists for the life of a real deployment. See [SystemOwner bootstrap](./installation-guide.md#systemowner-bootstrap) for how an operator claims it. | Everything `SystemAdmin` gates, plus granting/revoking `SystemAdmin`. |
 | `SystemAdmin` | Granted or revoked by a `SystemOwner`. | The catalog-source tools (`set-catalog-source`, `reset-catalog-source`, `get-catalog-source`), `list-access-roles`, `invite-user`, and `list-audit-events`. |
 | `PolicyManager` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | Nothing yet — provisioned ahead of future policy-authoring features; no tool currently checks for it. |
-| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
+| `ComplianceOfficer` | Granted or revoked by a `SystemOwner` or `SystemAdmin`. | `POST /restorations`, `POST /restorations/from-catalog`, `POST /exports`, `POST /change-checks`, `POST /ingestions` (catalog-sourced only — `source: "internal"` is unaffected), and the MCP tools `ingest_regulation`, `start_ingestion`, `get_ingestion_status`, `restore_instrument`, `check_regulations`, and the graph cleanup tools (`find-capability-merge-candidates`, `find-duplicate-obligations`, `merge-capabilities`, `merge-obligations`, `release-capability-governance`, `unmerge`, `check-cleanup-approval`; see [Clean up duplicate graph nodes](#clean-up-duplicate-graph-nodes)). No hierarchy override: a `SystemAdmin`/`SystemOwner` without an explicit grant is denied too. |
 | `AuthenticatedUser` | Automatic for every authenticated caller. | Asking questions via Claude Desktop ([Ask a question](#ask-a-question)) — no elevated role required. |
 
 Two safety rules apply to every grant or revoke, regardless of role:

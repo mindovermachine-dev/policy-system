@@ -72,6 +72,7 @@ postgres:
                                                        # (authz/store.py and audit/store.py import it from ps_service.persistence)
   - ps_service.audit.store.PsycopgAuditStore
   - ps_service.runtime_config.store.PsycopgRuntimeConfigStore
+  - ps_service.ingestion_runs.store.PsycopgIngestionRunStore
   - ps_service.passkey_signing.store.PsycopgPendingApprovalStore
   - ps_service.passkey_signing.store.connect_from_config
   - ps_service.passkey_signing.signing_credential_store.PsycopgSigningCredentialStore

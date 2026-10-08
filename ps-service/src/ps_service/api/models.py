@@ -128,6 +128,31 @@ class IngestionStatusResponse(BaseModel):
     stage: str | None = None
 
 
+class StartIngestionResponse(BaseModel):
+    """`start_ingestion` MCP success payload (issue #194)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    status: Literal["running"]
+
+
+class IngestionRunStatusResponse(BaseModel):
+    """`get_ingestion_status` MCP payload: one fixed five-key shape for every status (issue #194).
+
+    `result` is exactly the success dict `ingest_regulation` returns (AC-BI-007); `error` is
+    the sanitized `error:` text of a failed run. Every field is always present, `None` included.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    status: Literal["unknown", "running", "succeeded", "failed"]
+    stage: str | None
+    result: dict[str, object] | None
+    error: str | None
+
+
 class RestorationManifestPayload(BaseModel):
     """The ``manifest.json`` fields carried inline in a ``POST /restorations`` body.
 
