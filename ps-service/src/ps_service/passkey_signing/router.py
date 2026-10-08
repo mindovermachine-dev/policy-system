@@ -28,6 +28,13 @@ a genuine WebAuthn library verification failure) now raises the identical
 via ``emit_log_entry`` -- closing the one gap Slice 3 flagged (a raw
 ``webauthn`` verification failure previously fell through to the app-wide
 generic 500 handler uncaught).
+
+Issue #195 audits the signed merge as ``near_miss.resolve`` (approver as actor, ``approval_id``
+in the details). The single-use approval is consumed (``mark_signed`` precedes the merge) even
+when the opening audit row cannot be written: the merge then does not run, nothing is audited as
+applied, the stored outcome is ``_AUDIT_UNAVAILABLE_MESSAGE`` and the user must request a new
+approval. There is deliberately no pre-check: an audit row written before ``mark_signed`` would
+be orphaned if the CAS were lost.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from webauthn.helpers import base64url_to_bytes
 
 from ps_service.api.dependencies import (
     get_service_config,
+    provide_audit_store,
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
 )
@@ -52,6 +60,11 @@ from ps_service.api.errors import PendingApprovalInvalidOrExpiredError, PendingR
 from ps_service.api.near_miss_review_orchestration import (
     NearMissReviewDependencies,
     run_resolve_near_miss,
+)
+from ps_service.audit import (
+    AuditContext,
+    AuditStore,
+    AuditTrailUnavailableError,
 )
 from ps_service.config import (
     ServiceConfig,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
@@ -588,6 +601,10 @@ def _resolve_credential_for_signing(
 _MERGE_FAILED_MESSAGE = (
     "this action could not be completed; if you still intend to merge, ask for a new approval"
 )
+_AUDIT_UNAVAILABLE_MESSAGE = (
+    "The audit trail is temporarily unavailable; the merge was not performed. "
+    "Request a new approval."
+)
 
 
 def _log_merge_failure(*, pending_approval_id: str, review_id: str | None, reason: str) -> None:
@@ -611,8 +628,17 @@ def _execute_merge_and_record_outcome(
     store: PendingApprovalStore,
     near_miss_dependencies: NearMissReviewDependencies,
     config: ServiceConfig,
+    audit_store: AuditStore,
 ) -> dict[str, object]:
     """Run the real merge and persist its outcome onto the now-`'signed'` row.
+
+    Issue #195: the merge is audited as `near_miss.resolve` with the APPROVER (the approval row's
+    actor, whose credential just signed) as actor and `approval_id=row.id`; the `applied` row
+    precedes the write. If that opening row cannot be written the merge does not run and the
+    stored outcome is the fixed `_AUDIT_UNAVAILABLE_MESSAGE`. The single-use approval is consumed
+    either way (`mark_signed` precedes this call; there is deliberately no pre-check, because an
+    audit row written before `mark_signed` would be orphaned if the CAS were lost), so the user
+    must request a new approval.
 
     Only ever called after `store.mark_signed` has already committed
     (PLAN.md §3: "post-signature merge-execution" -- the signature's
@@ -632,8 +658,18 @@ def _execute_merge_and_record_outcome(
         return outcome
     try:
         result = run_resolve_near_miss(
-            review_id, "merge", config=config, dependencies=near_miss_dependencies
+            review_id,
+            "merge",
+            config=config,
+            dependencies=near_miss_dependencies,
+            audit=AuditContext((row.actor_subject, row.actor_issuer), audit_store),
+            approval_id=row.id,
         )
+    except AuditTrailUnavailableError:
+        _log_merge_failure(
+            pending_approval_id=row.id, review_id=review_id, reason="audit_opening_failed"
+        )
+        outcome = {"error": _AUDIT_UNAVAILABLE_MESSAGE}
     except PendingReviewNotFoundError as exc:
         # The response and stored outcome stay generic; without this the
         # reason a signed merge did nothing is recorded nowhere.
@@ -696,6 +732,7 @@ async def post_sign_verify(
         NearMissReviewDependencies, Depends(provide_near_miss_review_dependencies)
     ],
     config: Annotated[ServiceConfig, Depends(get_service_config)],
+    audit_store: Annotated[AuditStore, Depends(provide_audit_store)],
 ) -> dict[str, object]:
     """Verify a WebAuthn assertion and, on success, execute the merge (issue #131 Slice 3).
 
@@ -722,6 +759,8 @@ async def post_sign_verify(
             `near_misses_resolve`'s merge branch and
             `POST /near-misses/{review_id}/resolve` use.
         config: The resolved service configuration (injected).
+        audit_store: Where the merge's `near_miss.resolve` audit rows go (injected; overridden in
+            tests).
 
     Returns:
         `{"status": "signed", "winner_id", "loser_id"}` on a successful
@@ -778,7 +817,11 @@ async def post_sign_verify(
 
     if row.tool_name == _NEAR_MISS_TOOL_NAME:
         outcome = _execute_merge_and_record_outcome(
-            row=row, store=store, near_miss_dependencies=near_miss_dependencies, config=config
+            row=row,
+            store=store,
+            near_miss_dependencies=near_miss_dependencies,
+            config=config,
+            audit_store=audit_store,
         )
     else:
         outcome = _run_registered_executor_and_record_outcome(row=row, store=store, config=config)

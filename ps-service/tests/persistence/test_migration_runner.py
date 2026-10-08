@@ -122,7 +122,10 @@ def _write_migration(directory: Path, filename: str, sql: str) -> None:
 
 
 def test_each_component_migration_creates_only_its_own_tables() -> None:
-    assert _tables_created_by(AUDIT_MIGRATIONS_DIR) == {"0001_audit_events.sql": {"audit_events"}}
+    assert _tables_created_by(AUDIT_MIGRATIONS_DIR) == {
+        "0001_audit_events.sql": {"audit_events"},
+        "0002_audit_events_details_indexes.sql": set(),
+    }
     assert _tables_created_by(AUTHZ_MIGRATIONS_DIR) == {
         "0001_access_role_assignments.sql": {"access_role_assignments"}
     }
@@ -174,6 +177,7 @@ def test_empty_database_gets_one_migration_per_component_and_no_legacy_objects()
 
     assert applied == [
         "0001_audit_events.sql",
+        "0002_audit_events_details_indexes.sql",
         "0001_access_role_assignments.sql",
         "0001_runtime_config.sql",
         "0001_ingestion_runs.sql",
@@ -187,6 +191,7 @@ def test_empty_database_gets_one_migration_per_component_and_no_legacy_objects()
     }
     assert tracked == {
         ("audit", "0001_audit_events.sql"),
+        ("audit", "0002_audit_events_details_indexes.sql"),
         ("authz", "0001_access_role_assignments.sql"),
         ("runtime_config", "0001_runtime_config.sql"),
         ("ingestion_runs", "0001_ingestion_runs.sql"),
@@ -205,7 +210,7 @@ def test_second_run_applies_nothing() -> None:
         _cleanup_isolated_schema(conn, schema)
 
     assert second == []
-    assert len(tracked) == 4
+    assert len(tracked) == 5
 
 
 @pytest.mark.postgres_live
@@ -270,13 +275,14 @@ def test_apply_emits_success_entry_naming_applied_files(
     assert first["outcome"] == "success"
     assert first["applied"] == [
         "audit/0001_audit_events.sql",
+        "audit/0002_audit_events_details_indexes.sql",
         "authz/0001_access_role_assignments.sql",
         "runtime_config/0001_runtime_config.sql",
         "ingestion_runs/0001_ingestion_runs.sql",
     ]
     assert first["already_applied"] == 0
     assert second["applied"] == []
-    assert second["already_applied"] == 4
+    assert second["already_applied"] == 5
 
 
 @pytest.mark.postgres_live

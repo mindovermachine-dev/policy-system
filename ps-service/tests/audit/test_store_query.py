@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import ps_service.authz.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers access_role.* actions/`"principal"` resource type
+import ps_service.authz.audit_actions  # pyright: ignore[reportUnusedImport] -- side-effect import, registers access_role.* actions/`"principal"` resource type
+import ps_service.ingestion_runs.audit_actions  # noqa: F401  # pyright: ignore[reportUnusedImport] -- side-effect import, registers ingestion_run.* actions used by the details-filter tests
 from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit.errors import AuditPostgresUnavailableError
 from ps_service.audit.models import AuditQueryFilters
@@ -250,3 +251,103 @@ def test_query_connection_failure_leaks_no_host_or_port_or_driver_detail() -> No
     assert unreachable_host not in message
     assert str(unreachable_port) not in message
     assert message == "The audit store is temporarily unavailable."
+
+
+# --- issue #195, Slice 11: the allow-listed `details` filter (real Postgres) ---
+
+
+def _store_with_migrations() -> tuple[AuditStore, object]:
+    config = load_config()
+    with connect_from_config(config) as conn:
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
+    return PsycopgAuditStore(config), config
+
+
+def _seed_submit(store: AuditStore, *, run_id: str, celex: str, actor: str) -> None:
+    store.record_standalone(
+        actor_subject=actor,
+        actor_issuer=_ACTOR_ISSUER,
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=run_id,
+        outcome="applied",
+        details={
+            "celex": celex,
+            "short_name": "x",
+            "status": "started",
+            "trigger": "sync_ingest",
+        },
+    )
+
+
+@pytest.mark.postgres_live
+def test_query_details_celex_returns_only_rows_whose_details_celex_matches() -> None:
+    _require_configured_postgres()
+    store, _config = _store_with_migrations()
+    actor = f"details-actor-{uuid.uuid4().hex[:10]}"
+    _seed_submit(store, run_id="run-a", celex="32024R2847", actor=actor)
+    _seed_submit(store, run_id="run-b", celex="32016R0679", actor=actor)
+
+    page = store.query(
+        filters=AuditQueryFilters(actor_subject=actor, details={"celex": "32024R2847"}),
+        cursor=None,
+        page_size=10,
+    )
+
+    assert [event.resource_id for event in page.events] == ["run-a"]
+
+
+@pytest.mark.postgres_live
+def test_query_details_filter_combines_with_action_and_time_range_using_and() -> None:
+    _require_configured_postgres()
+    store, _config = _store_with_migrations()
+    actor = f"details-actor-{uuid.uuid4().hex[:10]}"
+    _seed_submit(store, run_id="run-a", celex="32024R2847", actor=actor)
+
+    matching = store.query(
+        filters=AuditQueryFilters(
+            actor_subject=actor, action="ingestion_run.submit", details={"celex": "32024R2847"}
+        ),
+        cursor=None,
+        page_size=10,
+    )
+    other_action = store.query(
+        filters=AuditQueryFilters(
+            actor_subject=actor, action="ingestion_run.complete", details={"celex": "32024R2847"}
+        ),
+        cursor=None,
+        page_size=10,
+    )
+
+    assert len(matching.events) == 1
+    assert other_action.events == ()
+
+
+@pytest.mark.postgres_live
+def test_query_details_filter_value_is_parameterized_not_interpolated() -> None:
+    _require_configured_postgres()
+    store, _config = _store_with_migrations()
+    actor = f"details-actor-{uuid.uuid4().hex[:10]}"
+    _seed_submit(store, run_id="run-a", celex="32024R2847", actor=actor)
+
+    page = store.query(
+        filters=AuditQueryFilters(actor_subject=actor, details={"celex": "x' OR '1'='1"}),
+        cursor=None,
+        page_size=10,
+    )
+
+    assert page.events == ()
+
+
+@pytest.mark.postgres_live
+def test_query_details_filter_uses_the_expression_index() -> None:
+    _require_configured_postgres()
+    config = load_config()
+    with connect_from_config(config) as conn:
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
+        with conn.cursor() as cur:
+            cur.execute("SET enable_seqscan = off")
+            cur.execute("EXPLAIN SELECT id FROM audit_events WHERE (details ->> 'celex') = 'x'")
+            plan = "\n".join(str(row[0]) for row in cur.fetchall())
+
+    assert "audit_events_details_celex_idx" in plan

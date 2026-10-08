@@ -80,3 +80,22 @@ class AuditInvalidCursorError(Exception):
     (PLAN.md §3.4) -- the MCP tool never documents the cursor's internal
     shape, only that it is opaque.
     """
+
+
+class AuditActorUnresolvedError(Exception):
+    """No audit actor could be resolved for an audited operation (issue #195, AC-BI-001).
+
+    Raised by :func:`ps_service.audit.actor.resolve_audit_actor` when the caller carries no
+    verified identity and the local-test bypass is not active. Fail-closed: a missing actor is
+    never silently attributed to the bypass sentinel.
+    """
+
+
+class AuditTrailUnavailableError(Exception):
+    """The opening audit row could not be written, so the operation was not performed.
+
+    Raised by :func:`ps_service.audit.emit.record_opening_row` (issue #195, AC-BI-011) when the
+    audit store is down, the insert fails, or the row is rejected by its registered model. The
+    message is fixed and carries no store detail (host, SQL, driver text); the original store
+    error is chained as `__cause__`.
+    """

@@ -33,6 +33,7 @@ import contextlib
 import json
 from typing import TYPE_CHECKING
 
+import pytest
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); this cross-package import mirrors `test_access_role_tools.py`'s own convention
     FakeAccessRoleStore,
     RaisingAccessRoleStore,
@@ -56,7 +57,8 @@ from ps_service.mcp_interface import mcp_server
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    import pytest
+# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _SYSTEM_OWNER_SUBJECT = "existing-system-owner"
 _NON_ADMIN_SUBJECT = "authenticated-user-only-caller"

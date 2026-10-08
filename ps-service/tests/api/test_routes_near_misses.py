@@ -44,12 +44,15 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from fastapi.testclient import TestClient
 
+from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.dependencies import (
     get_principal,
+    provide_audit_store,
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
 )
 from ps_service.api.near_miss_review_orchestration import NearMissReviewDependencies
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth import Principal
 from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
 from ps_service.config import ServiceConfig
@@ -191,10 +194,15 @@ def _fake_dependencies(
         _ = graph
         return records
 
+    def _get_pending_review(graph: GraphHandle, review_id: str) -> PendingReviewRecord | None:
+        _ = graph
+        return next((r for r in records if r.id == review_id), None)
+
     dependencies = NearMissReviewDependencies(
         open_single_tenant_graph=_open_single_tenant_graph,
         list_pending_reviews=_list_pending_reviews,
         resolve_review=resolve or _unexpected_resolve_review,
+        get_pending_review=_get_pending_review,
     )
     return dependencies, open_calls
 
@@ -286,9 +294,12 @@ def _client_for_resolve(
     records: tuple[PendingReviewRecord, ...] = (),
     principal: Principal | None = None,
     store: PendingApprovalStore | None = None,
+    audit_store: InMemoryAuditStore | None = None,
 ) -> TestClient:
     dependencies, _ = _fake_dependencies(records, resolve=resolve)
     app = create_app(_app_config())
+    audit = audit_store or InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: audit
     app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies
     app.dependency_overrides[provide_pending_approval_store] = lambda: (
         store or _FakePendingApprovalStore()
@@ -313,7 +324,7 @@ def test_post_resolve_keep_separate_returns_the_resolved_review() -> None:
         recorded_calls.append((review_id, decision))
         return ResolveOutcome(review_id=review_id, decision=decision)
 
-    client = _client_for_resolve(_resolve)
+    client = _client_for_resolve(_resolve, records=(_record("review_aaa"),))
 
     response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
 
@@ -622,3 +633,83 @@ def test_get_approval_status_unknown_id_returns_404() -> None:
     assert response.status_code == 404
     body = response.json()
     assert body["error"]["code"] == "pending_approval_not_found"
+
+
+# --- issue #195: keep-separate audits `near_miss.resolve` (AC-BI-001/011/012) ---
+
+
+def _outcome_resolve(
+    graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+) -> ResolveOutcome | None:
+    _ = graph
+    return ResolveOutcome(review_id=review_id, decision=decision)
+
+
+def test_post_resolve_keep_separate_audits_the_principal() -> None:
+    audit = InMemoryAuditStore()
+    client = _client_for_resolve(
+        _outcome_resolve,
+        records=(_record("review_aaa"),),
+        principal=_principal(),
+        audit_store=audit,
+    )
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 200
+    (row,) = audit.rows
+    assert (row.actor_subject, row.actor_issuer) == (_ACTOR_SUBJECT, _ACTOR_ISSUER)
+    assert (row.action, row.resource_id, row.outcome) == (
+        "near_miss.resolve",
+        "review_aaa",
+        "applied",
+    )
+    assert row.details["decision"] == "keep_separate"
+
+
+def test_post_resolve_keep_separate_under_bypass_audits_the_sentinel() -> None:
+    audit = InMemoryAuditStore()
+    client = _client_for_resolve(
+        _outcome_resolve, records=(_record("review_aaa"),), audit_store=audit
+    )
+
+    client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    (row,) = audit.rows
+    assert (row.actor_subject, row.actor_issuer) == ("system:local-test-bypass",) * 2
+
+
+def test_post_resolve_returns_503_when_audit_is_unavailable_and_graph_is_untouched() -> None:
+    audit = InMemoryAuditStore(fail_on_outcome={"applied": AuditPostgresUnavailableError("down")})
+    resolve_calls: list[str] = []
+
+    def _resolve(
+        graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
+    ) -> ResolveOutcome | None:
+        resolve_calls.append(review_id)
+        return _outcome_resolve(graph, review_id, decision)
+
+    client = _client_for_resolve(
+        _resolve, records=(_record("review_aaa"),), principal=_principal(), audit_store=audit
+    )
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "keep-separate"})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert resolve_calls == []
+
+
+def test_creating_a_merge_pending_approval_via_rest_writes_no_audit_row() -> None:
+    audit = InMemoryAuditStore()
+    client = _client_for_resolve(
+        _unexpected_resolve_review,
+        records=(_record("review_aaa"),),
+        principal=_principal(),
+        audit_store=audit,
+    )
+
+    response = client.post("/near-misses/review_aaa/resolve", json={"decision": "merge"})
+
+    assert response.status_code == 200
+    assert audit.rows == []

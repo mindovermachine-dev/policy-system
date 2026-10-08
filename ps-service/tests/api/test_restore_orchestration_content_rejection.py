@@ -28,9 +28,12 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreStageFailedError
 from ps_service.api.models import RestorationRequest
-from ps_service.api.restore_orchestration import RestoreDependencies, run_restoration
+from ps_service.api.restore_orchestration import RestoreDependencies
+from ps_service.api.restore_orchestration import run_restoration as _run_restoration
+from ps_service.audit import AuditContext
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper import DOMAIN_SCHEMA_VERSION
 from ps_service.export.models import InstrumentManifest, SerializedGraph, SerializedNode
@@ -44,9 +47,36 @@ if TYPE_CHECKING:
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
+    from ps_service.api.models import RestorationAcceptedResponse
+    from ps_service.logging import LogEmitter
+
 _INSTRUMENT_ID = "GH104-1.0"
 _NEVER_TOUCHED_DB = cast("FalkorDB", object())
 _REASON_MAX_LEN = 300  # == restore_orchestration._STAGE_REASON_MAX_LEN (pinned by its own tests)
+
+
+_AUDIT = AuditContext(("test-actor", "https://issuer.example.com/"), InMemoryAuditStore())
+
+
+def run_restoration(
+    request_body: RestorationRequest,
+    *,
+    config: ServiceConfig,
+    actor: str,
+    dependencies: RestoreDependencies,
+    owner: tuple[str, str] | None = None,
+    emitter: LogEmitter | None = None,
+) -> RestorationAcceptedResponse:
+    """Run `run_restoration` with an in-memory audit context (these tests are not about audit)."""
+    return _run_restoration(
+        request_body,
+        config=config,
+        actor=actor,
+        dependencies=dependencies,
+        audit=_AUDIT,
+        owner=owner,
+        emitter=emitter,
+    )
 
 
 def _checksum_correct_artifact(

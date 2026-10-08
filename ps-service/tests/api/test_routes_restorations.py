@@ -15,9 +15,19 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from api._fakes import install_compliance_officer_grant, install_no_principal
-from ps_service.api.dependencies import get_principal, provide_restore_dependencies
+from api._audit_fakes import InMemoryAuditStore
+from api._fakes import (
+    compliance_officer_principal,
+    install_compliance_officer_grant,
+    install_no_principal,
+)
+from ps_service.api.dependencies import (
+    get_principal,
+    provide_audit_store,
+    provide_restore_dependencies,
+)
 from ps_service.api.restore_orchestration import RestoreDependencies
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
@@ -113,8 +123,12 @@ def _app_config() -> ServiceConfig:
     )
 
 
-def _client_with_fake(stage: _FakeRestoreStage) -> TestClient:
+def _client_with_fake(
+    stage: _FakeRestoreStage, *, audit_store: InMemoryAuditStore | None = None
+) -> TestClient:
     app = create_app(_app_config())
+    store = audit_store if audit_store is not None else InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: store
     app.dependency_overrides[provide_restore_dependencies] = lambda: _fake_dependencies(stage)
     return TestClient(app, raise_server_exceptions=False)
 
@@ -322,3 +336,59 @@ def test_no_verified_principal_means_no_owner_is_passed_to_the_delegate() -> Non
 
     assert response.status_code == 200
     assert stage.owners == [None]
+
+
+# --- issue #195: instrument.restore audit rows (upload path) --------------------------
+
+
+def test_post_restorations_audits_the_principal() -> None:
+    """AC-BI-001/008: the upload restore writes started + succeeded rows for the caller.
+
+    The ComplianceOfficer gate (autouse) presents `compliance_officer_principal()`; the audit
+    context is built from the same `get_principal`. (Under the local-test bypass this gated route
+    is unreachable; the sentinel path is covered by `provide_audit_context` and the MCP tests.)
+    """
+    store = InMemoryAuditStore()
+    client = _client_with_fake(_FakeRestoreStage(), audit_store=store)
+    principal = compliance_officer_principal()
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 200
+    assert [(r.actor_subject, r.actor_issuer) for r in store.rows] == [
+        (principal.sub, principal.iss)
+    ] * 2
+    assert [
+        (r.action, r.resource_id, r.details["status"], r.details["source"]) for r in store.rows
+    ] == [
+        ("instrument.restore", "CRA-1.0", "started", "upload"),
+        ("instrument.restore", "CRA-1.0", "succeeded", "upload"),
+    ]
+
+
+def test_post_restorations_returns_503_when_audit_unavailable_and_restores_nothing() -> None:
+    """AC-BI-011: the opening row cannot be written -> 503, the delegate never runs."""
+    stage = _FakeRestoreStage()
+    store = InMemoryAuditStore(fail_on_outcome={"applied": AuditPostgresUnavailableError("db")})
+    client = _client_with_fake(stage, audit_store=store)
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert stage.call_count == 0
+
+
+def test_post_restorations_checksum_rejection_audits_a_failed_row() -> None:
+    store = InMemoryAuditStore()
+    client = _client_with_fake(
+        _FakeRestoreStage(error=ArtifactIntegrityError("checksum mismatch")), audit_store=store
+    )
+
+    response = client.post("/restorations", json=_valid_body())
+
+    assert response.status_code == 422
+    assert [(r.outcome, r.details.get("reason_code")) for r in store.rows] == [
+        ("applied", None),
+        ("failed", "artifact_rejected"),
+    ]

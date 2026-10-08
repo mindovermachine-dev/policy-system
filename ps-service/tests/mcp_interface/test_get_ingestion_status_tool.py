@@ -41,6 +41,9 @@ from ps_service.ingestion_runs import IngestionRunRow, dispatch
 from ps_service.logging import configure, resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
 
+# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+pytestmark = pytest.mark.usefixtures("ingest_audit_store")
+
 _RECONCILER = ("system:ingestion-run-reconciler", "system:ingestion-run-reconciler")
 _INTERRUPTED_RUN_MESSAGE = (
     "error: the ingestion run was interrupted before it finished; its outcome is unknown"
@@ -340,7 +343,7 @@ def test_a_failed_reconciliation_write_leaves_the_row_running_and_never_fails_th
     assert second["error"] == _INTERRUPTED_RUN_MESSAGE
 
 
-def test_reconciliation_is_audited_once_under_the_reconciler_actor_not_the_submitter(
+def test_reconciling_an_orphaned_run_writes_one_complete_row_under_reconciler_reason_interrupted(
     monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
 ) -> None:
     """OQ-7 / A6: the worker's lost write is reconciled by the poll, attributed to the sentinel."""
@@ -359,7 +362,15 @@ def test_reconciliation_is_audited_once_under_the_reconciler_actor_not_the_submi
     assert completion.resource_id == run_id
     assert completion.actor == _RECONCILER
     assert completion.entry.outcome == "failed"
-    assert completion.entry.details == {"status": "failed", "error": _INTERRUPTED_RUN_MESSAGE}
+    assert completion.entry.details == {
+        "status": "failed",
+        "celex": _CELEX,
+        "trigger": "async_ingest",
+        "reason_code": "interrupted",
+        "new_obligations": 0,
+        "new_capabilities": 0,
+        "matched_capabilities": 0,
+    }
     submission = next(
         e for e in pipeline_store.audit_entries if e.entry.action == "ingestion_run.submit"
     )
@@ -378,3 +389,44 @@ def test_a_workers_own_completion_keeps_the_submitters_attribution(
     ]
     assert completion.resource_id == run_id
     assert completion.actor == ("system:local-test-bypass", "system:local-test-bypass")
+
+
+def test_polling_a_running_or_finished_run_writes_no_audit_row(
+    monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
+) -> None:
+    """AC-BI-014: polls are write-free for a live and for a finished run."""
+    pipeline = use_gated_real_pipeline(monkeypatch)
+    try:
+        run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
+        before = len(pipeline_store.audit_entries)
+        _status(run_id)
+        _status(run_id)
+        assert len(pipeline_store.audit_entries) == before == 1
+    finally:
+        pipeline.gate.set()
+    wait_for_run(run_id)
+    finished = len(pipeline_store.audit_entries)
+
+    _status(run_id)
+    _status(run_id)
+
+    assert finished == 2
+    assert len(pipeline_store.audit_entries) == finished
+
+
+def test_two_polls_of_an_orphaned_run_still_yield_one_complete_row(
+    monkeypatch: pytest.MonkeyPatch, pipeline_store: InMemoryIngestionRunStore
+) -> None:
+    _use_real_pipeline_stages(monkeypatch)
+    pipeline_store.fail_next_complete = 1
+    run_id = _submit_and_finish()
+
+    _status(run_id)
+    _status(run_id)
+    _status(run_id)
+
+    completions = [
+        e for e in pipeline_store.audit_entries if e.entry.action == "ingestion_run.complete"
+    ]
+    assert len(completions) == 1
+    assert completions[0].resource_id == run_id

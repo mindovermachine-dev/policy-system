@@ -272,6 +272,12 @@ def merge_baseline_graph(
         single_tenant_graph, graph, emitter=emitter
     )
 
+    # issue #195: the net-new Obligation count, read BEFORE any write so it is the delta the
+    # passthrough below makes (ids a cleanup merge absorbed were dropped just above).
+    new_obligation_count = graph_writer.count_new_obligations(
+        single_tenant_graph, tuple(node.id for node in graph.obligation_nodes)
+    )
+
     # Only now, having completed the dedup pass with no exception, is
     # anything written -- "abort with no partial write" on a raised
     # LlmProviderError is therefore automatic, not enforced by a try/except.
@@ -349,12 +355,19 @@ def merge_baseline_graph(
     )
     _finish_policy_pass(single_tenant_graph, policy_dedup, emitter=emitter)
 
+    new_capability_count = sum(1 for r in capability_dedup.resolutions if r.match_kind == "new")
+    matched_capability_count = len(capability_dedup.resolutions) - new_capability_count
     emit_log_entry(
         component=_COMPONENT,
         action=_MERGE_ACTION,
         entity_id=regulatory_instrument_id,
         outcome="succeeded",
-        extra=graph_writer.classification_write_counts(graph),
+        extra={
+            **graph_writer.classification_write_counts(graph),
+            "new_obligations": new_obligation_count,
+            "new_capabilities": new_capability_count,
+            "matched_capabilities": matched_capability_count,
+        },
         emitter=emitter,
     )
 
@@ -382,4 +395,7 @@ def merge_baseline_graph(
             else ()
         ),
         pending_review_count=pending_review_count,
+        new_capability_count=new_capability_count,
+        matched_capability_count=matched_capability_count,
+        new_obligation_count=new_obligation_count,
     )

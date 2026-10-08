@@ -7,6 +7,13 @@ shape of `ps_service.authz.errors` exactly.
 
 from __future__ import annotations
 
+from typing import Literal
+
+type InvitationFailureReason = Literal[
+    "upstream_http_error", "upstream_unreachable", "unexpected_error"
+]
+"""Enumerated cause of a failed invite; the `user.invite` `reason_code` (never free text)."""
+
 
 class AuthentikCredentialConfigurationError(Exception):
     """`PS_AUTHENTIK_API_TOKEN`/`PS_AUTHENTIK_BASE_URL` are missing (issue #140, AC-BI-003).
@@ -36,3 +43,10 @@ class AuthentikInvitationError(Exception):
     `ps_service.curated_source.http_fetch.fetch_bytes`'s own message shape,
     which is safe to echo raw because it never carries a bearer token).
     """
+
+    def __init__(
+        self, message: str, *, reason_code: InvitationFailureReason = "unexpected_error"
+    ) -> None:
+        """Carry the caller-safe `message` plus the enumerated `reason_code` for the audit row."""
+        super().__init__(message)
+        self.reason_code: InvitationFailureReason = reason_code

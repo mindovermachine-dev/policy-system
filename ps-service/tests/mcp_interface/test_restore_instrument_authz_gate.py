@@ -40,6 +40,8 @@ import contextlib
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package (has `__init__.py`); this cross-package import mirrors `test_access_role_tools.py`'s own convention
     FakeAccessRoleStore,
     RaisingAccessRoleStore,
@@ -62,8 +64,6 @@ from ps_service.mcp_interface import mcp_server
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    import pytest
-
 _SYSTEM_OWNER_SUBJECT = "existing-system-owner"
 _NON_ADMIN_SUBJECT = "authenticated-user-only-caller"
 _SYSTEM_ADMIN_SUBJECT = "system-admin-without-grant"
@@ -71,6 +71,14 @@ _COMPLIANCE_OFFICER_SUBJECT = "granted-compliance-officer"
 _CALLER_ISSUER = "https://issuer.example.com/"
 
 _ACCESS_DENIED_MESSAGE = "error: You do not have the required access role for this action."
+
+
+@pytest.fixture(autouse=True)
+def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """The permitted call writes `instrument.restore` rows (issue #195): keep them off Postgres."""
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    return store
 
 
 @contextlib.contextmanager

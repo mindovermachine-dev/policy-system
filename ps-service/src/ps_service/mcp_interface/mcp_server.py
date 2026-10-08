@@ -65,7 +65,9 @@ from ps_service.api.ingestion_orchestration import (
     GraphOpeners,
     _require_ingestion_config,  # pyright: ignore[reportPrivateUsage]  -- issue #194 AC-BI-010: the identical config-completeness check, reused so the error text can never drift
     build_default_pipeline_dependencies,
+    classify_ingestion_failure,
     resolve_ingestion_entry,
+    run_audited_catalog_ingestion,
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.ingestion_orchestration import (
@@ -92,7 +94,14 @@ from ps_service.api.routes import (
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
 from ps_service.api.run_status import get_stage
-from ps_service.audit.errors import AuditPersistenceError, AuditPostgresUnavailableError
+from ps_service.audit.actor import resolve_audit_actor
+from ps_service.audit.emit import AuditContext
+from ps_service.audit.errors import (
+    AuditActorUnresolvedError,
+    AuditPersistenceError,
+    AuditPostgresUnavailableError,
+    AuditTrailUnavailableError,
+)
 from ps_service.audit.models import AuditQueryFilters
 from ps_service.audit.store import PsycopgAuditStore
 from ps_service.authz.models import AccessRole
@@ -144,6 +153,7 @@ from ps_service.ingestion_runs.errors import (
 )
 from ps_service.invitations.client import create_invitation
 from ps_service.invitations.errors import AuthentikInvitationError
+from ps_service.invitations.service import invite_user_audited
 from ps_service.logging import (
     LoggingLifecycleError,
     bind_run_context,
@@ -249,6 +259,7 @@ if TYPE_CHECKING:
     from ps_service.curated_source.catalog_client import CuratedCatalogDependencies
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion_runs import IngestionRunRow, IngestionRunStore
+    from ps_service.ingestion_runs.audit_actions import IngestionReasonCode, IngestionTrigger
     from ps_service.logging.emitter import LogEmitter
 
 _COMPONENT = "mcp_interface"
@@ -882,12 +893,25 @@ def _prepare_catalog_ingestion(
     )
 
 
+@dataclasses.dataclass
+class _FailureCapture:
+    """Carries the audit `reason_code` of the branch that failed a background run.
+
+    `_run_mcp_action` only returns the `error:` text, which must never be parsed back into a
+    reason; the failing `except` arm records its class here instead (issue #195, AC-BI-010).
+    """
+
+    reason_code: IngestionReasonCode | None = None
+
+
 def _run_prepared_catalog_ingestion(
     prepared: _PreparedCatalogIngestion,
     *,
     config: ServiceConfig,
     principal: str | None,
     run_id: str,
+    trigger: IngestionTrigger,
+    capture: _FailureCapture | None = None,
 ) -> dict[str, object] | str:
     """Run the pipeline for an already-prepared request, and map its exceptions.
 
@@ -903,10 +927,15 @@ def _run_prepared_catalog_ingestion(
             caller=principal or "unknown",
             dependencies=prepared.dependencies,
             ingestion_adapter=prepared.ingestion_adapter,
+            trigger=trigger,
         )
     except _CATALOG_INGESTION_ERRORS as exc:
+        if capture is not None:
+            capture.reason_code = classify_ingestion_failure(exc)
         return f"error: {exc}"
-    except McpGraphUnavailableError:
+    except McpGraphUnavailableError as exc:
+        if capture is not None:
+            capture.reason_code = classify_ingestion_failure(exc)
         return _GRAPH_UNAVAILABLE_MESSAGE
     return _to_accepted_response(run_id, outcome).model_dump()
 
@@ -918,21 +947,33 @@ def _resolve_and_ingest(
     config: ServiceConfig,
     principal: str | None,
     run_id: str,
+    audit: AuditContext,
 ) -> dict[str, object] | str:
-    """Validate/resolve the catalog entry, run the pipeline, and map its exceptions.
+    """Run the audited sync ingestion (identity check + pipeline) and map its exceptions.
 
-    Issue #194 S1: a pure composition of `_prepare_catalog_ingestion` (the
-    validation/resolution half) and `_run_prepared_catalog_ingestion` (the
-    blocking pipeline-run half), in that order -- every statement, its
-    exception mapping and its ordering are unchanged from the single-function
-    form, so `ingest_regulation`'s behaviour is unchanged (AC-BI-018).
+    Issue #195: delegates to `run_audited_catalog_ingestion`, the shared orchestration
+    `POST /ingestions` also calls, which writes the `ingestion_run.submit` opening row first
+    (fail-closed: an unavailable audit trail is the fixed `error: ` text and nothing runs), then
+    resolves the request's identity, runs the pipeline and writes the terminal row. The sanitized
+    dependency bundle is passed through so a graph failure still maps to
+    `_GRAPH_UNAVAILABLE_MESSAGE`; every other exception map is unchanged. The response shaping
+    (`_to_accepted_response`, looked up as a module global at call time) stays outside the `try`.
     """
-    prepared = _prepare_catalog_ingestion(celex, short_name, config=config)
-    if isinstance(prepared, str):
-        return prepared
-    return _run_prepared_catalog_ingestion(
-        prepared, config=config, principal=principal, run_id=run_id
-    )
+    try:
+        outcome = run_audited_catalog_ingestion(
+            celex,
+            short_name,
+            config=config,
+            run_id=run_id,
+            caller=principal or "unknown",
+            dependencies=_sanitize_pipeline_graph_opens(build_default_pipeline_dependencies()),
+            audit=audit,
+        )
+    except (*_CATALOG_INGESTION_ERRORS, AuditTrailUnavailableError) as exc:
+        return f"error: {exc}"
+    except McpGraphUnavailableError:
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    return _to_accepted_response(run_id, outcome).model_dump()
 
 
 @server.tool()
@@ -962,8 +1003,15 @@ def ingest_regulation(
     unhealthy (checked before any graph is opened or the pipeline is
     called); the service configuration is missing an LLM/embedding model
     or similarity threshold; the policy graph database cannot be reached;
-    a pipeline stage genuinely fails mid-run; or (this tool's own residual
-    safety net) on any other unexpected failure.
+    a pipeline stage genuinely fails mid-run; the audit trail is temporarily
+    unavailable (nothing is run then); or (this tool's own residual safety net)
+    on any other unexpected failure.
+
+    Every accepted call is audited (issue #195): an `ingestion_run.submit` row
+    (`trigger='sync_ingest'`) is written before anything runs, and one
+    `ingestion_run.complete` row records the instrument id, the counts of new
+    Obligations / new Capabilities / matched Capabilities, or an enumerated
+    failure `reason_code`. An already-ingested CELEX is audited too.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -988,8 +1036,17 @@ def ingest_regulation(
         # here -- the `""` fallback only satisfies the type checker's narrowing,
         # mirroring `_resolve_principal`'s own "unreachable in practice" idiom.
         run_id = current_run_id() or ""
+        try:
+            audit = AuditContext(
+                actor=resolve_audit_actor(
+                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                ),
+                store=PsycopgAuditStore(config),
+            )
+        except AuditActorUnresolvedError:
+            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         return _resolve_and_ingest(
-            celex, short_name, config=config, principal=principal, run_id=run_id
+            celex, short_name, config=config, principal=principal, run_id=run_id, audit=audit
         )
 
     return _run_mcp_action("ingest_regulation", principal, _body)
@@ -1046,9 +1103,16 @@ def _emit_best_effort_failure(action: str, run_id: str, **extra: object) -> None
 
 
 def _record_ingestion_run_outcome(
-    store: IngestionRunStore, *, run_id: str, result: dict[str, object] | str
+    store: IngestionRunStore,
+    *,
+    run_id: str,
+    result: dict[str, object] | str,
+    reason_code: IngestionReasonCode | None,
 ) -> None:
     """Write the run's one terminal row: `failed` for an `error:` string, else `succeeded`.
+
+    `reason_code` is the enumerated cause of a failure (`unexpected_error` when no known branch
+    recorded one); the `error:` text goes to the run row only, never to the audit row.
 
     The write is a single-winner compare-and-swap, so a row is never terminal twice (AC-BI-008).
     A failed write is logged (exception class only, never host detail) and swallowed: nothing
@@ -1056,7 +1120,13 @@ def _record_ingestion_run_outcome(
     """
     try:
         if isinstance(result, str):
-            store.complete_run(run_id, status="failed", result=None, error=result)
+            store.complete_run(
+                run_id,
+                status="failed",
+                result=None,
+                error=result,
+                reason_code=reason_code or "unexpected_error",
+            )
         else:
             store.complete_run(run_id, status="succeeded", result=result, error=None)
     except Exception as exc:  # noqa: BLE001 -- nothing may escape the worker unlogged; the row stays `running`
@@ -1078,12 +1148,18 @@ def _execute_background_ingestion(
     exception is sanitized exactly as for a blocking tool call. The outer `except` is the
     last-resort net: the run's row must never be left `running` by an exception.
     """
+    capture = _FailureCapture()
     try:
         result = _run_mcp_action(
             _BACKGROUND_INGESTION_ACTION,
             principal,
             lambda: _run_prepared_catalog_ingestion(
-                prepared, config=config, principal=principal, run_id=run_id
+                prepared,
+                config=config,
+                principal=principal,
+                run_id=run_id,
+                trigger="async_ingest",
+                capture=capture,
             ),
             run_id=run_id,
         )
@@ -1092,7 +1168,9 @@ def _execute_background_ingestion(
             _BACKGROUND_INGESTION_ACTION, run_id, principal=principal or "unknown", detail=repr(exc)
         )
         result = _UNEXPECTED_ERROR_MESSAGE
-    _record_ingestion_run_outcome(store, run_id=run_id, result=result)
+    _record_ingestion_run_outcome(
+        store, run_id=run_id, result=result, reason_code=capture.reason_code
+    )
 
 
 def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> IngestionRunRow:
@@ -1112,6 +1190,7 @@ def _reconcile_orphaned_run(store: IngestionRunStore, row: IngestionRunRow) -> I
             status="failed",
             result=None,
             error=_INTERRUPTED_RUN_MESSAGE,
+            reason_code="interrupted",
             audit_actor=_RECONCILER_AUDIT_ACTOR,
         )
         reread = store.get_run(row.run_id)
@@ -1151,6 +1230,12 @@ def _submit_ingestion_run(
     exception can leak a slot.
     """
     try:
+        audit_actor = resolve_audit_actor(
+            actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+        )
+    except AuditActorUnresolvedError:
+        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    try:
         reserve_run_slot(
             run_id,
             short_name=prepared.entry.short_name,
@@ -1163,7 +1248,7 @@ def _submit_ingestion_run(
             run_id=run_id,
             celex=prepared.entry.celex,
             short_name=prepared.entry.short_name,
-            actor=_catalog_source_audit_actor(actor),
+            actor=audit_actor,
         )
         start_background_run(
             run_id,
@@ -1286,6 +1371,35 @@ def get_ingestion_status(
     return _run_mcp_action("get_ingestion_status", principal, _body)
 
 
+def _run_audited_change_check(
+    config: ServiceConfig, actor: tuple[str, str] | None, run_id: str
+) -> dict[str, object] | str:
+    """Run the `check_regulations` sweep with the caller as audit actor (issue #195)."""
+    try:
+        audit = AuditContext(
+            actor=resolve_audit_actor(
+                actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+            ),
+            store=PsycopgAuditStore(config),
+        )
+    except AuditActorUnresolvedError:
+        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    try:
+        result = run_change_check_sweep(
+            config=config,
+            run_id=run_id,
+            dependencies=_sanitize_change_check_graph_opens(
+                build_default_change_check_dependencies()
+            ),
+            audit=audit,
+        )
+    except McpGraphUnavailableError:
+        return _GRAPH_UNAVAILABLE_MESSAGE
+    except AuditTrailUnavailableError as exc:
+        return f"error: {exc}"
+    return _to_change_check_response(result).model_dump()
+
+
 @server.tool()
 def check_regulations() -> dict[str, object] | str:
     """CheckRegulations: sweep every tracked regulation for detected amendments.
@@ -1306,8 +1420,17 @@ def check_regulations() -> dict[str, object] | str:
     `reingest_failed`), plus `detail`/`reingest_run_id` where applicable.
     Returns a string beginning `error: ` when the LLM Interface dependency
     is currently unhealthy (checked before any graph is opened or the sweep
-    is run), when the policy graph database cannot be reached, or (this
+    is run), when the policy graph database cannot be reached, when the
+    audit trail cannot record a re-ingest (the sweep stops before that
+    re-ingest; earlier re-ingests of the same sweep stay recorded), or (this
     tool's own residual safety net) on any other unexpected failure.
+
+    Audit (issue #195): every re-ingest the sweep actually runs writes an
+    `ingestion_run.submit` row (`trigger='amendment_check'`, before the
+    re-ingest) and an `ingestion_run.complete` row (instrument id; counts
+    0/0/0 because the sweep re-runs only the Ingestion stage), keyed by the
+    re-ingest's own run id (the `reingest_run_id` in the result) and
+    attributed to the caller. Read them with `list-audit-events`.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1331,18 +1454,7 @@ def check_regulations() -> dict[str, object] | str:
         # calling this closure, so `current_run_id()` is never actually `None`
         # here -- the `""` fallback only satisfies the type checker's narrowing,
         # mirroring `ingest_regulation`'s own identical idiom.
-        run_id = current_run_id() or ""
-        try:
-            result = run_change_check_sweep(
-                config=config,
-                run_id=run_id,
-                dependencies=_sanitize_change_check_graph_opens(
-                    build_default_change_check_dependencies()
-                ),
-            )
-        except McpGraphUnavailableError:
-            return _GRAPH_UNAVAILABLE_MESSAGE
-        return _to_change_check_response(result).model_dump()
+        return _run_audited_change_check(config, actor, current_run_id() or "")
 
     return _run_mcp_action("check_regulations", principal, _body)
 
@@ -1442,6 +1554,11 @@ def near_misses_resolve(
     issue #35. `decision`'s `Literal` type is itself the MCP-schema-level
     rejection of any other value, before this tool's body ever runs.
 
+    `decision="keep-separate"` is audited (issue #195): a `near_miss.resolve`
+    row is recorded before the write, and if that row cannot be recorded the
+    review is left untouched and an `error: ` string is returned. A merge is
+    audited when its approval is signed.
+
     `decision="merge"` is IRREVERSIBLE once it actually executes -- it
     deletes the loser node and re-points every edge that referenced it onto
     the winner, atomically -- so, since issue #131, this call never executes
@@ -1471,10 +1588,20 @@ def near_misses_resolve(
     """
     config = load_config()
     principal = _resolve_principal(config)
+    actor = _resolve_authz_actor(config)
 
     def _body() -> dict[str, object] | str:
         if decision == "merge":
             return _resolve_merge_pending_approval(review_id, ctx, config)
+        try:
+            audit = AuditContext(
+                actor=resolve_audit_actor(
+                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                ),
+                store=PsycopgAuditStore(config),
+            )
+        except AuditActorUnresolvedError:
+            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
         try:
             result = run_resolve_near_miss(
                 review_id,
@@ -1483,8 +1610,9 @@ def near_misses_resolve(
                 dependencies=_sanitize_near_miss_review_graph_opens(
                     build_default_near_miss_review_dependencies()
                 ),
+                audit=audit,
             )
-        except PendingReviewNotFoundError as exc:
+        except (PendingReviewNotFoundError, AuditTrailUnavailableError) as exc:
             return f"error: {exc}"
         except McpGraphUnavailableError:
             return _GRAPH_UNAVAILABLE_MESSAGE
@@ -1541,23 +1669,11 @@ def near_misses_check_approval(
     return _run_mcp_action("near_misses_check_approval", principal, _body)
 
 
-# issue #130: the actor `set-catalog-source`/`reset-catalog-source` record on their audit row when
-# no real caller identity exists. `_resolve_authz_actor` deliberately returns `None` under the
-# local-test bypass, and `audit_events` actors are NOT NULL, so a fixed sentinel (which can never
-# collide with an IdP-issued `sub`, precedent `ps_service.authz.store`'s `system:bootstrap`)
-# stands in.
-_LOCAL_TEST_BYPASS_AUDIT_ACTOR = "system:local-test-bypass"
-
 # Fixed, detail-free strings for the catalog-source tools' read failures (AC-BI-010): never
 # host, port, driver text or the (possibly credential-bearing) override URL.
 _RUNTIME_CONFIG_UNAVAILABLE_MESSAGE = (
     "error: The runtime configuration store is temporarily unavailable."
 )
-
-
-def _catalog_source_audit_actor(actor: tuple[str, str] | None) -> tuple[str, str]:
-    """The `(subject, issuer)` a catalog-source write is audited as (issue #130)."""
-    return actor or (_LOCAL_TEST_BYPASS_AUDIT_ACTOR, _LOCAL_TEST_BYPASS_AUDIT_ACTOR)
 
 
 @server.tool(name="set-catalog-source")
@@ -1608,7 +1724,9 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
             catalog_source_store.set_override(
                 PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
                 url,
-                actor=_catalog_source_audit_actor(actor),
+                actor=resolve_audit_actor(
+                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                ),
             )
         except (
             RuntimeConfigInvalidValueError,
@@ -1662,7 +1780,9 @@ def reset_catalog_source() -> dict[str, object] | str:
         try:
             catalog_source_store.reset_override(
                 PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
-                actor=_catalog_source_audit_actor(actor),
+                actor=resolve_audit_actor(
+                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                ),
             )
         except (RuntimeConfigUnavailableError, RuntimeConfigPersistenceError) as exc:
             return f"error: {exc}"
@@ -1786,8 +1906,10 @@ def invite_user(
     Returns a string beginning `error: ` when the caller lacks the required
     access role, when `email` is not a plausible address (rejected at the
     MCP schema layer, before this tool's body ever runs), when Authentik is
-    unreachable or returns a non-2xx response, or (this tool's own residual
-    safety net) on any other unexpected failure.
+    unreachable or returns a non-2xx response, when the audit trail is
+    unavailable (a `user.invite` row is written before Authentik is called; if
+    it cannot be, nothing is sent), or (this tool's own residual safety net)
+    on any other unexpected failure.
     """
     config = load_config()
     principal = _resolve_principal(config)
@@ -1806,8 +1928,18 @@ def invite_user(
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
         try:
-            result = create_invitation(config, email)
-        except AuthentikInvitationError as exc:
+            result = invite_user_audited(
+                config,
+                email,
+                audit=AuditContext(
+                    actor=resolve_audit_actor(
+                        actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                    ),
+                    store=PsycopgAuditStore(config),
+                ),
+                send_invitation=create_invitation,
+            )
+        except (AuthentikInvitationError, AuditTrailUnavailableError) as exc:
             return f"error: {exc}"
         _emit_invite_created_audit_entry(actor=actor, principal=principal, email=email)
         return {"itoken": result.itoken, "invite_url": result.invite_url}
@@ -1895,8 +2027,10 @@ def restore_instrument(
     On success, returns the same structured summary ps-cli's `restore
     instrument` used to print: `instrument_id` and one `stages` entry per
     completed restore stage, each carrying its own `stage`/`status`
-    (AC-BI-004). Returns a string beginning `error: ` when the configured
-    curated-content source is unreachable or the fetched artifact is
+    (AC-BI-004). Writes an `instrument.restore` audit row before the restore starts and a
+    terminal row after it (issue #195); if the opening row cannot be written nothing is
+    restored and the result is an `error: ` string. Returns a string beginning `error: ` when
+    the configured curated-content source is unreachable or the fetched artifact is
     missing/malformed, when `instrument_id` matches more than one catalog
     entry case-insensitively (issue #184, AC-BI-003 -- the error names every
     colliding id and nothing is fetched), when `instrument_id` matches no
@@ -1933,14 +2067,25 @@ def restore_instrument(
             build_default_restore_from_catalog_dependencies()
         )
         try:
+            audit = AuditContext(
+                actor=resolve_audit_actor(
+                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+                ),
+                store=PsycopgAuditStore(config),
+            )
+        except AuditActorUnresolvedError:
+            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        try:
             outcome = run_restoration_from_catalog_source(
                 request_body,
                 config=config,
                 actor=principal or "unknown",
                 dependencies=dependencies,
+                audit=audit,
                 owner=owner,
             )
         except (
+            AuditTrailUnavailableError,
             CatalogSourceOverrideUnavailableError,
             CuratedSourceUnavailableError,
             RestoreInstrumentIdAmbiguousError,
@@ -2320,6 +2465,7 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     occurred_to: datetime | None = None,
     cursor: Annotated[str, Field(min_length=1)] | None = None,
     page_size: Annotated[int, Field(gt=0, le=100)] = 25,
+    details: dict[str, str] | None = None,
 ) -> dict[str, object] | str:
     """ListAuditEvents: read the shared `audit_events` audit trail, filtered and paginated.
 
@@ -2334,7 +2480,17 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
     `occurred_to` (ISO 8601) by a time range. Results are always newest
     first. `cursor` (from a prior call's own `next_cursor`) advances to the
     next page; `page_size` bounds how many events one call returns (default
-    25, maximum 100).
+    25, maximum 100). `details` (issue #195) is an exact-match filter on the
+    business subject of a row: allowed keys are `celex` (an ingestion run's
+    submit and complete rows), `regulatory_instrument_id` (an ingestion's
+    complete row) and `instrument_id` (restore rows), e.g.
+    `{"celex": "32024R2847"}` answers "who ingested this regulation?". Any
+    other key, or an empty value, is rejected with an `error: ` response.
+
+    To allow another key: add it to `ps_service.audit.AUDIT_DETAILS_FILTER_KEYS`
+    and its fixed SQL fragment to `audit/store.py`'s `_DETAILS_FILTER_FRAGMENTS`,
+    add an expression index in a new audit migration, then update this
+    docstring, the `ps-list-audit-events` skill and the architecture docs.
 
     On success, returns `{"events": [{"id", "occurred_at", "actor_subject",
     "actor_issuer", "action", "resource_type", "resource_id", "outcome",
@@ -2364,6 +2520,7 @@ def list_audit_events(  # noqa: PLR0913, PLR0917 -- every parameter is an indepe
             action=action,
             occurred_from=occurred_from,
             occurred_to=occurred_to,
+            details=details,
         )
         try:
             page = run_list_audit_events(

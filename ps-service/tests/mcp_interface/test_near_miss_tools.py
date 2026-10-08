@@ -150,14 +150,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
+import pytest
 from api.test_routes_near_misses import (
     _record,  # pyright: ignore[reportPrivateUsage]  -- reuse the existing REST-side fixture verbatim, not reinvented (PLAN.md Slice 3.1 instruction)
 )
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
 from mcp.types import CallToolResult, TextContent
 
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
@@ -167,8 +170,6 @@ from ps_service.passkey_signing.models import PendingApprovalRow
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
     from pathlib import Path
-
-    import pytest
 
     from ps_service.company_merge.models import PendingReviewRecord
     from ps_service.config import ServiceConfig
@@ -456,6 +457,14 @@ def test_happy_path_lists_every_unresolved_review_with_full_field_set(
         assert line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
 
 
+@pytest.fixture(name="audit_store", autouse=True)
+def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
+    """`near_misses_resolve` writes `near_miss.resolve` rows (issue #195): keep off Postgres."""
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    return store
+
+
 def _call_near_misses_resolve(review_id: str, decision: str) -> CallToolResult:
     result = asyncio.run(
         mcp_server.server.call_tool(
@@ -477,10 +486,11 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
     emitter = configure()
 
+    # Step 0 (`get_pending_review`, issue #195): the audit lookup of the review's entity ids.
     # Step 1 (`_FIND_REVIEW_QUERY`): the review exists, kind "Capability".
     # Step 2 (`_DELETE_REVIEW_QUERY`): the real `resolve_review` does not
     # inspect this call's return value at all for `keep-separate`.
-    graph = _ScriptedGraphHandle(steps=[[["Capability"]], []])
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]], []])
     _use_scripted_graph(monkeypatch, graph)
 
     result = _call_near_misses_resolve("review_aaa", "keep-separate")
@@ -500,11 +510,12 @@ def test_keep_separate_resolves_with_winner_and_loser_left_none(
     # 2-query sequence for `review_aaa`/`keep-separate` -- asserted on the
     # real queries/params it issued against `graph`, not on a fake
     # collaborator's own recorded call.
-    assert len(graph.calls) == 2
-    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[0].query
+    assert len(graph.calls) == 3
     assert graph.calls[0].params == {"review_id": "review_aaa"}
-    assert "DELETE r" in graph.calls[1].query
+    assert "MATCH (r:PendingReview {id: $review_id}) RETURN" in graph.calls[1].query
     assert graph.calls[1].params == {"review_id": "review_aaa"}
+    assert "DELETE r" in graph.calls[2].query
+    assert graph.calls[2].params == {"review_id": "review_aaa"}
 
     emitter.flush()
     all_lines = read_lines(resolve_default_log_path())
@@ -999,7 +1010,11 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     # wrapped in `_execute_query`) raises something `_execute_query` itself
     # does not catch (only `redis.exceptions.RedisError` is handled there).
     graph = _ScriptedGraphHandle(
-        steps=[[["Capability"]], RuntimeError("boom -- must never reach the caller")]
+        steps=[
+            [_row_for(_record("review_aaa"))],
+            [["Capability"]],
+            RuntimeError("boom -- must never reach the caller"),
+        ]
     )
     _use_scripted_graph(monkeypatch, graph)
 
@@ -1018,3 +1033,80 @@ def test_resolve_residual_unexpected_exception_returns_generic_error_and_logs_de
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
+
+
+# --- issue #195: keep-separate audits `near_miss.resolve` (AC-BI-001/011/012) ---
+
+
+def _script_keep_separate(monkeypatch: pytest.MonkeyPatch) -> _ScriptedGraphHandle:
+    graph = _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))], [["Capability"]], []])
+    _use_scripted_graph(monkeypatch, graph)
+    return graph
+
+
+def test_near_misses_resolve_keep_separate_audits_the_verified_actor(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    configure()
+    _script_keep_separate(monkeypatch)
+
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "keep-separate")
+
+    assert result.is_error is False
+    (row,) = audit_store.rows
+    assert (row.actor_subject, row.actor_issuer) == (_ACTOR_SUBJECT, _ACTOR_ISSUER)
+    assert (row.action, row.resource_id, row.outcome) == (
+        "near_miss.resolve",
+        "review_aaa",
+        "applied",
+    )
+    assert row.details["decision"] == "keep_separate"
+
+
+def test_near_misses_resolve_keep_separate_audits_system_local_test_bypass_under_bypass(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    _script_keep_separate(monkeypatch)
+
+    _call_near_misses_resolve("review_aaa", "keep-separate")
+
+    (row,) = audit_store.rows
+    assert (row.actor_subject, row.actor_issuer) == ("system:local-test-bypass",) * 2
+
+
+def test_near_misses_resolve_returns_error_prefix_when_audit_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    configure()
+    audit_store.fail_on_outcome["applied"] = AuditPostgresUnavailableError("down")
+    graph = _script_keep_separate(monkeypatch)
+
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "keep-separate")
+
+    assert _text(result).startswith("error: ")
+    assert "audit trail" in _text(result)
+    assert len(graph.calls) == 1  # only the lookup; no delete was issued
+
+
+def test_creating_a_merge_pending_approval_via_mcp_writes_no_audit_row(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """The merge is audited when the approval is signed, not when it is requested (issue #195)."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    _use_scripted_graph(
+        monkeypatch, _ScriptedGraphHandle(steps=[[_row_for(_record("review_aaa"))]])
+    )
+    monkeypatch.setattr(
+        mcp_server, "PsycopgPendingApprovalStore", _fake_store_factory(_FakePendingApprovalStore())
+    )
+
+    with _verified_actor():
+        result = _call_near_misses_resolve("review_aaa", "merge")
+
+    assert "pending_approval_id" in json.loads(_text(result))
+    assert audit_store.rows == []

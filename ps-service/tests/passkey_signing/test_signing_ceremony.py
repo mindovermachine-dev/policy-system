@@ -46,6 +46,7 @@ from api.test_routes_near_misses import (
     _fake_dependencies,  # pyright: ignore[reportPrivateUsage]  -- reused verbatim, mirrors test_near_miss_tools.py's own cross-package-import precedent
     _record,  # pyright: ignore[reportPrivateUsage]  -- same reuse, mirrors `_fake_dependencies`' own justification immediately above
 )
+from audit._fakes import InMemoryAuditStore
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
@@ -54,6 +55,7 @@ from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from passkey_signing._fakes import FakePendingApprovalStore, FakeSigningCredentialStore
 from ps_service.api.dependencies import (
     get_principal,
+    provide_audit_store,
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
 )
@@ -116,6 +118,7 @@ def _client(
     credential_store: FakeSigningCredentialStore,
     recorded_calls: list[_MergeCall] | None = None,
     principal: Principal | None = None,
+    audit_store: InMemoryAuditStore | None = None,
 ) -> TestClient:
     def _resolve(
         graph: GraphHandle, review_id: str, decision: Literal["keep-separate", "merge"]
@@ -131,6 +134,8 @@ def _client(
     dependencies, _ = _fake_dependencies((record,), resolve=_resolve)
 
     app = create_app(_app_config())
+    audit = audit_store or InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: audit
     app.dependency_overrides[provide_pending_approval_store] = lambda: pending_store
     app.dependency_overrides[provide_signing_credential_store] = lambda: credential_store
     app.dependency_overrides[provide_near_miss_review_dependencies] = lambda: dependencies

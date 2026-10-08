@@ -68,21 +68,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import redis.exceptions
+
 from ps_service.api.errors import PendingReviewNotFoundError
 from ps_service.api.models import (
     PendingReviewEntry,
     PendingReviewListResponse,
     ResolveReviewResponse,
 )
-from ps_service.company_merge.errors import StalePendingReviewError
+from ps_service.api.near_miss_audit_actions import (
+    NEAR_MISS_RESOLVE_ACTION,
+    NEAR_MISS_REVIEW_RESOURCE_TYPE,
+)
+from ps_service.audit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.company_merge.errors import CompanyMergePersistenceError, StalePendingReviewError
+from ps_service.logging import emit_log_entry
+from ps_service.logging.errors import LoggingLifecycleError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Literal
 
+    from ps_service.api.near_miss_audit_actions import NearMissResolveReason
+    from ps_service.audit import AuditContext
     from ps_service.company_merge.falkordb_client import GraphHandle
     from ps_service.company_merge.models import PendingReviewRecord, ResolveOutcome
     from ps_service.config import ServiceConfig
+    from ps_service.logging import LogEmitter
+
+_COMPONENT = "near_miss_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +108,7 @@ class NearMissReviewDependencies:
     resolve_review: Callable[
         [GraphHandle, str, Literal["keep-separate", "merge"]], ResolveOutcome | None
     ]
+    get_pending_review: Callable[[GraphHandle, str], PendingReviewRecord | None]
 
 
 def _to_pending_review_entry(record: PendingReviewRecord) -> PendingReviewEntry:
@@ -143,12 +158,59 @@ def _to_resolve_response(outcome: ResolveOutcome) -> ResolveReviewResponse:
     )
 
 
+def _failure_reason(exc: Exception) -> NearMissResolveReason:
+    """Map a failed resolution to the enumerated audit `reason_code` (never the message)."""
+    if isinstance(exc, PendingReviewNotFoundError):
+        # A stale merge is translated to this API error with the stale signal as its cause.
+        return (
+            "review_stale"
+            if isinstance(exc.__cause__, StalePendingReviewError)
+            else "review_not_found"
+        )
+    if isinstance(exc, CompanyMergePersistenceError):
+        return "graph_write_failed"
+    if isinstance(exc, redis.exceptions.RedisError):
+        return "graph_unavailable"
+    return "unexpected_error"
+
+
+def _emit_resolve_log(
+    *,
+    record: PendingReviewRecord,
+    decision: Literal["keep-separate", "merge"],
+    approval_id: str | None,
+    outcome: Literal["succeeded", "failed"],
+    reason: NearMissResolveReason | None,
+    emitter: LogEmitter | None,
+) -> None:
+    """One semantic entry per resolution so the log and the audit trail agree (ids only)."""
+    extra: dict[str, object] = {"decision": decision}
+    if approval_id is not None:
+        extra["approval_id"] = approval_id
+    if reason is not None:
+        extra["reason_code"] = reason
+    try:
+        emit_log_entry(
+            component=_COMPONENT,
+            action="resolve_near_miss",
+            entity_id=record.id,
+            outcome=outcome,
+            extra=extra,
+            emitter=emitter,
+        )
+    except LoggingLifecycleError:
+        return
+
+
 def run_resolve_near_miss(
     review_id: str,
     decision: Literal["keep-separate", "merge"],
     *,
     config: ServiceConfig,
     dependencies: NearMissReviewDependencies,
+    audit: AuditContext,
+    approval_id: str | None = None,
+    emitter: LogEmitter | None = None,
 ) -> ResolveReviewResponse:
     """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
 
@@ -157,6 +219,14 @@ def run_resolve_near_miss(
     every edge referencing the loser canonical node onto the
     deterministically-chosen winner, deletes the loser, and deletes the
     `PendingReview` record, all as one atomic write.
+
+    Audit (issue #195, AC-BI-012/011): after the review is found and before any write, a
+    `near_miss.resolve` `applied` row is recorded (fail-closed: if it cannot be written nothing is
+    resolved and `AuditTrailUnavailableError` propagates). If the resolution then fails, a
+    best-effort `failed` row with an enumerated `reason_code` follows and the original exception is
+    re-raised unchanged. An unknown review writes no row (nothing to audit, D-G). `audit.actor` is
+    the principal who performed the operation (for a passkey-approved merge, the approver, with
+    `approval_id` set).
 
     AC-BI-008 (not-found half, both decisions): raises
     `PendingReviewNotFoundError` (-> HTTP 404) when `review_id` doesn't
@@ -176,6 +246,9 @@ def run_resolve_near_miss(
         config: The resolved service configuration (injected).
         dependencies: The near-miss review dependency bundle (injected;
             overridden in tests).
+        audit: Who is acting and where their audit rows go.
+        approval_id: The signed approval authorising a merge, recorded in the audit details.
+        emitter: Optional log emitter override (tests).
 
     Returns:
         A :class:`ResolveReviewResponse` naming the resolved review and
@@ -185,8 +258,63 @@ def run_resolve_near_miss(
         PendingReviewNotFoundError: `review_id` doesn't exist, was already
             resolved, or (merge only) references a node a prior merge
             already deleted.
+        AuditTrailUnavailableError: the opening audit row could not be written; nothing was
+            resolved.
     """
     graph = dependencies.open_single_tenant_graph(config)
+    record = dependencies.get_pending_review(graph, review_id)
+    if record is None:
+        raise PendingReviewNotFoundError(f"no unresolved PendingReview with id {review_id!r}")
+    target = AuditTarget(NEAR_MISS_RESOLVE_ACTION, NEAR_MISS_REVIEW_RESOURCE_TYPE, record.id)
+    details: dict[str, object] = {
+        "review_id": record.id,
+        "kind": record.kind,
+        "incoming_id": record.incoming_id,
+        "existing_id": record.nearest_existing_id,
+        "decision": "keep_separate" if decision == "keep-separate" else "merge",
+    }
+    if approval_id is not None:
+        details["approval_id"] = approval_id
+    record_opening_row(audit, target, component=_COMPONENT, details=details, emitter=emitter)
+    try:
+        response = _resolve_or_raise_not_found(dependencies, graph, review_id, decision)
+    except Exception as exc:
+        reason = _failure_reason(exc)
+        record_follow_up_row(
+            audit,
+            target,
+            component=_COMPONENT,
+            outcome="failed",
+            details={**details, "reason_code": reason},
+            emitter=emitter,
+        )
+        _emit_resolve_log(
+            record=record,
+            decision=decision,
+            approval_id=approval_id,
+            outcome="failed",
+            reason=reason,
+            emitter=emitter,
+        )
+        raise
+    _emit_resolve_log(
+        record=record,
+        decision=decision,
+        approval_id=approval_id,
+        outcome="succeeded",
+        reason=None,
+        emitter=emitter,
+    )
+    return response
+
+
+def _resolve_or_raise_not_found(
+    dependencies: NearMissReviewDependencies,
+    graph: GraphHandle,
+    review_id: str,
+    decision: Literal["keep-separate", "merge"],
+) -> ResolveReviewResponse:
+    """Run `resolve_review`, translating its not-found/stale signals into API errors."""
     try:
         outcome = dependencies.resolve_review(graph, review_id, decision)
     except StalePendingReviewError as exc:
@@ -281,6 +409,7 @@ def build_default_near_miss_review_dependencies(
         single-tenant-graph opener.
     """
     from ps_service.company_merge.pending_review import (  # noqa: PLC0415 -- M6: function-local
+        get_pending_review,
         list_pending_reviews,
         resolve_review,
     )
@@ -291,4 +420,5 @@ def build_default_near_miss_review_dependencies(
         ),
         list_pending_reviews=list_pending_reviews,
         resolve_review=resolve_review,
+        get_pending_review=get_pending_review,
     )

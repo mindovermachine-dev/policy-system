@@ -21,6 +21,12 @@ reachable by any MCP-capable client.
 entry per completed restore stage — the same summary ps-cli's own `restore
 instrument` used to print — or the specific named error state on failure.
 
+**Audit:** every restore that reaches the restore step is recorded as an
+`instrument.restore` opening row and a terminal row (instrument id, outcome,
+and a `reason_code` on failure). Use `ps-list-audit-events` with `details`
+`{"instrument_id": "<id>"}` to read them. If the audit trail cannot record the
+opening row nothing is restored.
+
 ## On Load
 
 Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
@@ -62,16 +68,17 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    of the following named states — never collapsed into a generic
    "restore failed":
 
-   | Tool result shape                                               | Named state to report                                                                                                                                     |
-   | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or an auth-rejection-shaped error | "PS Service is unreachable or the caller is unauthenticated"                                                                                              |
-   | A schema-validation rejection (a malformed `instrument_id`)     | "instrument_id is not well-formed" — report the id that was rejected; never retry with a guessed correction                                               |
-   | `error: <message naming the curated-content source>`            | The configured curated-content source is unreachable, or the fetched artifact is missing/malformed — report the message verbatim                          |
-   | `error: <message about a checksum/schema_version mismatch>`     | "Fetched artifact rejected (checksum or schema_version mismatch)" — the artifact itself failed integrity verification, distinct from a source outage      |
-   | `error: <message naming a failing restore stage>`               | "Restore stage failed" — report the message verbatim, including a missing similarity-threshold configuration failure, distinct from an artifact rejection |
-   | `error: the policy graph database is not reachable`             | The compliance graph database cannot be reached — report it distinctly from every state above                                                             |
-   | `error: an unexpected error occurred`                           | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                         |
-   | Successful structured response                                  | Report `instrument_id` and every completed stage's own `stage`/`status` plainly                                                                           |
+   | Tool result shape                                                                     | Named state to report                                                                                                                                                         |
+   | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or an auth-rejection-shaped error                       | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                  |
+   | A schema-validation rejection (a malformed `instrument_id`)                           | "instrument_id is not well-formed" — report the id that was rejected; never retry with a guessed correction                                                                   |
+   | `error: <message naming the curated-content source>`                                  | The configured curated-content source is unreachable, or the fetched artifact is missing/malformed — report the message verbatim                                              |
+   | `error: <message about a checksum/schema_version mismatch>`                           | "Fetched artifact rejected (checksum or schema_version mismatch)" — the artifact itself failed integrity verification, distinct from a source outage                          |
+   | `error: <message naming a failing restore stage>`                                     | "Restore stage failed" — report the message verbatim, including a missing similarity-threshold configuration failure, distinct from an artifact rejection                     |
+   | `error: the policy graph database is not reachable`                                   | The compliance graph database cannot be reached — report it distinctly from every state above                                                                                 |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.` | The audit trail could not record the operation, so it was NOT run (nothing was restored) — report it distinctly from an outage of the graph or of PS Service; nothing changed |
+   | `error: an unexpected error occurred`                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                             |
+   | Successful structured response                                                        | Report `instrument_id` and every completed stage's own `stage`/`status` plainly                                                                                               |
 
 4. **Output**, in this shape on success:
 

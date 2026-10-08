@@ -45,7 +45,7 @@ from ps_service.api.restore_orchestration import (
     build_default_restore_dependencies,
     build_default_restore_from_catalog_dependencies,
 )
-from ps_service.audit.store import PsycopgAuditStore
+from ps_service.audit import AuditContext, AuditStore, PsycopgAuditStore, resolve_audit_actor
 from ps_service.auth import Principal
 from ps_service.authz.service import require_role
 from ps_service.authz.store import PsycopgAccessRoleStore
@@ -316,3 +316,33 @@ def provide_change_check_dependencies() -> ChangeCheckDependencies:
         The production :class:`ChangeCheckDependencies` bundle.
     """
     return build_default_change_check_dependencies()
+
+
+def provide_audit_store(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+) -> AuditStore:
+    """Return the production `AuditStore` for audited REST operations (issue #195).
+
+    A plain provider, overridable in tests via `app.dependency_overrides` with an in-memory store
+    (the same idiom as :func:`provide_pending_approval_store`). `PsycopgAuditStore` opens no
+    connection until a row is written, so constructing one per request is cheap.
+    """
+    return PsycopgAuditStore(config)
+
+
+def provide_audit_context(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+    principal: Annotated[Principal | None, Depends(get_principal)],
+    audit_store: Annotated[AuditStore, Depends(provide_audit_store)],
+) -> AuditContext:
+    """Return who is acting and where their audit rows go, for the request (issue #195).
+
+    The actor is the verified principal; under the local-test bypass (no principal) it is the
+    `system:local-test-bypass` sentinel. A request with neither is refused by
+    `resolve_audit_actor` (fail-closed, never silently attributed to the sentinel).
+    """
+    actor = (principal.sub, principal.iss) if principal is not None else None
+    return AuditContext(
+        resolve_audit_actor(actor, is_local_test_bypass_active=config.is_local_test_bypass_active),
+        audit_store,
+    )

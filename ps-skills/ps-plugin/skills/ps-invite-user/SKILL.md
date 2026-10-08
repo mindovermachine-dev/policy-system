@@ -20,6 +20,11 @@ resulting URL must be delivered to the invitee by the admin themselves.
 **Deliverable:** the created invite's `itoken` and `invite_url` — or the
 specific named error state on failure.
 
+**Audit:** each invite is recorded as a `user.invite` row (the invitee email,
+written before Authentik is called, plus a `failed` row with a `reason_code`
+if the call fails). The invite token and URL are never recorded. If the audit
+trail cannot record the row, no invite is created.
+
 ## On Load
 
 Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
@@ -58,15 +63,16 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    of the following named states — never collapsed into a generic
    "invite failed":
 
-   | Tool result shape                                                                          | Named state to report                                                                                                              |
-   | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or `error: this action requires a real authenticated caller` | "PS Service is unreachable or the caller is unauthenticated"                                                                       |
-   | `error: You do not have the required access role for this action.`                         | `access_denied` — the caller does not hold `SystemAdmin` or above                                                                  |
-   | `error: The authorization store is temporarily unavailable.`                               | `authorization_store_unavailable` — the authorization store cannot be reached; the action fails closed until it is                 |
-   | The tool call itself is rejected before running (`email` is not a plausible address)       | `invalid_email` — the address given is not a plausible email; ask the user to confirm/correct it and re-check before retrying      |
-   | `error: Authentik invitation request failed: ...`                                          | `authentik_unavailable` — Authentik is unreachable or returned a non-2xx response; report the state, not the raw message internals |
-   | `error: an unexpected error occurred`                                                      | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause  |
-   | Successful structured response                                                             | Report `itoken` and `invite_url` plainly                                                                                           |
+   | Tool result shape                                                                          | Named state to report                                                                                                                                         |
+   | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or `error: this action requires a real authenticated caller` | "PS Service is unreachable or the caller is unauthenticated"                                                                                                  |
+   | `error: You do not have the required access role for this action.`                         | `access_denied` — the caller does not hold `SystemAdmin` or above                                                                                             |
+   | `error: The authorization store is temporarily unavailable.`                               | `authorization_store_unavailable` — the authorization store cannot be reached; the action fails closed until it is                                            |
+   | The tool call itself is rejected before running (`email` is not a plausible address)       | `invalid_email` — the address given is not a plausible email; ask the user to confirm/correct it and re-check before retrying                                 |
+   | `error: Authentik invitation request failed: ...`                                          | `authentik_unavailable` — Authentik is unreachable or returned a non-2xx response; report the state, not the raw message internals                            |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.`      | The audit trail could not record the operation, so it was NOT run (no invite was created) — report it distinctly from an outage of the graph or of PS Service |
+   | `error: an unexpected error occurred`                                                      | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                             |
+   | Successful structured response                                                             | Report `itoken` and `invite_url` plainly                                                                                                                      |
 
 4. **Output**, in this shape on success:
 

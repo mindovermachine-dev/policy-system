@@ -28,3 +28,20 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
     except ModuleNotFoundError:
         return
     fakes.install_default_cellar_stub_unless_live(request, monkeypatch)
+
+
+@pytest.fixture
+def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
+    """Route the sync `ingest_regulation` tool's audit rows to memory (issue #195).
+
+    The tool writes an opening row before it runs anything, so a test that drives it must not
+    reach Postgres. Opt in per module with
+    `pytestmark = pytest.mark.usefixtures("ingest_audit_store")`.
+    The import is lazy for the same importlib cross-package reason as `_default_cellar_stub`.
+    """
+    fakes = importlib.import_module("audit._fakes")
+    from ps_service.mcp_interface import mcp_server
+
+    store = fakes.InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", fakes.audit_store_factory(store))
+    return store

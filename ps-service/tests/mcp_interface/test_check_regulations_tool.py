@@ -43,6 +43,7 @@ import json
 from datetime import date
 from typing import TYPE_CHECKING
 
+import pytest
 from api._fakes import build_fake_change_check_dependencies
 from mcp.types import CallToolResult, TextContent
 
@@ -63,9 +64,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    import pytest
-
     type ReadLines = Callable[[Path], list[dict[str, object]]]
+
+
+pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 
 class NationalTranspositionNotSupportedError(Exception):

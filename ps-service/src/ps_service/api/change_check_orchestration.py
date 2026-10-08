@@ -55,6 +55,7 @@ Mirrors ``ingestion_orchestration._emit_run``'s shape exactly.
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -66,14 +67,27 @@ from ps_service.api.ingestion_orchestration import (
     _default_ingestion_adapter,  # pyright: ignore[reportPrivateUsage]  -- shared graph/adapter factory; reused per PLAN.md §0.4/D9's main.py:22-25 precedent
     _open_native_graph,  # pyright: ignore[reportPrivateUsage]  -- see above
     _open_single_tenant_graph,  # pyright: ignore[reportPrivateUsage]  -- see above
+    classify_ingestion_failure,
+)
+from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.audit.errors import AuditTrailUnavailableError
+from ps_service.ingestion_runs.audit_actions import (
+    INGESTION_RUN_COMPLETE_ACTION,
+    INGESTION_RUN_RESOURCE_TYPE,
+    INGESTION_RUN_SUBMIT_ACTION,
+    IngestionReasonCode,
+    completion_audit_entry,
+    submission_audit_entry,
 )
 from ps_service.logging.facade import emit_log_entry
+from ps_service.logging.run_context import bind_run_context
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from ps_service.api.catalog import CatalogEntry
     from ps_service.api.ingestion_orchestration import GraphHandle
+    from ps_service.audit.emit import AuditContext
     from ps_service.change_monitor.models import (
         AmendmentFinding,
         PollReport,
@@ -185,8 +199,17 @@ class TriggerReingestionCall(Protocol):
         adapter: IngestionAdapter,
         graph: GraphHandle,
         emitter: LogEmitter | None = None,
+        run_id: str | None = None,
     ) -> ReingestionOutcome:
         """Re-ingest `identifier` as `new_version` and record its succession."""
+        ...
+
+
+class WillReingestCall(Protocol):
+    """Call shape of ``change_monitor.trigger.will_reingest`` (issue #195)."""
+
+    def __call__(self, graph: GraphHandle, short_name: str, new_version: str) -> bool:
+        """Whether ``trigger_reingestion`` would run a real re-ingest (read-only)."""
         ...
 
 
@@ -209,6 +232,7 @@ class ChangeCheckDependencies:
     trigger_reingestion: TriggerReingestionCall
     default_adapter: Callable[[], IngestionAdapter]
     find_catalog_entry: Callable[[str], CatalogEntry | None]
+    will_reingest: WillReingestCall
 
 
 def _emit_sweep(
@@ -217,6 +241,7 @@ def _emit_sweep(
     run_id: str,
     emitter: LogEmitter | None,
     duration_ms: float | None = None,
+    extra: Mapping[str, object] | None = None,
 ) -> None:
     """Emit one ``change_check_sweep`` log entry (D8, AC-BI-008 full).
 
@@ -224,12 +249,13 @@ def _emit_sweep(
     always passed explicitly, never left to ``contextvars`` inheritance.
 
     Args:
-        outcome: ``"started"`` / ``"succeeded"``.
+        outcome: ``"started"`` / ``"succeeded"`` / ``"failed"`` (aborted, issue #195).
         run_id: The request-scoped run id (bound by ``provide_run_id``,
             passed into ``run_change_check_sweep`` unchanged -- this
             function mints nothing of its own).
         emitter: Optional explicit emitter; otherwise the process default.
         duration_ms: Wall time for the sweep so far (omitted on ``"started"``).
+        extra: Optional structured fields (the abort reason class and processed count).
     """
     emit_log_entry(
         component=_COMPONENT,
@@ -237,6 +263,7 @@ def _emit_sweep(
         outcome=outcome,
         run_id=run_id,
         duration_ms=duration_ms,
+        extra=extra,
         emitter=emitter,
     )
 
@@ -277,6 +304,7 @@ def run_change_check_sweep(
     config: ServiceConfig,
     run_id: str,
     dependencies: ChangeCheckDependencies,
+    audit: AuditContext,
     emitter: LogEmitter | None = None,
 ) -> ChangeCheckResult:
     """Sweep every tracked instrument for amendments and re-ingest any found.
@@ -298,6 +326,15 @@ def run_change_check_sweep(
     ``"started"``/``"succeeded"`` pair and one ``_emit_instrument`` entry per
     tracked instrument, all carrying this ``run_id`` explicitly.
 
+    Issue #195: every re-ingest that actually runs is bracketed by an
+    ``ingestion_run.submit`` / ``ingestion_run.complete`` audit pair
+    (``trigger='amendment_check'``, the re-ingest's own run id as ``resource_id``,
+    ``audit.actor`` as actor; see :func:`_reingest_one`). The opening row is
+    FAIL-CLOSED: if it cannot be written the WHOLE sweep aborts with
+    ``AuditTrailUnavailableError`` (a ``change_check_sweep`` ``failed`` log entry
+    is emitted first); the pairs of instruments already re-ingested earlier in
+    that sweep stay recorded, but their outcomes are not returned to the caller.
+
     Args:
         config: The resolved service configuration.
         run_id: The request-scoped run id (bound by ``provide_run_id``).
@@ -306,12 +343,17 @@ def run_change_check_sweep(
             emits (D8).
         dependencies: The injected dependency bundle (the production bundle
             in production; a fake in fast tests).
+        audit: Who triggered the sweep and where the audit rows go.
         emitter: Optional explicit log emitter; otherwise the process default.
 
     Returns:
         A :class:`ChangeCheckResult` carrying ``run_id`` and one
         :class:`InstrumentCheckOutcome` per tracked instrument, in
         ``read_tracked_instruments``'s own returned order.
+
+    Raises:
+        AuditTrailUnavailableError: An opening audit row could not be written; the sweep
+            stopped before that instrument's re-ingest.
     """
     started = time.perf_counter()
     _emit_sweep(outcome="started", run_id=run_id, emitter=emitter)
@@ -328,12 +370,27 @@ def run_change_check_sweep(
         instrument_id = node.regulatory_instrument_id
         finding = findings_by_id.get(instrument_id)
         if finding is not None:
-            outcome = _reingest_one(
-                finding,
-                celex_by_id[instrument_id],
-                config=config,
-                dependencies=dependencies,
-            )
+            try:
+                outcome = _reingest_one(
+                    finding,
+                    celex_by_id[instrument_id],
+                    config=config,
+                    dependencies=dependencies,
+                    audit=audit,
+                    emitter=emitter,
+                )
+            except AuditTrailUnavailableError:
+                _emit_sweep(
+                    outcome="failed",
+                    run_id=run_id,
+                    emitter=emitter,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                    extra={
+                        "reason": "AuditTrailUnavailableError",
+                        "instruments_processed": len(outcomes),
+                    },
+                )
+                raise
         elif instrument_id in failed_ids:
             outcome = InstrumentCheckOutcome(instrument_id, "poll_failed")
         elif instrument_id in unconfigured_ids:
@@ -359,6 +416,8 @@ def _reingest_one(
     *,
     config: ServiceConfig,
     dependencies: ChangeCheckDependencies,
+    audit: AuditContext,
+    emitter: LogEmitter | None,
 ) -> InstrumentCheckOutcome:
     """Re-ingest one detected amendment (PLAN.md §1 D2-D7's full call contract).
 
@@ -409,6 +468,11 @@ def _reingest_one(
         config: The resolved service configuration, passed through to
             `dependencies.open_native`.
         dependencies: The injected dependency bundle.
+        audit: Who triggered the sweep and where the audit rows go (issue #195). A pair is
+            written only when ``dependencies.will_reingest`` says a real re-ingest will run
+            (``fresh``) and a catalog entry resolved (D-G); the opening row's
+            ``AuditTrailUnavailableError`` propagates out of this function (CHANGES F-5).
+        emitter: Optional explicit log emitter.
 
     Returns:
         `("amendment_reingested", ...)` on a successful `trigger_reingestion`
@@ -433,24 +497,141 @@ def _reingest_one(
         )
     adapter = dependencies.default_adapter()
     graph = dependencies.open_native(config, entry.short_name)
+    new_version = finding.detected_consolidated_celex
     try:
-        outcome = dependencies.trigger_reingestion(
-            celex,
-            entry.short_name,
-            finding.detected_consolidated_celex,
-            adapter=adapter,
-            graph=graph,
-        )
+        fresh = dependencies.will_reingest(graph, entry.short_name, new_version)
     except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
-        if type(exc).__name__ == _NATIONAL_TRANSPOSITION_ERROR_NAME:
-            return InstrumentCheckOutcome(instrument_id, "skipped", detail=str(exc))
-        return InstrumentCheckOutcome(instrument_id, "reingest_failed", detail=_safe_reason(exc))
-    detail = f"{outcome.new_regulatory_instrument_id} ({outcome.outcome})"
+        return _failed_outcome(instrument_id, exc)
+    if not fresh:
+        # `resume` / `already_processed` ingest nothing, so there is no ingestion to audit
+        # (CHANGES F-4); the supersession log entry already covers `resume`.
+        try:
+            outcome = dependencies.trigger_reingestion(
+                celex, entry.short_name, new_version, adapter=adapter, graph=graph
+            )
+        except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary
+            return _failed_outcome(instrument_id, exc)
+        return _reingested_outcome(instrument_id, outcome)
+    return _audited_reingest(
+        finding,
+        celex,
+        entry,
+        new_version,
+        adapter=adapter,
+        graph=graph,
+        dependencies=dependencies,
+        audit=audit,
+        emitter=emitter,
+    )
+
+
+def _failed_outcome(instrument_id: str, exc: Exception) -> InstrumentCheckOutcome:
+    """Map a `trigger_reingestion` failure to `skipped` (D10) or `reingest_failed` (D6/D11)."""
+    if type(exc).__name__ == _NATIONAL_TRANSPOSITION_ERROR_NAME:
+        return InstrumentCheckOutcome(instrument_id, "skipped", detail=str(exc))
+    return InstrumentCheckOutcome(instrument_id, "reingest_failed", detail=_safe_reason(exc))
+
+
+def _reingested_outcome(instrument_id: str, outcome: ReingestionOutcome) -> InstrumentCheckOutcome:
+    """The `amendment_reingested` outcome (D7), whatever the re-ingest's own state."""
     return InstrumentCheckOutcome(
         instrument_id,
         "amendment_reingested",
-        detail=detail,
+        detail=f"{outcome.new_regulatory_instrument_id} ({outcome.outcome})",
         reingest_run_id=outcome.run_id,
+    )
+
+
+def _audit_reason_code(exc: Exception) -> IngestionReasonCode:
+    """Enumerated audit `reason_code` for a failed re-ingest (type only, AC-BI-010)."""
+    if type(exc).__name__ == _NATIONAL_TRANSPOSITION_ERROR_NAME:
+        return "unsupported_instrument_type"
+    return classify_ingestion_failure(exc)
+
+
+def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no natural grouping
+    finding: AmendmentFinding,
+    celex: str,
+    entry: CatalogEntry,
+    new_version: str,
+    *,
+    adapter: IngestionAdapter,
+    graph: GraphHandle,
+    dependencies: ChangeCheckDependencies,
+    audit: AuditContext,
+    emitter: LogEmitter | None,
+) -> InstrumentCheckOutcome:
+    """Re-ingest one instrument between its `ingestion_run.submit` / `.complete` audit rows.
+
+    The re-ingest's own run id is minted here, passed to ``trigger_reingestion`` and used as both
+    rows' ``resource_id`` (AC-BI-007). The opening row sits OUTSIDE the isolation ``try`` so its
+    ``AuditTrailUnavailableError`` aborts the sweep (CHANGES F-5, AC-BI-011); the terminal row is
+    best-effort (AC-BI-015).
+    """
+    instrument_id = finding.regulatory_instrument_id
+    reingest_run_id = str(uuid.uuid4())
+    with bind_run_context(reingest_run_id):
+        record_opening_row(
+            audit,
+            AuditTarget(INGESTION_RUN_SUBMIT_ACTION, INGESTION_RUN_RESOURCE_TYPE, reingest_run_id),
+            component=_COMPONENT,
+            details=submission_audit_entry(
+                celex=celex,
+                short_name=entry.short_name,  # raw catalog value: the sweep never normalizes (#193)
+                trigger="amendment_check",
+            ).details,
+            emitter=emitter,
+        )
+        try:
+            outcome = dependencies.trigger_reingestion(
+                celex,
+                entry.short_name,
+                new_version,
+                adapter=adapter,
+                graph=graph,
+                run_id=reingest_run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
+            reason = _audit_reason_code(exc)
+            _record_terminal_row(audit, reingest_run_id, celex, None, reason, emitter)
+            return _failed_outcome(instrument_id, exc)
+        # Counts are 0/0/0 on purpose: the sweep re-runs ONLY the Ingestion stage (+ the
+        # SUPERSEDED_BY write); Domain Mapper and Company Merge do not run, so it writes no
+        # Obligation or Capability (verified against the graph in AC-BI-016's test). The
+        # doc/code gap with UC-4 (amendment absorption "Ingestion -> Domain Mapper -> Company
+        # Merge") is tracked in GitHub issue #201; once the sweep runs the full pipeline, take
+        # the counts from its MergeResult here.
+        result: dict[str, object] = {
+            "regulatory_instrument_id": outcome.new_regulatory_instrument_id,
+            "outcome": "fresh",
+        }
+        _record_terminal_row(audit, reingest_run_id, celex, result, None, emitter)
+    return _reingested_outcome(instrument_id, outcome)
+
+
+def _record_terminal_row(
+    audit: AuditContext,
+    reingest_run_id: str,
+    celex: str,
+    result: dict[str, object] | None,
+    reason_code: IngestionReasonCode | None,
+    emitter: LogEmitter | None,
+) -> None:
+    """Write the re-ingest's `ingestion_run.complete` row; BEST-EFFORT (AC-BI-015)."""
+    entry = completion_audit_entry(
+        status="failed" if reason_code is not None else "succeeded",
+        celex=celex,
+        trigger="amendment_check",
+        result=result,
+        reason_code=reason_code,
+    )
+    record_follow_up_row(
+        audit,
+        AuditTarget(INGESTION_RUN_COMPLETE_ACTION, INGESTION_RUN_RESOURCE_TYPE, reingest_run_id),
+        component=_COMPONENT,
+        outcome=entry.outcome,
+        details=entry.details,
+        emitter=emitter,
     )
 
 
@@ -483,6 +664,7 @@ def build_default_change_check_dependencies() -> ChangeCheckDependencies:
     )
     from ps_service.change_monitor.trigger import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
         trigger_reingestion,
+        will_reingest,
     )
 
     return ChangeCheckDependencies(
@@ -493,4 +675,5 @@ def build_default_change_check_dependencies() -> ChangeCheckDependencies:
         trigger_reingestion=trigger_reingestion,
         default_adapter=_default_ingestion_adapter,
         find_catalog_entry=find_by_celex,
+        will_reingest=will_reingest,
     )

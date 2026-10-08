@@ -88,7 +88,12 @@ if TYPE_CHECKING:
     from ps_service.company_merge.models import NearMissPair
     from ps_service.logging import LogEmitter
 
-__all__ = ["list_pending_reviews", "persist_pending_reviews", "resolve_review"]
+__all__ = [
+    "get_pending_review",
+    "list_pending_reviews",
+    "persist_pending_reviews",
+    "resolve_review",
+]
 
 # Issue #196 (Cause 8): the two `MATCH`es apply the same predicate
 # `_MERGE_EXISTENCE_CHECK_QUERY_TEMPLATE` below enforces -- both referenced
@@ -114,6 +119,15 @@ _LIST_PENDING_REVIEWS_QUERY = (
     "RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
     "r.nearest_existing_id, r.nearest_existing_text, r.similarity, r.created_at "
     "ORDER BY r.created_at ASC"
+)
+
+# Issue #195: one review by id for audit emission. Unlike `_LIST_PENDING_REVIEWS_QUERY` it has NO
+# both-nodes-exist predicate, so a stale review still yields its entity ids and the attempted
+# resolution can be audited (and fail as stale) rather than being invisible.
+_GET_REVIEW_QUERY = (
+    "MATCH (r:PendingReview {id: $review_id}) "
+    "RETURN r.id, r.kind, r.incoming_id, r.incoming_text, "
+    "r.nearest_existing_id, r.nearest_existing_text, r.similarity, r.created_at"
 )
 
 _FIND_REVIEW_QUERY = "MATCH (r:PendingReview {id: $review_id}) RETURN r.kind"
@@ -274,31 +288,45 @@ def list_pending_reviews(single_tenant_graph: GraphHandle) -> tuple[PendingRevie
     """
     result = single_tenant_graph.query(_LIST_PENDING_REVIEWS_QUERY)
     rows = cast("list[list[object]]", result.result_set)
-    reviews: list[PendingReviewRecord] = []
-    for row in rows:
-        (
-            review_id,
-            kind,
-            incoming_id,
-            incoming_text,
-            nearest_existing_id,
-            nearest_existing_text,
-            similarity,
-            created_at,
-        ) = row
-        reviews.append(
-            PendingReviewRecord(
-                id=cast("str", review_id),
-                kind=cast('Literal["Capability", "Policy"]', kind),
-                incoming_id=cast("str", incoming_id),
-                incoming_text=cast("str", incoming_text),
-                nearest_existing_id=cast("str", nearest_existing_id),
-                nearest_existing_text=cast("str", nearest_existing_text),
-                similarity=cast("float", similarity),
-                created_at=cast("str", created_at),
-            )
-        )
-    return tuple(reviews)
+    return tuple(_record_from_row(row) for row in rows)
+
+
+def get_pending_review(
+    single_tenant_graph: GraphHandle, review_id: str
+) -> PendingReviewRecord | None:
+    """The `PendingReview` with `review_id`, or `None` when it does not exist (issue #195).
+
+    A plain read like `list_pending_reviews`, but without its resolvable predicate: a review whose
+    referenced nodes are gone is still returned, so the resolution attempt can be audited with the
+    entity ids the review names.
+    """
+    result = single_tenant_graph.query(_GET_REVIEW_QUERY, params={"review_id": review_id})
+    rows = cast("list[list[object]]", result.result_set)
+    return _record_from_row(rows[0]) if rows else None
+
+
+def _record_from_row(row: list[object]) -> PendingReviewRecord:
+    """Map one result row (column order of the list/get queries) to a `PendingReviewRecord`."""
+    (
+        review_id,
+        kind,
+        incoming_id,
+        incoming_text,
+        nearest_existing_id,
+        nearest_existing_text,
+        similarity,
+        created_at,
+    ) = row
+    return PendingReviewRecord(
+        id=cast("str", review_id),
+        kind=cast('Literal["Capability", "Policy"]', kind),
+        incoming_id=cast("str", incoming_id),
+        incoming_text=cast("str", incoming_text),
+        nearest_existing_id=cast("str", nearest_existing_id),
+        nearest_existing_text=cast("str", nearest_existing_text),
+        similarity=cast("float", similarity),
+        created_at=cast("str", created_at),
+    )
 
 
 def resolve_review(

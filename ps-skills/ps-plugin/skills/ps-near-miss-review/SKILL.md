@@ -41,6 +41,14 @@ whatever it is named — report it as unreachable (see the error-state
 table under Process) rather than proceeding against it. From here on,
 "the PS Service connector" means the `ps-mcp` connector.
 
+**Audit:** each decision is recorded as a `near_miss.resolve` row (both entity
+ids, the decision, and for a merge the `approval_id`; a `failed` row follows a
+failed write). A `keep-separate` decision is recorded at the request. A
+`merge` is recorded when the approver signs with their passkey, with the
+approver as actor. If the audit trail is unavailable at that moment the merge
+is not performed and the one-time approval is already consumed, so a new
+approval must be requested. Read the rows with `ps-list-audit-events`.
+
 ## Core Principles
 
 - Never fabricate a review or a field value — report exactly what the tool
@@ -81,12 +89,13 @@ table under Process) rather than proceeding against it. From here on,
    of the following named states — never collapsed into a generic
    "listing failed":
 
-   | Tool result shape                                               | Named state to report                                                                                                                                                                             |
-   | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or an auth-rejection-shaped error | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                      |
-   | `error: the policy graph database is not reachable`             | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                        |
-   | `error: an unexpected error occurred`                           | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                 |
-   | Successful structured response                                  | Report every unresolved review's `id`, `kind`, `incoming_text`, `nearest_existing_text`, and `similarity` plainly, including an explicit "no unresolved reviews" statement when the list is empty |
+   | Tool result shape                                                                     | Named state to report                                                                                                                                                                             |
+   | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or an auth-rejection-shaped error                       | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                      |
+   | `error: the policy graph database is not reachable`                                   | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                        |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.` | The audit trail could not record the operation, so it was NOT run (nothing was changed) — report it distinctly from an outage of the graph or of PS Service                                       |
+   | `error: an unexpected error occurred`                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                 |
+   | Successful structured response                                                        | Report every unresolved review's `id`, `kind`, `incoming_text`, `nearest_existing_text`, and `similarity` plainly, including an explicit "no unresolved reviews" statement when the list is empty |
 
 3. **Output**, in this shape on success:
 
@@ -115,13 +124,14 @@ table under Process) rather than proceeding against it. From here on,
    of the following named states — never collapsed into a generic
    "resolve failed":
 
-   | Tool result shape                                               | Named state to report                                                                                                                                                                                                |
-   | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or an auth-rejection-shaped error | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                                         |
-   | `error: no unresolved PendingReview with id '<review_id>'`      | "Review not found or already resolved" — the review either never existed or was already resolved (these two conditions are indistinguishable server-side, by design; report them as one state, not a guess at which) |
-   | `error: the policy graph database is not reachable`             | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                                           |
-   | `error: an unexpected error occurred`                           | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                    |
-   | Successful structured response                                  | Report the resolved review's `review_id` and `decision` plainly; state explicitly that `keep-separate` only removed the pending review record and left both compared entities untouched                              |
+   | Tool result shape                                                                     | Named state to report                                                                                                                                                                                                |
+   | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Connection/transport failure, or an auth-rejection-shaped error                       | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                                         |
+   | `error: no unresolved PendingReview with id '<review_id>'`                            | "Review not found or already resolved" — the review either never existed or was already resolved (these two conditions are indistinguishable server-side, by design; report them as one state, not a guess at which) |
+   | `error: the policy graph database is not reachable`                                   | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                                           |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.` | The audit trail could not record the operation, so it was NOT run (nothing was changed) — report it distinctly from an outage of the graph or of PS Service                                                          |
+   | `error: an unexpected error occurred`                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                    |
+   | Successful structured response                                                        | Report the resolved review's `review_id` and `decision` plainly; state explicitly that `keep-separate` only removed the pending review record and left both compared entities untouched                              |
 
 ### Resolving a review with `merge`
 
@@ -156,6 +166,7 @@ table under Process) rather than proceeding against it. From here on,
    | `error: no unresolved PendingReview with id '<review_id>'`                                                                                  | "Review not found or already resolved" — the review either never existed or was already resolved (these two conditions are indistinguishable server-side, by design; report them as one state, not a guess at which)                                  |
    | `error: pending review '<review_id>' references a node that no longer exists (already resolved by a prior merge); this review is now stale` | "Review references an already-merged node (stale)" — report this distinctly from "not found": the review itself exists, but the entity it compared no longer does, because a different merge already resolved it first; no write happened here either |
    | `error: the policy graph database is not reachable`                                                                                         | The compliance graph database cannot be reached — report it distinctly from a PS Service transport failure                                                                                                                                            |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.`                                                       | The audit trail could not record the operation, so it was NOT run (nothing was changed) — report it distinctly from an outage of the graph or of PS Service                                                                                           |
    | `error: an unexpected error occurred`                                                                                                       | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                                                     |
    | Successful structured response                                                                                                              | Report the resolved review's `review_id`, `decision`, `winner_id`, and `loser_id` plainly; state explicitly that the loser node was deleted and its edges re-pointed onto the winner, atomically                                                      |
 

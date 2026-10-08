@@ -17,6 +17,10 @@ schema, the `AuditDetails` base type, the extensible action registry, and
 callers (#133's `store.py`, repointed in Slice 2) will use. Nothing in
 `ps_service` calls this package yet.
 
+Emission convention (issue #195): see :mod:`ps_service.audit.emit` for the outcome-vs-lifecycle
+rule, the row shape per action, the failure policy (opening row fail-closed, terminal row
+best-effort), the actor semantics and the `resource_id` convention.
+
 Re-exports the store/model front door and its domain-specific errors,
 matching `ps_service.passkey_signing`'s own package
 front-door convention.
@@ -26,14 +30,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ps_service.audit.actor import LOCAL_TEST_BYPASS_AUDIT_ACTOR, resolve_audit_actor
+from ps_service.audit.emit import (
+    AuditContext,
+    AuditTarget,
+    record_follow_up_row,
+    record_opening_row,
+)
 from ps_service.audit.errors import (
+    AuditActorUnresolvedError,
     AuditInvalidCursorError,
     AuditInvalidDetailsError,
     AuditPersistenceError,
     AuditPostgresUnavailableError,
+    AuditTrailUnavailableError,
     AuditUnknownActionError,
 )
 from ps_service.audit.models import (
+    AUDIT_DETAILS_FILTER_KEYS,
     AuditDetails,
     AuditEventRow,
     AuditQueryFilters,
@@ -49,7 +63,11 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 """This component's own migration directory, listed by the composition root (`ps_service.main`)."""
 
 __all__ = [
+    "AUDIT_DETAILS_FILTER_KEYS",
+    "LOCAL_TEST_BYPASS_AUDIT_ACTOR",
     "MIGRATIONS_DIR",
+    "AuditActorUnresolvedError",
+    "AuditContext",
     "AuditDetails",
     "AuditEventRow",
     "AuditInvalidCursorError",
@@ -59,10 +77,15 @@ __all__ = [
     "AuditQueryFilters",
     "AuditQueryPage",
     "AuditStore",
+    "AuditTarget",
+    "AuditTrailUnavailableError",
     "AuditUnknownActionError",
     "PsycopgAuditStore",
     "is_known_resource_type",
+    "record_follow_up_row",
+    "record_opening_row",
     "register_audit_action",
     "register_audit_resource_type",
+    "resolve_audit_actor",
     "resolve_details_model",
 ]

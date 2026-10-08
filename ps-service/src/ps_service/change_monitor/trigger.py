@@ -129,6 +129,18 @@ def _guard_national_transposition(
         raise NationalTranspositionNotSupportedError
 
 
+def will_reingest(graph: GraphHandle, short_name: str, new_version: str) -> bool:
+    """Whether `trigger_reingestion` would run a real re-ingest (read-only probe, issue #195).
+
+    True only for the `fresh` state. `resume` (only the idempotent succession write) and
+    `already_processed` (a no-op) ingest nothing, so the sweep writes no audit pair for them.
+    Raises the same `ChangeMonitorStateError` as `trigger_reingestion` when the graph has no
+    single active prior. The probe and the later call are not atomic; a single sweep per caller
+    is the accepted model.
+    """
+    return _preflight(graph, f"{short_name}-{new_version}").state == "fresh"
+
+
 def trigger_reingestion(
     identifier: str,
     short_name: str,
@@ -137,6 +149,7 @@ def trigger_reingestion(
     adapter: IngestionAdapter,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
+    run_id: str | None = None,
 ) -> ReingestionOutcome:
     """Re-ingest `identifier` as `new_version` and record its succession.
 
@@ -156,6 +169,9 @@ def trigger_reingestion(
 
     `already_processed`: a no-op returning `run_id=None` and emitting nothing
     (a repeat call is not a new supersession event).
+
+    `run_id` (issue #195) is forwarded to the re-ingest so a caller that audits it can
+    know the run id before the ingest starts; `None` keeps minting a fresh one.
 
     Raises `NationalTranspositionNotSupportedError` (AC-010, before any
     write) or `ChangeMonitorStateError` when the graph has no single active
@@ -199,6 +215,7 @@ def trigger_reingestion(
         adapter=adapter,
         graph=graph,
         emitter=emitter,
+        run_id=run_id,
     )
     set_new_version_property(graph, new_id, new_version)
     link_and_supersede(graph, prior_id, new_id)

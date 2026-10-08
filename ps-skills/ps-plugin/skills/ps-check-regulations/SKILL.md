@@ -25,6 +25,16 @@ own outcome — `current`, `amendment_reingested`, `poll_failed`,
 `detail`/`reingest_run_id` the tool returned, or the specific named error
 state on failure.
 
+**Audit:** every re-ingest the sweep actually runs is recorded in the audit
+trail as an `ingestion_run.submit` / `ingestion_run.complete` pair with
+`trigger` = `amendment_check`, the caller as actor, and the re-ingest's own
+`reingest_run_id` as the row's resource. The counts are always 0 new
+Obligations / 0 new Capabilities / 0 matched Capabilities because the sweep
+re-runs only the Ingestion stage. If the audit trail cannot record a
+re-ingest, the sweep stops with the audit error below; re-ingests already done
+earlier in that sweep stay recorded but their outcomes are not returned. Read
+the rows with `ps-list-audit-events`.
+
 ## On Load
 
 Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
@@ -64,13 +74,14 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    of the following named states — never collapsed into a generic
    "check failed":
 
-   | Tool result shape                                               | Named state to report                                                                                                                  |
-   | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or an auth-rejection-shaped error | "PS Service is unreachable or the caller is unauthenticated"                                                                           |
-   | `error: LLM Interface is unavailable.`                          | The LLM Interface dependency is currently unreachable — report it distinctly from a PS Service outage; do not retry silently           |
-   | `error: the policy graph database is not reachable`             | The compliance graph database cannot be reached — report it distinctly from an LLM Interface or transport failure                      |
-   | `error: an unexpected error occurred`                           | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause      |
-   | Successful structured response                                  | Report `run_id`, then every tracked instrument's own `instrument_id` and outcome plainly — see step 4's per-instrument reporting rules |
+   | Tool result shape                                                                     | Named state to report                                                                                                                                                                            |
+   | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+   | Connection/transport failure, or an auth-rejection-shaped error                       | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                     |
+   | `error: LLM Interface is unavailable.`                                                | The LLM Interface dependency is currently unreachable — report it distinctly from a PS Service outage; do not retry silently                                                                     |
+   | `error: the policy graph database is not reachable`                                   | The compliance graph database cannot be reached — report it distinctly from an LLM Interface or transport failure                                                                                |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.` | The audit trail could not record the operation, so it was NOT run (the sweep stopped before that re-ingest) — report it distinctly from an outage of the graph or of PS Service; nothing changed |
+   | `error: an unexpected error occurred`                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                |
+   | Successful structured response                                                        | Report `run_id`, then every tracked instrument's own `instrument_id` and outcome plainly — see step 4's per-instrument reporting rules                                                           |
 
    For a successful response, report each tracked instrument's outcome
    distinctly — never collapse the six buckets into each other or into one

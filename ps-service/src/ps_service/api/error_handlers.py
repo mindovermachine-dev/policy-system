@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse
 
 from ps_service.api.errors import (
     AccessDeniedError,
-    ApiError,
     AuthorizationStoreUnavailableError,
     CatalogIdentifierNotFoundError,
     CatalogSourceOverrideUnavailableError,
@@ -48,6 +47,7 @@ from ps_service.api.errors import (
     ShortNameCollisionError,
     SystemOwnerFloorViolationError,
 )
+from ps_service.audit.errors import AuditTrailUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -98,7 +98,8 @@ def _scrub_text(text: str) -> str:
 
 # --- safe-verbatim whitelist (PLAN_REVIEWED.md §1.1 M5) ----------------------
 
-_SAFE_VERBATIM: tuple[type[ApiError], ...] = (
+_SAFE_VERBATIM: tuple[type[Exception], ...] = (
+    AuditTrailUnavailableError,
     AccessDeniedError,
     AuthorizationStoreUnavailableError,
     CelexAlreadyIngestedError,
@@ -207,7 +208,12 @@ def _json(status_code: int, body: dict[str, object]) -> JSONResponse:
 
 # --- handlers ---------------------------------------------------------------
 
-_API_ERROR_SPECS: tuple[tuple[type[ApiError], str, int], ...] = (
+_API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
+    (
+        AuditTrailUnavailableError,
+        "audit_trail_unavailable",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
     (AccessDeniedError, "access_denied", status.HTTP_403_FORBIDDEN),
     (
         AuthorizationStoreUnavailableError,
@@ -417,6 +423,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     (502), one for ``RequestValidationError`` (422), and a catch-all
     ``Exception`` handler (generic 500). Status map:
     ``AccessDeniedError`` 403, ``AuthorizationStoreUnavailableError`` 503,
+    ``AuditTrailUnavailableError`` 503 (issue #195: the opening audit row could not be written),
     ``CatalogIdentifierNotFoundError`` 404, ``CatalogSourceOverrideUnavailableError`` 503,
     ``InternalSeedValidationError`` 422,
     ``IngestionConfigIncompleteError`` 503,

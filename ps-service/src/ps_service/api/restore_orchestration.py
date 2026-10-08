@@ -36,9 +36,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from ps_service.api.error_handlers import (
     _scrub_text,  # pyright: ignore[reportPrivateUsage]  # shared scrubber; mirrors ingestion_orchestration.py's own reuse
@@ -53,7 +54,8 @@ from ps_service.api.errors import (
     RestoreStageFailedError,
 )
 from ps_service.api.models import RestorationAcceptedResponse, RestorationStageOutcome
-from ps_service.audit import PsycopgAuditStore
+from ps_service.audit import AuditContext, PsycopgAuditStore
+from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
 from ps_service.curated_source.artifact_client import FetchArtifactCall, fetch_artifact
 from ps_service.curated_source.catalog_client import FetchCatalogCall, fetch_catalog
 from ps_service.curated_source.errors import (
@@ -65,6 +67,12 @@ from ps_service.curated_source.instrument_lookup import resolve_canonical_instru
 from ps_service.curated_source.resolve import EffectiveCatalogSource, resolve_effective_source
 from ps_service.export.models import InstrumentManifest
 from ps_service.logging.facade import emit_log_entry
+from ps_service.logging.run_context import bind_run_context, current_run_id
+from ps_service.restore.audit_actions import (
+    INSTRUMENT_RESOURCE_TYPE,
+    INSTRUMENT_RESTORE_ACTION,
+    classify_restore_failure_reason,
+)
 from ps_service.restore.errors import ArtifactIntegrityError, ArtifactSchemaVersionMismatchError
 from ps_service.restore.models import RestoreArtifact
 from ps_service.runtime_config import PsycopgRuntimeConfigStore, RuntimeConfigError
@@ -84,6 +92,8 @@ if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
     from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreOutcome
+
+type RestoreAuditSource = Literal["catalog", "upload"]
 
 _COMPONENT = "restore"
 _ACTION = "restore_instrument"
@@ -323,6 +333,107 @@ def _to_accepted_response(outcome: RestoreOutcome) -> RestorationAcceptedRespons
     )
 
 
+class _RestoreInfra(Protocol):
+    """The two graph-handle accessors both dependency bundles share."""
+
+    @property
+    def open_db(self) -> Callable[[ServiceConfig], FalkorDB]:
+        """Open the FalkorDB connection for the config."""
+        ...
+
+    @property
+    def single_tenant_graph_name(self) -> Callable[[ServiceConfig], str]:
+        """Return the single-tenant graph name for the config."""
+        ...
+
+
+def _perform_restore(
+    *,
+    instrument_id: str,
+    config: ServiceConfig,
+    actor: str,
+    dependencies: _RestoreInfra,
+    invoke: Callable[[float, FalkorDB, str], RestoreOutcome],
+    emitter: LogEmitter | None,
+) -> RestorationAcceptedResponse:
+    """Run the restore delegate (via ``invoke``) and translate its failures to API errors.
+
+    Shared by the upload and catalog paths (the artifact differs, the failure translation does
+    not). ``invoke`` receives ``(similarity_threshold, db, single_tenant_graph_name)`` and calls
+    the path's own delegate shape.
+    """
+    threshold = _require_similarity_threshold(config)
+    db = dependencies.open_db(config)
+    graph_name = dependencies.single_tenant_graph_name(config)
+    try:
+        outcome = invoke(threshold, db, graph_name)
+    except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
+        raise RestoreArtifactRejectedError(str(exc)) from exc
+    except Exception as exc:
+        raise _classify_restore_failure(
+            exc, instrument_id=instrument_id, actor=actor, emitter=emitter
+        ) from exc
+    return _to_accepted_response(outcome)
+
+
+# --- audit (issue #195) ---------------------------------------------------
+
+
+def _audited_restore(
+    instrument_id: str,
+    *,
+    source: RestoreAuditSource,
+    audit: AuditContext,
+    emitter: LogEmitter | None,
+    restore: Callable[[], RestorationAcceptedResponse],
+) -> RestorationAcceptedResponse:
+    """Run ``restore`` between an ``instrument.restore`` opening row and a terminal row.
+
+    The opening row (``applied``, ``status=started``) is FAIL-CLOSED: if it cannot be written the
+    restore does not start and ``AuditTrailUnavailableError`` propagates (AC-BI-011). The terminal
+    row is BEST-EFFORT: ``succeeded`` (``applied``) or ``failed`` (``failed``, enumerated
+    ``reason_code``); a write failure is logged with the instrument id and run id and never changes
+    the restore's result or error (AC-BI-015). ``resource_id`` is the canonical instrument id.
+    A run id is bound for the call when none is, so those failure logs always carry one.
+    """
+    target = AuditTarget(INSTRUMENT_RESTORE_ACTION, INSTRUMENT_RESOURCE_TYPE, instrument_id)
+    base = {"instrument_id": instrument_id, "source": source}
+    run_scope = bind_run_context() if current_run_id() is None else contextlib.nullcontext()
+    with run_scope:
+        record_opening_row(
+            audit,
+            target,
+            component=_COMPONENT,
+            details={**base, "status": "started"},
+            emitter=emitter,
+        )
+        try:
+            response = restore()
+        except Exception as exc:
+            record_follow_up_row(
+                audit,
+                target,
+                component=_COMPONENT,
+                outcome="failed",
+                details={
+                    **base,
+                    "status": "failed",
+                    "reason_code": classify_restore_failure_reason(exc),
+                },
+                emitter=emitter,
+            )
+            raise
+        record_follow_up_row(
+            audit,
+            target,
+            component=_COMPONENT,
+            outcome="applied",
+            details={**base, "status": "succeeded"},
+            emitter=emitter,
+        )
+        return response
+
+
 # --- the wrapper -------------------------------------------------------
 
 
@@ -332,10 +443,16 @@ def run_restoration(
     config: ServiceConfig,
     actor: str,
     dependencies: RestoreDependencies,
+    audit: AuditContext,
     owner: tuple[str, str] | None = None,
     emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
     """Restore one curated instrument's artifact via the injected delegate.
+
+    Audit (issue #195): once the body decodes, an ``instrument.restore`` opening row
+    (``source="upload"``) is written before the restore starts (fail-closed) and a terminal row
+    after it (best-effort), sharing :func:`_audited_restore` with the catalog path. A body that
+    cannot be decoded is rejected before any restore starts and writes no row.
 
     Args:
         request_body: The ``POST /restorations`` request body.
@@ -348,37 +465,46 @@ def run_restoration(
             which becomes the owner of any imported draft Policy; ``None`` when
             no verified identity exists, in which case an artifact carrying
             Policy content is refused.
+        audit: Who is acting and where the ``instrument.restore`` audit rows go.
         emitter: Optional log emitter for the server-side failure-detail entry.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
 
     Raises:
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
+            restored.
         RestoreArtifactRejectedError: The artifact is malformed, or fails
             checksum (D9) / schema_version (D10) verification (422).
         RestoreStageFailedError: Any other failure, including a missing
             similarity-threshold configuration value (502).
     """
     artifact = _to_restore_artifact(request_body)
-    threshold = _require_similarity_threshold(config)
-    db = dependencies.open_db(config)
-    single_tenant_graph_name = dependencies.single_tenant_graph_name(config)
-    try:
-        outcome = dependencies.restore(
-            artifact,
-            db=db,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=threshold,
+
+    def _restore() -> RestorationAcceptedResponse:
+        return _perform_restore(
+            instrument_id=request_body.instrument_id,
+            config=config,
             actor=actor,
-            owner=owner,
+            dependencies=dependencies,
+            invoke=lambda threshold, db, graph_name: dependencies.restore(
+                artifact,
+                db=db,
+                single_tenant_graph_name=graph_name,
+                similarity_threshold=threshold,
+                actor=actor,
+                owner=owner,
+            ),
+            emitter=emitter,
         )
-    except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
-        raise RestoreArtifactRejectedError(str(exc)) from exc
-    except Exception as exc:
-        raise _classify_restore_failure(
-            exc, instrument_id=request_body.instrument_id, actor=actor, emitter=emitter
-        ) from exc
-    return _to_accepted_response(outcome)
+
+    return _audited_restore(
+        request_body.instrument_id,
+        source="upload",
+        audit=audit,
+        emitter=emitter,
+        restore=_restore,
+    )
 
 
 def run_restoration_from_catalog_source(
@@ -387,6 +513,7 @@ def run_restoration_from_catalog_source(
     config: ServiceConfig,
     actor: str,
     dependencies: CatalogRestoreDependencies,
+    audit: AuditContext,
     owner: tuple[str, str] | None = None,
     emitter: LogEmitter | None = None,
 ) -> RestorationAcceptedResponse:
@@ -430,12 +557,18 @@ def run_restoration_from_catalog_source(
         owner: The restoring caller's verified ``(sub, iss)`` pair (issue #183),
             the owner of any imported draft Policy; ``None`` when no verified
             identity exists.
+        audit: Who is acting and where the ``instrument.restore`` audit rows go (issue #195).
+            After the canonical id is resolved and the artifact fetched, an opening row is
+            written (fail-closed) before the restore starts and a terminal row after it
+            (best-effort); an unknown, ambiguous or unfetchable id writes no row.
         emitter: Optional log emitter for the server-side failure-detail entry.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
 
     Raises:
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
+            restored (issue #195).
         CatalogSourceOverrideUnavailableError: The override could not be read (AC-BI-010) --
             503, nothing fetched or restored.
         CuratedSourceUnavailableError: The configured source is unreachable,
@@ -472,26 +605,28 @@ def run_restoration_from_catalog_source(
         baseline_blob=fetched.baseline_blob,
         native_blob=fetched.native_blob,
     )
-    threshold = _require_similarity_threshold(config)
-    db = dependencies.open_db(config)
-    single_tenant_graph_name = dependencies.single_tenant_graph_name(config)
-    try:
-        outcome = dependencies.restore(
-            artifact,
-            db=db,
-            single_tenant_graph_name=single_tenant_graph_name,
-            similarity_threshold=threshold,
+
+    def _restore() -> RestorationAcceptedResponse:
+        return _perform_restore(
+            instrument_id=canonical_id,
+            config=config,
             actor=actor,
-            source=effective_source.url,
-            owner=owner,
+            dependencies=dependencies,
+            invoke=lambda threshold, db, graph_name: dependencies.restore(
+                artifact,
+                db=db,
+                single_tenant_graph_name=graph_name,
+                similarity_threshold=threshold,
+                actor=actor,
+                source=effective_source.url,
+                owner=owner,
+            ),
+            emitter=emitter,
         )
-    except (ArtifactIntegrityError, ArtifactSchemaVersionMismatchError) as exc:
-        raise RestoreArtifactRejectedError(str(exc)) from exc
-    except Exception as exc:
-        raise _classify_restore_failure(
-            exc, instrument_id=canonical_id, actor=actor, emitter=emitter
-        ) from exc
-    return _to_accepted_response(outcome)
+
+    return _audited_restore(
+        canonical_id, source="catalog", audit=audit, emitter=emitter, restore=_restore
+    )
 
 
 # --- default wiring (M6 -- every restore/company_merge import below is function-local) ---

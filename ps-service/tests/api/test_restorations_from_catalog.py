@@ -22,14 +22,21 @@ from typing import TYPE_CHECKING, NoReturn, cast
 import pytest
 from fastapi.testclient import TestClient
 
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakeCuratedArtifactTransport,
     FakeFailingCuratedSourceTransport,
+    compliance_officer_principal,
     install_compliance_officer_grant,
     install_no_principal,
 )
-from ps_service.api.dependencies import get_principal, provide_restore_from_catalog_dependencies
+from ps_service.api.dependencies import (
+    get_principal,
+    provide_audit_store,
+    provide_restore_from_catalog_dependencies,
+)
 from ps_service.api.restore_orchestration import CatalogRestoreDependencies
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import Principal
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
@@ -196,10 +203,19 @@ def _app_config() -> ServiceConfig:
     )
 
 
+def _fresh_audit_store() -> InMemoryAuditStore:
+    return InMemoryAuditStore()
+
+
 def _client_with_fake(
-    transport: CuratedSourceTransport, stage: _FakeCatalogRestoreStage
+    transport: CuratedSourceTransport,
+    stage: _FakeCatalogRestoreStage,
+    *,
+    audit_store: InMemoryAuditStore | None = None,
 ) -> TestClient:
     app = create_app(_app_config())
+    store = audit_store if audit_store is not None else InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: store
     app.dependency_overrides[provide_restore_from_catalog_dependencies] = lambda: (
         _fake_dependencies(transport, stage)
     )
@@ -438,6 +454,7 @@ def test_restore_from_catalog_fails_closed_when_override_read_fails() -> None:
         _fake_dependencies(transport, stage), resolve_effective_source=_failing_resolve
     )
     app = create_app(_app_config())
+    app.dependency_overrides[provide_audit_store] = _fresh_audit_store
     app.dependency_overrides[provide_restore_from_catalog_dependencies] = lambda: dependencies
 
     response = TestClient(app, raise_server_exceptions=False).post(
@@ -592,3 +609,43 @@ def test_no_catalog_match_in_any_case_returns_404_naming_closest_ids_and_never_f
     assert stage.calls == []
     requested_filenames = {req.full_url.rsplit("/", 1)[-1] for req in transport.requests}
     assert requested_filenames == {"catalog.json"}
+
+
+# --- issue #195: instrument.restore audit rows ---------------------------------------
+
+
+def test_post_from_catalog_audits_the_principal() -> None:
+    """AC-BI-001/002: the opening and terminal rows carry the verified caller as actor.
+
+    The ComplianceOfficer gate (autouse) presents `compliance_officer_principal()`; the audit
+    context is built from the same `get_principal`, so that principal is the row actor. (Under the
+    local-test bypass this gated route is unreachable; the sentinel path is covered by the
+    `provide_audit_context` and MCP tests.)
+    """
+    store = InMemoryAuditStore()
+    client = _client_with_fake(_valid_transport(), _FakeCatalogRestoreStage(), audit_store=store)
+    principal = compliance_officer_principal()
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": "cra-1.0"})
+
+    assert response.status_code == 200
+    assert [(r.actor_subject, r.actor_issuer) for r in store.rows] == [
+        (principal.sub, principal.iss)
+    ] * 2
+    assert [(r.action, r.resource_id, r.details["status"]) for r in store.rows] == [
+        ("instrument.restore", _INSTRUMENT_ID, "started"),
+        ("instrument.restore", _INSTRUMENT_ID, "succeeded"),
+    ]
+
+
+def test_post_from_catalog_returns_503_when_audit_unavailable() -> None:
+    """AC-BI-011: the opening row cannot be written -> 503, nothing restored."""
+    stage = _FakeCatalogRestoreStage()
+    store = InMemoryAuditStore(fail_on_outcome={"applied": AuditPostgresUnavailableError("db")})
+    client = _client_with_fake(_valid_transport(), stage, audit_store=store)
+
+    response = client.post("/restorations/from-catalog", json={"instrument_id": _INSTRUMENT_ID})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert stage.calls == []

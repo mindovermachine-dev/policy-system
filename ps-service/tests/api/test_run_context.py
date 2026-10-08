@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakeCuratedSourceTransport,
     build_fake_curated_catalog_dependencies,
@@ -32,6 +33,7 @@ from api._fakes import (
     install_compliance_officer_grant,
 )
 from ps_service.api.dependencies import (
+    provide_audit_store,
     provide_curated_catalog_dependencies,
     provide_pipeline_dependencies,
 )
@@ -77,6 +79,8 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     """A ``TestClient`` whose ``provide_pipeline_dependencies`` yields ``fake_deps``."""
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
+    audit_store = InMemoryAuditStore()  # catalog ingestion writes `ingestion_run.*` rows (#195)
+    app.dependency_overrides[provide_audit_store] = lambda: audit_store
     return TestClient(app, raise_server_exceptions=False)
 
 

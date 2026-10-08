@@ -40,9 +40,12 @@ if TYPE_CHECKING:
 
     from ps_service.audit import AuditStore
     from ps_service.config import ServiceConfig
+    from ps_service.ingestion_runs.audit_actions import IngestionReasonCode, IngestionTrigger
     from ps_service.logging import LogEmitter
 
 _COMPONENT = "ingestion_runs"
+_TRIGGER: IngestionTrigger = "async_ingest"
+"""Every row of this store is a `start_ingestion` run; sync and sweep runs have no run row."""
 
 _COLUMNS = (
     "run_id, celex, short_name, actor_subject, actor_issuer, status, result, error, "
@@ -58,7 +61,7 @@ _COMPLETE_RUN = """
 UPDATE ingestion_runs
 SET status = %(status)s, result = %(result)s, error = %(error)s, finished_at = now()
 WHERE run_id = %(run_id)s AND status = 'running'
-RETURNING actor_subject, actor_issuer
+RETURNING actor_subject, actor_issuer, celex
 """
 
 
@@ -91,6 +94,7 @@ class IngestionRunStore(Protocol):
         status: Literal["succeeded", "failed"],
         result: dict[str, object] | None,
         error: str | None,
+        reason_code: IngestionReasonCode | None = None,
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
         """Flip a `running` row to a terminal status: a single-winner compare-and-swap.
@@ -98,6 +102,8 @@ class IngestionRunStore(Protocol):
         Returns `True` only for the one call that flipped the row, and only that call writes the
         `ingestion_run.complete` audit row, in the same transaction. `audit_actor=None` audits
         it under the submitter (the row's own actor); the reconciler passes its sentinel.
+        `error` is the sanitized text kept on the run row for `get_ingestion_status`; the audit
+        row never carries it, only the enumerated `reason_code` (required when `status='failed'`).
 
         Raises:
             IngestionRunStoreUnavailableError: the store could not be reached.
@@ -176,7 +182,9 @@ class PsycopgIngestionRunStore:
                 with conn, conn.cursor() as cur:
                     cur.execute(_INSERT_RUN, params)
                     record = cur.fetchone()
-                    entry = submission_audit_entry(celex=celex, short_name=short_name)
+                    entry = submission_audit_entry(
+                        celex=celex, short_name=short_name, trigger=_TRIGGER
+                    )
                     self._audit_store.record(
                         cur,
                         actor_subject=actor[0],
@@ -228,6 +236,7 @@ class PsycopgIngestionRunStore:
         status: Literal["succeeded", "failed"],
         result: dict[str, object] | None,
         error: str | None,
+        reason_code: IngestionReasonCode | None = None,
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
         """Compare-and-swap a `running` row to a terminal status; see the Protocol."""
@@ -246,7 +255,13 @@ class PsycopgIngestionRunStore:
                     won = flipped is not None
                     if flipped is not None:
                         actor = audit_actor or (str(flipped[0]), str(flipped[1]))
-                        entry = completion_audit_entry(status=status, result=result, error=error)
+                        entry = completion_audit_entry(
+                            status=status,
+                            celex=str(flipped[2]),
+                            trigger=_TRIGGER,
+                            result=result,
+                            reason_code=reason_code,
+                        )
                         self._audit_store.record(
                             cur,
                             actor_subject=actor[0],

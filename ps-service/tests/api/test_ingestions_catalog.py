@@ -22,15 +22,18 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     build_fake_pipeline_dependencies,
+    compliance_officer_principal,
     default_cellar_rdf,
     default_cellar_xhtml,
     install_compliance_officer_grant,
     install_no_principal,
 )
-from ps_service.api.dependencies import provide_pipeline_dependencies
+from ps_service.api.dependencies import provide_audit_store, provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import GraphOpeners
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.config import ServiceConfig
 from ps_service.domain_mapper.errors import DomainMapperExtractionError
@@ -126,10 +129,18 @@ def _app_config() -> ServiceConfig:
     )
 
 
-def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
-    """A ``TestClient`` whose ``provide_pipeline_dependencies`` yields ``fake_deps``."""
+def _client_with_fake(
+    fake_deps: PipelineDependencies, *, audit_store: InMemoryAuditStore | None = None
+) -> TestClient:
+    """A ``TestClient`` whose ``provide_pipeline_dependencies`` yields ``fake_deps``.
+
+    The catalog path writes ``ingestion_run`` audit rows (issue #195): they go to ``audit_store``
+    (a fresh in-memory one by default) instead of Postgres.
+    """
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
+    store = audit_store if audit_store is not None else InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: store
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -1101,3 +1112,74 @@ def test_system_owner_without_explicit_grant_is_denied_with_403(
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "access_denied"
     assert fake.recorder.order == []
+
+
+# --- issue #195: ingestion_run audit rows (sync REST) ------------------------------------------
+
+
+def test_post_ingestions_catalog_audits_the_principal_and_effective_run_id() -> None:
+    """AC-BI-001/004/005: submit + complete rows for the caller, keyed by the effective run id.
+
+    The ComplianceOfficer gate (autouse) presents `compliance_officer_principal()`. A
+    client-supplied ``run_id`` wins over the server-minted one, so it is the rows' ``resource_id``.
+    (Under the local-test bypass this gated path is unreachable; the sentinel is covered by the MCP
+    test and `provide_audit_context`.)
+    """
+    store = InMemoryAuditStore()
+    fake = build_fake_pipeline_dependencies(rid="CRA-1.0")
+    client = _client_with_fake(fake.dependencies, audit_store=store)
+    principal = compliance_officer_principal()
+
+    response = client.post(
+        "/ingestions",
+        json={
+            "source": "catalog",
+            "celex": _VALID_CELEX,
+            "short_name": _VALID_SHORT_NAME,
+            "run_id": "client-abc123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [(r.action, r.resource_id, r.outcome) for r in store.rows] == [
+        ("ingestion_run.submit", "client-abc123", "applied"),
+        ("ingestion_run.complete", "client-abc123", "applied"),
+    ]
+    assert {(r.actor_subject, r.actor_issuer) for r in store.rows} == {
+        (principal.sub, principal.iss)
+    }
+    assert store.rows[0].details["trigger"] == "sync_ingest"
+    assert store.rows[1].details["regulatory_instrument_id"] == "CRA-1.0"
+
+
+def test_post_ingestions_internal_source_writes_no_audit_row() -> None:
+    """The internal-document path is not an audited ingestion (out of scope for #195)."""
+    store = InMemoryAuditStore()
+    client = _client_with_fake(build_fake_pipeline_dependencies().dependencies, audit_store=store)
+
+    response = client.post(
+        "/ingestions", json={"source": "internal", "content": {"not": "a valid seed"}}
+    )
+
+    assert response.status_code != 200
+    assert store.rows == []
+
+
+def test_post_ingestions_returns_503_when_audit_unavailable_and_runs_nothing() -> None:
+    """AC-BI-011: an unwritable `ingestion_run.submit` row is a 503 and no stage ran."""
+    store = InMemoryAuditStore(
+        fail_on_outcome={"applied": AuditPostgresUnavailableError("db down")}
+    )
+    fake = build_fake_pipeline_dependencies()
+    client = _client_with_fake(fake.dependencies, audit_store=store)
+
+    response = client.post(
+        "/ingestions",
+        json={"source": "catalog", "celex": _VALID_CELEX, "short_name": _VALID_SHORT_NAME},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert "db down" not in response.text
+    assert fake.recorder.calls == []
+    assert store.rows == []

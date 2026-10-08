@@ -61,6 +61,7 @@ from datetime import date
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakePipeline,
     build_fake_pipeline_dependencies,
@@ -76,7 +77,7 @@ from starlette.applications import Starlette
 
 from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry, find_by_celex
-from ps_service.api.dependencies import provide_pipeline_dependencies
+from ps_service.api.dependencies import provide_audit_store, provide_pipeline_dependencies
 from ps_service.api.ingestion_orchestration import (
     _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key (issue #193), mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key, mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
@@ -131,6 +132,9 @@ if TYPE_CHECKING:
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
+
+# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+pytestmark = pytest.mark.usefixtures("ingest_audit_store")
 
 _BASE_URL = "http://127.0.0.1:8000"
 _JSON_RPC_ACCEPT = "application/json, text/event-stream"
@@ -291,6 +295,7 @@ _EMBEDDING_BACKFILL_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+) \{id: \$id\}\) WHERE n\.embedding IS NULL "
     r"SET n\.embedding = \$embedding$"
 )
+_OBLIGATIONS_EXIST_QUERY = "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id"
 _COUNT_RE = re.compile(r"^MATCH \(n:(?P<label>\w+)\) RETURN count\(n\)$")
 _REACHABILITY_RE = re.compile(
     r"^MATCH \(n:(?P<label>\w+)\) WHERE NOT \(:RegulatoryInstrument\)-\[:HAS\*1\.\.\]->\(n\) "
@@ -351,6 +356,10 @@ class _MiniGraph:
         if "MERGED_INTO" in q or "MergedObligation" in q:
             # issue #190: the tombstone and obligation-marker reads -- no tombstones here.
             return _FakeQueryResult([])
+        if q == _OBLIGATIONS_EXIST_QUERY:
+            # issue #195, Slice 6: the net-new Obligation probe (`count_new_obligations`).
+            known = self._nodes.get("Obligation", {})
+            return _FakeQueryResult([[i] for i in cast("list[str]", params["ids"]) if i in known])
         if q == _CELEX_EXISTS_QUERY:
             # `{celex: $celex}` match (issue #193): the id of the node carrying that CELEX.
             matches = [
@@ -1067,6 +1076,36 @@ def test_curated_celex_happy_path_reports_each_completed_stage_with_a_nonempty_s
     assert stages_by_name["derivation"]["summary"]["unmatched_obligations"] == 1
 
 
+def test_curated_celex_merge_summary_counts_equal_the_graph_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #195, Slice 6 (AC-BI-016): the real merge stage's `summary` reports the net-new
+    Obligation / Capability counts, which equal what the run actually added to the (initially
+    empty) single-tenant graph, counted independently from the graph's own node tables.
+    """
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    fixture = _use_real_pipeline_stages(monkeypatch)
+
+    def _count(label: str) -> int:
+        rows = cast(
+            "list[list[int]]",
+            fixture.single_tenant.query(f"MATCH (n:{label}) RETURN count(n)").result_set,
+        )
+        return rows[0][0]
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    merge_summary = {s["stage"]: s["summary"] for s in json.loads(_text(result))["stages"]}["merge"]
+    assert _count("Obligation") > 0
+    assert _count("Capability") > 0
+    assert merge_summary["new_obligations"] == _count("Obligation")
+    assert merge_summary["new_capabilities"] == _count("Capability")
+    assert merge_summary["matched_capabilities"] == 0
+
+
 def test_curated_celex_happy_path_emits_one_started_succeeded_log_pair_with_principal(
     monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
 ) -> None:
@@ -1356,6 +1395,8 @@ def test_rest_and_mcp_return_identical_outcomes_for_the_same_request(
     install_compliance_officer_grant(monkeypatch, granted=True)
     app = create_app(_rest_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: rest_fake.dependencies
+    rest_audit_store = InMemoryAuditStore()  # the REST side audits too (issue #195)
+    app.dependency_overrides[provide_audit_store] = lambda: rest_audit_store
 
     rest_response = TestClient(app, raise_server_exceptions=False).post(
         "/ingestions",

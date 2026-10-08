@@ -311,6 +311,14 @@ class MergeResult:
     # ever" graph read. Zero by default so every pre-existing `MergeResult(...)`
     # construction in this codebase's tests stays valid unchanged.
     pending_review_count: int = 0
+    # issue #195, Slice 6: facts for the audit trail, not approximations. Capabilities the dedup
+    # pass minted (`match_kind == "new"`) versus resolved onto an existing node (`exact`,
+    # `semantic`, `redirected`); and Obligations this call wrote that did not already exist in
+    # the single-tenant graph (read BEFORE the write; ids dropped by a cleanup-merge redirect are
+    # never counted). All default to 0 so pre-existing constructions stay valid.
+    new_capability_count: int = 0
+    matched_capability_count: int = 0
+    new_obligation_count: int = 0
 
 
 # S1's fix: a properties-dict type distinct from BaselineNode.properties,

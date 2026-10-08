@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from psycopg.rows import TupleRow
 
     from ps_service.audit import AuditQueryFilters, AuditQueryPage
+    from ps_service.ingestion_runs.audit_actions import IngestionReasonCode
 
 
 class RecordingAuditStore:
@@ -143,7 +144,11 @@ class InMemoryIngestionRunStore:
                 finished_at=None,
             )
             self.rows[run_id] = row
-            self._audit(actor, run_id, submission_audit_entry(celex=celex, short_name=short_name))
+            self._audit(
+                actor,
+                run_id,
+                submission_audit_entry(celex=celex, short_name=short_name, trigger="async_ingest"),
+            )
             return row
 
     def get_run(self, run_id: str) -> IngestionRunRow | None:
@@ -165,6 +170,7 @@ class InMemoryIngestionRunStore:
         status: Literal["succeeded", "failed"],
         result: dict[str, object] | None,
         error: str | None,
+        reason_code: IngestionReasonCode | None = None,
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
         """Single-winner compare-and-swap out of `running`; the winner also records its audit."""
@@ -184,7 +190,13 @@ class InMemoryIngestionRunStore:
             self._audit(
                 audit_actor or (row.actor_subject, row.actor_issuer),
                 run_id,
-                completion_audit_entry(status=status, result=result, error=error),
+                completion_audit_entry(
+                    status=status,
+                    celex=row.celex,
+                    trigger="async_ingest",
+                    result=result,
+                    reason_code=reason_code,
+                ),
             )
             return True
 

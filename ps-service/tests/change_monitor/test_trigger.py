@@ -29,8 +29,11 @@ from change_monitor._fakes import (
     MakeEmitter,
     ReadLines,
 )
-from ps_service.change_monitor.errors import NationalTranspositionNotSupportedError
-from ps_service.change_monitor.trigger import trigger_reingestion
+from ps_service.change_monitor.errors import (
+    ChangeMonitorStateError,
+    NationalTranspositionNotSupportedError,
+)
+from ps_service.change_monitor.trigger import trigger_reingestion, will_reingest
 from ps_service.ingestion.adapters.errors import CellarFetchError
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
@@ -383,3 +386,73 @@ def test_crash_between_ingest_and_succession_is_resumable(
     )
     assert outcome_again.outcome == "already_processed"
     assert graph_complete.writes == []
+
+
+# --- Issue #195: run id pass-through and the read-only `will_reingest` probe ---
+
+
+def test_trigger_reingestion_passes_the_given_run_id_to_the_ingest(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+
+    outcome = trigger_reingestion(
+        _IDENTIFIER,
+        "CRA",
+        "2.0",
+        adapter=FakeAdapter({_IDENTIFIER: _structure()}),
+        graph=_fresh_graph("regulation"),
+        emitter=emitter,
+        run_id="caller-minted-run-id",
+    )
+
+    assert outcome.run_id == "caller-minted-run-id"
+
+
+def test_trigger_reingestion_without_run_id_keeps_minting_its_own(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    adapter = FakeAdapter({_IDENTIFIER: _structure()})
+
+    first = trigger_reingestion(
+        _IDENTIFIER,
+        "CRA",
+        "2.0",
+        adapter=adapter,
+        graph=_fresh_graph("regulation"),
+        emitter=emitter,
+    )
+    second = trigger_reingestion(
+        _IDENTIFIER,
+        "CRA",
+        "2.0",
+        adapter=adapter,
+        graph=_fresh_graph("regulation"),
+        emitter=emitter,
+    )
+
+    assert first.run_id and second.run_id and first.run_id != second.run_id
+
+
+@pytest.mark.parametrize(
+    ("graph", "expected"),
+    [
+        (_fresh_graph("regulation"), True),
+        (_resume_graph(), False),
+        (_already_processed_graph(), False),
+    ],
+    ids=["fresh", "resume", "already_processed"],
+)
+def test_will_reingest_is_true_only_for_the_fresh_state_and_writes_nothing(
+    graph: FakeGraph, *, expected: bool
+) -> None:
+    assert will_reingest(graph, "CRA", "2.0") is expected
+    assert graph.writes == []
+
+
+def test_will_reingest_raises_when_the_graph_has_no_single_active_prior() -> None:
+    with pytest.raises(ChangeMonitorStateError):
+        will_reingest(
+            FakeGraph([FakeQueryResult([]), FakeQueryResult([]), FakeQueryResult([])]), "CRA", "2.0"
+        )

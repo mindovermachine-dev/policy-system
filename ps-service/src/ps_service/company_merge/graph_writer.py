@@ -139,6 +139,10 @@ _STANDARD_LABEL = "Standard"
 _CONTROL_LABEL = "Control"
 _PRACTICE_AREA_LABEL = "PracticeArea"
 _RISK_PATH_LABEL = "RiskPath"
+
+# Fixed, code-owned, never string-interpolated: `$ids` always flows in via `params`
+# (L2 Query Safety).
+_EXISTING_OBLIGATIONS_QUERY = "MATCH (o:Obligation) WHERE o.id IN $ids RETURN o.id"
 _DRAFT_STATUS = "draft"
 
 # source_label, target_label per relationship_type -- the Edge Catalog shape
@@ -326,6 +330,26 @@ def persist_role_and_requirement_passthrough(
             edge.target_id,
             edge.source_ref,
         )
+
+
+def count_new_obligations(single_tenant_graph: GraphHandle, obligation_ids: tuple[str, ...]) -> int:
+    """Count how many of `obligation_ids` are NOT yet Obligation nodes in `single_tenant_graph`.
+
+    One parameterized read (`$ids`, never interpolated: Level 2 Query Safety), issued BEFORE
+    `persist_obligation_passthrough` so the answer is the delta that write will make. Net-new is
+    decided by this read, not driver statistics: `GraphQueryResult` exposes only `result_set`.
+    Duplicate ids count once; an empty tuple issues no query.
+    """
+    unique_ids = sorted(set(obligation_ids))
+    if not unique_ids:
+        return 0
+    result = _execute_query(
+        single_tenant_graph,
+        _EXISTING_OBLIGATIONS_QUERY,
+        params={"ids": unique_ids},
+    )
+    existing = {cast("str", row[0]) for row in cast("list[list[object]]", result.result_set)}
+    return len(set(unique_ids) - existing)
 
 
 def persist_obligation_passthrough(

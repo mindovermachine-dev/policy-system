@@ -134,13 +134,20 @@ def create_invitation(
             payload = json.loads(response.read())
     except urllib.error.HTTPError as exc:
         raise AuthentikInvitationError(
-            f"Authentik invitation request failed: HTTP {exc.code}"
+            f"Authentik invitation request failed: HTTP {exc.code}",
+            reason_code="upstream_http_error",
         ) from exc
     except Exception as exc:
         raise AuthentikInvitationError(
-            f"Authentik invitation request failed: {type(exc).__name__}"
+            f"Authentik invitation request failed: {type(exc).__name__}",
+            reason_code="upstream_unreachable",
         ) from exc
-    itoken = payload["pk"]
+    try:
+        itoken = payload["pk"]
+    except (KeyError, TypeError) as exc:
+        raise AuthentikInvitationError(
+            "Authentik invitation response was malformed", reason_code="unexpected_error"
+        ) from exc
     link_base = config.authentik_public_url or config.authentik_base_url
     invite_url = f"{link_base}{_ENROLLMENT_FLOW_PATH}?itoken={itoken}"
     return InvitationResult(itoken=itoken, invite_url=invite_url)

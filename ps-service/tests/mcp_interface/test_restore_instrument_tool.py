@@ -68,15 +68,20 @@ from typing import TYPE_CHECKING, NoReturn, cast
 
 import pytest
 from api._fakes import FakeCuratedArtifactTransport, FakeFailingCuratedSourceTransport
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own real-token success test can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
 from fastapi.testclient import TestClient
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 from starlette.applications import Starlette
 
 from ps_service.api.restore_orchestration import CatalogRestoreInfra
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.auth.models import AuthContext
 from ps_service.auth.verifier import PsTokenVerifier
 from ps_service.authz.models import AccessRole
@@ -102,7 +107,7 @@ from ps_test_support.mock_oidc_provider import (
 
 if TYPE_CHECKING:
     import urllib.request
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Generator
     from pathlib import Path
 
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
@@ -694,6 +699,27 @@ def _call_restore_instrument(instrument_id: str = _INSTRUMENT_ID) -> CallToolRes
 
 def _set_similarity_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PS_COMPANYMERGE_SIMILARITY_THRESHOLD", "0.83")
+
+
+@pytest.fixture(name="audit_store", autouse=True)
+def _audit_store_fixture(monkeypatch: pytest.MonkeyPatch) -> InMemoryAuditStore:  # pyright: ignore[reportUnusedFunction]  # autouse + injected by name
+    """Every restore writes `instrument.restore` rows (issue #195): keep them off Postgres."""
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
+    return store
+
+
+@contextlib.contextmanager
+def _verified_actor(*, sub: str, iss: str) -> Generator[None]:
+    """Bind a verified `AccessToken` onto the MCP SDK's auth contextvar (near-miss idiom)."""
+    access_token = AccessToken(
+        token="test-token", client_id="test-client", scopes=[], subject=sub, claims={"iss": iss}
+    )
+    token = auth_context_var.set(AuthenticatedUser(access_token))
+    try:
+        yield
+    finally:
+        auth_context_var.reset(token)
 
 
 def _restore_log_lines(all_lines: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1510,3 +1536,116 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert "ValueError" in str(failed_line.get("detail"))
+
+
+# --- issue #195: instrument.restore audit rows ---------------------------------------
+
+
+def test_restore_instrument_audits_verified_actor(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-001/002: the rows carry the verified caller and the canonical instrument id."""
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _grant_compliance_officer(monkeypatch, subject="user-42", issuer="https://issuer.example.com/")
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
+
+    with _verified_actor(sub="user-42", iss="https://issuer.example.com/"):
+        result = _call_restore_instrument("cra-1.0")
+
+    assert result.is_error is False
+    assert [(r.actor_subject, r.actor_issuer) for r in audit_store.rows] == [
+        ("user-42", "https://issuer.example.com/")
+    ] * 2
+    assert [
+        (r.action, r.resource_id, r.outcome, r.details["status"]) for r in audit_store.rows
+    ] == [
+        ("instrument.restore", _INSTRUMENT_ID, "applied", "started"),
+        ("instrument.restore", _INSTRUMENT_ID, "applied", "succeeded"),
+    ]
+    assert all(r.details["source"] == "catalog" for r in audit_store.rows)
+
+
+def test_restore_instrument_audits_sentinel_under_bypass(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-001: under the local-test bypass the actor is `system:local-test-bypass`."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
+
+    _call_restore_instrument()
+
+    assert {(r.actor_subject, r.actor_issuer) for r in audit_store.rows} == {
+        ("system:local-test-bypass", "system:local-test-bypass")
+    }
+
+
+def test_restore_instrument_returns_error_prefix_when_audit_unavailable_and_restores_nothing(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-011: the opening row cannot be written -> `error: ...`, the graph is never opened."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    audit_store.fail_on_outcome["applied"] = AuditPostgresUnavailableError("db.internal down")
+    open_db_calls: list[object] = []
+
+    def _counting_open_db(config: ServiceConfig) -> FalkorDB:
+        open_db_calls.append(config)
+        return cast("FalkorDB", object())
+
+    _use_fake_restore_infra(monkeypatch, _valid_transport(), open_db=_counting_open_db)
+
+    result = _call_restore_instrument()
+
+    text = _text(result)
+    assert text.startswith("error: ")
+    assert "temporarily unavailable" in text
+    assert "db.internal" not in text
+    assert open_db_calls == []
+    assert audit_store.rows == []
+
+
+def test_restore_instrument_failure_writes_a_failed_row_with_a_reason_code(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-003/010: a rejected artifact leaves started + failed(artifact_rejected), no detail."""
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _transport_with(baseline_sha256="0" * 64))
+
+    result = _call_restore_instrument()
+
+    assert _text(result).startswith("error: ")
+    assert [
+        (r.outcome, r.details["status"], r.details.get("reason_code")) for r in audit_store.rows
+    ] == [
+        ("applied", "started", None),
+        ("failed", "failed", "artifact_rejected"),
+    ]
+
+
+def test_restore_instrument_rows_are_returned_by_list_audit_events_by_instrument_id(
+    monkeypatch: pytest.MonkeyPatch, audit_store: InMemoryAuditStore
+) -> None:
+    """AC-BI-018: the rows are retrievable by `details={"instrument_id": ...}` (Slice 11 filter)."""
+    from ps_service.audit import AuditQueryFilters
+
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    _set_similarity_threshold(monkeypatch)
+    configure()
+    _use_fake_restore_infra(monkeypatch, _valid_transport())
+
+    _call_restore_instrument()
+
+    page = audit_store.query(
+        filters=AuditQueryFilters(
+            action="instrument.restore", details={"instrument_id": _INSTRUMENT_ID}
+        ),
+        cursor=None,
+        page_size=10,
+    )
+    assert [e.details["status"] for e in page.events] == ["succeeded", "started"]  # newest first

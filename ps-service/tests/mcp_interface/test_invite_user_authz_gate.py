@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+import pytest
+from audit._fakes import InMemoryAuditStore, audit_store_factory
 from authz._fakes import (
     RaisingAccessRoleStore,  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package, mirrors test_catalog_source_authz_gate.py's own convention
 )
@@ -33,11 +35,16 @@ from ps_service.logging import configure
 from ps_service.mcp_interface import mcp_server
 
 if TYPE_CHECKING:
-    import pytest
-
     from ps_service.config import ServiceConfig
 
 _EMAIL = "target@example.com"
+
+
+@pytest.fixture(autouse=True)
+def _in_memory_audit_store(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Invites write `user.invite` rows (issue #195): keep them off a real Postgres."""
+    store = InMemoryAuditStore()
+    monkeypatch.setattr(mcp_server, "PsycopgAuditStore", audit_store_factory(store))
 
 
 def _call(args: dict[str, object] | None = None) -> CallToolResult:

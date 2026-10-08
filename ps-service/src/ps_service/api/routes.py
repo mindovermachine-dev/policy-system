@@ -20,6 +20,7 @@ from ps_service.api.change_check_orchestration import (
 from ps_service.api.dependencies import (
     get_principal,
     get_service_config,
+    provide_audit_context,
     provide_change_check_dependencies,
     provide_curated_catalog_dependencies,
     provide_export_dependencies,
@@ -40,8 +41,7 @@ from ps_service.api.errors import (
 from ps_service.api.export_orchestration import ExportDependencies, run_export
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
-    resolve_ingestion_entry,
-    run_catalog_ingestion_pipeline,
+    run_audited_catalog_ingestion,
     run_internal_ingestion_pipeline,
 )
 from ps_service.api.models import (
@@ -75,6 +75,9 @@ from ps_service.api.restore_orchestration import (
     run_restoration_from_catalog_source,
 )
 from ps_service.api.run_status import get_stage
+from ps_service.audit import (
+    AuditContext,  # noqa: TC001 -- FastAPI resolves the route annotation at runtime
+)
 from ps_service.auth import (
     Principal,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
@@ -117,6 +120,7 @@ async def create_ingestion(
     run_id: Annotated[str, Depends(provide_run_id)],
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[PipelineDependencies, Depends(provide_pipeline_dependencies)],
+    audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> IngestionAcceptedResponse:
     """Trigger the in-process ingestion pipeline for one ``POST /ingestions`` request.
 
@@ -133,7 +137,9 @@ async def create_ingestion(
     the ``source == "internal"`` branch has already returned, before any
     Cellar/catalog pipeline dispatch begins; an unprivileged or unauthenticated
     caller gets a 403 (``AccessDeniedError``) with no pipeline call made. The
-    catalog path then calls ``resolve_ingestion_entry`` (issue #193) -- the same
+    catalog path then calls ``run_audited_catalog_ingestion`` (issue #195), which writes an
+    ``ingestion_run.submit`` row first (503 if the audit trail is unavailable; nothing runs),
+    calls ``resolve_ingestion_entry`` (issue #193) -- the same
     shared function the ``ingest_regulation`` MCP tool calls. It rejects a
     ``short_name`` already claimed by a different CELEX in the live graph, then
     resolves *every* CELEX -- curated or not, the catalog is never consulted --
@@ -160,6 +166,8 @@ async def create_ingestion(
             supply its own (catalog requests only -- see ``effective_run_id``).
         config: The resolved service configuration (injected).
         dependencies: The pipeline dependency bundle (injected; overridden in tests).
+        audit: Who is acting and where the ``ingestion_run`` audit rows go (injected;
+            catalog path only).
 
     Returns:
         An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
@@ -173,6 +181,8 @@ async def create_ingestion(
         InternalSeedValidationError: The internal request's document fails
             structural or shape validation (422).
         PipelineStageError: A pipeline stage raised (502).
+        AuditTrailUnavailableError: The ``ingestion_run.submit`` row could not be written; nothing
+            ran (503; issue #195, catalog path only).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     if request_body.source == "internal":
@@ -187,21 +197,15 @@ async def create_ingestion(
         return _to_accepted_response(run_id, outcome)
     await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)
     effective_run_id = request_body.run_id or run_id
-    single_tenant_graph = await run_in_threadpool(dependencies.graphs.single_tenant, config)
-    resolution = await run_in_threadpool(
-        resolve_ingestion_entry,
+    outcome = await run_in_threadpool(
+        run_audited_catalog_ingestion,
         request_body.celex,
         request_body.short_name,
-        single_tenant_graph=single_tenant_graph,
-    )
-    outcome = await run_in_threadpool(
-        run_catalog_ingestion_pipeline,
-        resolution.entry,
         config=config,
         run_id=effective_run_id,
         caller=caller,
         dependencies=dependencies,
-        ingestion_adapter=resolution.adapter,
+        audit=audit,
     )
     return _to_accepted_response(effective_run_id, outcome)
 
@@ -297,6 +301,7 @@ async def create_restoration(
     http_request: Request,
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[RestoreDependencies, Depends(provide_restore_dependencies)],
+    audit: Annotated[AuditContext, Depends(provide_audit_context)],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
     """Restore one curated instrument's artifact (D5, ``POST /restorations``).
@@ -316,11 +321,17 @@ async def create_restoration(
             ``create_ingestion``'s own ``caller`` derivation).
         config: The resolved service configuration (injected).
         dependencies: The restore dependency bundle (injected; overridden in tests).
+        audit: Who is acting and where the ``instrument.restore`` audit rows go (injected,
+            issue #195).
         principal: The verified caller (injected); becomes the owner of any imported
             draft Policy (issue #183). ``None`` when no verified identity exists.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
+
+    Raises:
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
+            restored (HTTP 503).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration(
@@ -328,6 +339,7 @@ async def create_restoration(
         config=config,
         actor=caller,
         dependencies=dependencies,
+        audit=audit,
         owner=_restore_owner(principal),
     )
 
@@ -339,6 +351,7 @@ async def create_restoration_from_catalog(
     dependencies: Annotated[
         CatalogRestoreDependencies, Depends(provide_restore_from_catalog_dependencies)
     ],
+    audit: Annotated[AuditContext, Depends(provide_audit_context)],
     principal: Annotated[Principal | None, Depends(get_principal)] = None,
 ) -> RestorationAcceptedResponse:
     """Fetch and restore one curated instrument's artifact from the curated-content source.
@@ -366,11 +379,17 @@ async def create_restoration_from_catalog(
             effective curated-content source URL to fetch from.
         dependencies: The fetch-and-restore dependency bundle (injected;
             overridden in tests).
+        audit: Who is acting and where the ``instrument.restore`` audit rows go (injected,
+            issue #195).
         principal: The verified caller (injected); becomes the owner of any imported
             draft Policy (issue #183). ``None`` when no verified identity exists.
 
     Returns:
         A :class:`RestorationAcceptedResponse` naming the completed stages.
+
+    Raises:
+        AuditTrailUnavailableError: The opening audit row could not be written; nothing was
+            restored (HTTP 503).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     return run_restoration_from_catalog_source(
@@ -378,6 +397,7 @@ async def create_restoration_from_catalog(
         config=config,
         actor=caller,
         dependencies=dependencies,
+        audit=audit,
         owner=_restore_owner(principal),
     )
 
@@ -435,6 +455,7 @@ async def create_change_check(
     run_id: Annotated[str, Depends(provide_run_id)],
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[ChangeCheckDependencies, Depends(provide_change_check_dependencies)],
+    audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> ChangeCheckResponse:
     """Sweep every tracked instrument for amendments and re-ingest any found.
 
@@ -456,13 +477,20 @@ async def create_change_check(
         config: The resolved service configuration (injected).
         dependencies: The change-check dependency bundle (injected;
             overridden in tests).
+        audit: The verified principal and audit store (issue #195): each re-ingest the
+            sweep runs is audited as an ``ingestion_run`` pair with this actor; an
+            unwritable opening row aborts the sweep with HTTP 503.
 
     Returns:
         A :class:`ChangeCheckResponse` with the run id and each tracked
         instrument's outcome.
     """
     result = await run_in_threadpool(
-        run_change_check_sweep, config=config, run_id=run_id, dependencies=dependencies
+        run_change_check_sweep,
+        config=config,
+        run_id=run_id,
+        dependencies=dependencies,
+        audit=audit,
     )
     return _to_change_check_response(result)
 
@@ -516,6 +544,7 @@ async def resolve_near_miss(
     ],
     store: Annotated[PendingApprovalStore, Depends(provide_pending_approval_store)],
     principal: Annotated[Principal | None, Depends(get_principal)],
+    audit: Annotated[AuditContext, Depends(provide_audit_context)],
 ) -> ResolveReviewResponse:
     """Resolve one `PendingReview` (issue #35, `POST /near-misses/{review_id}/resolve`).
 
@@ -549,12 +578,16 @@ async def resolve_near_miss(
         store: The pending-approval store (injected; overridden in tests).
         principal: The request's verified identity, or `None` under the
             local-test bypass (injected).
+        audit: Who is acting and where the `near_miss.resolve` audit rows go (injected;
+            `keep-separate` only: a merge is audited when its approval is signed).
 
     Returns:
         A :class:`ResolveReviewResponse` naming the resolved review and
         decision.
 
     Raises:
+        AuditTrailUnavailableError: `decision="keep-separate"` and the opening audit row could
+            not be written; nothing was resolved (HTTP 503).
         MergeApprovalRequiresAuthenticatedCallerError: `decision="merge"`
             with no real, verified `principal` (HTTP 401).
         PendingReviewNotFoundError: `review_id` doesn't exist or was
@@ -562,7 +595,11 @@ async def resolve_near_miss(
     """
     if request_body.decision == "keep-separate":
         return run_resolve_near_miss(
-            review_id, request_body.decision, config=config, dependencies=dependencies
+            review_id,
+            request_body.decision,
+            config=config,
+            dependencies=dependencies,
+            audit=audit,
         )
     if principal is None:
         raise MergeApprovalRequiresAuthenticatedCallerError(

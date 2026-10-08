@@ -295,9 +295,30 @@ def test_create_run_writes_one_submit_audit_row_in_the_same_transaction(
             _SUBMIT_ACTION,
             "ingestion_run",
             "applied",
-            {"celex": "32024R2847", "short_name": "cra", "status": "started"},
+            {
+                "celex": "32024R2847",
+                "short_name": "cra",
+                "status": "started",
+                "trigger": "async_ingest",
+            },
         )
     ]
+
+
+@pytest.mark.postgres_live
+def test_each_run_has_exactly_one_submit_and_one_complete_row(
+    live_config: ServiceConfig,
+) -> None:
+    """AC-BI-014: a lost-race second completion and re-reads add no rows."""
+    config = live_config
+    store = _live_store(config)
+    run_id = _new_id()
+    store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
+    store.complete_run(run_id, status="succeeded", result=_RESULT, error=None)
+    store.complete_run(run_id, status="failed", result=None, error="x", reason_code="interrupted")
+    store.get_run(run_id)
+
+    assert [row[2] for row in _audit_rows(config, run_id)] == [_SUBMIT_ACTION, _COMPLETE_ACTION]
 
 
 @pytest.mark.postgres_live
@@ -311,7 +332,12 @@ def test_complete_run_writes_one_complete_audit_row_and_a_lost_race_writes_none(
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
     assert store.complete_run(run_id, status="succeeded", result=_RESULT, error=None) is True
-    assert store.complete_run(run_id, status="failed", result=None, error="error: late") is False
+    assert (
+        store.complete_run(
+            run_id, status="failed", result=None, error="error: late", reason_code="interrupted"
+        )
+        is False
+    )
 
     rows = _audit_rows(config, run_id)
     assert [row[2] for row in rows] == [_SUBMIT_ACTION, _COMPLETE_ACTION]
@@ -320,12 +346,21 @@ def test_complete_run_writes_one_complete_audit_row_and_a_lost_race_writes_none(
         _COMPLETE_ACTION,
         "ingestion_run",
         "applied",
-        {"status": "succeeded", "regulatory_instrument_id": "cra-1.0", "outcome": "fresh"},
+        {
+            "status": "succeeded",
+            "celex": "32024R2847",
+            "trigger": "async_ingest",
+            "regulatory_instrument_id": "cra-1.0",
+            "outcome": "fresh",
+            "new_obligations": 0,
+            "new_capabilities": 0,
+            "matched_capabilities": 0,
+        },
     )
 
 
 @pytest.mark.postgres_live
-def test_a_failed_completion_is_audited_as_failed_with_the_error_text(
+def test_a_failed_completion_is_audited_as_failed_with_a_reason_code_and_no_error_text(
     live_config: ServiceConfig,
 ) -> None:
     config = live_config
@@ -333,11 +368,25 @@ def test_a_failed_completion_is_audited_as_failed_with_the_error_text(
     run_id = _new_id()
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
-    store.complete_run(run_id, status="failed", result=None, error="error: boom")
+    store.complete_run(
+        run_id,
+        status="failed",
+        result=None,
+        error="error: boom",
+        reason_code="pipeline_stage_failed",
+    )
 
     complete = _audit_rows(config, run_id)[1]
     assert complete[2:5] == (_COMPLETE_ACTION, "ingestion_run", "failed")
-    assert complete[5] == {"status": "failed", "error": "error: boom"}
+    assert complete[5] == {
+        "status": "failed",
+        "celex": "32024R2847",
+        "trigger": "async_ingest",
+        "reason_code": "pipeline_stage_failed",
+        "new_obligations": 0,
+        "new_capabilities": 0,
+        "matched_capabilities": 0,
+    }
 
 
 @pytest.mark.postgres_live
@@ -351,12 +400,19 @@ def test_an_audit_actor_override_is_the_actor_recorded_on_the_completion_row(
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
     store.complete_run(
-        run_id, status="failed", result=None, error="error: interrupted", audit_actor=_RECONCILER
+        run_id,
+        status="failed",
+        result=None,
+        error="error: interrupted",
+        reason_code="interrupted",
+        audit_actor=_RECONCILER,
     )
 
     complete = _audit_rows(config, run_id)[1]
     assert complete[:2] == _RECONCILER
     assert (_audit_rows(config, run_id)[0][0], _audit_rows(config, run_id)[0][1]) == _ACTOR
+    assert complete[5]["celex"] == "32024R2847"  # read from the run row (RETURNING celex)
+    assert complete[5]["reason_code"] == "interrupted"
     row = store.get_run(run_id)
     assert row is not None
     assert (row.actor_subject, row.actor_issuer) == _ACTOR

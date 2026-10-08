@@ -9,9 +9,12 @@ description: Read PS Service's shared audit_events trail — who did what, to wh
 
 Read the shared, insert-only `audit_events` trail PS Service's `ps.service.audit`
 component maintains — every access-role bootstrap/grant/revoke (applied or
-denied) today, with more actions (policy lifecycle, supersede-fork,
-`user.invite`) joining it over time as each feature adopts the same store
-(issue #147). The MCP-tool-backed front end to `list-audit-events` — there is
+denied), policy lifecycle and supersede-fork actions, and (issue #195) the
+business operations `ingestion_run.submit` / `ingestion_run.complete`
+(regulation ingestion, sync, async and `check_regulations` re-ingests,
+distinguished by `details.trigger`), `instrument.restore`, `near_miss.resolve`
+and `user.invite`, with more joining over time as each feature adopts the
+same store (issue #147). The MCP-tool-backed front end to `list-audit-events` — there is
 no other read path; the underlying Postgres is not directly reachable by any
 client this skill serves.
 
@@ -19,7 +22,8 @@ client this skill serves.
 is no bulk export and no cross-page aggregation performed by this skill
 itself; each of `actor_subject`, `actor_issuer`, `resource_type`,
 `resource_id`, `action`, `occurred_from`, `occurred_to` is optional and
-independently combinable, and `cursor`/`page_size` control paging through
+independently combinable, and `details` narrows by the business subject of a
+row, and `cursor`/`page_size` control paging through
 however many pages the caller wants to walk.
 
 **Deliverable:** the matching `events` for the requested filters/page,
@@ -60,25 +64,34 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    unfiltered, most-recent events. All filters are optional and combinable.
 2. **Call the tool** — `list-audit-events`, with whichever of
    `actor_subject`, `actor_issuer`, `resource_type`, `resource_id`,
-   `action`, `occurred_from`, `occurred_to` (ISO 8601), `cursor`, and
-   `page_size` (default 25, maximum 100) the user supplied — on the PS
+   `action`, `occurred_from`, `occurred_to` (ISO 8601), `details`, `cursor`,
+   and `page_size` (default 25, maximum 100) the user supplied — on the PS
    Service connector selected at On Load.
+   `details` is an exact-match filter on an allow-listed key: `celex`
+   (ingestion submit and complete rows), `regulatory_instrument_id`
+   (ingestion complete rows) or `instrument_id` (restore rows). To answer
+   "who ingested X?", pass `{"celex": "<celex>"}` (or
+   `{"regulatory_instrument_id": "<id>"}`); the rows show the actor, the
+   `trigger` (`sync_ingest`, `async_ingest` or `amendment_check`), the
+   outcome and the counts of new Obligations, new Capabilities and matched
+   Capabilities. Never invent a `details` key: any other key is rejected.
 3. **Report the result**, distinguishing every non-success outcome into one
    of the following named states — never collapsed into a generic
    "listing failed":
 
-   | Tool result shape                                                                                     | Named state to report                                                                                                                |
-   | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-   | Connection/transport failure, or `error: access-role management requires a real authenticated caller` | "PS Service is unreachable or the caller is unauthenticated" — audit-trail access is never available under the local-test bypass     |
-   | `error: You do not have the required access role for this action.`                                    | `access_denied` — the caller does not hold `SystemOwner` or `SystemAdmin`                                                            |
-   | `error: The 'action' filter names an action that is not registered.`                                  | `invalid_action_filter` — the `action` string given isn't a registered action; ask the user to confirm the exact spelling            |
-   | `error: The 'resource_type' filter names a resource type that is not registered.`                     | `invalid_resource_type_filter` — the `resource_type` string given isn't registered                                                   |
-   | `error: The 'occurred_from' filter must not be later than 'occurred_to'.`                             | `invalid_time_range_filter` — the time range is backwards; ask the user to confirm the two bounds                                    |
-   | `error: The 'cursor' filter is malformed.`                                                            | `invalid_cursor_filter` — never happens from a `next_cursor` this skill passed back unmodified; if seen, start over with no `cursor` |
-   | `error: The 'page_size' filter must not exceed 100.`                                                  | `invalid_page_size_filter` — ask for a smaller page size (≤ 100)                                                                     |
-   | `error: The authorization store is temporarily unavailable.`                                          | `authorization_store_unavailable` — the authorization store cannot be reached; every role-gated action fails closed until it is      |
-   | `error: an unexpected error occurred`                                                                 | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause    |
-   | Successful structured response                                                                        | Report the returned `events`, newest first, and whether `next_cursor` means more remain                                              |
+   | Tool result shape                                                                                                                | Named state to report                                                                                                                |
+   | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+   | Connection/transport failure, or `error: access-role management requires a real authenticated caller`                            | "PS Service is unreachable or the caller is unauthenticated" — audit-trail access is never available under the local-test bypass     |
+   | `error: You do not have the required access role for this action.`                                                               | `access_denied` — the caller does not hold `SystemOwner` or `SystemAdmin`                                                            |
+   | `error: The 'action' filter names an action that is not registered.`                                                             | `invalid_action_filter` — the `action` string given isn't a registered action; ask the user to confirm the exact spelling            |
+   | `error: The 'resource_type' filter names a resource type that is not registered.`                                                | `invalid_resource_type_filter` — the `resource_type` string given isn't registered                                                   |
+   | `error: The 'occurred_from' filter must not be later than 'occurred_to'.`                                                        | `invalid_time_range_filter` — the time range is backwards; ask the user to confirm the two bounds                                    |
+   | `error: The 'details' filter accepts only the keys celex, regulatory_instrument_id, instrument_id, each with a non-empty value.` | `invalid_details_filter` — the key is outside the allow-list or the value is empty; retry with one of the three allow-listed keys    |
+   | `error: The 'cursor' filter is malformed.`                                                                                       | `invalid_cursor_filter` — never happens from a `next_cursor` this skill passed back unmodified; if seen, start over with no `cursor` |
+   | `error: The 'page_size' filter must not exceed 100.`                                                                             | `invalid_page_size_filter` — ask for a smaller page size (≤ 100)                                                                     |
+   | `error: The authorization store is temporarily unavailable.`                                                                     | `authorization_store_unavailable` — the authorization store cannot be reached; every role-gated action fails closed until it is      |
+   | `error: an unexpected error occurred`                                                                                            | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause    |
+   | Successful structured response                                                                                                   | Report the returned `events`, newest first, and whether `next_cursor` means more remain                                              |
 
 4. **Offer the next page, if any.** When `next_cursor` is not `None`, tell
    the user more events remain and ask whether to continue before calling

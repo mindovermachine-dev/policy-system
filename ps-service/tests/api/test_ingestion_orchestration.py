@@ -42,6 +42,7 @@ from ps_service.api.ingestion_orchestration import (
     _is_already_merged,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     check_short_name_collision,
+    classify_ingestion_failure,
     normalize_short_name,
     resolve_ingestion_entry,
     resolve_via_cellar,
@@ -56,6 +57,7 @@ from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarNotFoundError
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
 from ps_service.ingestion.models import IngestResult
+from ps_service.mcp_interface.errors import McpGraphUnavailableError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -395,6 +397,77 @@ def test_emits_started_and_succeeded_entries_with_run_id_source_and_caller_and_d
     assert all(run["caller"] == "10.1.2.3" for run in runs)
     assert "duration_ms" not in runs[0]
     assert isinstance(runs[1]["duration_ms"], float)
+
+
+def test_succeeded_ingestion_run_log_carries_trigger_and_counts(
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+) -> None:
+    """Issue #195: the succeeded log line agrees with the audit row (trigger + the three counts)."""
+    emitter, log_path = make_emitter()
+    fake = build_fake_pipeline_dependencies()
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-xyz",
+        caller="10.1.2.3",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+        trigger="sync_ingest",
+    )
+    emitter.flush()
+
+    runs = [line for line in read_lines(log_path) if line.get("action") == "ingestion_run"]
+    succeeded = next(run for run in runs if run["outcome"] == "succeeded")
+    assert succeeded["trigger"] == "sync_ingest"
+    assert (
+        succeeded["new_obligations"],
+        succeeded["new_capabilities"],
+        succeeded["matched_capabilities"],
+    ) == (0, 0, 0)
+    assert "trigger" not in next(run for run in runs if run["outcome"] == "started")
+
+
+def test_ingestion_run_log_without_a_trigger_is_unchanged(
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+) -> None:
+    emitter, log_path = make_emitter()
+    fake = build_fake_pipeline_dependencies()
+
+    run_catalog_ingestion_pipeline(
+        _ENTRY,
+        config=_complete_config(),
+        run_id="run-xyz",
+        caller="c",
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    runs = [line for line in read_lines(log_path) if line.get("action") == "ingestion_run"]
+    assert all("trigger" not in run and "new_obligations" not in run for run in runs)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (IngestionConfigIncompleteError("x"), "config_incomplete"),
+        (CatalogIdentifierNotFoundError("x"), "celex_not_found"),
+        (ShortNameCollisionError("x"), "short_name_collision"),
+        (PipelineStageError(stage="merge", reason="boom /Users/x"), "pipeline_stage_failed"),
+        (RuntimeError("boom"), "unexpected_error"),
+    ],
+)
+def test_classify_ingestion_failure_maps_the_exception_type_to_a_reason_code(
+    exc: Exception, expected: str
+) -> None:
+    assert classify_ingestion_failure(exc) == expected
+
+
+def test_classify_ingestion_failure_matches_the_graph_unavailable_error_by_class_name() -> None:
+    assert classify_ingestion_failure(McpGraphUnavailableError()) == "graph_unavailable"
 
 
 def test_classify_stage_failure_returns_scrubbed_verbatim_reason_for_whitelisted_exception() -> (
@@ -1154,6 +1227,44 @@ def test_merge_summary_pending_reviews_zero_when_no_near_misses() -> None:
 
     assert summary["near_misses"] == 0
     assert summary["pending_reviews"] == 0
+
+
+def test_merge_stage_summary_exposes_new_and_matched_counts() -> None:
+    """Issue #195, Slice 6: the merge stage summary gains `new_obligations`, `new_capabilities`
+    and `matched_capabilities` (additive; `StageOutcome.summary` is `dict[str, int]`), sourced
+    from the `MergeResult` fields, alongside the pre-existing keys (unchanged).
+    """
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary-3",
+        obligation_ids=("obl-1", "obl-2", "obl-3"),
+        capability_canonical_ids=("cap-1", "cap-2", "cap-3"),
+        near_misses=(),
+        new_capability_count=1,
+        matched_capability_count=2,
+        new_obligation_count=3,
+    )
+
+    summary = _merge_summary(result)
+
+    assert summary["new_obligations"] == 3
+    assert summary["new_capabilities"] == 1
+    assert summary["matched_capabilities"] == 2
+    assert summary["obligations"] == 3
+    assert summary["canonical_capabilities"] == 3
+
+
+def test_merge_stage_summary_counts_default_to_zero() -> None:
+    result = MergeResult(
+        regulatory_instrument_id="ri-summary-4",
+        obligation_ids=(),
+        capability_canonical_ids=(),
+        near_misses=(),
+    )
+
+    summary = _merge_summary(result)
+
+    assert (summary["new_obligations"], summary["new_capabilities"]) == (0, 0)
+    assert summary["matched_capabilities"] == 0
 
 
 # --- issue #135: reject redundant re-ingestion of an already-merged instrument ---

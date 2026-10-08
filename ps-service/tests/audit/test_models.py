@@ -12,7 +12,9 @@ import pytest
 from pydantic import ValidationError
 
 from ps_service.audit.models import (
+    AUDIT_DETAILS_FILTER_KEYS,
     AuditDetails,
+    AuditQueryFilters,
     is_known_resource_type,
     register_audit_action,
     register_audit_resource_type,
@@ -95,3 +97,13 @@ def test_register_audit_resource_type_tolerates_being_registered_twice() -> None
     register_audit_resource_type(resource_type)  # must not raise
 
     assert is_known_resource_type(resource_type) is True
+
+
+def test_audit_details_filter_keys_allow_list_is_exactly_the_three_business_keys() -> None:
+    """AC-BI-018: the `details` filter's allow-list is a closed, ordered tuple of three keys."""
+    assert AUDIT_DETAILS_FILTER_KEYS == ("celex", "regulatory_instrument_id", "instrument_id")
+
+
+def test_audit_query_filters_details_defaults_to_empty() -> None:
+    """No `details` filter by default, so existing callers are unaffected."""
+    assert AuditQueryFilters().details is None

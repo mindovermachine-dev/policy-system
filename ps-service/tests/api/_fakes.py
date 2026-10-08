@@ -25,6 +25,10 @@ from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, Protocol, Self, cast
 
+from starlette.requests import (
+    Request,  # noqa: TC002 -- FastAPI resolves the annotation at runtime to inject the request
+)
+
 from ps_service.api import dependencies
 from ps_service.api.change_check_orchestration import ChangeCheckDependencies
 from ps_service.api.ingestion_orchestration import (
@@ -38,7 +42,7 @@ from ps_service.api.ingestion_orchestration import (
 )
 from ps_service.auth import Principal
 from ps_service.authz.models import AccessRole
-from ps_service.change_monitor.models import PollReport
+from ps_service.change_monitor.models import PollReport, ReingestionOutcome
 from ps_service.company_merge.models import MergeResult
 from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,
@@ -60,7 +64,7 @@ if TYPE_CHECKING:
     from ps_service.api.catalog import CatalogEntry, CuratedInstrumentEntry
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
     from ps_service.api.ingestion_orchestration import GraphHandle
-    from ps_service.change_monitor.models import ReingestionOutcome, TrackedInstrumentNode
+    from ps_service.change_monitor.models import TrackedInstrumentNode
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_service.domain_mapper.models import ExtractionUnit
@@ -662,6 +666,7 @@ def _never_trigger_reingestion(
     adapter: IngestionAdapter,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
+    run_id: str | None = None,
 ) -> ReingestionOutcome:
     """Fail loudly if a faked sweep with no scripted ``reingestion_result`` calls this.
 
@@ -672,7 +677,7 @@ def _never_trigger_reingestion(
     D5 "no curated catalog entry" test (the missing-entry short-circuit
     happens before `trigger_reingestion` would ever be called).
     """
-    _ = (adapter, graph, emitter)
+    _ = (adapter, graph, emitter, run_id)
     message = (
         "trigger_reingestion must not be called in this test "
         f"(identifier={identifier!r}, short_name={short_name!r}, new_version={new_version!r})"
@@ -707,6 +712,7 @@ class TriggerReingestionCallRecord:
     new_version: str
     adapter: IngestionAdapter
     graph: GraphHandle
+    run_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,6 +726,7 @@ class FakeChangeCheckDependencies:
     find_catalog_entry_calls: list[str]
     open_native_short_names: list[str]
     trigger_reingestion_calls: list[TriggerReingestionCallRecord]
+    will_reingest_calls: list[tuple[str, str]]
 
 
 def build_fake_change_check_dependencies(
@@ -731,6 +738,7 @@ def build_fake_change_check_dependencies(
     reingestion_results: Sequence[ReingestionOutcome | BaseException] | None = None,
     native_graph: FakeGraphHandle | None = None,
     ingestion_adapter: IngestionAdapter | None = None,
+    will_reingest_error: BaseException | None = None,
 ) -> FakeChangeCheckDependencies:
     """Assemble a :class:`FakeChangeCheckDependencies` around scripted tracked/poll results.
 
@@ -785,6 +793,10 @@ def build_fake_change_check_dependencies(
         ingestion_adapter: The `IngestionAdapter` `default_adapter` returns;
             only meaningful when `reingestion_result`/`reingestion_results`
             is given. Defaults to a fresh `FakeIngestionAdapter()` sentinel.
+        will_reingest_error: When given (issue #195), the fake `will_reingest` probe raises it
+            instead of answering. Without it the probe answers like the real one against the
+            scripted result: False when the next scripted `ReingestionOutcome` carries
+            `run_id=None` (a `resume` / `already_processed` outcome), otherwise True.
 
     Returns:
         A :class:`FakeChangeCheckDependencies` whose `dependencies` can be
@@ -801,6 +813,7 @@ def build_fake_change_check_dependencies(
     find_catalog_entry_calls: list[str] = []
     open_native_short_names: list[str] = []
     trigger_reingestion_calls: list[TriggerReingestionCallRecord] = []
+    will_reingest_calls: list[tuple[str, str]] = []
 
     def _open_single_tenant(config: ServiceConfig) -> GraphHandle:
         _ = config
@@ -832,15 +845,15 @@ def build_fake_change_check_dependencies(
     open_native: Callable[[ServiceConfig, str], GraphHandle]
     default_adapter: Callable[[], IngestionAdapter]
     trigger_reingestion: TriggerReingestionCall
+    fixed_result = reingestion_result
+    scripted: deque[ReingestionOutcome | BaseException] | None = (
+        deque(reingestion_results) if reingestion_results is not None else None
+    )
     if reingestion_result is None and reingestion_results is None:
         open_native = _never_open_native
         default_adapter = _never_default_adapter
         trigger_reingestion = _never_trigger_reingestion
     else:
-        fixed_result = reingestion_result
-        scripted: deque[ReingestionOutcome | BaseException] | None = (
-            deque(reingestion_results) if reingestion_results is not None else None
-        )
         resolved_native_graph = native_graph if native_graph is not None else FakeGraphHandle()
         resolved_ingestion_adapter = (
             ingestion_adapter if ingestion_adapter is not None else FakeIngestionAdapter()
@@ -862,10 +875,13 @@ def build_fake_change_check_dependencies(
             adapter: IngestionAdapter,
             graph: GraphHandle,
             emitter: LogEmitter | None = None,
+            run_id: str | None = None,
         ) -> ReingestionOutcome:
             _ = emitter
             trigger_reingestion_calls.append(
-                TriggerReingestionCallRecord(identifier, short_name, new_version, adapter, graph)
+                TriggerReingestionCallRecord(
+                    identifier, short_name, new_version, adapter, graph, run_id
+                )
             )
             if scripted is not None:
                 if not scripted:
@@ -884,6 +900,14 @@ def build_fake_change_check_dependencies(
         default_adapter = _default_adapter
         trigger_reingestion = _trigger_reingestion
 
+    def _will_reingest(graph: GraphHandle, short_name: str, new_version: str) -> bool:
+        _ = graph
+        will_reingest_calls.append((short_name, new_version))
+        if will_reingest_error is not None:
+            raise will_reingest_error
+        upcoming = (scripted[0] if scripted else None) if scripted is not None else fixed_result
+        return not (isinstance(upcoming, ReingestionOutcome) and upcoming.run_id is None)
+
     dependencies = ChangeCheckDependencies(
         open_single_tenant=_open_single_tenant,
         open_native=open_native,
@@ -892,6 +916,7 @@ def build_fake_change_check_dependencies(
         trigger_reingestion=trigger_reingestion,
         default_adapter=default_adapter,
         find_catalog_entry=find_catalog_entry,
+        will_reingest=_will_reingest,
     )
     return FakeChangeCheckDependencies(
         dependencies=dependencies,
@@ -901,6 +926,7 @@ def build_fake_change_check_dependencies(
         find_catalog_entry_calls=find_catalog_entry_calls,
         open_native_short_names=open_native_short_names,
         trigger_reingestion_calls=trigger_reingestion_calls,
+        will_reingest_calls=will_reingest_calls,
     )
 
 
@@ -1146,7 +1172,7 @@ def install_compliance_officer_grant(
         else (roles if roles is not None else frozenset({AccessRole.AUTHENTICATED_USER}))
     )
 
-    def _get_principal(request: object) -> Principal:
+    def _get_principal(request: Request) -> Principal:
         _ = request
         return principal
 
@@ -1160,7 +1186,7 @@ def install_compliance_officer_grant(
     monkeypatch.setattr(dependencies, "PsycopgAccessRoleStore", _store_factory)
 
 
-def _no_principal(request: object) -> None:
+def _no_principal(request: Request) -> None:
     """Stand-in for `get_principal` returning `None` -- no verified caller at all."""
     _ = request
 

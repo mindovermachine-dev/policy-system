@@ -17,13 +17,17 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from api._audit_fakes import InMemoryAuditStore
 from ps_service.api.errors import RestoreArtifactRejectedError, RestoreStageFailedError
 from ps_service.api.models import RestorationManifestPayload, RestorationRequest
 from ps_service.api.restore_orchestration import (
     _STAGE_REASON_MAX_LEN,  # pyright: ignore[reportPrivateUsage]  # test pins the cap this module applies
     RestoreDependencies,
-    run_restoration,
 )
+from ps_service.api.restore_orchestration import (
+    run_restoration as _run_restoration,
+)
+from ps_service.audit import AuditContext
 from ps_service.restore.errors import (
     ArtifactContentRejectedError,
     ArtifactIntegrityError,
@@ -36,10 +40,37 @@ if TYPE_CHECKING:
     from company_merge._fakes import MakeEmitter, ReadLines
     from falkordb import FalkorDB  # pyright: ignore[reportMissingTypeStubs]
 
+    from ps_service.api.models import RestorationAcceptedResponse
     from ps_service.config import ServiceConfig
+    from ps_service.logging import LogEmitter
     from ps_service.restore.models import RestoreArtifact
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+_AUDIT = AuditContext(("test-actor", "https://issuer.example.com/"), InMemoryAuditStore())
+
+
+def run_restoration(
+    request_body: RestorationRequest,
+    *,
+    config: ServiceConfig,
+    actor: str,
+    dependencies: RestoreDependencies,
+    owner: tuple[str, str] | None = None,
+    emitter: LogEmitter | None = None,
+) -> RestorationAcceptedResponse:
+    """Run `run_restoration` with an in-memory audit context (these tests are not about audit)."""
+    return _run_restoration(
+        request_body,
+        config=config,
+        actor=actor,
+        dependencies=dependencies,
+        audit=_AUDIT,
+        owner=owner,
+        emitter=emitter,
+    )
+
 
 _INSTRUMENT_ID_MISMATCH_MESSAGE = (
     "no RegulatoryInstrument node with id 'X-1.0' found in the staged baseline graph -- the "

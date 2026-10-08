@@ -263,11 +263,36 @@ Show me the most recent access-role changes.
 ```
 
 The `ps-list-audit-events` skill reads PS Service's shared `audit_events`
-trail through the same MCP connector — every access-role bootstrap, grant,
-and revoke (applied or denied) recorded so far, filterable by actor,
-resource, action, or time range, and paginated newest-first. It is a plain
-read (no confirmation needed) but requires `SystemAdmin` or above; see
+trail through the same MCP connector, filterable by actor, resource, action,
+or time range, and paginated newest-first. It is a plain read (no
+confirmation needed) but requires `SystemAdmin` or above; see
 [Role System](#role-system).
+
+What is recorded:
+
+| Operation | Rows | Notes |
+|---|---|---|
+| Access-role changes, policy lifecycle, graph cleanup | `access_role.*`, `policy.*`, `capability.*`, `obligation.*` | Applied and denied attempts |
+| Regulation ingestion (`ingest_regulation`, `start_ingestion`, and each re-ingest of `check_regulations`) | `ingestion_run.submit` before the run, `ingestion_run.complete` after | The CELEX id, the instrument id, `trigger` (`sync_ingest`, `async_ingest`, `amendment_check`), the counts of new Obligations, new Capabilities and matched Capabilities, and a `reason_code` on failure. Polling a run writes nothing. A `check_regulations` sweep re-runs only the Ingestion stage, so its counts are always 0 |
+| Instrument restore (`restore_instrument`, `POST /restorations`) | `instrument.restore` opening and terminal rows | The instrument id, the source (`catalog` or `upload`) and the outcome |
+| Near-miss resolution | `near_miss.resolve` | Both entity ids and the decision. A `merge` is recorded when the approver signs with their passkey; the approver is the actor and the row carries the `approval_id` |
+| `invite-user` | `user.invite` | The invitee email. The invite token and URL are never recorded |
+
+If the audit trail cannot record the opening row, the operation does not run
+and you get `error: The audit trail is temporarily unavailable; the operation
+was not performed.` (HTTP 503 over REST). For a passkey-approved merge the
+single-use approval is already consumed at that point, so request a new
+approval. A failure to write the closing row is only logged and does not
+change the result. Rows never contain tokens, URLs, error text, stack traces
+or file paths; failures carry an enumerated `reason_code`.
+
+To answer "who ingested X?", filter with `details`, for example
+`{"celex": "32024R2847"}`, `{"regulatory_instrument_id": "CRA-1.0"}` or, for
+restores, `{"instrument_id": "CRA-1.0"}`. Any other `details` key is rejected.
+A synchronous ingest that is rejected by the identity check (unknown CELEX,
+short-name collision, already ingested) still leaves an opening row followed
+by a terminal row; an asynchronous `start_ingestion` rejected at that step
+leaves none.
 
 If the skill does not engage on its own, ask for it by name: _"Use the
 ps-list-audit-events skill."_

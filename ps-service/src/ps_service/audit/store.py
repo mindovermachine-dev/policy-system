@@ -126,6 +126,18 @@ equality-fragment shape -- every filter except the two range/cursor comparisons 
 which use `>=`/`<=`/`<` instead of `=` and so don't fit this same data-driven loop."""
 
 
+_DETAILS_FILTER_FRAGMENTS: dict[str, str] = {
+    "celex": "(details ->> 'celex') = %(details_celex)s",
+    "regulatory_instrument_id": (
+        "(details ->> 'regulatory_instrument_id') = %(details_regulatory_instrument_id)s"
+    ),
+    "instrument_id": "(details ->> 'instrument_id') = %(details_instrument_id)s",
+}
+"""Fixed SQL fragment per `AUDIT_DETAILS_FILTER_KEYS` member (expression text matches the
+`migrations/0002` indexes). The caller's key string is only ever used to *select* a fragment
+from this dict, never interpolated into SQL; the value is bound as `details_<key>`."""
+
+
 def _build_query_conditions(
     filters: AuditQueryFilters, *, cursor_bound: tuple[datetime, str] | None, page_size: int
 ) -> tuple[list[str], dict[str, object]]:
@@ -146,6 +158,9 @@ def _build_query_conditions(
         if value is not None:
             conditions.append(f"{column} = %({field_name})s")
             params[field_name] = value
+    for key, value in (filters.details or {}).items():
+        conditions.append(_DETAILS_FILTER_FRAGMENTS[key])
+        params[f"details_{key}"] = value
     if filters.occurred_from is not None:
         conditions.append("occurred_at >= %(occurred_from)s")
         params["occurred_from"] = filters.occurred_from

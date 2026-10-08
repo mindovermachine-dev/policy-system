@@ -31,6 +31,14 @@ legacy celex-less node that already existed for this identifier, confirmation
 that nothing new ran (issue #135's `outcome: "already_ingested"`) — or, on
 failure, the specific named error state.
 
+**Audit:** each accepted run is recorded in the audit trail as an
+`ingestion_run.submit` row (before the pipeline runs) and a terminal
+`ingestion_run.complete` row with the instrument id and the counts of new
+Obligations, new Capabilities and matched Capabilities (or a `reason_code` on
+failure). Use `ps-list-audit-events` with `details` `{"celex": "<celex>"}` to
+see who ingested an instrument. If the audit trail cannot record the opening
+row the run does not start.
+
 ## On Load
 
 Exactly one connector name is recognised: `ps-mcp` ("Policy System MCP"),
@@ -151,6 +159,7 @@ a PS Service connector. From here on, "the PS Service connector" means the
    | `error: The ingestion run could not be recorded.`                                                            | PS Service could not record the run — nothing was started                                                                                                                                                                                                                                                    |
    | `error: <stage> stage failed: <reason>`                                                                      | One pipeline stage (ingestion, extraction, derivation, or merge) genuinely failed mid-run — name the failing stage exactly as returned; earlier stages' work is not implied to be undone                                                                                                                     |
    | `error: the ingestion run was interrupted before it finished; its outcome is unknown`                        | The run stopped before finishing (e.g. PS Service restarted) — its effect on the graph is unknown; tell the user, and let them decide whether to submit again                                                                                                                                                |
+   | `error: The audit trail is temporarily unavailable; the operation was not performed.`                        | The audit trail could not record the operation, so it was NOT run (no run was started) — report it distinctly from an outage of the graph or of PS Service; nothing changed                                                                                                                                  |
    | `error: an unexpected error occurred`                                                                        | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                                                                                                            |
    | `status: "succeeded"` with `result.outcome: "already_ingested"` and an empty `result.stages`                 | A legacy celex-less instrument already existed for this identifier (issue #135; a CELEX-bearing node is rejected with the already-ingested error above instead) — Domain Mapper and Company Merge did not run this time; report that the regulation is already ingested, not a fresh run's per-stage summary |
    | `status: "succeeded"` with `result.outcome: "fresh"`                                                         | Report `regulatory_instrument_id`, `source`, and each stage's name and summary plainly                                                                                                                                                                                                                       |

@@ -50,6 +50,9 @@ if TYPE_CHECKING:
     from api._fakes import ReadLines
     from ingestion_runs._fakes import InMemoryIngestionRunStore
 
+# The sync tool writes `ingestion_run.*` rows (issue #195): keep them off Postgres.
+pytestmark = pytest.mark.usefixtures("ingest_audit_store")
+
 _TOOLS = ("ingest_regulation", "start_ingestion")
 
 _WRONG_SHORT_NAME = "not-the-real-short-name"

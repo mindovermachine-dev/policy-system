@@ -22,6 +22,7 @@ from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING
 
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakeGraphHandle,
     FakeIngestionAdapter,
@@ -29,6 +30,7 @@ from api._fakes import (
 )
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.change_check_orchestration import run_change_check_sweep
+from ps_service.audit import AuditContext
 from ps_service.change_monitor.models import (
     AmendmentFinding,
     PollReport,
@@ -39,6 +41,9 @@ from ps_service.change_monitor.models import (
 if TYPE_CHECKING:
     from api._fakes import MakeEmitter, ReadLines
     from ps_service.config import ServiceConfig
+
+
+_AUDIT = AuditContext(("sweep-caller", "https://issuer.example.com/"), InMemoryAuditStore())
 
 
 def _node(instrument_id: str) -> TrackedInstrumentNode:
@@ -63,7 +68,11 @@ def test_sweep_reports_current_for_every_tracked_instrument_when_poll_finds_noth
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     actual = [(o.instrument_id, o.outcome, o.detail, o.reingest_run_id) for o in result.instruments]
@@ -91,7 +100,11 @@ def test_sweep_reports_poll_failed_and_not_configured_from_the_poll_reports_own_
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     outcomes = {o.instrument_id: o.outcome for o in result.instruments}
@@ -110,7 +123,11 @@ def test_sweep_opens_the_single_tenant_graph_and_passes_it_to_poll_for_amendment
     fake = build_fake_change_check_dependencies(tracked=(_node("A"),))
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     assert fake.poll_for_amendments_graphs == [fake.single_tenant]
@@ -124,7 +141,11 @@ def test_sweep_calls_read_tracked_instruments_exactly_once(
     fake = build_fake_change_check_dependencies(tracked=(_node("A"), _node("B")))
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     assert len(fake.read_tracked_instruments_graphs) == 1
@@ -178,7 +199,11 @@ def test_sweep_calls_trigger_reingestion_with_the_exact_ac_bi_004_argument_contr
     )
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     assert len(fake.trigger_reingestion_calls) == 1
@@ -224,7 +249,11 @@ def test_sweep_reports_amendment_reingested_with_detail_and_reingest_run_id_on_f
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     (outcome,) = result.instruments
@@ -268,7 +297,11 @@ def test_sweep_reports_amendment_reingested_with_none_run_id_on_already_processe
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     (outcome,) = result.instruments
@@ -301,7 +334,11 @@ def test_sweep_reports_reingest_failed_when_no_catalog_entry_resolves_the_findin
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     (outcome,) = result.instruments
@@ -350,7 +387,11 @@ def test_sweep_reports_skipped_when_trigger_reingestion_raises_national_transpos
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     outcomes = {o.instrument_id: o for o in result.instruments}
@@ -384,7 +425,11 @@ def test_sweep_does_not_confuse_a_different_exception_type_sharing_no_special_na
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     (outcome,) = result.instruments
@@ -435,7 +480,11 @@ def test_sweep_isolates_a_reingest_failure_and_continues_to_remaining_instrument
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     outcomes = {o.instrument_id: o for o in result.instruments}
@@ -475,7 +524,11 @@ def test_reingest_failed_detail_is_scrubbed_and_length_capped(
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     (outcome,) = result.instruments
@@ -502,7 +555,11 @@ def test_sweep_emits_started_and_succeeded_change_check_sweep_entries_carrying_t
     fake = build_fake_change_check_dependencies(tracked=())
 
     run_change_check_sweep(
-        config=app_config, run_id="sweep-run-1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="sweep-run-1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
     emitter.flush()
 
@@ -536,7 +593,11 @@ def test_sweep_emits_one_change_check_instrument_entry_per_tracked_instrument_ca
     )
 
     run_change_check_sweep(
-        config=app_config, run_id="sweep-run-2", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="sweep-run-2",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
     emitter.flush()
 
@@ -608,7 +669,11 @@ def test_sweep_calls_trigger_reingestion_at_most_once_per_tracked_instrument_id(
     )
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     identifiers = [call.identifier for call in fake.trigger_reingestion_calls]
@@ -650,7 +715,11 @@ def test_sweep_never_calls_poll_for_amendments_more_than_once(
     )
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     assert len(fake.poll_for_amendments_graphs) == 1
@@ -690,7 +759,11 @@ def test_sweep_result_instrument_count_equals_read_tracked_instruments_count_exa
     )
 
     result = run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=fake.dependencies, emitter=emitter
+        config=app_config,
+        run_id="r1",
+        dependencies=fake.dependencies,
+        audit=_AUDIT,
+        emitter=emitter,
     )
 
     assert len(result.instruments) == 4
@@ -733,7 +806,7 @@ def test_change_check_sweep_still_resolves_via_catalog_find_by_celex_and_canonic
     dependencies = replace(fake.dependencies, find_catalog_entry=find_by_celex)
 
     run_change_check_sweep(
-        config=app_config, run_id="r1", dependencies=dependencies, emitter=emitter
+        config=app_config, run_id="r1", dependencies=dependencies, audit=_AUDIT, emitter=emitter
     )
 
     assert fake.open_native_short_names == [expected.short_name]

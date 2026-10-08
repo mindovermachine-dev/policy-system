@@ -52,6 +52,7 @@ from ps_service.api.errors import (
     ShortNameCollisionError,
 )
 from ps_service.api.run_status import clear_stage, set_stage
+from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
 from ps_service.config import missing_ingestion_config_fields
 from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
@@ -59,11 +60,23 @@ from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
 from ps_service.ingestion.adapters.errors import CellarNotFoundError
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
 from ps_service.ingestion.adapters.internal_seed.persist import find_regulatory_instrument
+from ps_service.ingestion_runs.audit_actions import (
+    INGESTION_RUN_COMPLETE_ACTION,
+    INGESTION_RUN_RESOURCE_TYPE,
+    INGESTION_RUN_SUBMIT_ACTION,
+    IngestionCounts,
+    IngestionReasonCode,
+    IngestionTrigger,
+    completion_audit_entry,
+    submission_audit_entry,
+)
 from ps_service.logging.facade import emit_log_entry
+from ps_service.logging.run_context import bind_run_context
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from ps_service.audit.emit import AuditContext
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
@@ -394,6 +407,29 @@ def _run_stage[T](name: str, thunk: Callable[[], T], *, emitter: LogEmitter | No
         return thunk()
     except Exception as exc:
         raise _classify_stage_failure(name, exc, emitter=emitter) from exc
+
+
+_REASON_BY_EXCEPTION_NAME: dict[str, IngestionReasonCode] = {
+    "IngestionConfigIncompleteError": "config_incomplete",
+    "McpGraphUnavailableError": "graph_unavailable",
+    "CatalogIdentifierNotFoundError": "celex_not_found",
+    "ShortNameCollisionError": "short_name_collision",
+    "PipelineStageError": "pipeline_stage_failed",
+}
+"""Failure class name -> the enumerated audit `reason_code` (issue #195, AC-BI-010).
+
+``McpGraphUnavailableError`` is matched by class name so ``api`` does not import
+``mcp_interface`` (the idiom of ``change_check_orchestration._NATIONAL_TRANSPOSITION_ERROR_NAME``).
+"""
+
+
+def classify_ingestion_failure(exc: BaseException) -> IngestionReasonCode:
+    """Map a failed ingestion to its enumerated ``reason_code`` (pure; never reads the message).
+
+    Decided by the exception TYPE only, so no free text, path or host can reach an audit row.
+    Anything that is not one of the known domain failures is ``unexpected_error``.
+    """
+    return _REASON_BY_EXCEPTION_NAME.get(type(exc).__name__, "unexpected_error")
 
 
 # --- Cellar-fallback existence resolution (D1/D2/D3, AC-BI-003/004/005/006/007) ---
@@ -767,12 +803,20 @@ def _merge_summary(result: MergeResult) -> dict[str, int]:
     ``dict[str, int]``, and ``ps-cli``'s own summary parsing already iterates
     ``summary.items()`` generically, so this is backward-compatible by
     construction (CHANGES.md C2 / PLAN.md §5).
+
+    ``new_obligations``, ``new_capabilities`` and ``matched_capabilities`` (issue #195, Slice 6)
+    are the net-new / matched facts ``company_merge`` computed (never approximations): the
+    ingestion audit rows carry these three counts. ``obligations`` /
+    ``canonical_capabilities`` stay the total processed.
     """
     return {
         "obligations": len(result.obligation_ids),
         "canonical_capabilities": len(result.capability_canonical_ids),
         "near_misses": len(result.near_misses),
         "pending_reviews": result.pending_review_count,
+        "new_obligations": result.new_obligation_count,
+        "new_capabilities": result.new_capability_count,
+        "matched_capabilities": result.matched_capability_count,
     }
 
 
@@ -793,6 +837,7 @@ def _emit_run(
     emitter: LogEmitter | None,
     duration_ms: float | None = None,
     failing_stage: str | None = None,
+    audit_facts: dict[str, object] | None = None,
 ) -> None:
     """Emit one ``ingestion_run`` log entry (AC-BI-010 / AC-BI-011).
 
@@ -807,8 +852,12 @@ def _emit_run(
         emitter: Optional explicit emitter; otherwise the process default.
         duration_ms: Wall time for the run so far (omitted on ``"started"``).
         failing_stage: The stage that raised, on the ``"failed"`` entry only.
+        audit_facts: The ``trigger`` and the three counts the audit rows carry (issue #195),
+            on the ``"succeeded"`` entry of an audited run only, so log and audit agree.
     """
     extra: dict[str, object] = {"source_identifier": source_identifier, "caller": caller}
+    if audit_facts is not None:
+        extra.update(audit_facts)
     if failing_stage is not None:
         extra["failing_stage"] = failing_stage
     emit_log_entry(
@@ -1022,6 +1071,21 @@ def _execute_catalog_stages(
     return rid, reports
 
 
+def _audit_facts(trigger: IngestionTrigger, reports: tuple[StageReport, ...]) -> dict[str, object]:
+    """The ``trigger`` and merge-stage counts for the succeeded log line (zero without a merge)."""
+    merge: dict[str, int] = {}
+    for report in reports:
+        if report.stage == "merge":
+            merge = report.summary
+    counts = IngestionCounts.from_merge_summary(merge)
+    return {
+        "trigger": trigger,
+        "new_obligations": counts.new_obligations,
+        "new_capabilities": counts.new_capabilities,
+        "matched_capabilities": counts.matched_capabilities,
+    }
+
+
 def run_catalog_ingestion_pipeline(
     entry: CatalogEntry,
     *,
@@ -1031,6 +1095,7 @@ def run_catalog_ingestion_pipeline(
     dependencies: PipelineDependencies,
     emitter: LogEmitter | None = None,
     ingestion_adapter: IngestionAdapter | None = None,
+    trigger: IngestionTrigger | None = None,
 ) -> IngestionOutcome:
     """Run the external ingestion pipeline for one catalog regulation.
 
@@ -1075,6 +1140,9 @@ def run_catalog_ingestion_pipeline(
             :func:`resolve_via_cellar`); when ``None``, the dependency
             bundle's default factory builds one, exactly as the curated path
             does today.
+        trigger: The audited entry point that started this run (issue #195); when given, the
+            ``succeeded`` log line also carries it and the merge-stage counts. The audit rows
+            themselves are written by the caller, not here.
 
     Returns:
         An :class:`IngestionOutcome` with ``source="catalog"``, one
@@ -1154,8 +1222,182 @@ def run_catalog_ingestion_pipeline(
         caller=caller,
         emitter=emitter,
         duration_ms=_elapsed_ms(started),
+        audit_facts=None if trigger is None else _audit_facts(trigger, reports),
     )
     return IngestionOutcome(regulatory_instrument_id=rid, source="catalog", stages=reports)
+
+
+# --- audited synchronous ingestion (issue #195) ---
+
+
+def _outcome_as_result(outcome: IngestionOutcome) -> dict[str, object]:
+    """The accepted-response-shaped dict `IngestionCounts` and the audit builder read."""
+    return {
+        "regulatory_instrument_id": outcome.regulatory_instrument_id,
+        "outcome": outcome.outcome,
+        "stages": [{"stage": r.stage, "summary": r.summary} for r in outcome.stages],
+    }
+
+
+def _record_terminal_row(
+    audit: AuditContext,
+    run_id: str,
+    celex: str,
+    *,
+    result: dict[str, object] | None,
+    reason_code: IngestionReasonCode | None,
+    emitter: LogEmitter | None,
+) -> None:
+    """Write the run's one terminal `ingestion_run.complete` row; BEST-EFFORT (AC-BI-015)."""
+    entry = completion_audit_entry(
+        status="failed" if reason_code is not None else "succeeded",
+        celex=celex,
+        trigger="sync_ingest",
+        result=result,
+        reason_code=reason_code,
+    )
+    record_follow_up_row(
+        audit,
+        AuditTarget(INGESTION_RUN_COMPLETE_ACTION, INGESTION_RUN_RESOURCE_TYPE, run_id),
+        component=_COMPONENT,
+        outcome=entry.outcome,
+        details=entry.details,
+        emitter=emitter,
+    )
+
+
+def run_audited_catalog_ingestion(
+    celex: str,
+    short_name: str,
+    *,
+    config: ServiceConfig,
+    run_id: str,
+    caller: str,
+    dependencies: PipelineDependencies,
+    audit: AuditContext,
+    emitter: LogEmitter | None = None,
+) -> IngestionOutcome:
+    """Resolve and run one synchronous catalog ingestion between its two audit rows (issue #195).
+
+    The shared orchestration of ``POST /ingestions`` and the ``ingest_regulation`` MCP tool.
+    An ``ingestion_run.submit`` opening row (``applied``, ``status=started``,
+    ``trigger='sync_ingest'``) is written FIRST, before the identity check (D-A), and is
+    FAIL-CLOSED: if it cannot be written nothing runs and ``AuditTrailUnavailableError``
+    propagates (AC-BI-011). It is followed by identity resolution
+    (:func:`resolve_ingestion_entry`) and the pipeline
+    (:func:`run_catalog_ingestion_pipeline`), then one terminal ``ingestion_run.complete`` row
+    carrying the instrument id and the merge-stage counts. ``resource_id`` of both rows is
+    ``run_id``. The terminal row is BEST-EFFORT (AC-BI-015: a failed write is logged with the run
+    id and never changes the outcome or the raised error). Outcomes: a fresh or pre-flight
+    ``already_ingested`` run -> ``succeeded``; ``CelexAlreadyIngestedError`` -> ``succeeded`` with
+    ``outcome='already_ingested'`` and zero counts, then re-raised; any other exception -> a
+    ``failed`` row with an enumerated ``reason_code`` (no message, trace or path; AC-BI-010), then
+    re-raised unchanged. The unaudited pipeline function stays public for the async worker, whose
+    rows are
+    written by the run store.
+
+    Args:
+        celex: The request's CELEX identifier.
+        short_name: The request's caller-supplied ``short_name`` (any case).
+        config: The resolved service configuration.
+        run_id: The effective run id (the rows' ``resource_id``).
+        caller: The requesting client host or principal label, for the run log.
+        dependencies: The injected graph openers, stages and adapters.
+        audit: Who is acting and where the rows go.
+        emitter: Optional explicit log emitter.
+
+    Returns:
+        The pipeline's :class:`IngestionOutcome`, unchanged.
+
+    Raises:
+        AuditTrailUnavailableError: The opening row could not be written; nothing ran.
+        CelexAlreadyIngestedError: ``celex`` is already in the graph.
+        ShortNameCollisionError: ``short_name`` is claimed by a different CELEX.
+        CatalogIdentifierNotFoundError: ``celex`` does not exist on Cellar/ELI.
+        IngestionConfigIncompleteError: The pipeline configuration is incomplete.
+        PipelineStageError: A stage, or the identity/pre-flight reads, failed.
+    """
+    submission = submission_audit_entry(
+        celex=celex, short_name=normalize_short_name(short_name), trigger="sync_ingest"
+    )
+    with bind_run_context(run_id):
+        record_opening_row(
+            audit,
+            AuditTarget(INGESTION_RUN_SUBMIT_ACTION, INGESTION_RUN_RESOURCE_TYPE, run_id),
+            component=_COMPONENT,
+            details=submission.details,
+            emitter=emitter,
+        )
+        try:
+            outcome = _resolve_and_run(
+                celex,
+                short_name,
+                config=config,
+                run_id=run_id,
+                caller=caller,
+                dependencies=dependencies,
+                emitter=emitter,
+            )
+        except CelexAlreadyIngestedError:
+            # AC-BI-006: the request was understood and the instrument is already there -- a
+            # succeeded run that changed nothing; the caller still gets the existing rejection.
+            _record_terminal_row(
+                audit,
+                run_id,
+                celex,
+                result={"outcome": "already_ingested"},
+                reason_code=None,
+                emitter=emitter,
+            )
+            raise
+        except Exception as exc:
+            _record_terminal_row(
+                audit,
+                run_id,
+                celex,
+                result=None,
+                reason_code=classify_ingestion_failure(exc),
+                emitter=emitter,
+            )
+            raise
+        _record_terminal_row(
+            audit,
+            run_id,
+            celex,
+            result=_outcome_as_result(outcome),
+            reason_code=None,
+            emitter=emitter,
+        )
+        return outcome
+
+
+def _resolve_and_run(
+    celex: str,
+    short_name: str,
+    *,
+    config: ServiceConfig,
+    run_id: str,
+    caller: str,
+    dependencies: PipelineDependencies,
+    emitter: LogEmitter | None,
+) -> IngestionOutcome:
+    """Resolve the request's identity, then run the unaudited catalog pipeline."""
+    resolution = resolve_ingestion_entry(
+        celex,
+        short_name,
+        single_tenant_graph=dependencies.graphs.single_tenant(config),
+        emitter=emitter,
+    )
+    return run_catalog_ingestion_pipeline(
+        resolution.entry,
+        config=config,
+        run_id=run_id,
+        caller=caller,
+        dependencies=dependencies,
+        emitter=emitter,
+        ingestion_adapter=resolution.adapter,
+        trigger="sync_ingest",
+    )
 
 
 # --- internal-seed pipeline (issue #54, S2) ---

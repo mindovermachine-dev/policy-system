@@ -18,18 +18,23 @@ package's own front-door re-export convention (e.g.
 
 from __future__ import annotations
 
+from ps_service.invitations.audit_actions import USER_INVITE_ACTION, UserInviteDetails
 from ps_service.invitations.client import AuthentikTransport, InvitationResult, create_invitation
 from ps_service.invitations.errors import (
     AuthentikCredentialConfigurationError,
     AuthentikInvitationError,
 )
+from ps_service.invitations.service import invite_user_audited
 from ps_service.invitations.startup import require_authentik_credential_configured
 
 __all__ = [
+    "USER_INVITE_ACTION",
     "AuthentikCredentialConfigurationError",
     "AuthentikInvitationError",
     "AuthentikTransport",
     "InvitationResult",
+    "UserInviteDetails",
     "create_invitation",
+    "invite_user_audited",
     "require_authentik_credential_configured",
 ]

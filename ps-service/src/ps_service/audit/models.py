@@ -24,11 +24,12 @@ dataclass, not LLM/API-boundary Pydantic" convention.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from datetime import datetime
     from typing import Literal
 
@@ -110,9 +111,33 @@ class AuditEventRow:
     details: dict[str, object]
 
 
+AUDIT_DETAILS_FILTER_KEYS: Final[tuple[str, ...]] = (
+    "celex",
+    "regulatory_instrument_id",
+    "instrument_id",
+)
+"""The only `details` keys `list-audit-events` may filter on (exact match, AC-BI-018).
+
+How to add an allow-listed key:
+
+1. Append it to this tuple.
+2. Add an expression index `((details ->> '<key>'))` in a NEW migration file under
+   `audit/migrations/` (never edit an applied one) and add its fixed SQL fragment to
+   `_DETAILS_FILTER_FRAGMENTS` in `audit/store.py` (the caller's key is never interpolated).
+3. Make sure every action that should be searchable by it declares a field of that exact
+   name in its `AuditDetails` model.
+4. Add the key to the `list-audit-events` tool docstring and the `ps-list-audit-events` skill.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class AuditQueryFilters:
-    """Every filter `list-audit-events` accepts (AC-BI-007), all optional/combinable."""
+    """Every filter `list-audit-events` accepts (AC-BI-007), all optional/combinable.
+
+    `details` is an exact-match filter on the top-level string fields of `audit_events.details`;
+    its keys must be members of `AUDIT_DETAILS_FILTER_KEYS` (validated by the service before
+    any query).
+    """
 
     actor_subject: str | None = None
     actor_issuer: str | None = None
@@ -121,6 +146,7 @@ class AuditQueryFilters:
     action: str | None = None
     occurred_from: datetime | None = None
     occurred_to: datetime | None = None
+    details: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +158,7 @@ class AuditQueryPage:
 
 
 __all__ = [
+    "AUDIT_DETAILS_FILTER_KEYS",
     "AuditDetails",
     "AuditEventRow",
     "AuditQueryFilters",

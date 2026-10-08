@@ -1147,3 +1147,57 @@ def test_list_audit_events_translates_a_malformed_cursor_into_invalid_query_filt
         )
 
     assert "cursor" in str(exc_info.value)
+
+
+# --- issue #195, Slice 11: the allow-listed `details` filter -----------------
+# Pattern for validation-before-query tests: modelled on the other `list_audit_events` filter
+# tests above (the :954/:974 ones are access-denied tests, not a pattern).
+
+
+def _call_list_with_details(details: dict[str, str]) -> FakeAuditStore:
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+    list_audit_events(
+        _FIRST_CALLER,
+        filters=AuditQueryFilters(details=details),
+        cursor=None,
+        page_size=25,
+        access_role_store=access_role_store,
+        audit_store=audit_store,
+    )
+    return audit_store
+
+
+def test_list_audit_events_rejects_a_details_key_outside_the_allow_list_before_any_query() -> None:
+    """AC-BI-018: a key outside the allow-list is rejected, naming 'details', query never ran."""
+    access_role_store = FakeAccessRoleStore(expected_owner=_FIRST_CALLER)
+    resolve_active_roles(_FIRST_CALLER, store=access_role_store)
+    audit_store = FakeAuditStore()
+
+    with pytest.raises(InvalidAuditQueryFilterError) as exc_info:
+        list_audit_events(
+            _FIRST_CALLER,
+            filters=AuditQueryFilters(details={"foo": "x"}),
+            cursor=None,
+            page_size=25,
+            access_role_store=access_role_store,
+            audit_store=audit_store,
+        )
+
+    assert "details" in str(exc_info.value)
+    assert "foo" not in str(exc_info.value)
+    assert audit_store.query_calls == []
+
+
+def test_list_audit_events_rejects_an_empty_details_value() -> None:
+    """An empty value can match nothing meaningful, so it is rejected before any query."""
+    with pytest.raises(InvalidAuditQueryFilterError):
+        _call_list_with_details({"celex": ""})
+
+
+def test_list_audit_events_passes_allow_listed_details_filter_to_the_store() -> None:
+    audit_store = _call_list_with_details({"celex": "32024R2847"})
+
+    ((filters, _cursor, _page_size),) = audit_store.query_calls
+    assert filters.details == {"celex": "32024R2847"}

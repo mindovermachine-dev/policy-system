@@ -34,14 +34,17 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
     FakeChangeCheckDependencies,
     build_fake_change_check_dependencies,
+    compliance_officer_principal,
     install_compliance_officer_grant,
     install_no_principal,
 )
 from ps_service.api.catalog import CatalogEntry
-from ps_service.api.dependencies import provide_change_check_dependencies
+from ps_service.api.dependencies import provide_audit_store, provide_change_check_dependencies
+from ps_service.audit import AuditPostgresUnavailableError
 from ps_service.authz.models import AccessRole
 from ps_service.change_monitor.models import (
     AmendmentFinding,
@@ -91,10 +94,15 @@ def _stub_run_log(  # pyright: ignore[reportUnusedFunction]  # requested via use
     monkeypatch.setattr("ps_service.api.change_check_orchestration.emit_log_entry", _noop_emit)
 
 
-def _client_with_fake(fake: FakeChangeCheckDependencies) -> TestClient:
+def _client_with_fake(
+    fake: FakeChangeCheckDependencies, *, audit_store: InMemoryAuditStore | None = None
+) -> TestClient:
+    """A `TestClient` over `fake`; audit rows (issue #195) go to memory, never Postgres."""
     app = create_app(_APP_CONFIG)
     app.dependency_overrides[provide_change_check_dependencies] = lambda: fake.dependencies
-    return TestClient(app)
+    store = audit_store if audit_store is not None else InMemoryAuditStore()
+    app.dependency_overrides[provide_audit_store] = lambda: store
+    return TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture(autouse=True)
@@ -385,3 +393,76 @@ def test_system_owner_without_explicit_grant_is_denied_with_403(
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "access_denied"
     assert fake.read_tracked_instruments_graphs == []
+
+
+def _amended_fake() -> FakeChangeCheckDependencies:
+    node = TrackedInstrumentNode(
+        regulatory_instrument_id="CRA-1.0",
+        celex="32024R2847",
+        instrument_type="regulation",
+        effective_date="2024-01-01",
+    )
+    finding = AmendmentFinding(
+        regulatory_instrument_id="CRA-1.0",
+        instrument_type="regulation",
+        baseline_reference="2024-01-01",
+        detected_consolidated_celex="32024R2847C01",
+        detected_consolidation_date=date(2025, 1, 1),
+        reason="newer_consolidation",
+    )
+    return build_fake_change_check_dependencies(
+        tracked=(node,),
+        poll_report=PollReport(
+            findings=(finding,), polled_count=1, failed_ids=(), unconfigured_ids=()
+        ),
+        catalog_entries={
+            "32024R2847": CatalogEntry(
+                celex="32024R2847", title="Cyber Resilience Act", short_name="CRA", version="1.0"
+            )
+        },
+        reingestion_result=ReingestionOutcome(
+            prior_regulatory_instrument_id="CRA-0.9",
+            new_regulatory_instrument_id="CRA-1.0",
+            run_id="ingest-run-1",
+            outcome="superseded",
+            ingest_counts={},
+        ),
+    )
+
+
+@pytest.mark.usefixtures("_stub_run_log")
+def test_post_change_checks_audits_the_principal() -> None:
+    """Issue #195 (AC-BI-001/007): the pair's actor is the verified principal, not the bypass."""
+    store = InMemoryAuditStore()
+    client = _client_with_fake(_amended_fake(), audit_store=store)
+    principal = compliance_officer_principal()
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 200
+    assert [(r.action, r.outcome) for r in store.rows] == [
+        ("ingestion_run.submit", "applied"),
+        ("ingestion_run.complete", "applied"),
+    ]
+    assert {(r.actor_subject, r.actor_issuer) for r in store.rows} == {
+        (principal.sub, principal.iss)
+    }
+    assert store.rows[0].details["trigger"] == "amendment_check"
+    assert store.rows[0].resource_id != response.json()["run_id"]
+
+
+@pytest.mark.usefixtures("_stub_run_log")
+def test_post_change_checks_returns_503_when_audit_unavailable() -> None:
+    """AC-BI-011: an unwritable opening row aborts the sweep with a 503; nothing re-ingests."""
+    store = InMemoryAuditStore(
+        fail_on_outcome={"applied": AuditPostgresUnavailableError("db down")}
+    )
+    fake = _amended_fake()
+    client = _client_with_fake(fake, audit_store=store)
+
+    response = client.post("/change-checks")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audit_trail_unavailable"
+    assert "db down" not in response.text
+    assert fake.trigger_reingestion_calls == []

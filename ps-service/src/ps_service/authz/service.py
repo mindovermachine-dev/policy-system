@@ -32,7 +32,11 @@ from ps_service.audit.errors import (
     AuditPersistenceError,
     AuditPostgresUnavailableError,
 )
-from ps_service.audit.models import is_known_resource_type, resolve_details_model
+from ps_service.audit.models import (
+    AUDIT_DETAILS_FILTER_KEYS,
+    is_known_resource_type,
+    resolve_details_model,
+)
 from ps_service.authz.errors import (
     AccessRoleAssignmentPersistenceError,
     AccessRoleSystemOwnerFloorRaceError,
@@ -70,6 +74,10 @@ _INVALID_AUDIT_TIME_RANGE_FILTER_MESSAGE = (
     "The 'occurred_from' filter must not be later than 'occurred_to'."
 )
 _INVALID_AUDIT_CURSOR_FILTER_MESSAGE = "The 'cursor' filter is malformed."
+_INVALID_AUDIT_DETAILS_FILTER_MESSAGE = (
+    "The 'details' filter accepts only the keys "
+    f"{', '.join(AUDIT_DETAILS_FILTER_KEYS)}, each with a non-empty value."
+)
 # PLAN.md §4 Slice 4: a plan-original bound, not derived from any specific
 # AC beyond AC-BI-008's "page size above the maximum" -- justified by L2's
 # Data Modeling principle (`docs/coding-standards/level2-python-instructions.md`,
@@ -592,7 +600,9 @@ def _validate_audit_query_filters(filters: AuditQueryFilters, *, page_size: int)
     Runs entirely before `list_audit_events` ever calls `audit_store.query`
     -- unknown `action` (not in the typed-model registry), unknown
     `resource_type` (not in the resource-type registry), `occurred_from`
-    later than `occurred_to`, and `page_size` above the configured maximum.
+    later than `occurred_to`, `page_size` above the configured maximum, and a
+    `details` key outside `AUDIT_DETAILS_FILTER_KEYS` or with an empty value
+    (the message lists the allowed keys but never echoes the caller's key).
     `cursor` malformedness is not checked here -- `AuditStore.query` itself
     validates it (it alone knows the opaque token's internal shape);
     `list_audit_events` translates that failure separately, below.
@@ -609,6 +619,10 @@ def _validate_audit_query_filters(filters: AuditQueryFilters, *, page_size: int)
         raise InvalidAuditQueryFilterError(_INVALID_AUDIT_TIME_RANGE_FILTER_MESSAGE)
     if page_size > _LIST_AUDIT_EVENTS_MAX_PAGE_SIZE:
         raise InvalidAuditQueryFilterError(_INVALID_AUDIT_PAGE_SIZE_FILTER_MESSAGE)
+    if filters.details is not None and any(
+        key not in AUDIT_DETAILS_FILTER_KEYS or not value for key, value in filters.details.items()
+    ):
+        raise InvalidAuditQueryFilterError(_INVALID_AUDIT_DETAILS_FILTER_MESSAGE)
 
 
 def list_audit_events(

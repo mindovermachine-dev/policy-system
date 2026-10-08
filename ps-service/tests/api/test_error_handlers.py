@@ -32,6 +32,7 @@ from ps_service.api.errors import (
     PipelineStageError,
     ShortNameCollisionError,
 )
+from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.ingestion.falkordb_client import FalkorDBConnectionError
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -286,3 +287,20 @@ def test_curated_mismatch_error_no_longer_exists() -> None:
 
     assert not hasattr(api_errors, "ShortNameCuratedMismatchError")
     assert not hasattr(error_handlers_module, "ShortNameCuratedMismatchError")
+
+
+def test_audit_trail_unavailable_maps_to_503_with_fixed_message() -> None:
+    """Issue #195, AC-BI-011: a fail-closed opening-row failure is a 503, message verbatim."""
+    exc = AuditTrailUnavailableError(
+        "The audit trail is temporarily unavailable; the operation was not performed."
+    )
+    client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["code"] == "audit_trail_unavailable"
+    assert body["error"]["message"] == (
+        "The audit trail is temporarily unavailable; the operation was not performed."
+    )
