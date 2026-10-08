@@ -52,7 +52,7 @@ from ps_service.logging import configure, resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator
+    from collections.abc import Callable, Generator, Iterator
 
     from api._fakes import ReadLines
     from ingestion_runs._fakes import InMemoryIngestionRunStore
@@ -368,6 +368,24 @@ def _poll_until_stage(run_id: str, stage: str) -> dict[str, object]:
     return status
 
 
+def _record_launched_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Wrap the worker launcher so a test can see which runs actually got a worker.
+
+    Asserting on the launcher rather than `threading.active_count()` keeps the check about this
+    tool: the process-wide count also moves with unrelated helper threads (issue #218).
+    """
+    launched: list[str] = []
+    real_start_background_run = mcp_server.start_background_run
+
+    def _record(run_id: str, work: Callable[[], None]) -> None:
+        launched.append(run_id)
+        real_start_background_run(run_id, work)
+
+    # detroit-exception: spy-through wrapping the real launcher; launched runs ARE the spec (§1.2)
+    monkeypatch.setattr(mcp_server, "start_background_run", _record)
+    return launched
+
+
 def test_the_default_cap_admits_one_run_and_rejects_a_second_until_the_first_finishes(
     monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
 ) -> None:
@@ -375,19 +393,17 @@ def test_the_default_cap_admits_one_run_and_rejects_a_second_until_the_first_fin
     monkeypatch.delenv("PS_INGESTIONRUNS_MAX_IN_FLIGHT", raising=False)
     other_celex, other_short_name = _second_curated_entry()
     pipeline = use_gated_real_pipeline(monkeypatch, per_short_name_graphs=True)
+    launched = _record_launched_runs(monkeypatch)
     try:
         first = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
-        # Sample only once the first run is parked at the gate: until then its own thread may
-        # still be lazily starting helper threads, which is not a leak from the rejected call.
         assert _poll_until_stage(first, "extraction")["status"] == "running"
-        threads_before = threading.active_count()
 
         rejected = text(call_start_ingestion(other_celex, other_short_name))
 
         assert rejected == _CAP_ERROR
         assert set(store.rows) == {first}
         assert dispatch.in_flight_run_count() == 1
-        assert threading.active_count() == threads_before
+        assert launched == [first]
         pipeline.release(_SHORT_NAME)
         wait_for_run(first)
 

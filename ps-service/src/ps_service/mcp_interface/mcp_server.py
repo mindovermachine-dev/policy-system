@@ -568,6 +568,27 @@ def _resolve_policy_lifecycle_actor(config: ServiceConfig) -> tuple[str, str] | 
     return None
 
 
+def _audit_context(config: ServiceConfig, actor: tuple[str, str] | None) -> AuditContext | str:
+    """Return who is acting and where the audit rows go, for one audited tool call (issue #218).
+
+    The single MCP definition of the actor policy, the counterpart of REST's
+    `provide_audit_context`: the verified `(sub, iss)`, or the local-test-bypass sentinel when
+    there is none and the bypass is active. A caller with neither gets
+    `_CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE` (fail-closed), which the tool returns
+    as is. `PsycopgAuditStore` opens no connection until a row is written, so a tool that needs
+    only `.actor` pays nothing for the store.
+    """
+    try:
+        return AuditContext(
+            actor=resolve_audit_actor(
+                actor, is_local_test_bypass_active=config.is_local_test_bypass_active
+            ),
+            store=PsycopgAuditStore(config),
+        )
+    except AuditActorUnresolvedError:
+        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+
+
 def _resolve_base_url(ctx: Context) -> str:
     """Derive `{scheme}://{host}` from the live MCP request (PLAN.md §2.2 step 4).
 
@@ -1036,15 +1057,9 @@ def ingest_regulation(
         # here -- the `""` fallback only satisfies the type checker's narrowing,
         # mirroring `_resolve_principal`'s own "unreachable in practice" idiom.
         run_id = current_run_id() or ""
-        try:
-            audit = AuditContext(
-                actor=resolve_audit_actor(
-                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                ),
-                store=PsycopgAuditStore(config),
-            )
-        except AuditActorUnresolvedError:
-            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         return _resolve_and_ingest(
             celex, short_name, config=config, principal=principal, run_id=run_id, audit=audit
         )
@@ -1229,12 +1244,9 @@ def _submit_ingestion_run(
     before anything is written) and released on any failure before the worker starts, so no
     exception can leak a slot.
     """
-    try:
-        audit_actor = resolve_audit_actor(
-            actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-        )
-    except AuditActorUnresolvedError:
-        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    audit = _audit_context(config, actor)
+    if isinstance(audit, str):
+        return audit
     try:
         reserve_run_slot(
             run_id,
@@ -1248,7 +1260,7 @@ def _submit_ingestion_run(
             run_id=run_id,
             celex=prepared.entry.celex,
             short_name=prepared.entry.short_name,
-            actor=audit_actor,
+            actor=audit.actor,
         )
         start_background_run(
             run_id,
@@ -1375,15 +1387,9 @@ def _run_audited_change_check(
     config: ServiceConfig, actor: tuple[str, str] | None, run_id: str
 ) -> dict[str, object] | str:
     """Run the `check_regulations` sweep with the caller as audit actor (issue #195)."""
-    try:
-        audit = AuditContext(
-            actor=resolve_audit_actor(
-                actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-            ),
-            store=PsycopgAuditStore(config),
-        )
-    except AuditActorUnresolvedError:
-        return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+    audit = _audit_context(config, actor)
+    if isinstance(audit, str):
+        return audit
     try:
         result = run_change_check_sweep(
             config=config,
@@ -1593,15 +1599,9 @@ def near_misses_resolve(
     def _body() -> dict[str, object] | str:
         if decision == "merge":
             return _resolve_merge_pending_approval(review_id, ctx, config)
-        try:
-            audit = AuditContext(
-                actor=resolve_audit_actor(
-                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                ),
-                store=PsycopgAuditStore(config),
-            )
-        except AuditActorUnresolvedError:
-            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         try:
             result = run_resolve_near_miss(
                 review_id,
@@ -1720,13 +1720,14 @@ def set_catalog_source(url: Annotated[str, Field(min_length=1)]) -> dict[str, ob
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         try:
             catalog_source_store.set_override(
-                PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
+                PsycopgRuntimeConfigStore(config, audit_store=audit.store),
                 url,
-                actor=resolve_audit_actor(
-                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                ),
+                actor=audit.actor,
             )
         except (
             RuntimeConfigInvalidValueError,
@@ -1777,12 +1778,13 @@ def reset_catalog_source() -> dict[str, object] | str:
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         try:
             catalog_source_store.reset_override(
-                PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config)),
-                actor=resolve_audit_actor(
-                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                ),
+                PsycopgRuntimeConfigStore(config, audit_store=audit.store),
+                actor=audit.actor,
             )
         except (RuntimeConfigUnavailableError, RuntimeConfigPersistenceError) as exc:
             return f"error: {exc}"
@@ -1927,17 +1929,12 @@ def invite_user(
                 )
             except (AccessDeniedError, AuthorizationStoreUnavailableError) as exc:
                 return f"error: {exc}"
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         try:
             result = invite_user_audited(
-                config,
-                email,
-                audit=AuditContext(
-                    actor=resolve_audit_actor(
-                        actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                    ),
-                    store=PsycopgAuditStore(config),
-                ),
-                send_invitation=create_invitation,
+                config, email, audit=audit, send_invitation=create_invitation
             )
         except (AuthentikInvitationError, AuditTrailUnavailableError) as exc:
             return f"error: {exc}"
@@ -2066,15 +2063,9 @@ def restore_instrument(
         dependencies: CatalogRestoreDependencies = _sanitize_restore_graph_opens(
             build_default_restore_from_catalog_dependencies()
         )
-        try:
-            audit = AuditContext(
-                actor=resolve_audit_actor(
-                    actor, is_local_test_bypass_active=config.is_local_test_bypass_active
-                ),
-                store=PsycopgAuditStore(config),
-            )
-        except AuditActorUnresolvedError:
-            return _CATALOG_SOURCE_REQUIRES_AUTHENTICATED_CALLER_MESSAGE
+        audit = _audit_context(config, actor)
+        if isinstance(audit, str):
+            return audit
         try:
             outcome = run_restoration_from_catalog_source(
                 request_body,
