@@ -27,8 +27,10 @@ NodeLabel = Literal[
     "PracticeArea",
     "RiskPath",
 ]
-"""The intake format's allowed node labels -- mirrors the packaged JSON Schema's
-`nodeLabel` enum exactly (D7). `Policy` (GH #76 Slice 1), `Standard` (GH #76
+"""The intake format's allowed node labels. Pinned to the code-defined domain
+schema (and so to the generated intake JSON Schema's `nodeLabel` enum) by
+`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`
+(AC-BI-013); drift fails there. `Policy` (GH #76 Slice 1), `Standard` (GH #76
 Slice 2), and `Control` (GH #76 Slice 3) are authored governance labels --
 AC-BI-001 is fully satisfied now that all three land. `PracticeArea` (GH #93
 Slice 1) and `RiskPath` (GH #93 Slice 2) are the two authored
@@ -49,8 +51,11 @@ EdgeType = Literal[
     "COVERS",
     "MITIGATED_BY",
 ]
-"""The intake format's allowed edge types -- mirrors the packaged JSON Schema's
-`edge.type` enum exactly (D7). `GOVERNED_BY` (GH #76 Slice 1), `SUPPORTED_BY`
+"""The intake format's allowed edge types. Pinned to the code-defined domain
+schema (and so to the generated intake JSON Schema's `edge.type` enum) by
+`tests/ingestion/adapters/internal_seed/test_models_vocabulary_pin.py`
+(AC-BI-013); schema-only system-minted edges are named exceptions there.
+`GOVERNED_BY` (GH #76 Slice 1), `SUPPORTED_BY`
 (GH #76 Slice 2), and `IMPLEMENTED_BY` (GH #76 Slice 3) are authored
 governance edges -- AC-BI-001 is fully satisfied now that all three land."""
 

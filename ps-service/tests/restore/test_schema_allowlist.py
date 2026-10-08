@@ -9,10 +9,18 @@ graph argument at all, only the parsed `SerializedGraph`).
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import get_args
 
 import pytest
 
+from ps_service.domain_schema import DOMAIN_SCHEMA
+from ps_service.domain_schema.vocabulary_exceptions import (
+    CELLAR_ELI_NATIVE_LABELS,
+    SYSTEM_MINTED_EDGE_TYPES,
+    find_unpinned,
+)
 from ps_service.export.models import (
     SerializedEdge,
     SerializedGraph,
@@ -20,6 +28,7 @@ from ps_service.export.models import (
     SerializedPropertyValue,
 )
 from ps_service.ingestion.adapters.internal_seed.models import EdgeType, NodeLabel
+from ps_service.restore import schema_allowlist
 from ps_service.restore.errors import ArtifactContentRejectedError
 from ps_service.restore.schema_allowlist import (
     BASELINE_ALLOWED_LABELS,
@@ -78,6 +87,92 @@ def test_baseline_allow_lists_equal_the_internal_seed_vocabulary() -> None:
     """
     assert frozenset[str](get_args(NodeLabel)) == BASELINE_ALLOWED_LABELS
     assert frozenset[str](get_args(EdgeType)) == BASELINE_ALLOWED_RELATIONSHIP_TYPES
+
+
+_SCHEMA_LABELS = frozenset(node.label for node in DOMAIN_SCHEMA.nodes)
+_SCHEMA_EDGE_TYPES = frozenset(edge.type for edge in DOMAIN_SCHEMA.edges)
+_ALLOW_LIST_CONSTANTS = (
+    "BASELINE_ALLOWED_LABELS",
+    "BASELINE_ALLOWED_RELATIONSHIP_TYPES",
+    "NATIVE_ALLOWED_LABELS",
+    "NATIVE_ALLOWED_RELATIONSHIP_TYPES",
+)
+
+
+def test_baseline_allow_lists_are_subsets_of_the_domain_schema() -> None:
+    """AC-BI-014: a baseline name the schema lacks fails; the schema stays the superset."""
+    assert find_unpinned(BASELINE_ALLOWED_LABELS, _SCHEMA_LABELS, ()) == ()
+    assert find_unpinned(BASELINE_ALLOWED_RELATIONSHIP_TYPES, _SCHEMA_EDGE_TYPES, ()) == ()
+    # Schema-only edges are exactly the named system-minted ones (not stale).
+    assert (
+        frozenset(SYSTEM_MINTED_EDGE_TYPES)
+        == _SCHEMA_EDGE_TYPES - BASELINE_ALLOWED_RELATIONSHIP_TYPES
+    )
+
+
+def test_allow_list_check_flags_a_name_the_schema_lacks() -> None:
+    assert find_unpinned(BASELINE_ALLOWED_LABELS | {"Bogus"}, _SCHEMA_LABELS, ()) == ("Bogus",)
+
+
+def test_native_allow_lists_are_schema_plus_named_exceptions() -> None:
+    assert _SCHEMA_LABELS | frozenset(CELLAR_ELI_NATIVE_LABELS) == NATIVE_ALLOWED_LABELS
+    assert find_unpinned(NATIVE_ALLOWED_LABELS, _SCHEMA_LABELS, CELLAR_ELI_NATIVE_LABELS) == ()
+    assert (
+        _SCHEMA_EDGE_TYPES - frozenset(SYSTEM_MINTED_EDGE_TYPES)
+        == NATIVE_ALLOWED_RELATIONSHIP_TYPES
+    )
+    assert find_unpinned(NATIVE_ALLOWED_RELATIONSHIP_TYPES, _SCHEMA_EDGE_TYPES, ()) == ()
+
+
+def test_documented_edge_endpoints_are_schema_edges() -> None:
+    """The hand-copied endpoint triples are pinned to the schema's `(type, source, target)` keys."""
+    schema_keys = {edge.key for edge in DOMAIN_SCHEMA.edges}
+
+    assert set(_DOCUMENTED_EDGE_ENDPOINTS) <= schema_keys
+    assert {edge_type for edge_type, _, _ in _DOCUMENTED_EDGE_ENDPOINTS} == (
+        _SCHEMA_EDGE_TYPES - frozenset(SYSTEM_MINTED_EDGE_TYPES)
+    )
+
+
+def _allowlist_tree() -> ast.Module:
+    source = Path(schema_allowlist.__file__).read_text(encoding="utf-8")
+    return ast.parse(source)
+
+
+def test_allow_lists_do_not_import_the_schema_package() -> None:
+    """AC-BI-014: the sink-side lists stay independent of the schema (defence in depth)."""
+    imported: list[str] = []
+    for node in ast.walk(_allowlist_tree()):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+            imported.extend(alias.name for alias in node.names)
+
+    assert [name for name in imported if "domain_schema" in name] == []
+
+
+def test_allow_lists_are_hand_written_literals() -> None:
+    assignments: dict[str, ast.expr] = {}
+    for node in _allowlist_tree().body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            assignments[node.target.id] = node.value
+
+    for name in _ALLOW_LIST_CONSTANTS:
+        value = assignments[name]
+        assert isinstance(value, ast.Call), name
+        assert isinstance(value.func, ast.Name), name
+        assert value.func.id == "frozenset", name
+        [argument] = value.args
+        assert isinstance(argument, ast.Set), name
+        assert all(
+            isinstance(element, ast.Constant) and isinstance(element.value, str)
+            for element in argument.elts
+        ), name
 
 
 def test_baseline_allow_lists_accept_the_practice_area_and_risk_path_classification_layer() -> None:

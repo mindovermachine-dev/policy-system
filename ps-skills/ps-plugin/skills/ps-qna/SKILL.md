@@ -27,11 +27,13 @@ request, not shown by default.
 1. If the user hasn't provided a question, ask for one before doing
    anything else.
 2. Fetch the domain concepts by calling the `domain_concepts` MCP tool on
-   the PS Service connector — the same text its `psdomain://concepts`
-   resource serves, and the only source of truth for entities,
-   relationships, and vocabulary. Call the tool, not the resource: some
-   hosts expose MCP tools but not resources. `ps-mcp` is the only
-   recognised connector name; one exposing `cypher` but no
+   the PS Service connector — it returns the graph schema (node labels,
+   properties, edges with direction and cardinality), the only source of
+   truth for entities, relationships, and vocabulary. Call the tool, not
+   the resource: some hosts expose MCP tools but not resources. Fetch the
+   `psdomain://concepts` resource only if you need its prose
+   explanations. `ps-mcp` is the only recognised connector name; one
+   exposing `cypher` but no
    `domain_concepts` is not a PS Service connector either — report it as
    unreachable (error-state table, Process step 2; full test: see
    Guardrails). Always refetch this turn — never reuse a prior turn's or

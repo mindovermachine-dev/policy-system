@@ -12,24 +12,22 @@ rejected by the SDK before the read function runs).
 fakes / monkeypatching only -- no `unittest.mock`.
 
 F-11: `ReadResourceContents.content` is a `str`, not `bytes`.
-F-12: on a resource-read failure the mcp SDK emits its own ERROR-level log
-record (full traceback + absolute path) to `mcp.server.mcpserver.server` before
-re-raising a clean `ResourceError`. The AC-011 test `caplog`-absorbs that record
-(sets the level so it neither fails an assertion nor floods output); it is
-expected, not asserted against.
+AC-BI-017: a missing / unreadable file makes the resource return a path-free
+`error:` text body (the private `_load_domain_concepts` raises
+`McpResourceUnavailableError`; the registered resource function catches it).
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 from importlib import resources
 from pathlib import Path
 
 import pytest
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+from mcp.types import CallToolResult, TextContent
 
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.errors import McpResourceUnavailableError
@@ -106,20 +104,36 @@ def test_packaged_copy_matches_docs_artifacts_source() -> None:
     assert packaged_content == source_content
 
 
-def test_helper_raises_domain_error_on_missing_file(
+def test_load_raises_domain_error_on_missing_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     missing = tmp_path / "does-not-exist.md"
     _point_helper_at(monkeypatch, missing)
 
     with pytest.raises(McpResourceUnavailableError) as excinfo:
-        mcp_server.read_domain_concepts()
+        mcp_server._load_domain_concepts()  # pyright: ignore[reportPrivateUsage]  # test drives the module-private loader that raises the domain error
 
     message = str(excinfo.value)
     assert "does-not-exist.md" not in message
     assert str(missing) not in message
     assert "Errno" not in message
     assert "Traceback" not in message
+
+
+def test_read_returns_clean_error_string_on_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-BI-017 (resource half): a missing file yields a path-free `error:` text."""
+    missing = tmp_path / "does-not-exist.md"
+    _point_helper_at(monkeypatch, missing)
+
+    text = mcp_server.read_domain_concepts()
+
+    assert text.startswith("error:")
+    assert "does-not-exist.md" not in text
+    assert str(missing) not in text
+    assert "Errno" not in text
+    assert "Traceback" not in text
 
 
 def test_resource_listed_with_stable_uri_and_markdown_mime() -> None:
@@ -147,23 +161,73 @@ def test_read_resource_via_server_returns_verbatim(
 
 
 def test_read_resource_via_server_missing_file_error_is_clean(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    caplog.set_level(logging.ERROR)  # F-12: absorb the SDK's own ERROR record
     missing = tmp_path / "does-not-exist.md"
     _point_helper_at(monkeypatch, missing)
 
-    # The SDK re-raises a `ResourceError` (no stable public class to pin on);
-    # what matters is that its `str()` carries no traceback and no filesystem path.
-    with pytest.raises(Exception) as excinfo:
-        asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
 
-    surfaced = str(excinfo.value)
-    assert "Traceback" not in surfaced
-    assert str(missing) not in surfaced
-    assert "does-not-exist.md" not in surfaced
+    body = content.content
+    assert isinstance(body, str)
+    assert body.startswith("error:")
+    assert "Traceback" not in body
+    assert str(missing) not in body
+    assert "does-not-exist.md" not in body
+
+
+def test_resource_returns_the_real_packaged_document_byte_for_byte() -> None:
+    """AC-BI-010: no monkeypatching; the resource is the packaged file, equal to the docs copy."""
+    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
+    packaged = (
+        resources.files("ps_service.mcp_interface")
+        .joinpath("ps-domain-concepts.md")
+        .read_text(encoding="utf-8")
+    )
+    source = (_REPO_ROOT / "docs" / "artifacts" / "ps-domain-concepts.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert content.content == packaged
+    assert content.content == source
+
+
+def _tool_text() -> str:
+    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
+    assert isinstance(outcome, CallToolResult)
+    [text] = [c.text for c in outcome.content if isinstance(c, TextContent)]
+    return text
+
+
+def test_tool_and_resource_differ_and_tool_is_shorter() -> None:
+    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
+    resource_text = content.content
+    assert isinstance(resource_text, str)
+
+    tool_text = _tool_text()
+
+    assert tool_text != resource_text
+    assert len(tool_text) < len(resource_text)
+
+
+def test_tool_still_returns_schema_when_packaged_document_is_missing_and_resource_errors_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "does-not-exist.md"
+    _point_helper_at(monkeypatch, missing)
+
+    tool_text = _tool_text()
+    raw = asyncio.run(mcp_server.server.read_resource("psdomain://concepts"))
+    [content] = [c for c in raw if isinstance(c, ReadResourceContents)]
+
+    assert not tool_text.startswith("error:")
+    assert "NODES" in tool_text
+    assert isinstance(content.content, str)
+    assert content.content.startswith("error:")
+    assert str(missing) not in content.content
 
 
 def test_traversal_uri_is_unknown_resource() -> None:

@@ -161,23 +161,36 @@ under [Domain Concepts](#domain-concepts) describe each edge's meaning
 from that node's perspective; this table is the one place to see the
 full cross-model shape and provenance rationale at once.
 
+Cardinality reads `S : T`: `S` source nodes per target node, `T` target nodes per source node (`1..*` means one or more, `0..*` zero or more).
+
+<!-- BEGIN GENERATED edge-catalog. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Edge | Source → Target | Cardinality | Properties | Rule case ([above](#provenance-placement-rule)) |
 |------|------------------|-------------|------------|------|
 | `DEFINES` | RegulatoryInstrument → Role | 1 : 0..* | `source_ref` (required) | 1 — edge-owned |
 | `EXPRESSES` | RegulatoryInstrument → Requirement | 1 : 0..* | `source_ref` (required) | 1 — edge-owned; also structurally fixed enough to double as Requirement's own identity, unlike Role's |
 | `SUPERSEDED_BY` | RegulatoryInstrument → RegulatoryInstrument | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
-| `TRANSPOSES` | RegulatoryInstrument → RegulatoryInstrument | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. Source is always a `national_transposition`, target always a `directive`. |
-| `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved. The `1` (exactly one Role per Obligation) holds structurally, via Obligation's Role-scoped identity — not as a rule extraction must be trusted to honour. See [Obligation](#obligation). |
+| `SUPERSEDED_BY` | Policy → Policy | 0..1 : 0..1 | — | n/a — version succession, not a provenance fact |
+| `TRANSPOSES` | RegulatoryInstrument → RegulatoryInstrument | 0..* : 1 | — | n/a — structural bibliographic link (a national statute implements an EU directive), not a provenance fact; parallels `SUPERSEDED_BY`. |
+| `HAS` | Role → Obligation | 1 : 0..* | — | n/a — structural assignment, no location fact involved. |
 | `SATISFIED_BY` | Requirement → Obligation | 1..\* : 0..* | — | 2 — recoverable via this Requirement's own `EXPRESSES` edge |
 | `REQUIRES` | Obligation → Capability | 1..\* : 0..* | — | 2 — recoverable transitively, one hop further than `SATISFIED_BY` |
-| `COVERS` | PracticeArea → Capability | 1 : 0..* | — | 3 — classification layer |
-| `OWNS` | PracticeArea → Policy | 1 : 0..* | — | 3 — classification layer |
-| `MITIGATED_BY` | RiskPath → Capability | 1 : 0..* | — | 3 — classification layer |
-| `VERIFIED_BY` | RiskPath → Control | 1 : 0..* | — | 3 — classification layer |
+| `COVERS` | PracticeArea → Capability | 1..\* : 0..* | — | 3 — classification layer |
+| `OWNS` | PracticeArea → Policy | 1..\* : 0..* | — | 3 — classification layer |
+| `MITIGATED_BY` | RiskPath → Capability | 1..\* : 0..* | — | 3 — classification layer |
+| `VERIFIED_BY` | RiskPath → Control | 1..\* : 0..* | — | 3 — classification layer |
 | `MERGED_INTO` | Capability → Capability | 0..1 : 0..* | — | n/a — redirect marker from a `merged` tombstone to its survivor, not a provenance fact; parallels `SUPERSEDED_BY`. Chains (a survivor later absorbed itself) are followed to the terminal Capability. |
-| `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived. For a human-authored Policy the edge is written when a fresh draft is created with `capability_ids`; a fork of an approved Policy does not write it — the edges move from the superseded Policy to the fork when the fork is approved |
+| `GOVERNED_BY` | Capability → Policy | 0..* : 0..1 | — | 3 if Policy is human-authored; 2 (recoverable via `REQUIRES`→`SATISFIED_BY`→`EXPRESSES`) if Policy is internal-SoP-derived. |
 | `SUPPORTED_BY` | Policy → Standard | 1 : 1..* | — | 3 if Standard is human-authored; 2 (recoverable via `GOVERNED_BY` onward) if internal-SoP-derived |
 | `IMPLEMENTED_BY` | Standard → Control | 1 : 0..* | — | 3 if Control is human-authored; 2 (recoverable via `SUPPORTED_BY` onward) if internal-SoP-derived |
+
+<!-- END GENERATED edge-catalog -->
+
+**Rule case details.** The Rule case cells above are kept to one line; the longer explanations are here.
+
+- `TRANSPOSES`: source is always a `national_transposition`, target always a `directive`.
+- `HAS`: the `1` (exactly one Role per Obligation) holds structurally, via Obligation's Role-scoped identity — not as a rule extraction must be trusted to honour. See [Obligation](#obligation).
+- `GOVERNED_BY`: for a human-authored Policy the edge is written when a fresh draft is created with `capability_ids`; a fork of an approved Policy does not write it — the edges move from the superseded Policy to the fork when the fork is approved.
 
 ---
 
@@ -215,25 +228,45 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:RegulatoryInstrument. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `id` | string | Yes | Same value as Identity above |
 | `title` | string | Yes | |
 | `source_type` | enum: `external` \| `internal` | Yes | `external` = EU legislation, international standard, or national law. `internal` = organizationally-authored Business Regulation (e.g. Engineering Practices standard). |
-| `instrument_type` | enum: `regulation` \| `directive` \| `national_transposition` | Conditional | Required for `source_type: external`; absent for `internal`. Determines the identity pattern (below) and, for `directive`, that framework-level and national obligations are modelled as separate linked nodes. See [Directives and National Transposition](#directives-and-national-transposition). |
-| `jurisdiction` | string | No | Required in practice for `external` sources. Optional because `internal` sources may have no jurisdiction, or may use this field for org-unit scope instead — different business units can carry different values here. For `national_transposition` this is a single ISO 3166-1 alpha-2 country code and also appears in the identity. |
+| `instrument_type` | enum: `regulation` \| `directive` \| `national_transposition` | Conditional | Required for source_type external; absent for internal. Shapes the identity. |
+| `jurisdiction` | string | No | Needed for external sources; for national_transposition an ISO 3166-1 alpha-2 code. |
 | `effective_date` | date (ISO 8601) | Yes | |
 | `version` | string | Yes | |
 | `status` | enum: `active` \| `superseded` \| `vacated` | Yes | |
 
+<!-- END GENERATED properties:RegulatoryInstrument -->
+
+**Property notes.** The Notes cells above are kept short; the full explanations are here.
+
+- `instrument_type`: Required for `source_type: external`; absent for `internal`. Determines the identity pattern (below) and, for `directive`, that framework-level and national obligations are modelled as separate linked nodes. See [Directives and National Transposition](#directives-and-national-transposition).
+- `jurisdiction`: Required in practice for `external` sources. Optional because `internal` sources may have no jurisdiction, or may use this field for org-unit scope instead — different business units can carry different values here. For `national_transposition` this is a single ISO 3166-1 alpha-2 country code and also appears in the identity.
+
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:RegulatoryInstrument. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `DEFINES` | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument defines this Role. Lives on the edge, not on Role, because the defining act is specific to this RegulatoryInstrument–Role pair. |
-| `EXPRESSES` | Requirement | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this RegulatoryInstrument–Requirement pair. |
-| `SUPERSEDED_BY` | RegulatoryInstrument | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
-| `TRANSPOSES` (outbound) | RegulatoryInstrument | 0..* : 1 | — | Only on `national_transposition` nodes: links the national statute to the EU `directive` it implements. Each national node transposes exactly one `directive`; a `directive` is transposed by zero-or-more national nodes. Structural bibliographic link — no `source_ref`, since this node's real provenance is on its own `DEFINES`/`EXPRESSES` edges. |
+| `SUPERSEDED_BY` (inbound) | RegulatoryInstrument | 0..1 : 0..1 | — | See [RegulatoryInstrument → SUPERSEDED_BY](#regulatory-instrument). |
+| `TRANSPOSES` (inbound) | RegulatoryInstrument | 1 : 0..* | — | See [RegulatoryInstrument → TRANSPOSES](#regulatory-instrument). |
+| `DEFINES` (outbound) | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument defines this Role. Lives on the edge, not on Role, because the defining act is specific to this RegulatoryInstrument–Role pair. |
+| `EXPRESSES` (outbound) | Requirement | 1 : 0..* | `source_ref` (string, required) | Article/section where the instrument expresses the Requirement; lives on the edge. |
+| `SUPERSEDED_BY` (outbound) | RegulatoryInstrument | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
+| `TRANSPOSES` (outbound) | RegulatoryInstrument | 0..* : 1 | — | A national_transposition node links to the single directive it implements. |
+
+<!-- END GENERATED relationships:RegulatoryInstrument -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `EXPRESSES` (outbound): The article/section where this RegulatoryInstrument expresses this Requirement. Lives on the edge, not on Requirement, for the same reason as `DEFINES` above — the expressing act is specific to this RegulatoryInstrument–Requirement pair.
+- `TRANSPOSES` (outbound): Only on `national_transposition` nodes: links the national statute to the EU `directive` it implements. Each national node transposes exactly one `directive`; a `directive` is transposed by zero-or-more national nodes. Structural bibliographic link — no `source_ref`, since this node's real provenance is on its own `DEFINES`/`EXPRESSES` edges.
 
 ---
 
@@ -248,18 +281,30 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Role. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `name` | string | Yes | |
 | `description` | string | No | |
-| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty that this candidate is genuinely a duty-bearing actor category the regulation names or creates — not conditioned on how the Role was minted; always recorded, since it's a fact about the extraction event itself and is unrecoverable once dropped. |
+| `confidence` | float, 0.0–1.0 | Yes | Extractor's certainty that this is a genuine duty-bearing actor category. |
+
+<!-- END GENERATED properties:Role -->
+
+**Property notes.** The Notes cells above are kept short; the full explanations are here.
+
+- `confidence`: The extracting LLM's own certainty that this candidate is genuinely a duty-bearing actor category the regulation names or creates — not conditioned on how the Role was minted; always recorded, since it's a fact about the extraction event itself and is unrecoverable once dropped.
 
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:Role. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `DEFINES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → DEFINES](#regulatory-instrument). |
-| `HAS` | Obligation | 1 : 0..* | — | A Role has zero or more Obligations assigned to it; each of those Obligations is borne by this Role alone. |
+| `HAS` (outbound) | Obligation | 1 : 0..* | — | A Role has zero or more Obligations assigned to it; each of those Obligations is borne by this Role alone. |
+
+<!-- END GENERATED relationships:Role -->
 
 ---
 
@@ -274,19 +319,36 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Requirement. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `text` | string | Yes | |
 | `type` | enum: `requirement` \| `prohibition` \| `recommendation` | Yes | |
 | `status` | enum: `active` \| `deprecated` | No | |
-| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty that this paragraph/sub-point genuinely states an operative requirement, prohibition, or recommendation (vs. a borderline case — ambiguous modal strength, an embedded conditional, disputed granularity). Always recorded, unconditionally. |
+| `confidence` | float, 0.0–1.0 | Yes | Extractor's certainty that this paragraph genuinely states an operative requirement. |
+
+<!-- END GENERATED properties:Requirement -->
+
+**Property notes.** The Notes cells above are kept short; the full explanations are here.
+
+- `confidence`: The extracting LLM's own certainty that this paragraph/sub-point genuinely states an operative requirement, prohibition, or recommendation (vs. a borderline case — ambiguous modal strength, an embedded conditional, disputed granularity). Always recorded, unconditionally.
 
 #### Relationships
 
+<!-- BEGIN GENERATED relationships:Requirement. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `EXPRESSES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → EXPRESSES](#regulatory-instrument). `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge. |
-| `SATISFIED_BY` | Obligation | 1..\* : 0..* | — | Bridges this regulation-specific condition to one or more Obligations. Many-to-many within a single source: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies several Requirements borne by the same Role (one Role's duties often recur across articles). Obligations are not shared across regulations — cross-source convergence is at [Capability](#capability). |
+| `EXPRESSES` (inbound) | RegulatoryInstrument | 0..* : 1 | `source_ref` (string, required) | See [RegulatoryInstrument → EXPRESSES](#regulatory-instrument). |
+| `SATISFIED_BY` (outbound) | Obligation | 1..\* : 0..* | — | Bridges a Requirement to the Obligations that satisfy it; many-to-many. |
+
+<!-- END GENERATED relationships:Requirement -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `EXPRESSES` (inbound): `source_ref` lives on this edge, not on Requirement, following the same rule applied to Role's `DEFINES` edge.
+- `SATISFIED_BY` (outbound): Bridges this regulation-specific condition to one or more Obligations. Many-to-many within a single source: a single Requirement may need several Obligations to be fully satisfied, and a single Obligation commonly satisfies several Requirements borne by the same Role (one Role's duties often recur across articles). Obligations are not shared across regulations — cross-source convergence is at [Capability](#capability).
 
 ---
 
@@ -301,20 +363,36 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Obligation. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `text` | string | Yes | The duty statement, e.g. "Conduct Cybersecurity Risk Assessment" |
-| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether minting a new Obligation from an unmatched Requirement, or matching a Requirement to an existing Obligation of the same Role. Always recorded, unconditionally; not limited to the minted case. |
+| `confidence` | float, 0.0–1.0 | Yes | Extractor's certainty in minting or matching this Obligation; always recorded. |
+
+<!-- END GENERATED properties:Obligation -->
+
+**Property notes.** The Notes cells above are kept short; the full explanations are here.
+
+- `confidence`: The extracting LLM's own certainty in this decision — whether minting a new Obligation from an unmatched Requirement, or matching a Requirement to an existing Obligation of the same Role. Always recorded, unconditionally; not limited to the minted case.
 
 Deliberately **excluded**: a `source_ref` property, on the node or on any of its edges — see [Provenance Placement Rule, case 2](#provenance-placement-rule). An Obligation with no live `SATISFIED_BY` edge is unprovenanced.
 
 #### Relationships
 
+<!-- BEGIN GENERATED relationships:Obligation. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `HAS` (inbound) | Role | 0..* : 1 | — | See [Role → HAS](#role). Each Obligation is borne by exactly one Role — structurally, via the Role-scoped identity above, not merely by convention. |
+| `HAS` (inbound) | Role | 0..* : 1 | — | See [Role → HAS](#role). |
 | `SATISFIED_BY` (inbound) | Requirement | 0..\* : 1..* | — | See [Requirement → SATISFIED_BY](#requirement). |
 | `REQUIRES` (outbound) | Capability | 1..\* : 0..* | — | See [Capability](#capability). |
+
+<!-- END GENERATED relationships:Obligation -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `HAS` (inbound): Each Obligation is borne by exactly one Role — structurally, via the Role-scoped identity above, not merely by convention.
 
 ---
 
@@ -329,6 +407,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:PracticeArea. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `name` | string | Yes | |
@@ -337,12 +417,18 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `version` | string | No | |
 | `owner_id` | string | No | Optional organizational owner for this taxonomy area. |
 
+<!-- END GENERATED properties:PracticeArea -->
+
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:PracticeArea. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `COVERS` | Capability | 1 : 0..* | — | Classifies which reusable Capabilities belong to this practice area. |
-| `OWNS` | Policy | 1 : 0..* | — | Assigns governance ownership of Policies by area. |
+| `COVERS` (outbound) | Capability | 1..\* : 0..* | — | Classifies which reusable Capabilities belong to this practice area. |
+| `OWNS` (outbound) | Policy | 1..\* : 0..* | — | Assigns governance ownership of Policies by area. |
+
+<!-- END GENERATED relationships:PracticeArea -->
 
 ---
 
@@ -357,6 +443,8 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:RiskPath. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `name` | string | Yes | |
@@ -365,12 +453,18 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 | `risk_type` | enum: `security` \| `reliability` \| `privacy` \| `compliance` \| `safety` \| `supply_chain` | No | Optional categorization for reporting slices. |
 | `version` | string | No | |
 
+<!-- END GENERATED properties:RiskPath -->
+
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:RiskPath. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `MITIGATED_BY` | Capability | 1 : 0..* | — | Connects abstract risk exposure to reusable technical/organizational capacity. |
-| `VERIFIED_BY` | Control | 1 : 0..* | — | Connects risk exposure to concrete verification evidence paths. |
+| `MITIGATED_BY` (outbound) | Capability | 1..\* : 0..* | — | Connects abstract risk exposure to reusable technical/organizational capacity. |
+| `VERIFIED_BY` (outbound) | Control | 1..\* : 0..* | — | Connects risk exposure to concrete verification evidence paths. |
+
+<!-- END GENERATED relationships:RiskPath -->
 
 ---
 
@@ -385,24 +479,41 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Capability. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `name` | string | Yes | |
 | `description` | string | No | |
 | `type` | string | No | e.g. `technical`, `organizational` |
-| `status` | enum: `active` \| `deprecated` \| `merged` | No | `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge, kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`. |
-| `confidence` | float, 0.0–1.0 | Yes | The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally. |
+| `status` | enum: `active` \| `deprecated` \| `merged` | No | merged marks a tombstone with an outbound MERGED_INTO edge; no status means active. |
+| `confidence` | float, 0.0–1.0 | Yes | Extractor's certainty in reusing or minting this Capability; always recorded. |
+
+<!-- END GENERATED properties:Capability -->
+
+**Property notes.** The Notes cells above are kept short; the full explanations are here.
+
+- `status`: `merged` marks a tombstone: a duplicate absorbed by a Compliance Officer cleanup merge, kept in the graph and never deleted. A tombstone has an outbound `MERGED_INTO` edge to its survivor and is not a live Capability. A Capability with no `status` is treated as `active`. Unmerging returns a tombstone to `active`. Queries that count or list live Capabilities filter on `status = 'active'`.
+- `confidence`: The extracting LLM's own certainty in this decision — whether reusing an existing Capability for an Obligation, or minting a new one because none of the existing candidates fit. Always recorded, unconditionally.
 
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:Capability. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `REQUIRES` (inbound) | Obligation | 0..\* : 1..* | — | See [Obligation → REQUIRES](#obligation). |
 | `COVERS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → COVERS](#practicearea). |
 | `MITIGATED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → MITIGATED_BY](#riskpath). |
-| `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). A Capability has exactly one governing Policy at any time, including while its Policy is being superseded. |
+| `MERGED_INTO` (inbound) | Capability | 0..* : 0..1 | — | See [Capability → MERGED_INTO](#capability). |
 | `MERGED_INTO` (outbound) | Capability | 0..1 : 0..* | — | Present only on a `merged` tombstone; points at the survivor that absorbed it. |
-| `MERGED_INTO` (inbound) | Capability | 0..* : 0..1 | — | Tombstones that were absorbed into this Capability. |
+| `GOVERNED_BY` (outbound) | Policy | 0..* : 0..1 | — | See [Policy → GOVERNED_BY](#policy). A Capability has exactly one governing Policy at any time, including while its Policy is being superseded. |
+
+<!-- END GENERATED relationships:Capability -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `MERGED_INTO` (inbound): Tombstones that were absorbed into this Capability.
 
 ---
 
@@ -410,7 +521,7 @@ Deliberately **excluded**: a `source_ref` property, on the node or on any of its
 
 **Description:** An organizational commitment governing how one or more Capabilities must be achieved. Policy is where accountability actually attaches to the generic model: the "what capacity must exist" of a Capability becomes "who owns making it happen and how it's reviewed" (owner, review cycle, approval status) once it reaches Policy. A single Policy commonly governs several Capabilities at once — e.g. one "Data Protection Policy" governing encryption, logging, and access-control capabilities together — rather than each Capability answering to its own policy; different business contexts or risk tolerances are handled by minting a distinct Capability, not by a Capability answering to more than one Policy.
 
-**Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `approved` → `deprecated` status workflow. The Policy's `GOVERNED_BY` edges follow the same workflow: a fresh human-authored draft's edges are written at creation; a fork's edges stay on the superseded Policy until the fork is approved, then move to the fork in the same operation as the approval.
+**Lifecycle:** Created by policy managers through governance workflows; revised when regulations or the business change; archived (not deleted) when superseded, since audit history requires the full approval trail to remain intact. Moves through a `draft` → `proposed` → `approved` → `deprecated` status workflow. The Policy's `GOVERNED_BY` edges follow the same workflow: a fresh human-authored draft's edges are written at creation; a fork's edges stay on the superseded Policy until the fork is approved, then move to the fork in the same operation as the approval.
 
 Alternatively, authored directly in the internal-seed intake document when the governing Capability traces to an `internal` RegulatoryInstrument, and minted (canonical id only) by `ps_service.ingestion.adapters.internal_seed` in the same step that authors/mints the rest of that source's spine — no LLM involved, permanent design. A Policy instance is one origin or the other, never both; see [Document Purpose](#document-purpose).
 
@@ -419,12 +530,14 @@ Alternatively, authored directly in the internal-seed intake document when the g
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Policy. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `title` | string | Yes | |
 | `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `owner_id` | string | No | |
-| `status` | enum: `draft` \| `approved` \| `deprecated` | Yes | |
+| `status` | enum: `draft` \| `proposed` \| `approved` \| `deprecated` | Yes | |
 | `version` | string | No | |
 | `scope_in` | string | No | What this Policy's commitment covers. |
 | `scope_out` | string | No | What this Policy's commitment explicitly does not cover. |
@@ -434,16 +547,29 @@ Alternatively, authored directly in the internal-seed intake document when the g
 | `measurable_outcomes` | string | No | At least one quantifiable or objectively verifiable outcome. |
 | `capability_grouping_rationale` | string | No | Why the governed Capabilities belong under one Policy — same owner, cadence, and control model. |
 
+<!-- END GENERATED properties:Policy -->
+
 These structured fields pair with `ps-skills/ps-plugin/rubrics/policy-rubric.md` (one field per scored criterion) and `policy-template.md` (one section per field).
 
 #### Relationships
 
+<!-- BEGIN GENERATED relationships:Policy. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `OWNS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → OWNS](#practicearea). A Policy may be owned by any number of PracticeAreas — no artificial one-owner cap, matching COVERS/MITIGATED_BY/VERIFIED_BY (see AC-BI-011). |
-| `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. A human-authored fresh draft claims its Capabilities when it is created (the caller names them via `capability_ids`; every named Capability must exist and be ungoverned, otherwise nothing is created) and holds them until approved or abandoned. A fork never claims Capabilities at creation: the Capabilities governed by the superseded Policy move to the fork in the same operation as the fork's approval, so a Capability never has zero or two governing Policies. A fork whose superseded Policy governs no Capabilities (a legacy Policy) is approved without moving any edge. |
+| `SUPERSEDED_BY` (inbound) | Policy | 0..1 : 0..1 | — | See [Policy → SUPERSEDED_BY](#policy). |
+| `OWNS` (inbound) | PracticeArea | 0..\* : 1..* | — | See [PracticeArea → OWNS](#practicearea). |
+| `GOVERNED_BY` (inbound) | Capability | 0..1 : 0..* | — | See [Capability → GOVERNED_BY](#capability). |
+| `SUPERSEDED_BY` (outbound) | Policy | 0..1 : 0..1 | — | A Policy has at most one successor version; written when a fork is created. |
 | `SUPPORTED_BY` (outbound) | Standard | 1 : 1..* | — | See [Standard → SUPPORTED_BY](#standard). Every Policy requires at least one Standard defining how its commitment is actually implemented. |
-| `SUPERSEDED_BY` (outbound) | Policy | 0..1 : 0..1 | — | A Policy may be superseded by exactly one successor version (or none); Policy-level only — no per-Standard/Control links. The edge is written when a fork of an approved Policy is created. Approving the successor moves the superseded Policy's `GOVERNED_BY` Capabilities to the successor and auto-deprecates the superseded Policy (see Policy's Lifecycle note above). |
+
+<!-- END GENERATED relationships:Policy -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `OWNS` (inbound): A Policy may be owned by any number of PracticeAreas — no artificial one-owner cap, matching COVERS/MITIGATED_BY/VERIFIED_BY (see AC-BI-011).
+- `GOVERNED_BY` (inbound): Many Capabilities may point to the same Policy — the reason this Policy's identity above can't be derived from any one of them. A human-authored fresh draft claims its Capabilities when it is created (the caller names them via `capability_ids`; every named Capability must exist and be ungoverned, otherwise nothing is created) and holds them until approved or abandoned. A fork never claims Capabilities at creation: the Capabilities governed by the superseded Policy move to the fork in the same operation as the fork's approval, so a Capability never has zero or two governing Policies. A fork whose superseded Policy governs no Capabilities (a legacy Policy) is approved without moving any edge.
+- `SUPERSEDED_BY` (outbound): A Policy may be superseded by exactly one successor version (or none); Policy-level only — no per-Standard/Control links. The edge is written when a fork of an approved Policy is created. Approving the successor moves the superseded Policy's `GOVERNED_BY` Capabilities to the successor and auto-deprecates the superseded Policy (see Policy's Lifecycle note above).
 
 ---
 
@@ -460,6 +586,8 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 
 #### Properties
 
+<!-- BEGIN GENERATED properties:Standard. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
 | `title` | string | Yes | |
@@ -474,14 +602,20 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `verification_notes` | string | No | Written so a Control could be built directly against it, pass/fail, without interpretation. |
 | `change_rationale` | string | No | Why this Standard was introduced, or what changed from its previous version and why. |
 
+<!-- END GENERATED properties:Standard -->
+
 These structured fields pair with `ps-skills/ps-plugin/rubrics/standard-rubric.md` (one field per scored criterion) and `standard-template.md` (one section per field).
 
 #### Relationships
+
+<!-- BEGIN GENERATED relationships:Standard. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
 | `SUPPORTED_BY` (inbound) | Policy | 1..* : 1 | — | See [Policy → SUPPORTED_BY](#policy). |
 | `IMPLEMENTED_BY` (outbound) | Control | 1 : 0..* | — | See [Control](#control). |
+
+<!-- END GENERATED relationships:Standard -->
 
 ---
 
@@ -497,6 +631,8 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 **Identity:** `ctrl_{slug}_{hash of title}` (e.g. `ctrl_automated_log_retention_integrity_check_0897e9`) — content-derived from the Control's own `title` AND the Standard it verifies (the Standard it links to via `IMPLEMENTED_BY`), mirroring [Standard](#standard)'s own identity shape: the visible slug is the Control's own title, human-readable; the Standard enters only the opaque hash, never the id string. This is the same weak-entity pattern used for Requirement, Obligation, and Standard (not the canonical-hash pattern used for Capability and Policy): a Control exists only to verify exactly one Standard, so there's no cross-Standard reuse to protect against.
 
 #### Properties
+
+<!-- BEGIN GENERATED properties:Control. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
 
 | Property | Type | Required | Notes |
 |----------|------|----------|-------|
@@ -516,14 +652,25 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `reviewer_role` | string | No | Who reviews the result. |
 | `risk_alignment_rationale` | string | No | How this Control's objective addresses the risk exposure of the RiskPath(s) it verifies. |
 
+<!-- END GENERATED properties:Control -->
+
 These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md` (one field per scored criterion) and `control-template.md` (one section per field).
 
 #### Relationships
 
+<!-- BEGIN GENERATED relationships:Control. Generated from ps_service.domain_schema, do not edit by hand. Regenerate with: uv run python -m ps_service.domain_schema write-docs -->
+
 | Edge | Target | Cardinality | Edge Properties | Note |
 |------|--------|-------------|------------------|------|
-| `IMPLEMENTED_BY` (inbound) | Standard | 0..* : 1 | — | See [Standard → IMPLEMENTED_BY](#standard). Each Control verifies exactly one Standard. |
-| `VERIFIED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → VERIFIED_BY](#riskpath). Enables completeness checks that each active RiskPath has concrete verification evidence. |
+| `VERIFIED_BY` (inbound) | RiskPath | 0..\* : 1..* | — | See [RiskPath → VERIFIED_BY](#riskpath). |
+| `IMPLEMENTED_BY` (inbound) | Standard | 0..* : 1 | — | See [Standard → IMPLEMENTED_BY](#standard). |
+
+<!-- END GENERATED relationships:Control -->
+
+**Relationship notes.** The Note cells above are kept short; the full explanations are here.
+
+- `IMPLEMENTED_BY` (inbound): Each Control verifies exactly one Standard.
+- `VERIFIED_BY` (inbound): Enables completeness checks that each active RiskPath has concrete verification evidence.
 
 ---
 

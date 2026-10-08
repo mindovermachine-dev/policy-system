@@ -120,6 +120,7 @@ from ps_service.curated_source import store as catalog_source_store
 from ps_service.curated_source.catalog_client import build_default_curated_catalog_dependencies
 from ps_service.curated_source.errors import CuratedSourceFetchError
 from ps_service.curated_source.resolve import resolve_effective_source
+from ps_service.domain_schema import DOMAIN_SCHEMA, render_slim_schema
 from ps_service.graph_cleanup.dependencies import (
     GraphCleanupDependencies,
     build_default_graph_cleanup_dependencies,
@@ -349,9 +350,8 @@ server = MCPServer(
     name="ps-mcp",
     instructions=(
         "Read-only Cypher access to the policy_system compliance graph. "
-        "Call the domain_concepts tool first (the same text as the psdomain://concepts "
-        "resource) and ground every query in its actual node labels, properties, and "
-        "edge directions -- never invent one. "
+        "Call the domain_concepts tool first and ground every query in its actual node "
+        "labels, properties, and edge directions -- never invent one. "
         "Write clauses are rejected before execution and returned as an 'error:' line."
     ),
 )
@@ -2218,17 +2218,28 @@ def cypher(query: str) -> dict[str, object] | str:
 
 @server.tool()
 def domain_concepts() -> str:
-    """Return the PS compliance-graph vocabulary and schema (ps-domain-concepts.md) verbatim.
+    """Return the PS compliance-graph schema: node labels, properties and edges.
 
-    The same text the `psdomain://concepts` resource serves, exposed as a
-    tool because some MCP hosts (Claude Desktop among them) let the model
-    call tools but not read resources. Takes no parameters. Returns a
-    string beginning `error: ` when the backing file cannot be read.
+    Call this first and ground every Cypher query in it. Takes no
+    parameters. Lists each node label with its properties (type, enum
+    values, required flag) and each edge with direction, cardinality and
+    edge-property names. Prose explanations and worked examples are not
+    included; read the `psdomain://concepts` resource for those.
+    """
+    return render_slim_schema(DOMAIN_SCHEMA)
+
+
+def _load_domain_concepts() -> str:
+    """Read the packaged ps-domain-concepts.md text.
+
+    Takes no parameters -- no client-supplied input reaches the read
+    (AC-012). Raises `McpResourceUnavailableError` (with a fixed, path-free
+    detail) if the file cannot be read.
     """
     try:
-        return read_domain_concepts()
-    except McpResourceUnavailableError as exc:
-        return f"error: {exc}"
+        return _domain_concepts_path().read_text(encoding="utf-8")
+    except OSError as exc:
+        raise McpResourceUnavailableError(_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL) from exc
 
 
 @server.resource(
@@ -2241,14 +2252,13 @@ def domain_concepts() -> str:
 def read_domain_concepts() -> str:
     """GetDomainConcepts: return the full ps-domain-concepts.md text.
 
-    Takes no parameters -- no client-supplied input reaches the read
-    (AC-012). Resolves from a repo checkout only; raises a
-    resource-unavailable error if the file cannot be read.
+    Takes no parameters. If the file is unavailable, returns the
+    `error:`-prefixed fixed detail text -- no path, no cause (AC-BI-017).
     """
     try:
-        return _domain_concepts_path().read_text(encoding="utf-8")
-    except OSError as exc:
-        raise McpResourceUnavailableError(_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL) from exc
+        return _load_domain_concepts()
+    except McpResourceUnavailableError:
+        return f"error: {_DOMAIN_CONCEPTS_UNAVAILABLE_DETAIL}"
 
 
 def _assignment_to_dict(row: AccessRoleAssignmentRow) -> dict[str, object]:

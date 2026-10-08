@@ -1,0 +1,103 @@
+PS domain schema (generated from code; prose lives in the psdomain://concepts resource)
+Every node has a string id. Property marks: ! required, ? conditional, none optional.
+Cardinality "S : T": S source nodes per target node, T target nodes per source node.
+Capability status "merged" is a tombstone (see MERGED_INTO to its survivor); readers filter status = "active" unless they want tombstones.
+
+NODES
+RegulatoryInstrument
+  id: string !
+  title: string !
+  source_type: enum(external|internal) !
+  instrument_type: enum(regulation|directive|national_transposition) ?
+  jurisdiction: string
+  effective_date: date !
+  version: string !
+  status: enum(active|superseded|vacated) !
+Role
+  name: string !
+  description: string
+  confidence: float[0.0..1.0] !
+Requirement
+  text: string !
+  type: enum(requirement|prohibition|recommendation) !
+  status: enum(active|deprecated)
+  confidence: float[0.0..1.0] !
+Obligation
+  text: string !
+  confidence: float[0.0..1.0] !
+PracticeArea
+  name: string !
+  description: string
+  status: enum(active|deprecated) !
+  version: string
+  owner_id: string
+RiskPath
+  name: string !
+  description: string
+  status: enum(active|deprecated) !
+  risk_type: enum(security|reliability|privacy|compliance|safety|supply_chain)
+  version: string
+Capability
+  name: string !
+  description: string
+  type: string
+  status: enum(active|deprecated|merged)
+  confidence: float[0.0..1.0] !
+Policy
+  title: string !
+  description: string
+  owner_id: string
+  status: enum(draft|proposed|approved|deprecated) !
+  version: string
+  scope_in: string
+  scope_out: string
+  normative_commitments: string
+  review_cadence: string
+  exception_pathway: string
+  measurable_outcomes: string
+  capability_grouping_rationale: string
+Standard
+  title: string !
+  description: string
+  implementation_status: enum(draft|implemented|reviewed|deprecated) !
+  status: enum(draft|proposed|approved|deprecated) !
+  version: string
+  procedure: string
+  implementer_role: string
+  reviewer_role: string
+  applicability_boundary: string
+  verification_notes: string
+  change_rationale: string
+Control
+  type: enum(automated|manual) !
+  title: string !
+  description: string
+  implementation_status: enum(planned|implemented|reviewed|deprecated) !
+  status: enum(draft|proposed|approved|deprecated) !
+  execution_frequency: string
+  last_test_date: date
+  next_review_date: date
+  evidence_ref: string
+  pass_fail_criteria: string
+  execution_method: string
+  evidence_plan: string
+  executor_role: string
+  reviewer_role: string
+  risk_alignment_rationale: string
+EDGES
+(:RegulatoryInstrument)-[:DEFINES {source_ref: string !}]->(:Role)  1 : 0..*
+(:RegulatoryInstrument)-[:EXPRESSES {source_ref: string !}]->(:Requirement)  1 : 0..*
+(:RegulatoryInstrument)-[:SUPERSEDED_BY]->(:RegulatoryInstrument)  0..1 : 0..1
+(:Policy)-[:SUPERSEDED_BY]->(:Policy)  0..1 : 0..1
+(:RegulatoryInstrument)-[:TRANSPOSES]->(:RegulatoryInstrument)  0..* : 1
+(:Role)-[:HAS]->(:Obligation)  1 : 0..*
+(:Requirement)-[:SATISFIED_BY]->(:Obligation)  1..* : 0..*
+(:Obligation)-[:REQUIRES]->(:Capability)  1..* : 0..*
+(:PracticeArea)-[:COVERS]->(:Capability)  1..* : 0..*
+(:PracticeArea)-[:OWNS]->(:Policy)  1..* : 0..*
+(:RiskPath)-[:MITIGATED_BY]->(:Capability)  1..* : 0..*
+(:RiskPath)-[:VERIFIED_BY]->(:Control)  1..* : 0..*
+(:Capability)-[:MERGED_INTO]->(:Capability)  0..1 : 0..*
+(:Capability)-[:GOVERNED_BY]->(:Policy)  0..* : 0..1
+(:Policy)-[:SUPPORTED_BY]->(:Standard)  1 : 1..*
+(:Standard)-[:IMPLEMENTED_BY]->(:Control)  1 : 0..*

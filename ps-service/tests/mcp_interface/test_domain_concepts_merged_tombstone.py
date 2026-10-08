@@ -1,7 +1,10 @@
-"""The `domain_concepts` tool text documents the Capability `merged` tombstone (issue #190).
+"""The domain-concepts document describes the Capability `merged` tombstone (issue #190).
 
-The packaged copy is what a model-driven skill reads, so the `merged` status and
-the `MERGED_INTO` edge must be present in the text the tool returns.
+These are properties of the hand-written document, served verbatim by the
+`psdomain://concepts` resource (the `domain_concepts` tool now renders the slim
+schema from code; its `merged` / `MERGED_INTO` assertions live with the schema
+tests). The tables are still hand-written at this point, so they are read
+through `read_domain_concepts()`.
 """
 
 from __future__ import annotations
@@ -10,16 +13,13 @@ import asyncio
 
 from mcp.types import CallToolResult, TextContent
 
+from ps_service.domain_schema import DOMAIN_SCHEMA, EnumType
 from ps_service.mcp_interface import mcp_server
 
 
 def _domain_text() -> str:
     mcp_server._domain_concepts_path.cache_clear()  # pyright: ignore[reportPrivateUsage]  # reset module-internal cache so the real packaged file is read
-    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
-    assert isinstance(outcome, CallToolResult)
-    texts = [c.text for c in outcome.content if isinstance(c, TextContent)]
-    assert len(texts) == 1
-    return texts[0]
+    return mcp_server.read_domain_concepts()
 
 
 def test_capability_status_enum_includes_merged() -> None:
@@ -54,3 +54,27 @@ def test_obligation_cleanup_merge_is_documented_as_a_delete_not_a_tombstone() ->
 
     assert "A Compliance Officer cleanup merge of two Obligations under the same Role" in text
     assert "deletes the absorbed Obligation" in text
+
+
+def _tool_text() -> str:
+    outcome = asyncio.run(mcp_server.server.call_tool("domain_concepts", {}))
+    assert isinstance(outcome, CallToolResult)
+    return "".join(c.text for c in outcome.content if isinstance(c, TextContent))
+
+
+def test_capability_status_enum_includes_merged_in_schema_and_tool_output() -> None:
+    """AC-BI-020: the tombstone status is a schema fact and visible through the tool."""
+    capability = next(node for node in DOMAIN_SCHEMA.nodes if node.label == "Capability")
+    status = next(prop for prop in capability.properties if prop.name == "status")
+
+    assert isinstance(status.type, EnumType)
+    assert "merged" in status.type.values
+    assert "status: enum(active|deprecated|merged)" in _tool_text()
+
+
+def test_merged_into_edge_in_schema_and_slim_output() -> None:
+    """AC-BI-020: Capability -[MERGED_INTO]-> Capability, 0..1 : 0..*, in schema and tool output."""
+    edges = {edge.key: edge for edge in DOMAIN_SCHEMA.edges}
+
+    assert str(edges[("MERGED_INTO", "Capability", "Capability")].cardinality) == "0..1 : 0..*"
+    assert "(:Capability)-[:MERGED_INTO]->(:Capability)  0..1 : 0..*" in _tool_text()

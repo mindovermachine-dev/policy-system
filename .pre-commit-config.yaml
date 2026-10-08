@@ -46,6 +46,12 @@ repos:
         language: system
         pass_filenames: true
         files: ^(ps-service|ps-cli)/tests/.*\.py$
+      - id: domain-schema-freshness
+        name: domain schema freshness (generated docs and intake schema)
+        entry: uv run python -m ps_service.domain_schema check
+        language: system
+        pass_filenames: false # compares fixed artifacts, not the staged file list
+        files: ^(docs/artifacts/ps-domain-concepts\.md|docs/artifacts/schemas/.*\.json|ps-service/src/ps_service/(domain_schema/.*\.py|mcp_interface/ps-domain-concepts\.md|api/schemas/.*\.json)|ps-cli/src/ps_cli/schemas/.*\.json)$
       - id: pip-audit
         name: pip-audit (locked dependencies)
         entry: bash -c 'uv export --no-emit-workspace --format requirements-txt --no-hashes | uvx pip-audit@2.10.1 --requirement /dev/stdin --progress-spinner off'
