@@ -536,7 +536,9 @@ Alternatively, authored directly in the internal-seed intake document when the g
 |----------|------|----------|-------|
 | `title` | string | Yes | |
 | `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
-| `owner_id` | string | No | |
+| `owner_id` | string | No | Organizational owner; not writable through the content tools. |
+| `owner_subject` | string | No | Authz owner (OIDC subject/issuer); set by the system, never model-writable. |
+| `owner_issuer` | string | No | Authz owner (OIDC subject/issuer); set by the system, never model-writable. |
 | `status` | enum: `draft` \| `proposed` \| `approved` \| `deprecated` | Yes | |
 | `version` | string | No | |
 | `scope_in` | string | No | What this Policy's commitment covers. |
@@ -594,7 +596,7 @@ Alternatively, authored directly in the internal-seed intake document alongside 
 | `description` | string | No | Short human-readable summary — not a catch-all; the structured fields below hold the substantive content. |
 | `implementation_status` | enum: `draft` \| `implemented` \| `reviewed` \| `deprecated` | Yes | |
 | `status` | enum: `draft` \| `proposed` \| `approved` \| `deprecated` | Yes | Governance status, independent of implementation_status; cascades from the parent Policy (see Policy Lifecycle, issue #134). |
-| `version` | string | No | |
+| `version` | string | No | Not model-writable; set at creation. |
 | `procedure` | string | No | Steps explicit enough that two implementers would execute them the same way. |
 | `implementer_role` | string | No | Who implements. Standard has no `owner_id`; this is the only place this lives. |
 | `reviewer_role` | string | No | Who reviews/verifies. |

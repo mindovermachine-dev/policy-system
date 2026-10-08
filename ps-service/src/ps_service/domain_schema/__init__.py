@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ps_service.domain_schema.definition import DOMAIN_SCHEMA
+from ps_service.domain_schema.derivation import enum_values, patchable_fields, property_named
 from ps_service.domain_schema.errors import DomainSchemaError, SchemaProfileError
 from ps_service.domain_schema.model import (
     Cardinality,
@@ -46,5 +47,8 @@ __all__ = [
     "SchemaProfileError",
     "StringType",
     "apply_profile",
+    "enum_values",
+    "patchable_fields",
+    "property_named",
     "render_slim_schema",
 ]

@@ -170,13 +170,33 @@ _CAPABILITY = Node(
 _POLICY = Node(
     label="Policy",
     properties=(
-        Property("title", _STRING, _REQUIRED),
+        Property("title", _STRING, _REQUIRED, is_identity_bearing=True),
         Property("description", _STRING, _OPTIONAL, _SHORT_SUMMARY_NOTE),
-        Property("owner_id", _STRING, _OPTIONAL),
+        Property(
+            "owner_id",
+            _STRING,
+            _OPTIONAL,
+            "Organizational owner; not writable through the content tools.",
+            is_identity_bearing=True,
+        ),
+        Property(
+            "owner_subject",
+            _STRING,
+            _OPTIONAL,
+            "Authz owner (OIDC subject/issuer); set by the system, never model-writable.",
+            is_identity_bearing=True,
+        ),
+        Property(
+            "owner_issuer",
+            _STRING,
+            _OPTIONAL,
+            "Authz owner (OIDC subject/issuer); set by the system, never model-writable.",
+            is_identity_bearing=True,
+        ),
         # `proposed` is a lifecycle status (policy_lifecycle/rules.py); pinned by
         # tests/domain_schema/test_policy_status_matches_lifecycle.py.
-        Property("status", EnumType(_GOVERNANCE_STATUSES), _REQUIRED),
-        Property("version", _STRING, _OPTIONAL),
+        Property("status", EnumType(_GOVERNANCE_STATUSES), _REQUIRED, is_lifecycle_managed=True),
+        Property("version", _STRING, _OPTIONAL, is_lifecycle_managed=True),
         Property("scope_in", _STRING, _OPTIONAL, "What this Policy's commitment covers."),
         Property(
             "scope_out",
@@ -218,15 +238,27 @@ _POLICY = Node(
 _STANDARD = Node(
     label="Standard",
     properties=(
-        Property("title", _STRING, _REQUIRED),
+        Property("title", _STRING, _REQUIRED, is_identity_bearing=True),
         Property("description", _STRING, _OPTIONAL, _SHORT_SUMMARY_NOTE),
         Property(
             "implementation_status",
             EnumType(("draft", "implemented", "reviewed", "deprecated")),
             _REQUIRED,
         ),
-        Property("status", EnumType(_GOVERNANCE_STATUSES), _REQUIRED, _GOVERNANCE_STATUS_NOTE),
-        Property("version", _STRING, _OPTIONAL),
+        Property(
+            "status",
+            EnumType(_GOVERNANCE_STATUSES),
+            _REQUIRED,
+            _GOVERNANCE_STATUS_NOTE,
+            is_lifecycle_managed=True,
+        ),
+        Property(
+            "version",
+            _STRING,
+            _OPTIONAL,
+            "Not model-writable; set at creation.",
+            is_lifecycle_managed=True,
+        ),
         Property(
             "procedure",
             _STRING,
@@ -274,14 +306,20 @@ _CONTROL = Node(
     label="Control",
     properties=(
         Property("type", EnumType(("automated", "manual")), _REQUIRED),
-        Property("title", _STRING, _REQUIRED),
+        Property("title", _STRING, _REQUIRED, is_identity_bearing=True),
         Property("description", _STRING, _OPTIONAL, _SHORT_SUMMARY_NOTE),
         Property(
             "implementation_status",
             EnumType(("planned", "implemented", "reviewed", "deprecated")),
             _REQUIRED,
         ),
-        Property("status", EnumType(_GOVERNANCE_STATUSES), _REQUIRED, _GOVERNANCE_STATUS_NOTE),
+        Property(
+            "status",
+            EnumType(_GOVERNANCE_STATUSES),
+            _REQUIRED,
+            _GOVERNANCE_STATUS_NOTE,
+            is_lifecycle_managed=True,
+        ),
         Property("execution_frequency", _STRING, _OPTIONAL),
         Property("last_test_date", DateType(), _OPTIONAL),
         Property("next_review_date", DateType(), _OPTIONAL),

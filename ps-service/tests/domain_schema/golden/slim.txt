@@ -47,6 +47,8 @@ Policy
   title: string !
   description: string
   owner_id: string
+  owner_subject: string
+  owner_issuer: string
   status: enum(draft|proposed|approved|deprecated) !
   version: string
   scope_in: string

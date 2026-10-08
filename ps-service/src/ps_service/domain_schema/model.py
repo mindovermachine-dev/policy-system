@@ -8,7 +8,7 @@ presence) and, in later slices, edges. Everything is immutable
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ps_service.domain_schema.errors import DomainSchemaError
@@ -111,12 +111,19 @@ def _check_unique(kind: str, owner: str, names: tuple[str, ...]) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Property:
-    """One named property of a node, with its type and presence."""
+    """One named property of a node, with its type, presence and write-ownership flags.
+
+    `is_identity_bearing` marks values that name or own the node (title, owner fields); the
+    system sets them, content tools never patch them. `is_lifecycle_managed` marks values the
+    governance lifecycle sets (status, version). A property with neither flag is patchable.
+    """
 
     name: str
     type: PropertyType
     presence: Presence
     note: str = ""
+    is_identity_bearing: bool = field(default=False, kw_only=True)
+    is_lifecycle_managed: bool = field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate the note."""

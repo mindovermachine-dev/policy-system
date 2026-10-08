@@ -39,6 +39,7 @@ from ps_service.authz.models import AccessRole
 from ps_service.authz.service import require_role, resolve_active_roles
 from ps_service.domain_mapper.identity import control_id, standard_id
 from ps_service.domain_mapper.identity import policy_id as compute_policy_id
+from ps_service.domain_schema import enum_values, patchable_fields
 from ps_service.policy_lifecycle import graph_writer
 from ps_service.policy_lifecycle.errors import (
     PolicyCapabilityAlreadyGovernedError,
@@ -106,53 +107,29 @@ __all__ = [
 _DRAFT_VISIBILITY_OVERRIDE_ROLES = frozenset({AccessRole.SYSTEM_OWNER, AccessRole.SYSTEM_ADMIN})
 
 # Issue #136, Slice 1, §1.6: `update-policy-draft`'s patchable-field allow-list,
-# from `ps-domain-concepts.md`'s Policy property table. Deliberately excludes
-# `title` (identity-bearing -- `policy_id` is content-derived from it),
-# `status` (lifecycle-managed only, via #134's propose/approve/reject/revert),
-# and `owner_subject`/`owner_issuer`/`version` (identity/lifecycle-managed).
-# Declared once here and imported into `mcp_interface.mcp_server` (its own
-# `_parse_patch_fields` call site) to avoid drift between the two layers.
-_POLICY_PATCHABLE_FIELDS = frozenset(
-    {
-        "description",
-        "scope_in",
-        "scope_out",
-        "normative_commitments",
-        "review_cadence",
-        "exception_pathway",
-        "measurable_outcomes",
-        "capability_grouping_rationale",
-    }
-)
+# derived from the domain schema's property flags (issue #199): every Policy
+# property not flagged identity-bearing (`title`, `owner_id`, `owner_subject`,
+# `owner_issuer`) or lifecycle-managed (`status`, `version`). Declared once here
+# and imported into `mcp_interface.mcp_server` (its own `_parse_patch_fields`
+# call site) to avoid drift between the two layers.
+_POLICY_PATCHABLE_FIELDS = patchable_fields("Policy")
 
 # Issue #136, Slice 2, §1.6: `add-standard-to-draft`'s (and the future
-# `update-standard-draft`'s) patchable-field allow-list, from
-# `ps-domain-concepts.md`'s Standard property table. Deliberately excludes
-# `title` (identity-bearing -- `standard_id` is content-derived from it) and
-# `status` (governance status -- lifecycle-managed only, never set through
-# this issue's content tools). `implementation_status` IS included here
-# (unlike Policy's `version`/`status`) -- it is Standard's own workflow
-# field, distinct from governance `status`, and AC-BI-007 requires it be
-# independently settable.
-_STANDARD_PATCHABLE_FIELDS = frozenset(
-    {
-        "description",
-        "implementation_status",
-        "procedure",
-        "implementer_role",
-        "reviewer_role",
-        "applicability_boundary",
-        "verification_notes",
-        "change_rationale",
-    }
-)
-_STANDARD_IMPLEMENTATION_STATUS_VALUES = ("draft", "implemented", "reviewed", "deprecated")
+# `update-standard-draft`'s) patchable-field allow-list, derived from the
+# domain schema's property flags (issue #199). Excludes `title`
+# (identity-bearing -- `standard_id` is content-derived from it), and `status`
+# and `version` (lifecycle-managed, never set through the content tools).
+# `implementation_status` IS included (unlike Policy's `version`/`status`) --
+# it is Standard's own workflow field, distinct from governance `status`, and
+# AC-BI-007 requires it be independently settable.
+_STANDARD_PATCHABLE_FIELDS = patchable_fields("Standard")
+_STANDARD_IMPLEMENTATION_STATUS_VALUES = enum_values("Standard", "implementation_status")
 
 # Issue #136, Slice 4, §1.6: `add-control-to-draft`'s (and the future
-# `update-control-draft`'s) patchable-field allow-list, from
-# `ps-domain-concepts.md`'s Control property table. Deliberately excludes
-# `title` (identity-bearing -- `control_id` is content-derived from it) and
-# `status` (governance status -- lifecycle-managed only). Unlike
+# `update-control-draft`'s) patchable-field allow-list, derived from the
+# domain schema's property flags (issue #199). Excludes `title`
+# (identity-bearing -- `control_id` is content-derived from it) and `status`
+# (governance status -- lifecycle-managed only). Unlike
 # `_STANDARD_PATCHABLE_FIELDS`, this includes `"type"` -- CHANGES.md finding
 # #8: `add-control-to-draft` itself excludes `"type"` from ITS OWN allow-list
 # at the MCP boundary (the top-level `control_type` param is the only way to
@@ -161,24 +138,8 @@ _STANDARD_IMPLEMENTATION_STATUS_VALUES = ("draft", "implemented", "reviewed", "d
 # constant is the full set; `mcp_interface.mcp_server`'s own
 # `_ADD_CONTROL_TO_DRAFT_PATCHABLE_FIELDS` narrows it by one key for that
 # tool alone.
-_CONTROL_PATCHABLE_FIELDS = frozenset(
-    {
-        "description",
-        "implementation_status",
-        "type",
-        "execution_frequency",
-        "last_test_date",
-        "next_review_date",
-        "evidence_ref",
-        "pass_fail_criteria",
-        "execution_method",
-        "evidence_plan",
-        "executor_role",
-        "reviewer_role",
-        "risk_alignment_rationale",
-    }
-)
-_CONTROL_IMPLEMENTATION_STATUS_VALUES = ("planned", "implemented", "reviewed", "deprecated")
+_CONTROL_PATCHABLE_FIELDS = patchable_fields("Control")
+_CONTROL_IMPLEMENTATION_STATUS_VALUES = enum_values("Control", "implementation_status")
 
 _CREATE_DRAFT_ACTION = "policy.create_draft"
 _PROPOSE_ACTION = "policy.propose"

@@ -104,6 +104,8 @@ INTAKE_PROFILE = Profile(
         Omit("Control", "status"),
         Omit("Capability", "status"),
         Narrow("Policy", "status", EnumType(("draft", "approved", "deprecated"))),
+        Omit("Policy", "owner_subject"),
+        Omit("Policy", "owner_issuer"),
         Narrow("Capability", "type", StringType(min_length=1)),
         *(
             operation
