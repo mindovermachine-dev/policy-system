@@ -6,7 +6,7 @@ description: >-
   testable AC from multiple perspectives.
 metadata:
   author: platform
-  version: "4.1.0"
+  version: "4.2.0"
   tags: [gh-issue, backlog-item, interactive]
   copyright: "© 2026 Cartman ApS. All rights reserved."
 ---
@@ -103,7 +103,14 @@ If the user is unsure about out-of-scope items, probe:
 - "Are there related features you're deferring?"
 - "What would make this item too large?"
 
+Then ask: **"What existing code, tests, config, docs or feature flags does this
+replace, duplicate or make obsolete?"** Name concrete paths or symbols where known.
+If the work is purely additive, record `Superseded: none` with a one-line reason.
+
 **Required output:** In scope list + Out of scope list (may be empty if truly standalone)
+
+- `Superseded:` list (or `none` with reason). Each superseded item becomes a
+  Deliverable (removal is in scope unless explicitly deferred under Out of scope).
 
 ---
 
@@ -143,16 +150,23 @@ Derive candidate AC from each perspective. Not all perspectives apply to every i
 | **Technical**    | What code-level invariants must hold (error handling, logging, idempotency)?          |
 | **Compliance**   | What audit, retention, or regulatory requirements apply?                              |
 | **Security**     | What authentication, authorization, input validation, or data protection is required? |
+| **Cleanup**      | What is left behind once this lands (old code, tests, config, docs, flags)?           |
 
 For each perspective, generate WHEN/THEN criteria:
 
 - **WHEN** [user action or system event] **THEN** [verifiable outcome]
 
+The **Cleanup** perspective is derived from the `Superseded:` list in Phase 1 Step 5.
+Each superseded item gets a verifiable removal AC, e.g. **WHEN** the change is merged
+**THEN** `<old module/test>` no longer exists and a search for `<symbol>` returns no
+matches. Replacement behaviour must be covered by tests that remain after the old
+tests are deleted. Mark Cleanup N/A only when `Superseded: none`.
+
 Assign sequential IDs: `AC-BI-001`, `AC-BI-002`, etc.
 
 **Required output:**
 
-- `Perspective coverage` list: Business, Architecture, Technical, Compliance, Security
+- `Perspective coverage` list: Business, Architecture, Technical, Compliance, Security, Cleanup
 - `Candidate AC table` with AC-ID, Criterion, Perspective
 
 **Gate:**
@@ -255,6 +269,9 @@ Remove AC that:
 For borderline cases, ask: **"What implementation mistake would this AC catch?"**
 If no answer → eliminate.
 
+Never eliminate Cleanup AC as "tautological": the mistake they catch is orphaned
+code, tests or config left behind after a replacement.
+
 **Required output:**
 
 - `Low-value elimination log:` removed AC IDs + mistake-caught rationale for retained borderline AC
@@ -295,12 +312,15 @@ Deliverables captured in Phase 1 Step 5.
 
 **Ask:** "Are these AC complete with respect to the objective and every deliverable?"
 
-Review each aspect of the stated objective and verify at least one AC tests it:
+Review each aspect of the stated objective, and each `Superseded:` item from Phase 1
+Step 5, and verify at least one AC covers it (a superseded item may instead be
+explicitly kept, with a reason recorded in Discussion):
 
 | Objective Aspect | Covered By AC | Gap? |
 | ---------------- | ------------- | ---- |
 | [aspect 1]       | AC-BI-###     | —    |
 | [aspect 2]       | —             | Yes  |
+| [superseded X]   | AC-BI-###     | —    |
 
 **If gaps exist:**
 
@@ -340,6 +360,7 @@ Group AC in logical implementation sequence and renumber IDs accordingly.
 | 6        | Error handling          | Graceful degradation                           |
 | 7        | Audit/Logging           | Observability layer                            |
 | 8        | Edge cases              | Completeness                                   |
+| 9        | Cleanup                 | Remove superseded code/tests once replaced     |
 
 Category names may be adapted to the domain (e.g. "Transport", "Deployment
 independence") as long as priority order is preserved and the rationale is clear.
@@ -582,3 +603,5 @@ Execution should be silent unless:
    ten types from Phase 3 Step 2; lint it with `scripts/release/lint-commit-header.sh`
    before `gh issue create`. A non-conforming title fails at `gh tt deliver`, not at
    creation.
+10. **Name what is removed** — refactor and replacement issues must list superseded
+    code, tests, config and docs, and carry a removal AC for each (Cleanup perspective)
