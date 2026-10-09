@@ -22,8 +22,17 @@
    - [Policy](#policy)
    - [Standard](#standard)
    - [Control](#control)
-6. [Directives and National Transposition](#directives-and-national-transposition)
-7. [Worked Examples](#worked-examples)
+6. [Graph Write Gateway and Mutation Log](#graph-write-gateway-and-mutation-log)
+   - [Mutation log](#mutation-log)
+   - [Log entry](#log-entry)
+   - [Transaction group](#transaction-group)
+   - [Per-graph sequence](#per-graph-sequence)
+   - [Applied marker](#applied-marker)
+   - [Digest checkpoint](#digest-checkpoint)
+   - [Canonical digest](#canonical-digest)
+   - [Graph Write Gateway](#graph-write-gateway)
+7. [Directives and National Transposition](#directives-and-national-transposition)
+8. [Worked Examples](#worked-examples)
 
 ---
 
@@ -675,6 +684,46 @@ These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md
 - `VERIFIED_BY` (inbound): Enables completeness checks that each active RiskPath has concrete verification evidence.
 
 ---
+
+## Graph Write Gateway and Mutation Log
+
+Target design (not yet implemented; delivered by #205-#214): the entities below are defined before their implementation.
+
+The entities in this section are **not graph nodes**. They are not part of the compliance-graph vocabulary, are not defined in `ps_service.domain_schema`, and so have no generated Properties or Relationships tables. They describe how every write to the compliance graph is recorded, so that the graph can be rebuilt and checked from that record.
+
+**Audit and the mutation log.** Audit records who invoked which domain command and when; the mutation log records the resolved primitive graph mutations those commands produced. A log entry carries the identifier of the command that caused it, so each mutation can be traced to its Audit event.
+
+### Mutation log
+
+The authoritative, append-only record of every change to the content of the compliance graphs. The graph held in FalkorDB is a projection of the log: it can be discarded and rebuilt by replaying the log from the beginning. Entries are only ever added; an entry is never changed or removed.
+
+### Log entry
+
+One resolved primitive graph mutation: the graph it applies to, the node label or relationship type it names, the identity of the node or relationship, and the content written. A log entry also carries the identifier of the domain command that caused it.
+
+### Transaction group
+
+An ordered set of log entries that are committed together as one unit. Either the whole group is recorded in the mutation log or none of it is. A group is the unit a writer submits to the Graph Write Gateway.
+
+### Per-graph sequence
+
+The gap-free ordering of log entries within one graph. Each graph has its own sequence; positions in one graph's sequence say nothing about another graph's.
+
+### Applied marker
+
+For one graph, the position in its per-graph sequence up to which the graph reflects the mutation log. A graph is caught up when its applied marker equals the last position recorded for it.
+
+### Digest checkpoint
+
+A recorded [canonical digest](#canonical-digest) of one graph at a given position in that graph's sequence. Comparing a checkpoint with the digest of a graph rebuilt up to the same position shows whether replay reproduced the same content.
+
+### Canonical digest
+
+A fingerprint of one graph's content (its nodes, relationships and their properties) that is independent of storage order and of storage-internal identifiers, so the live graph and a graph rebuilt by replaying the mutation log give the same digest exactly when their content is the same. A Digest checkpoint records a canonical digest at a given position in a graph's sequence.
+
+### Graph Write Gateway
+
+The actor, not a graph node, through which writers submit graph writes. It records each transaction group in the mutation log before the group is applied to the graph, applies it to FalkorDB, replays the log to rebuild a graph, and verifies a rebuilt graph against a Digest checkpoint. It accepts a write only if every node label and relationship type the write names is permitted by the label allow-list; anything else is rejected before anything is logged. If the log cannot accept a group, nothing is logged and nothing is applied.
 
 ## Directives and National Transposition
 

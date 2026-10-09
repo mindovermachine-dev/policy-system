@@ -37,9 +37,8 @@
 **System Purpose & Scope**
 The purpose of the Policy System is to provide a backend service that ingests, stores, and monitors EU regulations in a compliance knowledge graph, unifying a select set of EU regulations with a company's internal business regulations and policies. The service will expose a REST API for lifecycle/config and authoring clients (PS-Cli, Policy Editor), and an MCP interface exposing a Cypher query mechanism for PS Question Skill to query the knowledge graph.
 
-
-
 **Key Capabilities**
+
 - Ingest EU Regulations via Cellar/ELI
 - Map raw EU regulation into the PS Conceptual Model (`ps-domain-concepts.md`) knowledge graph
 - Monitor ingested EU regulations for amendments and trigger re-ingestion of affected content
@@ -47,11 +46,13 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 - Cypher Query interface
 
 **Consuming clients**
+
 - PS-Cli a distributed command-line client (installed independently of PS Service, like `gh`/`az`) that drives PS Service's REST API — checking health and readiness, selecting EU regulations for Cellar/ELI-sourced ingestion, and ingesting internal business regulations/policies (JSON fixtures today; a PDF ingestion pipeline is deferred, not yet designed). Individual operators authenticate via OIDC before PS-Cli can reach a non-local PS Service instance. Also provides `ps-cli-mcp-bridge`, a separate entry point (never invoked directly by an operator) that an MCP host spawns as a local stdio server, so PS Question Skill can reach PS Service's MCP interface using PS-Cli's already-stored per-user OIDC credentials — needed because interactive OAuth against an IdP that lacks Dynamic Client Registration or enforces the `resource` parameter in conflict with the MCP authorization spec cannot be performed by an MCP host directly (spike #65)
 - PS Question Skill a skill that allows agents in VSCode or Claude Desktop ask questions, send Cypher queries to the PS Service and articulate answers to the users question. Reaches PS Service's MCP interface directly (any IdP supporting Dynamic Client Registration) or via PS-Cli's `ps-cli-mcp-bridge` (IdPs that do not)
 - Policy Editor a client for authoring a Policy/Standard/Control from scratch and linking it to an existing Capability (under exploration — client not yet designed)
 
 **Deployment Architecture**
+
 - The PS Service is deployed as a Container and can be run in Podman, Kubernetes etc.
 - The PS Service depends on FalkorDB which should be deployed in a separate container. This allows for patching FalkorDB without rebuilding and deploying the PS Service.
 - PS Service is single-tenant
@@ -60,6 +61,7 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 - PS-Cli runs on the same machine as both containers during Local Test; in Production it is a separately-installed client reaching PS Service over the network
 
 **Regulatory Compliance (if applicable)**
+
 - EU GDPR
 - EU NIS2
 
@@ -70,17 +72,20 @@ The purpose of the Policy System is to provide a backend service that ingests, s
 ### Diagram Legend & Conventions
 
 **Shape Conventions:**
+
 - **Hexagon shapes:** External systems and actors — consuming clients and external platform dependencies outside the Policy System boundary
 - **Rectangle shapes:** Internal containers within the Policy System
 - **Cylinder shapes:** Data stores
 
 **Color Coding:**
+
 - **Yellow (`#FFD54F`) fill:** External platform/data service dependency (e.g., Cellar/ELI)
 - **Blue (`#90CAF9`) fill:** External consuming client application (e.g., PS-Cli, PS Question Skill)
 - **Teal (`#4DB6AC`) fill:** Core Policy System service (PS Service)
 - **Green (`#81C784`) fill:** Internal data store container (e.g., FalkorDB)
 
 **Architectural Significance:**
+
 - External system interactions (Cellar/ELI) represent integration boundaries with third-party data platforms outside the team's control
 - Consuming clients (PS-Cli, PS Question Skill) interact with PS Service exclusively through its REST/Cypher API — no direct data-store access
 - FalkorDB is deployed as a separate container from PS Service specifically so it can be patched independently without rebuilding or redeploying PS Service
@@ -136,8 +141,6 @@ graph TB
 | PS Question Skill | Sends Cypher queries to PS Service's MCP Interface and receives results, used to articulate answers to user questions | Policy System | External client application (Claude Desktop / VS Code skill) | Enable users in their agentic coding/chat environment to ask natural-language questions about regulations and policies, answered against the compliance knowledge graph |
 | Policy Editor | Enables a user to author a Policy/Standard/Control from scratch and link it via an edge to an existing Capability — **client and interaction design are under exploration, not yet specified** | Policy System | External client application (not yet designed) | Enable manual authoring of governance-layer content as an alternative to PDF-based ingestion |
 
-
-
 ---
 
 ## C4 Container Level
@@ -163,8 +166,8 @@ graph TB
         PSPostgres[(PS Postgres: ps_state, ps_signing<br/>Always-on, deployed as a separate container)]
         Authentik[Authentik<br/>Bundled identity provider + its own Postgres<br/>Production/opt-in]
 
-        PSService -->|"Cypher: read/write knowledge graph"| FalkorDB
-        PSService -->|"read/write ps_state, ps_signing"| PSPostgres
+        PSService -->|"Cypher: read knowledge graph; writes via Graph Write Gateway (target)"| FalkorDB
+        PSService -->|"read/write ps_state (incl. mutation log, target), ps_signing"| PSPostgres
         Authentik -->|"validates bearer tokens issued by"| PSService
         PSService -->|"Invitations: create invitation"| Authentik
     end
@@ -197,11 +200,9 @@ graph TB
 | Container/Service | Description | Key Responsibilities | Domain path |
 |-----|---|---|---|
 | PS Service | Backend REST API service, deployed as a single-tenant container (Podman/Kubernetes) | • Expose REST API for consuming clients (PS-Cli, Policy Editor) and an MCP interface for PS Question Skill<br/>• Ingest EU regulations via Cellar/ELI<br/>• Map raw EU regulation text into the PS Conceptual Model knowledge graph<br/>• Ingest business regulations/policies — the entire regulatory spine (Role through Control) is authored directly in the intake document and minted (canonical id only) by the internal-seed Ingestion Adapter, converging on shared Capability/Policy nodes via Company Merge the same way external regulations do<br/>• Expose a Cypher query interface to consuming services<br/>• Persist and query the compliance knowledge graph via FalkorDB<br/>• Access an LLM Provider via LiteLLM for content curation<br/>• Restore pre-curated instrument graphs (baseline + native) from a `curated-content` git folder into a target deployment, requiring no LLM provider or extraction run<br/>• Fetch the curated catalog listing and, on demand, one instrument's artifact at runtime from a configurable HTTP(S) source (default: the public Policy System GitHub repo), with a FalkorDB-persisted runtime override settable/resettable/readable via MCP, no restart required | ps.service |
-| FalkorDB | Graph database storing the compliance knowledge graph, deployed as a separate container from PS Service to allow independent patching without rebuilding/redeploying PS Service | • Store the regulatory and organizational layers of the compliance knowledge graph<br/>• Execute Cypher queries issued by PS Service | ps.falkordb |
-| PS Postgres | Relational database server holding PS Service's own state, deployed as a separate container; always deployed, the same "always-on" posture as FalkorDB (unlike Authentik, which is opt-in) | • Host two databases on one server: `ps_state` (audit, authz, runtime config) and `ps_signing` (Passkey Signing enrolled credentials/pending approvals)<br/>• Serve per-call connections to PS Service's Persistence component<br/>• Apply each component's pending SQL migrations at startup | ps.postgres *(no prior convention found in the Container Architecture doc or code; chosen for consistency with `ps.falkordb`)* |
+| FalkorDB | Graph database storing the compliance knowledge graph, deployed as a separate container from PS Service to allow independent patching without rebuilding/redeploying PS Service | • Store the regulatory and organizational layers of the compliance knowledge graph; once the Graph Write Gateway lands this is a projection rebuilt from the mutation log in PS Postgres (target)<br/>• Execute Cypher queries issued by PS Service | ps.falkordb |
+| PS Postgres | Relational database server holding PS Service's own state, deployed as a separate container; always deployed, the same "always-on" posture as FalkorDB (unlike Authentik, which is opt-in) | • Host two databases on one server: `ps_state` (audit, authz, runtime config, and the graph mutation log, the authoritative record of graph content (target)) and `ps_signing` (Passkey Signing enrolled credentials/pending approvals)<br/>• Serve per-call connections to PS Service's Persistence component<br/>• Apply each component's pending SQL migrations at startup | ps.postgres *(no prior convention found in the Container Architecture doc or code; chosen for consistency with `ps.falkordb`)* |
 | Authentik | Bundled third-party identity provider (with its own dedicated Postgres, per the Helm chart's `authentik` dependency), production/opt-in rather than always-on — off by default in local test, enabled for production/customer-tenant deployments | • Issue OIDC bearer tokens that PS Service's Authentication component validates<br/>• Serve PS Service's Invitations component's calls to its invitation-stage API for invite-only account signup<br/>• Optionally federate to an upstream customer IdP | — |
-
-
 
 ### User Role Mapping
 
@@ -249,10 +250,13 @@ graph TB
 | Dependency Health | Process-wide registry of whether FalkorDB, LLM Interface, and Cellar/ELI were reachable on their most recent real call | Fed by those components' own exception handling on every real call; read by Process Harness to answer `/ready`, self-healing as soon as a subsequent call succeeds | ps.service.dependencyhealth |
 | Passkey Signing | Owns a WebAuthn relying party for transaction-signing, independent of the OIDC login IdP | Store enrolled signing credentials and pending-approval records in the separate `ps_signing` database on the PS Postgres server; construct/verify dynamically-bound challenges; serve companion-browser enrollment/signing ceremony pages | ps.service.passkeysigning |
 | Audit | Shared, insert-only audit trail for every PS Service component that needs to record who did what to what, and when | Validate an action's `details` payload against its registered typed model before insert; persist one `audit_events` row per audited action/denial in the PS state Postgres, in the same transaction as the state change when the caller supplies one; serve filtered, paginated, newest-first reads, optionally narrowed by an allow-listed `details` key (`celex`, `regulatory_instrument_id`, `instrument_id`) so "who ingested or restored X" is answerable; record, for ingestion, restore, near-miss resolution, user invitation and `check_regulations` re-ingests, a fail-closed opening row before the effect and a best-effort terminal row (issue #195); expose no update/delete method | ps.service.audit |
+| Graph Write Gateway | The single path through which PS Service components write to the compliance graphs, recording every write in an append-only mutation log before applying it | Accept graph writes from Ingestion, Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup and Regulatory Change Monitor as transaction groups; record each group in the mutation log (in the PS state Postgres) before it is applied; apply it to FalkorDB, which is a rebuildable projection of the log; replay the log and verify a rebuilt graph by canonical digest; reject node labels and relationship types outside the label allow-list; fail closed when the log cannot accept a group; report a group as "committed, apply pending" (not an error) when FalkorDB is unavailable after the commit | ps.service.graphgateway |
 | Persistence | Shared internal component owning PS Service's state Postgres access, so other components need not each carry their own connection or migration machinery | Open per-call connections to the PS state Postgres from `PS_STATE_POSTGRES_*` and fail closed when it is unconfigured; probe its connectivity; apply each component's pending SQL migrations at startup, tracked per component | ps.service.persistence |
 | Runtime Config | Shared internal component owning PS Service's runtime-mutable configuration values, so a second such value needs a registry entry rather than a new storage pattern | Declare each key in a typed registry (name, value type, validator); reject an unregistered key or invalid value before any write; persist values in the `runtime_config` table of the PS state Postgres; write one `audit_events` row per set/reset in the same transaction through the Audit component's public interface; fail closed when the store cannot be read | ps.service.runtimeconfig |
 | Ingestion Runs | Tracks catalog ingestion runs submitted asynchronously over MCP, so a caller can poll a long run instead of blocking on it | Persist each submitted run's status and terminal result/error in the ingestion_runs table of the PS state Postgres; run each submission on a background thread under a configured cap on concurrently in-flight runs; record submission and completion through Audit | ps.service.ingestionruns |
 | Process Harness | The process composition root that starts PS Service and exposes its liveness/readiness surface | Expose `/health` (liveness) and `/ready` (readiness); probe FalkorDB, LLM Interface, and Cellar/ELI once at startup; confirm every ingestion-required configuration field resolved; own `load_config()`/`uvicorn.run()` | ps.service.main |
+
+*Graph Write Gateway rows describe the target design (not yet implemented; delivered by #205-#214).*
 
 ---
 
@@ -312,6 +316,7 @@ This section maps non-functional requirements (from URS) to architectural decisi
 | [NFR-PERF-001] | [e.g., P95 latency < 200ms] | [e.g., Redis caching layer for read-heavy endpoints] | [e.g., API, Cache] | [Why this decision satisfies the NFR] |
 
 **Guidelines:**
+
 - Every NFR from the URS should appear here — if an NFR has no architectural decision, document why (e.g., "deferred to component-level implementation")
 - Multiple NFRs may share an architectural decision
 - Decisions here drive Container Architecture strategies (CA documents the component-level details)
@@ -340,6 +345,7 @@ This section maps non-functional requirements (from URS) to architectural decisi
 | Technical Debt | No schema/data migration strategy exists for the graph itself — RegulatoryInstrument instances version explicitly, but nothing addresses what happens to already-minted nodes when `ps-domain-concepts.md`'s own shape changes (a property renamed or added) | Deferred for the general case (a property rename, or any change that forces re-minting existing nodes). The `instrument_type` addition for Directive modelling is the first live instance and is handled as a purely additive backfill — no node re-identified, existing baselines untouched |
 
 **Common Risk Categories:**
+
 - **Single Points of Failure:** Components or systems whose failure would cause system-wide issues
 - **Scalability Bottlenecks:** Areas that may not scale under increased load
 - **Security Considerations:** Authentication, authorization, data protection, and compliance concerns
@@ -351,4 +357,3 @@ This section maps non-functional requirements (from URS) to architectural decisi
 **End of Document**
 
 ---
-

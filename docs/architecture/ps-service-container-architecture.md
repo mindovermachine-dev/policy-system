@@ -40,6 +40,7 @@
    - [Dependency Health](#dependency-health)
    - [Passkey Signing](#passkey-signing)
    - [Audit](#audit)
+   - [Graph Write Gateway](#graph-write-gateway)
    - [Persistence](#persistence)
    - [Runtime Config](#runtime-config)
    - [Ingestion Runs](#ingestion-runs)
@@ -119,6 +120,7 @@ graph TB
             PolicyLifecycle[Policy Lifecycle]
             GraphCleanup[Graph Cleanup]
             Audit[Audit]
+            GraphWriteGateway[Graph Write Gateway]
             Persistence[Persistence]
             RuntimeConfig[Runtime Config]
             IngestionRuns[Ingestion Runs]
@@ -138,17 +140,19 @@ graph TB
     Cellar -->|"regulation text, structure, ELI citations"| Ingestion
     ChangeMonitor -->|"poll for amendments"| Cellar
     ChangeMonitor -->|"trigger re-ingestion"| Ingestion
+    ChangeMonitor -->|"submit succession and re-ingest marker writes"| GraphWriteGateway
 
-    Ingestion -->|"write native graph"| FalkorDB
+    %% Graph Write Gateway and its edges: target design (not yet implemented; delivered by #205-#214)
+    Ingestion -->|"submit native graph writes"| GraphWriteGateway
     DomainMapper -->|"read native graph"| FalkorDB
-    DomainMapper -->|"write per-regulation baseline graph"| FalkorDB
+    DomainMapper -->|"submit per-regulation baseline graph writes"| GraphWriteGateway
     CompanyMerge -->|"read per-regulation baseline graph"| FalkorDB
-    CompanyMerge -->|"write company graph"| FalkorDB
-    CompanyMerge -->|"backfill incoming Capability embeddings onto {short}_baseline"| FalkorDB
+    CompanyMerge -->|"submit company graph writes"| GraphWriteGateway
+    CompanyMerge -->|"submit Capability embedding backfills ({short}_baseline)"| GraphWriteGateway
 
     Export -->|"read {short}_baseline / {short}_native"| FalkorDB
-    Export -->|"backfill Capability/Policy embeddings onto {short}_baseline"| FalkorDB
-    Restore -->|"write {short}_native / {short}_baseline / policy_system"| FalkorDB
+    Export -->|"submit Capability/Policy embedding backfills ({short}_baseline)"| GraphWriteGateway
+    Restore -->|"submit {short}_native / {short}_baseline / policy_system writes"| GraphWriteGateway
 
     CuratedContentSource -->|"catalog.json; manifest/baseline/native.json"| CuratedSource
     CuratedSource -->|"get/set/reset override"| RuntimeConfig
@@ -175,12 +179,14 @@ graph TB
     Authorization -->|"log entries"| Logging
 
     MCPInterface -->|"create/propose/approve/reject/revert/edit policy drafts"| PolicyLifecycle
-    PolicyLifecycle -->|"read/write Policy/Standard/Control tree (policy_system)"| FalkorDB
+    PolicyLifecycle -->|"read Policy/Standard/Control tree (policy_system)"| FalkorDB
+    PolicyLifecycle -->|"submit Policy/Standard/Control tree writes"| GraphWriteGateway
     PolicyLifecycle -->|"record policy.* audit events"| Audit
     PolicyLifecycle -->|"require_role / resolve_active_roles"| Authorization
 
     MCPInterface -->|"discover/preview/approve/check duplicate-node cleanup (ComplianceOfficer)"| GraphCleanup
-    GraphCleanup -->|"read; apply merge/release/unmerge (policy_system)"| FalkorDB
+    GraphCleanup -->|"read (policy_system)"| FalkorDB
+    GraphCleanup -->|"submit merge/release/unmerge writes"| GraphWriteGateway
     GraphCleanup -->|"require_role(ComplianceOfficer), re-checked at execution"| Authorization
     GraphCleanup -->|"create/check pending approvals"| PasskeySigning
     GraphCleanup -->|"record capability.*/obligation.* audit events; read merge history"| Audit
@@ -210,10 +216,14 @@ graph TB
     ProcessHarness -->|"apply_pending_migrations (audit, authz, runtime_config, ingestion_runs)"| Persistence
     Persistence -->|"connect / migrate (ps_state)"| PSPostgres
     Persistence -->|"log entries"| Logging
+    GraphWriteGateway -->|"apply writes; replay"| FalkorDB
+    GraphWriteGateway -->|"append/read mutation log (ps_state)"| PSPostgres
+    GraphWriteGateway -->|"log entries"| Logging
 
     Ingestion -->|"record health"| DependencyHealth
     LLMInterface -->|"record health"| DependencyHealth
     Persistence -->|"record health (ps_state)"| DependencyHealth
+    GraphWriteGateway -->|"record health"| DependencyHealth
     Audit -->|"record health (ps_state)"| DependencyHealth
     RuntimeConfig -->|"record health (ps_state)"| DependencyHealth
     IngestionRuns -->|"record health (ps_state)"| DependencyHealth
@@ -267,6 +277,7 @@ graph TB
     style Invitations fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Audit fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style Persistence fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
+    style GraphWriteGateway fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style RuntimeConfig fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style IngestionRuns fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
     style DependencyHealth fill:#B39DDB,stroke:#333,stroke-width:2px,color:#FFFFFF
@@ -304,6 +315,7 @@ graph TB
 | Dependency Health | `ps.service.dependencyhealth` | Process-wide registry of whether FalkorDB, LLM Interface, and Cellar/ELI were reachable on their most recent real call; fed by those components' own exception handling, read by Process Harness for `/ready` |
 | Passkey Signing | `ps.service.passkeysigning` | Own WebAuthn relying party for transaction-signing (independent of the OIDC login IdP); PS-Service-owned store in the separate `ps_signing` database of the PS Postgres server for enrolled signing credentials and pending-approval records; dynamically-bound challenge construction/verification; companion-browser enrollment/signing ceremony pages |
 | Audit | `ps.service.audit` | Shared, insert-only audit trail (`audit_events` in the PS state Postgres) for every component that records who did what to what; validates each action's typed `details` against its registered model; writes in the caller's transaction so the audit row and the state change commit or roll back together; operations whose effect is outside Postgres (ingestion, restore, near-miss resolve, invite, `check_regulations` re-ingests) write an opening row first (fail-closed: if it cannot be written the operation does not run) and a best-effort terminal row (issue #195); `list-audit-events` supports an allow-listed `details` filter (`celex`, `regulatory_instrument_id`, `instrument_id`) backed by expression indexes (migration 0002) |
+| Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): the single path for graph writes by Ingestion, Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup and Regulatory Change Monitor; record each transaction group in the mutation log (`ps_state`) before it is applied; apply to FalkorDB as a rebuildable projection of the log; replay the log and verify a rebuilt graph against a digest checkpoint; reject labels and relationship types outside the allow-list; fail closed, reporting "committed, apply pending" when only the apply is delayed |
 | Persistence | `ps.service.persistence` | Own PS Service's access to the PS state Postgres: per-call connections, connectivity probe, and applying each component's SQL migrations at startup, tracked per component; fails closed when the store is unconfigured or unreachable |
 | Runtime Config | `ps.service.runtimeconfig` | Own runtime-mutable configuration values: each key is declared in a typed registry (name, value type, validator); reject an unregistered key or invalid value before any write; persist values in the `runtime_config` table of the PS state Postgres; audit every set/reset in the same transaction through Audit's public interface |
 | Ingestion Runs | `ps.service.ingestionruns` | Track catalog ingestion runs submitted asynchronously over MCP: persist each run's status and terminal result or sanitized error in the `ingestion_runs` table of the PS state Postgres; run each submission on a background thread tracked by a process-local in-flight registry |
@@ -324,6 +336,14 @@ graph TB
 | Control | Ingestion (internal-seed adapter, internal sources only, authored) | `ps.service.ingestion` | Authored directly in the intake document alongside its parent Standard, and minted (canonical id only) via `IMPLEMENTED_BY` from that Standard, for `source_type: internal`. Weak-entity identity derived from its Standard + type — scoped to exactly one Standard, no cross-source dedup needed |
 | PracticeArea | Ingestion (internal-seed adapter, authored) + Company Merge (exact-identity passthrough) | `ps.service.ingestion`, `ps.service.companymerge` | Authored directly in the intake document for `source_type: internal` and minted (canonical id only, content-derived from `name` alone) by `ps_service.ingestion.adapters.internal_seed`, the same step that authors/mints Policy/Standard/Control for that source. Company Merge's `persist_practice_area_and_risk_path_passthrough` carries it through unchanged (`MERGE ... ON CREATE SET`, never a semantic/embedding comparison) — two sources naming the same PracticeArea converge onto one node because their ids are identical content hashes minted by Ingestion, not because Company Merge compares them. `validate_classification_edge_endpoints` confirms every edge endpoint already exists before any classification edge is written. `COVERS` (→ Capability) and `OWNS` (→ Policy) edge targets are rewritten onto the target's own canonical id when it was dedup-resolved, exactly like `GOVERNED_BY`'s Policy target |
 | RiskPath | Ingestion (internal-seed adapter, authored) + Company Merge (exact-identity passthrough) | `ps.service.ingestion`, `ps.service.companymerge` | Same origin/passthrough shape as PracticeArea, canonical identity content-derived from `name` alone, carried through by the same `persist_practice_area_and_risk_path_passthrough` function. `MITIGATED_BY` (→ Capability) has its target rewritten the same way; `VERIFIED_BY` (→ Control) passes through unchanged, since Control is never canonically deduped. Write counts for both labels and all four edge types (`COVERS`/`OWNS`/`MITIGATED_BY`/`VERIFIED_BY`) are reported via `classification_write_counts` on the merge's semantic log entry |
+| Mutation log | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): The authoritative, append-only record of graph content; FalkorDB is a projection of it. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Log entry | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): One resolved primitive graph mutation, traceable to the Audit event of its causing command. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Transaction group | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): Ordered entries committed together as one unit; the unit a writer submits. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Per-graph sequence | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): Gap-free ordering of entries within one graph. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Applied marker | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): Per-graph position up to which the graph reflects the log. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Digest checkpoint | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): A recorded canonical digest of one graph at a sequence position. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Canonical digest | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): Storage-order-independent fingerprint of one graph's content, used to compare a live graph with a replayed one. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
+| Graph Write Gateway | Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): The actor through which writers submit groups; see the [Graph Write Gateway](#graph-write-gateway) section. Defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log); not a graph node |
 
 ---
 
@@ -386,6 +406,7 @@ graph TB
 
 **Implementation Guidance:**
 - Stateless — no persistent state of its own beyond what it writes to FalkorDB via `RegisterRegulatoryInstrumentVersion` and `PersistNativeStructuralGraph`.
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - Source-specific fetch/persist logic lives behind an Ingestion Adapter interface (`ps_service.ingestion.adapters.base`), one concrete adapter per regulatory source. The Cellar/ELI Adapter is the only implementation for this walking skeleton; adding SOX/HIPAA/FDA later means adding a new adapter, not modifying Ingestion's core.
 - An Ingestion Adapter's output shape is an implicit contract with its paired Domain Mapping Adapter (see [Domain Mapper](#domain-mapper)) — not enforced by a shared schema, so the two must be reviewed/changed together.
 - Retry policy for Cellar/ELI fetch failures is deliberately not built into this component — `FetchRegulatoryInstrumentStructure` fails clearly and lets the caller (manual UC-1 trigger, or Regulatory Change Monitor's next poll cycle) decide whether to retry.
@@ -533,6 +554,7 @@ Only authored/minted for `source_type: internal` (by Ingestion's internal-seed a
 | Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/domain_mapper/`, adapters under `ps-service/src/ps_service/domain_mapper/adapters/` | `ps_service.domain_mapper`, `ps_service.domain_mapper.adapters` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - LLM-extraction results always carry a `confidence` score — never dropped, even for low-confidence extractions (confidence review is a downstream/governance concern, not this component's job to gate).
 - Reads the native structural graph (see [Ingestion](#ingestion)) through a Domain Mapping Adapter (`ps_service.domain_mapper.adapters.base`), one per regulatory source, paired 1:1 with that source's Ingestion Adapter. The Cellar/ELI Domain Mapping Adapter is the only implementation for this walking skeleton.
 - A Domain Mapping Adapter's expected input shape must track its paired Ingestion Adapter's output shape exactly — the two are reviewed/changed together, never independently.
@@ -617,6 +639,7 @@ The single-tenant graph's guaranteed contents are not limited to these four node
 | Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/company_merge/` | `ps_service.company_merge` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - Add/merge-only — per UC-1, adding a regulation never modifies or deletes existing customer data.
 - Convergence matching is two-tier: canonical-identity equality first, then a semantic-equivalence check (via LLM Interface's `RouteEmbedding` action — cosine similarity over embeddings) for content that doesn't hash-match but expresses the same capability (or, for internal sources, the same policy). Obligation is not in scope — it is Role-scoped and passed through. Unlike Domain Mapper's chat-driven decisions, the embedding computation itself is deterministic for a fixed model/input; the similarity-threshold decision is still a judgment call that can land wrong near the boundary, which is why a below-threshold near-miss is surfaced — recorded, not merged and not dropped — rather than silently resolved either way. This surfacing never blocks the run and is distinct from, and never triggers, the hard-failure abort described in Actions below.
 - On a confirmed match (exact identity, or a confident semantic match), the existing canonical node's properties are never overwritten — it wins on any disagreement (e.g. `confidence`, `description`); the incoming duplicate is dropped and only its edges are rewired onto the canonical node, consistent with add/merge-only.
@@ -662,6 +685,7 @@ None — reads the existing baseline/native graph shapes Domain Mapper already d
 | Internal component (Python package) | None (calls LLM Interface) | Python 3.14 | `ps-service/src/ps_service/export/` | `ps_service.export` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): its baseline embedding backfills are submitted to the Graph Write Gateway under the Regulatory Change Monitor's contract (#213).
 - Maintainer-only, never exposed via REST or `ps-cli` — a project maintainer runs the thin CLI shim `tools/curated-export/export_instrument.py` against an already-ingested source (direct FalkorDB + LLM Interface access), not a customer-facing action.
 - Fixed orchestration order: backfill Capability/Policy embeddings onto the live `{short}_baseline` graph first (one `RouteEmbedding` call per node lacking one), then serialize both graphs, then write the manifest, then regenerate `catalog.json` from every manifest now on disk — never just the instrument just exported, so a re-export never drops another instrument's catalog entry.
 - Serializes generically: enumerates the source graph's own labels/relationship types (`CALL db.labels()`/`CALL db.relationshipTypes()`) rather than hardcoding Role/Requirement/Obligation/Capability, so one function is correct for both the baseline graph and the native structural graph, and for `external`- and `internal`-sourced instruments alike (source_type-agnostic, per AC-BI-003). A node carrying zero or more than one label is an export error, never silently coerced.
@@ -704,6 +728,7 @@ None — writes into the existing baseline/native/single-tenant graph shapes Dom
 | Internal component (Python package) | None (no LLM Interface call) | Python 3.14 | `ps-service/src/ps_service/restore/` | `ps_service.restore` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - Verifies before touching FalkorDB: checksum (SHA-256 over each blob) first, then `schema_version` equality against `ps_service.domain_mapper.DOMAIN_SCHEMA_VERSION` — a mismatch on either refuses outright, no migrate/warn path, before any FalkorDB call has happened.
 - Every write happens against a freshly-created, uniquely-tokened staged key; the target's real `{short}_native`, `{short}_baseline`, and `policy_system` keys are touched only inside one final `RENAME`-based finalize step, so an interruption at any earlier point leaves the target byte-for-byte unchanged — never a partially-seeded baseline-only or native-only state.
 - The `policy_system` leg (the only one a concurrent live ingestion could also be writing) finalizes under a `WATCH`/`MULTI`/`EXEC` optimistic-concurrency retry loop, not a bare rename — a concurrent writer aborts and retries the snapshot+merge computation, bounded, rather than silently losing either side's update.
@@ -1053,6 +1078,7 @@ See [Domain Concepts to Component Mapping](#domain-concepts-to-component-mapping
 | Internal component (Python package) | None (`redis.exceptions` for FalkorDB error translation) | Python 3.14 | `ps-service/src/ps_service/policy_lifecycle/` | `ps_service.policy_lifecycle` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - Every top-level action authored here writes into the same single-tenant `policy_system` FalkorDB graph that Company Merge merges into — never a per-regulation baseline graph of its own.
 - Reuses the shared `ps_service.authz` RBAC machinery directly (`require_role`, `resolve_active_roles`) for the `PolicyManager` approve/reject gate and the `SystemOwner`/`SystemAdmin` draft-visibility override — never a second, parallel gating mechanism; defines its own ABAC rules (`require_owner`, `require_status`, `block_self_approval`, in `ps_service.policy_lifecycle.rules`) only for the ownership/status checks genuinely specific to this component.
 - Every state-changing action (create, and the four status transitions) records its own `policy.*` audit event via the shared Audit component's `record_standalone` — `applied` BEFORE the graph write, and a follow-up `failed` event if the write then fails; a rejected gate check (ownership/status/self-approval/completeness) instead records its own `outcome="rejected"` event and raises, before any graph write is attempted. The six draft-content PATCH/add tools (issue #136) are the one deliberate exception: they record no audit event at all, relying entirely on MCP Interface's own generic started/succeeded/failed log triad.
@@ -1121,6 +1147,7 @@ Graph Cleanup introduces no new regulatory concept; it edits existing Capability
 
 **Implementation Guidance:**
 - Every action reads and writes the single-tenant `policy_system` FalkorDB graph Company Merge merges into, through its own narrowed graph opener (the only FalkorDB connection surface of this component, an approved mock boundary).
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB.
 - Reuses the shared `ps_service.authz` RBAC machinery (`require_role`) for the `ComplianceOfficer` gate, the shared Audit component for every `capability.*`/`obligation.*` event, and Passkey Signing's approval store and executor registry for the signed edit — never a parallel gating, audit or approval mechanism. Registers its executors and effect verifiers with Passkey Signing at import.
 - Company Merge keeps its add/merge-only contract: it only gains redirect-following for `merged` tombstones and `MergedObligation` markers. The near-miss merge re-points inbound `MERGED_INTO` edges onto its winner and treats a review naming a tombstone as stale; Policy Lifecycle treats a tombstone as nonexistent when claiming Capabilities.
 - Registered audit actions: `capability.merge`, `obligation.merge`, `capability.release_governance`, `capability.unmerge`, `obligation.unmerge`, with resource types `capability` and `obligation`; `resource_id` is the absorbed or affected node id and every `details` payload carries the `approval_id`. They are returned by the `list-audit-events` tool like any other registered action.
@@ -1178,6 +1205,7 @@ None new — maintains `RegulatoryInstrument.SUPERSEDED_BY`, documented under [I
 | Internal component (Python package) | None | Python 3.14 | `ps-service/src/ps_service/change_monitor/` | `ps_service.change_monitor` |
 
 **Implementation Guidance:**
+- Target design (not yet implemented; delivered by #205-#214): every graph write this component makes is submitted to the [Graph Write Gateway](#graph-write-gateway); it holds no other path to write to FalkorDB. This includes the baseline embedding backfills made by Export.
 - Delta report shape/mechanism is under exploration (per Solution Architecture) — do not assume a shape here that the SA doc doesn't already commit to.
 - Amendment detection relies on Cellar/ELI's consolidated-version linkage between a regulation's CELEX-numbered expressions. Verified live against the Cellar SPARQL endpoint under issue #19 (AC-001, `tests/change_monitor/test_cellar_consolidated.py` plus the consolidated-re-ingestion capstone): the working predicate is `cdm:act_consolidated_consolidates_resource_legal` (endpoint `https://publications.europa.eu/webapi/rdf/sparql`, GET with `format=application/sparql-results+json`, no auth), filtered to the base act's CELEX and ordered by consolidation date.
 - `regulation` and `directive` framework nodes are polled on the **identical** Cellar-lineage code path — both resolve to a single base-act CELEX with its own consolidation lineage, and nothing in `PollForAmendments` branches on `instrument_type`. `national_transposition` nodes are the exception: their checkable obligations live in the member states' national transposing statutes, each independently amendable in its own national legal database with no common EU-level access point, so polling a Directive's Cellar lineage detects nothing about a member state amending its transposition. Those nodes are excluded from the tracked set here, and `TriggerReingestion` guards against them explicitly. Per-`national_transposition` monitoring — plus a transposition-ingestion work-queue and directive-supersession re-transposition tracking — is a separate, larger piece of work (see issues #41 / #46).
@@ -1481,6 +1509,162 @@ These are PS Service's own operational security records, not PS Conceptual Model
 
 ---
 
+### Graph Write Gateway
+
+Target design (not yet implemented; delivered by #205-#214): the Graph Write Gateway is the single path through which the writers below change the compliance graphs; the contracts below describe the intended behavior.
+
+#### Domain Concepts
+
+The entities below are defined in [`ps-domain-concepts.md`](../artifacts/ps-domain-concepts.md#graph-write-gateway-and-mutation-log). They are not graph nodes and are not part of `ps_service.domain_schema`. Audit records who invoked which domain command and when; the mutation log records the resolved primitive graph mutations those commands produced. A log entry carries the identifier of the command that caused it, so each mutation can be traced to its Audit event.
+
+##### Log entry
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Insert-only | An entry, once recorded, is never changed or removed |
+| One resolved mutation | An entry names exactly one node or relationship write, already resolved to concrete identity and content |
+| Traceable | An entry carries the identifier of the domain command that caused it |
+| Allow-listed names | Every label and relationship type an entry names is permitted by the [label allow-list contract](#label-allow-list-contract) |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| Graph | The graph the mutation applies to | string | — | — | Required |
+| Position | The entry's place in that graph's per-graph sequence | integer | 1 | — | Required; assigned on commit, never reused |
+| Name | The node label or relationship type written | string | — | — | Required; on the allow-list |
+| Identity | The identity of the node or relationship written | string | — | — | Required |
+| Content | The properties written | object | — | — | Required |
+| Command | Identifier of the domain command that caused the entry | string | — | — | Required |
+
+##### Transaction group
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| All or nothing | Either every entry of the group is recorded or none is |
+| Ordered | Entries keep the order the writer submitted them in |
+| Unit of submission | A writer submits whole groups, never single entries outside a group |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| Entries | The ordered log entries of the group | list | 1 | — | Required; a group with no effective change is not recorded |
+| Command | Identifier of the domain command that caused the group | string | — | — | Required |
+
+##### Per-graph sequence
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Gap-free | Positions within one graph run 1, 2, 3, … with no gap |
+| Independent per graph | A position in one graph's sequence says nothing about another graph's |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| Graph | The graph the sequence orders | string | — | — | Required |
+| Last position | The highest position recorded for the graph | integer | 0 | — | Required |
+
+##### Applied marker
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Never ahead of the log | The marker never exceeds the last position recorded for the graph |
+| Moves with the graph | The marker advances together with the applied entries, so the graph and its marker never disagree |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| Graph | The graph the marker belongs to | string | — | — | Required |
+| Applied position | The position up to which the graph reflects the log | integer | 0 | — | Required; the graph is caught up when it equals the last position |
+
+##### Digest checkpoint
+
+###### Constraints
+
+| Constraint | Description |
+|---|---|
+| Insert-only | A checkpoint, once recorded, is never changed or removed |
+| Canonical | The digest is a canonical digest, independent of storage order and storage-internal identifiers |
+
+###### Attributes
+
+| Attribute | Description | Type | Min | Max | Rules |
+|---|---|---|---|---|---|
+| Graph | The graph digested | string | — | — | Required |
+| Position | The position in the graph's sequence the digest was taken at | integer | 0 | — | Required |
+| Canonical digest | The fingerprint of the graph content at that position | string | — | — | Required |
+
+#### Invariants
+
+- **Log-first:** a write is durable in the mutation log before it is applied to the graph, and nothing is applied that is not logged.
+- **Insert-only:** log entries and digest checkpoints are only ever added; none is changed or removed.
+- **Deterministic replay:** replaying a graph's log from the beginning reproduces the same graph content and the same canonical digest, every time.
+- **Fail-closed:** when the log cannot accept a group, nothing is logged and nothing is applied, and the caller receives the existing sanitized error.
+- **No-op writes are not logged:** a group whose entries change nothing is not recorded.
+- **Guards before logging:** where a writer's change depends on a guard or pattern condition, the condition is evaluated before anything is logged.
+- **Effect checks only when caught up:** a writer's check on the effect of its own write is made only when the graph's applied marker equals the last recorded position.
+
+#### C-0 exceptions
+
+The gateway deliberately differs from today's direct writes in the caller-visible cases below. Each states the condition under which it occurs and what the caller sees.
+
+- **Committed, apply pending.** Condition: the group is recorded in the log, and FalkorDB then remains unavailable after the gateway's bounded retries. The caller is told the group is committed and will be applied on recovery; this is not an error. When FalkorDB recovers, CaughtUp applies the pending entries in order.
+- **Crash-case completion.** Condition: the process stops after the group is recorded and before it is fully applied. On restart the unapplied entries are applied from the log, so an operation interrupted part-way is completed rather than left partial as today.
+- **Re-used Standard or Control id.** Condition: a Standard or Control id is re-used under a different parent. It no longer creates a second node (#211). This cannot occur in normal operation because computed ids embed the parent id.
+- **Pre-commit failure (the contract, not an exception).** Condition: the log cannot accept the group, for example because the PS state store is unavailable before the commit. The group fails closed: nothing is logged, nothing is applied, and the caller receives the sanitized error.
+
+#### Label allow-list contract
+
+A write is accepted only if every node label and relationship type it names is in the union of:
+
+1. the labels and relationship types of the domain schema (`ps_service.domain_schema`); and
+2. three named, closed exception sets, kept as named sets in the domain schema's vocabulary exceptions:
+   - **system-minted edges:** `SUPERSEDED_BY`, `TRANSPOSES`, `MERGED_INTO`;
+   - **operational labels:** `MergedObligation`, `PendingReview`, `ReingestProgress`;
+   - **native structural labels:** `TITLE`, `CHAPTER`, `SECTION`, `ARTICLE`, `PARAGRAPH`, `ANNEX`, `RECITAL` (the Cellar/ELI adapter vocabulary).
+
+A write naming anything else is rejected before anything is logged. If the lists above ever disagree with the named sets, the named sets win.
+
+- Native graphs have no exemption: the native structural labels are a closed set, and a write to a native graph is checked like any other.
+- No runtime registration: a new regulatory source adds its labels to the native set by a change to the architecture and schema, not at runtime.
+- The Restore allow-lists are hand-written, independent of this rule, and remain; the gateway does not replace them.
+
+#### Kind
+
+| Kind | Framework | Language | Project Pattern | Namespace Pattern |
+|---|---|---|---|---|
+| Internal component (Python package) | None | Python 3.14 | To be set by #205 (not yet created) | To be set by #205 (not yet created) |
+
+**Implementation Guidance:**
+
+- The gateway owns the mutation log store in the PS state Postgres (`ps_state`). Persistence is unchanged and only supplies the state-store connection surface.
+- Writers hold no other path to write to FalkorDB; reads stay direct.
+- Feeds Logging with its log entries and Dependency Health with the health of the stores it uses.
+
+#### Implementation Registration
+
+None yet: registered when the implementing issues land (#205, #206, #207).
+
+#### Actions
+
+| Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| SubmitGroup | Accept one transaction group from a writer, record it in the mutation log, then apply it to the graph | No (internal call — the writer has already authenticated and authorized its own command) | n/a | Every label and relationship type named is on the allow-list; the group carries the identifier of its causing command | The group is recorded in the log and applied to FalkorDB; or recorded and reported "committed, apply pending" (not an error) | Appends entries to the mutation log (`ps_state`); writes to FalkorDB; advances the applied marker | PS state Postgres, FalkorDB | Not yet set | No (each submission is a new group) | Off-allow-list names are rejected before anything is logged; if the log cannot accept the group it fails closed with nothing logged or applied; if FalkorDB is unavailable after the commit the caller is told "committed, apply pending" |
+| Replay | Rebuild a graph by applying its log from the beginning | No (internal call) | n/a | The graph's log is available | The graph reflects the log up to its last position, and its applied marker equals that position | Rewrites the graph in FalkorDB from the log | PS state Postgres, FalkorDB | Target only: see #202 AC-BI-013 | Yes (the same log always yields the same graph) | Fails closed if the log cannot be read; a partly rebuilt graph is never reported as caught up |
+| Verify | Compare the canonical digest of a replayed graph with a recorded digest checkpoint | No (internal call) | n/a | A digest checkpoint exists for the graph and position | A match or mismatch is reported; the graph and the log are unchanged | May record a new digest checkpoint | PS state Postgres, FalkorDB | Target only: see #202 AC-BI-013 | Yes | A mismatch is reported as a failure of deterministic replay and never repaired silently |
+| CaughtUp | Apply the log entries beyond a graph's applied marker, for example after FalkorDB recovers or the process restarts | No (internal call) | n/a | The graph's applied marker is behind the last recorded position | The applied marker equals the last recorded position | Applies pending entries to FalkorDB in sequence order; advances the applied marker | PS state Postgres, FalkorDB | Not yet set | Yes (nothing pending means nothing applied) | While FalkorDB stays unavailable the entries remain pending and the writers' groups stay "committed, apply pending" |
+
 ### Persistence
 
 #### Domain Concepts
@@ -1760,17 +1944,50 @@ sequenceDiagram
     end
 ```
 
+### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)
+
+Target design (not yet implemented; delivered by #205-#214).
+
+*Every action below may also emit a log entry to Logging; only the write path is diagrammed, to keep the flow focused on business data.*
+
+```mermaid
+sequenceDiagram
+    participant Writer
+    participant GW as Graph Write Gateway
+    participant Log as Mutation log (ps_state)
+    participant DB as FalkorDB
+
+    Writer->>GW: SubmitGroup(transaction group)
+
+    alt a label or relationship type is off the allow-list
+        GW-->>Writer: rejected (nothing logged)
+    else the mutation log cannot accept the group
+        GW-->>Writer: sanitized error (fail closed: nothing logged, nothing applied)
+    else group accepted
+        GW->>Log: commit group
+        Log-->>GW: committed
+        GW->>DB: apply group
+        alt FalkorDB available
+            DB-->>GW: applied
+            GW-->>Writer: committed and applied
+        else FalkorDB unavailable
+            GW-->>Writer: committed, apply pending (not an error)
+            Note over GW,DB: later, CaughtUp applies the pending entries on recovery
+        end
+    end
+```
+
 ---
 
 ## Use Case Coverage Mapping
 
 | Use Case | Components | Coverage Notes |
 |---|---|---|
-| UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Ingestion Runs, MCP Interface (`start_ingestion`/`get_ingestion_status`) | Fully covered by this container's ingestion pipeline |
-| UC-2: Govern internal regulations | Ingestion, Company Merge | Unlike UC-1, this pipeline never invokes Domain Mapper — Ingestion's internal-seed adapter authors and mints the entire compliance spine (Role through Control) directly from the customer's intake document in one stage (`internal_ingestion`), then Company Merge (`merge`) resolves cross-source convergence at Capability and Policy, the same as for external sources. Triggered by a Policy Manager via `ps-cli` (Policy Editor once built) — see Solution Architecture's User Role Mapping |
+| UC-1: Select and add a regulation to the system | Ingestion, Domain Mapper, Company Merge, Ingestion Runs, MCP Interface (`start_ingestion`/`get_ingestion_status`), Graph Write Gateway (target design; all graph writes) | Fully covered by this container's ingestion pipeline |
+| UC-2: Govern internal regulations | Ingestion, Company Merge, Graph Write Gateway (target design; all graph writes) | Unlike UC-1, this pipeline never invokes Domain Mapper — Ingestion's internal-seed adapter authors and mints the entire compliance spine (Role through Control) directly from the customer's intake document in one stage (`internal_ingestion`), then Company Merge (`merge`) resolves cross-source convergence at Capability and Policy, the same as for external sources. Triggered by a Policy Manager via `ps-cli` (Policy Editor once built) — see Solution Architecture's User Role Mapping |
 | Govern policy/standard/control content (not yet defined in `ps-primary-use-cases.md`) | **Not covered by this container** | Belongs to Policy Editor (separate, not-yet-designed container per Solution Architecture) |
 | UC-3: Ask compliance questions (query regulations and policies) | MCP Interface (delegates to Query Engine) | Covered over the Streamable HTTP transport at `/mcp/`, reached by the Policy System Plugin's (`ps-plugin`) `ps-mcp` connector. Remote deployment — the stated production target — additionally requires the authentication and resource-bounding work flagged under [MCP Interface](#mcp-interface) |
-| UC-4: Detect and absorb a regulatory amendment | Regulatory Change Monitor (poll + trigger), Ingestion, Domain Mapper, Company Merge | **Covered.** RCM's `PollForAmendments` (manually invoked; amendment-detection mechanism verified live under issue #19) and `TriggerReingestion` run the full Ingestion → Domain Mapper → Company Merge cycle for the amended version and write `SUPERSEDED_BY` (and the prior's `superseded` status, in `{short_name}_native` and `policy_system`) last. Not wired: no scheduler. See [Regulatory Change Monitor](#regulatory-change-monitor) |
+| UC-4: Detect and absorb a regulatory amendment | Regulatory Change Monitor (poll + trigger), Ingestion, Domain Mapper, Company Merge, Graph Write Gateway (target design; all graph writes) | **Covered.** RCM's `PollForAmendments` (manually invoked; amendment-detection mechanism verified live under issue #19) and `TriggerReingestion` run the full Ingestion → Domain Mapper → Company Merge cycle for the amended version and write `SUPERSEDED_BY` (and the prior's `superseded` status, in `{short_name}_native` and `policy_system`) last. Not wired: no scheduler. See [Regulatory Change Monitor](#regulatory-change-monitor) |
 
 ---
 
