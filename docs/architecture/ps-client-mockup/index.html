@@ -1,0 +1,628 @@
+<!doctype html>
+<!-- © 2026 Cartman ApS. All rights reserved. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ps-client — UX mockup</title>
+<style>
+  :root{
+    --bg:#f4f1ec; --pane:#ffffff; --ink:#2b2a27; --ink-soft:#6e6a62;
+    --line:#e3ded5; --accent:#b4552d; --accent-soft:#f6e8e0;
+    --user-bubble:#eef0f4; --ai-bubble:#faf8f4;
+    --pass:#2e7d4f; --pass-bg:#e3f1e8; --partial:#a06a00; --partial-bg:#f7edd6;
+    --fail:#b3362c; --fail-bg:#f9e4e1; --pending:#8a857c; --pending-bg:#efece6;
+    --chip-draft:#5b5650; --chip-draft-bg:#ece8e1; --chip-prop:#1d5c8f; --chip-prop-bg:#e0edf7;
+    --readonly:#6a5f8f; --readonly-bg:#ece8f6;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:center; gap:14px; padding:10px 18px;
+    background:var(--pane); border-bottom:1px solid var(--line);
+  }
+  header .logo{font-weight:700; letter-spacing:.2px}
+  header .logo span{color:var(--accent)}
+  #beat{
+    font-size:12px; color:var(--ink-soft); background:var(--pending-bg);
+    border:1px solid var(--line); border-radius:20px; padding:3px 12px;
+  }
+  header .spacer{flex:1}
+  header button{
+    font:inherit; font-size:12px; padding:5px 12px; border-radius:8px;
+    border:1px solid var(--line); background:var(--pane); color:var(--ink-soft); cursor:pointer;
+  }
+  header button:hover{border-color:var(--accent); color:var(--accent)}
+  header .user{
+    width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+  }
+  main{flex:1; display:flex; min-height:0}
+
+  /* ---------- chat pane ---------- */
+  #chatPane{
+    width:430px; min-width:360px; display:flex; flex-direction:column;
+    border-right:1px solid var(--line); background:var(--bg);
+  }
+  #messages{flex:1; overflow-y:auto; padding:18px 16px 8px; display:flex; flex-direction:column; gap:12px}
+  .msg{max-width:88%; padding:10px 14px; border-radius:14px; white-space:pre-wrap}
+  .msg.ai{align-self:flex-start; background:var(--ai-bubble); border:1px solid var(--line); border-bottom-left-radius:4px}
+  .msg.user{align-self:flex-end; background:var(--user-bubble); border:1px solid #dde1e8; border-bottom-right-radius:4px}
+  .msg.sys{align-self:center; background:none; border:none; color:var(--ink-soft); font-size:12px; font-style:italic; padding:2px}
+  .msg b{color:var(--ink)}
+  .msg .ok{color:var(--pass); font-weight:700}
+  .msg .warn{color:var(--partial); font-weight:700}
+  .typing{align-self:flex-start; padding:12px 16px}
+  .typing i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-soft);margin-right:4px;animation:blink 1.2s infinite}
+  .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+  #composer{display:flex; gap:8px; padding:12px 14px 14px; border-top:1px solid var(--line); background:var(--pane)}
+  #composer textarea{
+    flex:1; resize:none; font:inherit; padding:9px 12px; height:60px;
+    border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink);
+  }
+  #composer textarea:focus{outline:2px solid var(--accent-soft); border-color:var(--accent)}
+  #sendBtn{
+    font:inherit; font-weight:600; border:none; border-radius:10px; padding:0 18px;
+    background:var(--accent); color:#fff; cursor:pointer;
+  }
+  #sendBtn:disabled{opacity:.4; cursor:default}
+  #hint{font-size:11px; color:var(--ink-soft); padding:0 16px 10px; background:var(--pane)}
+
+  /* ---------- artifact viewport ---------- */
+  #viewport{flex:1; display:flex; flex-direction:column; min-width:0; background:var(--pane)}
+  #tabbar{display:flex; gap:2px; padding:8px 12px 0; border-bottom:1px solid var(--line); background:var(--bg)}
+  .tab{
+    padding:8px 16px; font-size:13px; border:1px solid transparent; border-bottom:none;
+    border-radius:10px 10px 0 0; color:var(--ink-soft); cursor:pointer; background:none;
+    display:flex; align-items:center; gap:8px; font-family:inherit;
+  }
+  .tab.active{background:var(--pane); border-color:var(--line); color:var(--ink); font-weight:600}
+  .tab .dot{width:7px;height:7px;border-radius:50%}
+  #artifact{flex:1; overflow-y:auto; padding:26px 34px 60px}
+  #empty{color:var(--ink-soft); text-align:center; margin-top:14vh}
+  #empty .big{font-size:40px; margin-bottom:10px}
+
+  .doc{max-width:760px; margin:0 auto}
+  .doc-head{display:flex; align-items:flex-start; gap:12px; margin-bottom:4px}
+  .doc-head h1{font-size:21px; margin:0; flex:1}
+  .chip{font-size:10.5px; font-weight:700; letter-spacing:.6px; padding:3px 10px; border-radius:20px; white-space:nowrap}
+  .chip.readonly{color:var(--readonly); background:var(--readonly-bg)}
+  .chip.draft{color:var(--chip-draft); background:var(--chip-draft-bg)}
+  .chip.proposed{color:var(--chip-prop); background:var(--chip-prop-bg)}
+  .doc-meta{font-size:12px; color:var(--ink-soft); margin-bottom:18px}
+  .ctx{
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px;
+    background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:8px 12px; margin-bottom:20px;
+  }
+  .ctx .cap{font-weight:600; color:var(--accent)}
+  .callout{
+    border:1px solid #efc9c4; background:var(--fail-bg); color:var(--fail);
+    border-radius:10px; padding:10px 14px; font-weight:600; margin:16px 0;
+  }
+  table.rpt{width:100%; border-collapse:collapse; font-size:13px; margin-top:8px}
+  table.rpt th{text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--ink-soft); padding:6px 10px; border-bottom:2px solid var(--line)}
+  table.rpt td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  .srcref{font-size:11.5px; color:var(--readonly); background:var(--readonly-bg); border-radius:6px; padding:1px 7px; white-space:nowrap}
+
+  /* sections */
+  .section{border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden; transition:border-color .3s}
+  .section.flash{border-color:var(--accent)}
+  .sec-head{display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--bg)}
+  .sec-head h2{font-size:14px; margin:0; flex:1}
+  .badge{
+    font-size:11px; font-weight:700; border-radius:20px; padding:3px 11px; cursor:pointer;
+    border:1px solid transparent; font-family:inherit;
+  }
+  .badge:hover{filter:brightness(.95)}
+  .badge.pass{color:var(--pass); background:var(--pass-bg)}
+  .badge.partial{color:var(--partial); background:var(--partial-bg)}
+  .badge.fail{color:var(--fail); background:var(--fail-bg)}
+  .badge.pending{color:var(--pending); background:var(--pending-bg); cursor:default}
+  .badge.pulse{animation:pulse 1.2s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(160,106,0,.45)}50%{box-shadow:0 0 0 7px rgba(160,106,0,0)}}
+  .sec-body{padding:12px 16px; font-size:13.5px; color:var(--ink)}
+  .sec-body.pending{color:var(--pending); font-style:italic}
+  .sec-body[contenteditable="true"]{outline:2px dashed var(--accent); outline-offset:2px; background:#fffdf8; border-radius:6px}
+  .edit-hint{font-size:11.5px; color:var(--accent); padding:0 16px 10px; font-weight:600}
+
+  .propose-row{display:flex; justify-content:flex-end; margin-top:22px}
+  #proposeBtn{
+    font:inherit; font-weight:700; font-size:14px; padding:10px 24px; border-radius:10px; border:none;
+    background:var(--accent); color:#fff; cursor:pointer;
+  }
+  #proposeBtn:disabled{background:var(--pending-bg); color:var(--pending); cursor:default}
+  #proposeBtn.pulse{animation:pulse2 1.3s infinite}
+  @keyframes pulse2{0%,100%{box-shadow:0 0 0 0 rgba(180,85,45,.5)}50%{box-shadow:0 0 0 9px rgba(180,85,45,0)}}
+
+  /* criteria popover */
+  #popover{
+    position:fixed; z-index:40; width:430px; max-width:92vw; background:var(--pane);
+    border:1px solid var(--line); border-radius:12px; box-shadow:0 10px 32px rgba(40,30,20,.18); padding:14px 16px; display:none;
+  }
+  #popover h3{margin:0 0 2px; font-size:13px}
+  #popover .sub{font-size:11px; color:var(--ink-soft); margin-bottom:10px}
+  #popover table{width:100%; border-collapse:collapse; font-size:12px}
+  #popover td{padding:6px 6px; border-top:1px solid var(--line); vertical-align:top}
+  #popover td.crit{white-space:nowrap; font-weight:600}
+  .st{font-size:10px; font-weight:800; border-radius:12px; padding:2px 8px}
+  .st.pass{color:var(--pass); background:var(--pass-bg)}
+  .st.fail{color:var(--fail); background:var(--fail-bg)}
+
+  /* modal */
+  #overlay{position:fixed; inset:0; background:rgba(35,28,20,.45); display:none; align-items:center; justify-content:center; z-index:50}
+  #modal{width:480px; max-width:92vw; background:var(--pane); border-radius:16px; padding:24px 26px; box-shadow:0 18px 60px rgba(0,0,0,.3)}
+  #modal h2{margin:0 0 4px; font-size:17px}
+  #modal .sub{font-size:12px; color:var(--ink-soft); margin-bottom:14px}
+  .signrow{display:flex; justify-content:space-between; font-size:13px; padding:7px 2px; border-bottom:1px solid var(--line)}
+  .signrow b{font-weight:600}
+  .digest{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--ink-soft); word-break:break-all; margin:12px 0 18px}
+  .modal-actions{display:flex; gap:10px; justify-content:flex-end}
+  .modal-actions button{font:inherit; padding:9px 18px; border-radius:10px; cursor:pointer; border:1px solid var(--line); background:var(--pane)}
+  .modal-actions .primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700}
+  #passkeyWait{display:none; text-align:center; padding:18px 0 6px}
+  #passkeyWait .key{font-size:38px; animation:pulse 1s infinite; display:inline-block; border-radius:50%}
+
+  #toast{
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px);
+    background:var(--ink); color:#fff; font-size:13px; padding:10px 20px; border-radius:10px;
+    transition:transform .35s; z-index:60;
+  }
+  #toast.show{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">ps-client <span>●</span> <span style="font-weight:400;color:var(--ink-soft);font-size:12px">UX mockup</span></div>
+  <div id="beat">Beat 0/8 — Open</div>
+  <div class="spacer"></div>
+  <button onclick="location.reload()">↺ Restart demo</button>
+  <div class="user" title="Compliance Officer">CO</div>
+</header>
+
+<main>
+  <section id="chatPane">
+    <div id="messages"></div>
+    <div id="hint"></div>
+    <div id="composer">
+      <textarea id="input" placeholder="Ask about your compliance graph…"></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
+  </section>
+
+  <section id="viewport">
+    <div id="tabbar"></div>
+    <div id="artifact">
+      <div id="empty">
+        <div class="big">▦</div>
+        Structured answers, reports and drafts render here.<br>
+        <span style="font-size:12px">Ask a question to begin — the scripted message is pre-filled on the left.</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="popover"></div>
+<div id="overlay">
+  <div id="modal">
+    <div id="signBody">
+      <h2>Propose Policy tree</h2>
+      <div class="sub">Lifecycle transition: <b>draft → proposed</b> · requires passkey signature</div>
+      <div class="signrow"><span>Policy — ICT Incident Reporting Policy</span><b>6/6 criteria groups pass</b></div>
+      <div class="signrow"><span>Standard — Incident Classification &amp; Reporting Procedure</span><b>4/4 pass</b></div>
+      <div class="signrow"><span>Controls — 2 attached</span><b>2/2 pass</b></div>
+      <div class="signrow"><span>Covers Obligations</span><b>DORA Art. 17(1), 18(1), 19(1)</b></div>
+      <div class="digest">signing digest&nbsp; sha256:9f3c1a77e2…b04d81 — bound to this exact tree and state</div>
+      <div class="modal-actions">
+        <button onclick="closeModal()">Cancel</button>
+        <button class="primary" onclick="startPasskey()">Approve with passkey</button>
+      </div>
+    </div>
+    <div id="passkeyWait">
+      <div class="key">🔑</div>
+      <p>Waiting for passkey touch…</p>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ---------------------------------------------------------- state */
+const S = {
+  tabs: [],           // {id, label, dotColor}
+  activeTab: null,
+  step: 0,
+  busy: false,
+  awaitingScope: false,
+  scopeDone: false,
+  proposed: false,
+};
+
+const CRITERIA = {
+  purposePartial: [
+    ['POL-PU-001','Outcome focus','pass','Describes an outcome (incidents detected, classified, reported in time), not activities.'],
+    ['POL-PU-002','Beneficiary named','fail','Does not say who relies on this policy working, or to whom incidents are reported.'],
+  ],
+  purposePass: [
+    ['POL-PU-001','Outcome focus','pass','Describes an outcome, not activities.'],
+    ['POL-PU-002','Beneficiary named','pass','Board/CISO accountability and the competent authority are named.'],
+  ],
+  scopePass: [
+    ['POL-SC-001','Boundaries explicit','pass','In-scope entities/systems stated; non-EU affiliates explicitly excluded.'],
+    ['POL-SC-002','Obligation coverage','pass','Scope covers all 3 uncovered DORA Obligations.'],
+  ],
+  stmtsPass: [
+    ['POL-ST-001','Traceable to Obligations','pass','Each statement cites the Obligation it satisfies.'],
+    ['POL-ST-002','Testable wording','pass','Statements are verifiable (deadlines, thresholds, named artefacts).'],
+  ],
+  rolesPartial: [
+    ['POL-RR-001','Accountable owner named','pass','CISO named as accountable owner.'],
+    ['POL-RR-002','Separation of duties','fail','The role that reports an incident also approves the outbound regulator notification.'],
+  ],
+  rolesPass: [
+    ['POL-RR-001','Accountable owner named','pass','CISO accountable for reporting.'],
+    ['POL-RR-002','Separation of duties','pass','Approval of regulator notifications moved to Head of Compliance.'],
+  ],
+  reviewPass: [
+    ['POL-RV-001','Review cadence set','pass','Annual review plus post-major-incident review.'],
+    ['POL-RV-002','Compliance measure named','pass','Measured via Control effectiveness and audit trail.'],
+  ],
+  title: [['POL-TI-001','Names the Capability','pass','Title matches the governed Capability.']],
+};
+
+const sections = [
+  {id:'title',  name:'Title', status:'pass', crit:'title',
+   body:'ICT Incident Reporting Policy'},
+  {id:'purpose',name:'Purpose', status:'pending', crit:null,
+   body:'— to be drafted —'},
+  {id:'scope',  name:'Scope', status:'pending', crit:null,
+   body:'— to be drafted —'},
+  {id:'stmts',  name:'Policy Statements', status:'pending', crit:null,
+   body:'— to be drafted —'},
+  {id:'roles',  name:'Roles & Responsibilities', status:'pending', crit:null,
+   body:'— to be drafted —'},
+  {id:'review', name:'Review & Compliance', status:'pending', crit:null,
+   body:'— to be drafted —'},
+];
+
+const stdSections = [
+  {name:'Classification criteria', why:'Thresholds per DORA Art. 18(1) encoded as decision table.'},
+  {name:'Detection & intake', why:'Monitored channels and intake SLAs defined.'},
+  {name:'Notification timeline', why:'Initial/intermediate/final report deadlines per Art. 19(4).'},
+  {name:'Records & evidence', why:'Register fields and retention defined.'},
+];
+
+/* ---------------------------------------------------------- dom helpers */
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function setBeat(n, label){ $('beat').textContent = `Beat ${n}/8 — ${label}`; }
+function setHint(t){ $('hint').textContent = t; }
+function prefill(t){ $('input').value = t; }
+
+function addMsg(kind, html){
+  const d = document.createElement('div');
+  d.className = 'msg ' + kind;
+  d.innerHTML = html;
+  $('messages').appendChild(d);
+  $('messages').scrollTop = $('messages').scrollHeight;
+  return d;
+}
+async function aiSay(html, delay=900){
+  const t = document.createElement('div');
+  t.className = 'typing'; t.innerHTML = '<i></i><i></i><i></i>';
+  $('messages').appendChild(t);
+  $('messages').scrollTop = $('messages').scrollHeight;
+  await sleep(delay);
+  t.remove();
+  addMsg('ai', html);
+}
+function toast(t){
+  const el = $('toast'); el.textContent = t; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'), 3600);
+}
+
+/* ---------------------------------------------------------- tabs & artifacts */
+function addTab(id, label, dot){
+  S.tabs.push({id, label, dot});
+  renderTabs(); selectTab(id);
+}
+function renderTabs(){
+  $('tabbar').innerHTML = '';
+  for(const t of S.tabs){
+    const b = document.createElement('button');
+    b.className = 'tab' + (S.activeTab===t.id ? ' active':'');
+    b.innerHTML = `<span class="dot" style="background:${t.dot}"></span>${t.label}`;
+    b.onclick = () => selectTab(t.id);
+    $('tabbar').appendChild(b);
+  }
+}
+function selectTab(id){
+  S.activeTab = id; renderTabs(); renderArtifact();
+}
+function renderArtifact(){
+  const a = $('artifact');
+  if(S.activeTab==='report') a.innerHTML = reportHTML();
+  else if(S.activeTab==='policy'){ a.innerHTML = policyHTML(); wirePolicy(); }
+  else if(S.activeTab==='standard') a.innerHTML = standardHTML();
+}
+
+function reportHTML(){
+  return `<div class="doc">
+    <div class="doc-head"><h1>Gap Report — DORA ICT incident reporting</h1><span class="chip readonly">READ-ONLY REPORT</span></div>
+    <div class="doc-meta">Generated from: “Do we have a gap for DORA incident reporting?” · graph: policy_system · citations verified</div>
+    <div class="ctx"><span>Capability</span><span class="cap">ICT Incident Management &amp; Reporting</span><span style="color:var(--ink-soft)">· 3 Obligations · Role: Financial Entity</span></div>
+    <div class="callout">⚠ No governing Policy found for this Capability — 3 Obligations are uncovered.</div>
+    <table class="rpt">
+      <tr><th>Obligation</th><th>Summary</th><th>source_ref</th></tr>
+      <tr><td>OBL-dora-17-1</td><td>Establish an ICT-related incident management process to detect, manage and notify ICT-related incidents.</td><td><span class="srcref">DORA Art. 17(1) · 32022R2554</span></td></tr>
+      <tr><td>OBL-dora-18-1</td><td>Classify ICT-related incidents and determine their impact per the Art. 18 criteria.</td><td><span class="srcref">DORA Art. 18(1) · 32022R2554</span></td></tr>
+      <tr><td>OBL-dora-19-1</td><td>Report major ICT-related incidents to the competent authority within the applicable time limits.</td><td><span class="srcref">DORA Art. 19(1) · 32022R2554</span></td></tr>
+    </table>
+    <p style="font-size:12px;color:var(--ink-soft);margin-top:16px">Reports are structured answers — commentary stays in chat. This artifact is not editable and carries no rubric.</p>
+  </div>`;
+}
+
+function badgeFor(sec){
+  const label = {pass:'PASS', partial:'PARTIAL', fail:'FAIL', pending:'PENDING'}[sec.status];
+  const pulse = (sec.id==='roles' && sec.status==='partial' && S.step>=6) ? ' pulse' : '';
+  return `<button class="badge ${sec.status}${pulse}" data-sec="${sec.id}" ${sec.crit?'':'disabled'}>${label}</button>`;
+}
+function policyHTML(){
+  const chip = S.proposed ? '<span class="chip proposed">PROPOSED</span>' : '<span class="chip draft">DRAFT</span>';
+  const allPass = sections.every(s=>s.status==='pass');
+  const secs = sections.map(sec=>{
+    const editable = (sec.id==='scope' && S.awaitingScope && !S.scopeDone);
+    return `<div class="section" id="sec-${sec.id}">
+      <div class="sec-head"><h2>${sec.name}</h2>${badgeFor(sec)}</div>
+      <div class="sec-body ${sec.status==='pending'?'pending':''}" id="body-${sec.id}" ${editable?'contenteditable="true"':''}>${sec.body}</div>
+      ${editable?'<div class="edit-hint">✏️ You can type directly here — click anywhere else when done, I’ll follow.</div>':''}
+    </div>`;
+  }).join('');
+  return `<div class="doc">
+    <div class="doc-head"><h1>ICT Incident Reporting Policy</h1>${chip}</div>
+    <div class="doc-meta">Server-held draft · every edit (chat or manual) is rubric-scored · autosaved — leave anytime and resume</div>
+    <div class="ctx"><span>Governs Capability</span><span class="cap">ICT Incident Management &amp; Reporting</span><span style="color:var(--ink-soft)">· covers OBL-dora-17-1, 18-1, 19-1</span></div>
+    ${secs}
+    <div class="propose-row">
+      <button id="proposeBtn" ${(!allPass||S.proposed)?'disabled':''} class="${(allPass&&!S.proposed)?'pulse':''}">
+        ${S.proposed?'Proposed ✓':'Propose… 🔑'}
+      </button>
+    </div>
+  </div>`;
+}
+function standardHTML(){
+  const rows = stdSections.map(s=>`<div class="section">
+      <div class="sec-head"><h2>${s.name}</h2><button class="badge pass" disabled>PASS</button></div>
+      <div class="sec-body">${s.why}</div></div>`).join('');
+  const chip = S.proposed ? '<span class="chip proposed">PROPOSED</span>' : '<span class="chip draft">DRAFT</span>';
+  return `<div class="doc">
+    <div class="doc-head"><h1>Standard — Incident Classification &amp; Reporting Procedure</h1>${chip}</div>
+    <div class="doc-meta">Supports: ICT Incident Reporting Policy · same authoring loop, own rubric (condensed in this mock)</div>
+    ${rows}
+  </div>`;
+}
+
+function flash(id){
+  const el = document.getElementById('sec-'+id);
+  if(!el) return;
+  el.classList.add('flash');
+  el.scrollIntoView({behavior:'smooth', block:'center'});
+  setTimeout(()=>el.classList.remove('flash'), 1600);
+}
+function setSection(id, status, body, crit){
+  const s = sections.find(x=>x.id===id);
+  s.status = status; if(body!==undefined) s.body = body; if(crit!==undefined) s.crit = crit;
+  if(S.activeTab==='policy'){ renderArtifact(); flash(id); }
+}
+
+/* ---------------------------------------------------------- criteria popover */
+function wirePolicy(){
+  document.querySelectorAll('.badge[data-sec]').forEach(b=>{
+    b.onclick = (ev)=>{
+      ev.stopPropagation();
+      const sec = sections.find(x=>x.id===b.dataset.sec);
+      if(!sec || !sec.crit) return;
+      showPopover(b, sec);
+    };
+  });
+  const scopeBody = document.getElementById('body-scope');
+  if(scopeBody && scopeBody.isContentEditable){
+    scopeBody.addEventListener('blur', onScopeBlur);
+    scopeBody.addEventListener('focus', ()=>{ if(scopeBody.textContent.includes('to be drafted')) scopeBody.textContent=''; });
+  }
+  const pb = document.getElementById('proposeBtn');
+  if(pb) pb.onclick = openModal;
+}
+function showPopover(anchor, sec){
+  const rows = CRITERIA[sec.crit].map(([id,name,st,why])=>
+    `<tr><td class="crit">${id}</td><td>${name}</td><td><span class="st ${st}">${st.toUpperCase()}</span></td><td style="color:var(--ink-soft)">${why}</td></tr>`).join('');
+  const p = $('popover');
+  p.innerHTML = `<h3>${sec.name} — rubric detail</h3><div class="sub">Click anywhere to close · scores come from the server, per criterion, with reasons</div>
+    <table>${rows}</table>`;
+  p.style.display='block';
+  const r = anchor.getBoundingClientRect();
+  p.style.top = Math.min(r.bottom+8, innerHeight-260)+'px';
+  p.style.left = Math.max(12, Math.min(r.left-320, innerWidth-450))+'px';
+}
+document.addEventListener('click', ()=>{ $('popover').style.display='none'; });
+
+/* ---------------------------------------------------------- modal / passkey */
+function openModal(){ $('overlay').style.display='flex'; }
+function closeModal(){ $('overlay').style.display='none'; }
+async function startPasskey(){
+  $('signBody').style.display='none'; $('passkeyWait').style.display='block';
+  await sleep(1600);
+  $('overlay').style.display='none';
+  $('signBody').style.display='block'; $('passkeyWait').style.display='none';
+  S.proposed = true;
+  renderArtifact();
+  setBeat(8,'Proposed ✓');
+  toast('Lifecycle: draft → proposed — signature verified, recorded in audit trail');
+  await aiSay('Signed and <b>proposed</b>. ✅ The transition is in the audit trail, and approval now requires <i>someone else’s</i> passkey — no self-approval. That closes the loop: gap found, gap closed, tree proposed.<br><br><span style="color:var(--ink-soft);font-size:12px">End of scripted demo — ↺ Restart to replay, or keep clicking around.</span>', 1100);
+  setHint('Demo complete. Tabs, badges and the report stay clickable.');
+  prefill('');
+}
+
+/* ---------------------------------------------------------- script */
+const script = [
+  { // step 0 -> 1: ask the gap question
+    async run(userText){
+      setBeat(1,'Ask');
+      addMsg('user', userText);
+      await aiSay('Checking the graph for Capabilities with uncovered Obligations under <b>DORA</b>…', 1000);
+      addTab('report','Gap report','#6a5f8f');
+      await aiSay('Yes — one gap. The Capability <b>ICT Incident Management &amp; Reporting</b> carries <b>3 Obligations</b> from DORA (Art. 17(1), 18(1), 19(1)) but has <b>no governing Policy</b>. The full report is in the pane on the right, citations included.<br><br>Want help closing it?', 1300);
+      prefill('Yes — help me close this gap.');
+      setHint('Scripted demo: press Send to continue. The report tab stays one click away throughout.');
+    }
+  },
+  { // step 2: scaffold
+    async run(userText){
+      setBeat(2,'Scaffold');
+      addMsg('user', userText);
+      await aiSay('Creating a Policy draft on the server and scaffolding it…', 900);
+      addTab('policy','Policy · ICT Incident Reporting','#b4552d');
+      await aiSay('The scaffold is up — every section visible, already linked to the Capability with the 3 uncovered Obligations as its scope. We work <b>top to bottom</b>.<br><br>First, <b>Purpose</b>: what outcome should this policy secure — not which activities it mandates, but what should be <i>true</i> when it works?', 1400);
+      prefill('Incidents get detected, classified and reported to the authority within DORA deadlines — no major incident goes unreported.');
+    }
+  },
+  { // step 3: purpose draft -> partial
+    async run(userText){
+      setBeat(3,'Section loop');
+      addMsg('user', userText);
+      await aiSay('Drafting Purpose from that — watch the section update…', 800);
+      setSection('purpose','partial',
+        'Ensure ICT-related incidents are detected, classified and reported within the deadlines of Regulation (EU) 2022/2554 (DORA), such that no major incident goes unreported.',
+        'purposePartial');
+      await aiSay('Purpose scores <span class="warn">PARTIAL</span>: <b>POL-PU-002</b> wants the beneficiary named — reported <i>to whom</i>, and who inside the company relies on this working? (Click the badge for the full criterion detail.)<br><br>So: who depends on this policy functioning?', 1300);
+      prefill('The board and the CISO org — they answer to the regulator. And ops teams need unambiguous escalation duties.');
+    }
+  },
+  { // step 4: purpose pass
+    async run(userText){
+      addMsg('user', userText);
+      await sleep(600);
+      setSection('purpose','pass',
+        'Ensure ICT-related incidents are detected, classified and reported to the competent authority within the deadlines of Regulation (EU) 2022/2554 (DORA), so that the Board and CISO organisation can discharge their accountability to the regulator and operational teams have unambiguous escalation duties.',
+        'purposePass');
+      await aiSay('<span class="ok">Purpose now passes</span> — POL-PU-001 and POL-PU-002 both green. Shall we move on to <b>Scope</b>?', 1100);
+      prefill('yes');
+    }
+  },
+  { // step 5: scope question, enable manual edit
+    async run(userText){
+      setBeat(4,'Manual edit');
+      addMsg('user', userText);
+      await aiSay('<b>Scope</b>: which entities and systems are inside this policy — and, just as important, what is explicitly <i>out</i>?<br><br><span style="color:var(--ink-soft);font-size:12px">Tip: you can also type straight into the Scope section in the pane — I’ll follow.</span>', 1200);
+      S.awaitingScope = true;
+      if(S.activeTab==='policy') renderArtifact();
+      flash('scope');
+      prefill('All EU group entities; ICT systems supporting critical or important functions. Non-EU affiliates are excluded.');
+      setHint('Try it: type directly into the Scope section on the right, then click elsewhere. (Or just press Send.)');
+    }
+  },
+  { // step 6: fast-forward remaining; roles partial
+    async run(userText){
+      setBeat(5,'Drill-down');
+      addMsg('user', userText);
+      await aiSay('Drafting the remaining sections from the three Obligations…', 1000);
+      setSection('stmts','pass',
+        'S1 — An ICT incident management process SHALL detect, manage and notify ICT-related incidents <span class="srcref">OBL-dora-17-1</span>. S2 — Incidents SHALL be classified per the Art. 18 criteria within 24h of detection <span class="srcref">OBL-dora-18-1</span>. S3 — Major incidents SHALL be reported to the competent authority within the applicable time limits <span class="srcref">OBL-dora-19-1</span>.',
+        'stmtsPass');
+      await sleep(500);
+      setSection('review','pass',
+        'Reviewed annually and after every major incident. Compliance measured through Control effectiveness and the audit trail of regulator notifications.',
+        'reviewPass');
+      await sleep(500);
+      setSection('roles','partial',
+        'The CISO is accountable for incident reporting. The incident manager on duty reports incidents and approves outbound regulator notifications.',
+        'rolesPartial');
+      await aiSay('Policy Statements and Review &amp; Compliance <span class="ok">pass</span>. <b>Roles &amp; Responsibilities</b> is <span class="warn">PARTIAL</span> — click its badge in the pane to see exactly which criterion fails and why, then tell me how you want to fix it.', 1300);
+      prefill('Keep the CISO accountable for reporting, but move approval of outbound regulator notifications to the Head of Compliance.');
+      setHint('Click the pulsing PARTIAL badge first — the document explains itself without the chat.');
+    }
+  },
+  { // step 7: roles pass -> tree ready
+    async run(userText){
+      setBeat(6,'Tree complete');
+      addMsg('user', userText);
+      await sleep(700);
+      setSection('roles','pass',
+        'The CISO is accountable for incident reporting. The incident manager on duty reports incidents; outbound regulator notifications are approved by the Head of Compliance (separation of duties).',
+        'rolesPass');
+      await aiSay('<span class="ok">Roles &amp; Responsibilities passes.</span> Holistic rescore: <b>all six sections green</b>.', 1100);
+      addTab('standard','Standard · Incident Classification','#1d5c8f');
+      await aiSay('I’ve also drafted the supporting <b>Standard</b> (new tab — Controls follow the same loop; condensed in this mock).<br><br>You can close ps-client at any point — the draft lives on the server with its scores, and we resume right here.<br><br>When you’re ready: the tree is ready to <b>Propose</b>. The control is on the document — that transition is yours to make, and it will ask for your passkey.', 1600);
+      setBeat(7,'Propose');
+      selectTab('policy');
+      prefill('');
+      setHint('Click “Propose… 🔑” at the bottom of the document →');
+      $('sendBtn').disabled = true;
+    }
+  },
+];
+
+async function onScopeBlur(){
+  if(!S.awaitingScope || S.scopeDone) return;
+  const body = document.getElementById('body-scope');
+  const text = (body?.textContent || '').trim();
+  if(!text || text.includes('to be drafted')) return;
+  S.scopeDone = true; S.awaitingScope = false; S.busy = true;
+  const s = sections.find(x=>x.id==='scope');
+  s.body = text; s.status='pass'; s.crit='scopePass';
+  renderArtifact(); flash('scope');
+  addMsg('sys','✏️ you edited Scope directly in the document');
+  await aiSay('I see you’ve edited <b>Scope</b> directly — re-scoring… it <span class="ok">passes</span> (POL-SC-001: the explicit exclusion is exactly the boundary the rubric wants). Your edit went through the same draft contract as mine would.<br><br>Picking up where we left off: next is <b>Policy Statements</b>.', 1300);
+  prefill('Draft the remaining sections from the three obligations.');
+  setHint('Scripted demo: press Send to continue.');
+  S.busy = false;
+}
+
+async function send(){
+  if(S.busy) return;
+  const stepIdx = S.step;
+  if(stepIdx >= script.length + 1) return;
+  const text = $('input').value.trim() || '(…)';
+  $('input').value = '';
+  S.busy = true; $('sendBtn').disabled = true;
+
+  if(S.awaitingScope && !S.scopeDone){
+    // chat fallback for the scope beat
+    S.scopeDone = true; S.awaitingScope = false;
+    addMsg('user', text);
+    await sleep(600);
+    setSection('scope','pass',
+      'Applies to all EU group entities and the ICT systems supporting critical or important functions. Non-EU affiliates are explicitly excluded.',
+      'scopePass');
+    await aiSay('<span class="ok">Scope passes</span> (POL-SC-001: boundaries explicit — the exclusion matters as much as the inclusion). Next: <b>Policy Statements</b>.', 1100);
+    prefill('Draft the remaining sections from the three obligations.');
+    setHint('Scripted demo: press Send to continue.');
+  } else {
+    const step = script[stepIdx];
+    if(step){ await step.run(text); S.step = stepIdx + 1; }
+  }
+  S.busy = false;
+  if(S.step < script.length) $('sendBtn').disabled = false;
+}
+
+$('sendBtn').onclick = send;
+$('input').addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+});
+
+/* ---------------------------------------------------------- boot */
+(async function(){
+  await aiSay('Good morning, Compliance Officer. Ask me anything about your compliance graph — answers with structure render in the pane on the right; we talk here.', 500);
+  prefill('Do we have a gap for DORA incident reporting?');
+  setHint('Scripted demo: the next message is pre-filled — press Send (or Enter) to advance. Edit it if you like; the script carries on regardless.');
+})();
+</script>
+</body>
+</html>
