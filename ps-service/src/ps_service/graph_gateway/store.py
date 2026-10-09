@@ -117,6 +117,15 @@ _INSERT_CHECKPOINT = """
 INSERT INTO graph_log.checkpoints (graph, position, canonical_digest)
 VALUES (%(graph)s, %(position)s, %(canonical_digest)s)
 """
+_SELECT_GRAPHS_WITH_PENDING_ENTRIES = """
+SELECT logged.graph
+FROM (
+    SELECT graph, max(position) AS last_position FROM graph_log.entries GROUP BY graph
+) AS logged
+LEFT JOIN graph_log.applied_markers AS marker ON marker.graph = logged.graph
+WHERE logged.last_position > coalesce(marker.applied_position, 0)
+ORDER BY logged.graph
+"""
 _SELECT_CHECKPOINT = """
 SELECT canonical_digest FROM graph_log.checkpoints WHERE graph = %s AND position = %s
 """
@@ -181,6 +190,17 @@ class GraphLogStore(Protocol):
 
     def last_position(self, graph: str) -> int:
         """Return the highest recorded position of `graph`, or 0 when it has no entries.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+        """
+        ...
+
+    def graphs_with_pending_entries(self) -> tuple[str, ...]:
+        """Return, in name order, every graph whose log holds entries beyond its applied marker.
+
+        A graph with no marker counts as applied through position 0. Read-only: it is what
+        startup recovery asks to find the graphs it must catch up.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -387,6 +407,15 @@ class PsycopgGraphLogStore:
             return cast("int", cast("TupleRow", cur.fetchone())[0])
 
         return self._read(select_last_position)
+
+    def graphs_with_pending_entries(self) -> tuple[str, ...]:
+        """Read the graphs behind their log (see `GraphLogStore.graphs_with_pending_entries`)."""
+
+        def select_graphs(cur: psycopg.Cursor[TupleRow]) -> tuple[str, ...]:
+            cur.execute(_SELECT_GRAPHS_WITH_PENDING_ENTRIES)
+            return tuple(cast("str", record[0]) for record in cur.fetchall())
+
+        return self._read(select_graphs)
 
     def read_groups_by_audit_event(self, audit_event_id: str) -> tuple[GraphLogGroup, ...]:
         """Read the groups an audit event anchors (see the `GraphLogStore` method)."""

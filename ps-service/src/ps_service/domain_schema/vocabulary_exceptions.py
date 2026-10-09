@@ -4,8 +4,10 @@ The pin tests (internal_seed vocabulary, restore allow-lists, company_merge
 read set, Cypher scan) compare a hand-written vocabulary copy with
 `DOMAIN_SCHEMA`. A few names legitimately appear on only one side; each is
 listed here with the reason, so a new exception is a conscious, reviewed edit
-rather than a silent widening. Imported by tests only: the restore allow-lists
-must stay independent of this package (AC-BI-014).
+rather than a silent widening. Imported by tests and, at runtime, by the Graph Write Gateway
+(`ps_service.graph_gateway.label_allow_list`), which builds its label allow-list from
+`DOMAIN_SCHEMA` plus these named sets. The restore allow-lists must stay independent of this
+package (AC-BI-014).
 """
 
 from __future__ import annotations

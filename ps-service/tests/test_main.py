@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import inspect
 import json
+import threading
 import tomllib
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
@@ -30,10 +31,11 @@ from persistence.provisioned_postgres import Provisioned, provision_graph_log
 import ps_service.main as main_module
 from ps_service import dependency_health
 from ps_service.config import ServiceConfig, load_config
+from ps_service.graph_gateway.models import RecoveryResult
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
-from ps_service.logging.facade import reset_for_tests, resolve_default_log_path
+from ps_service.logging.facade import configure, reset_for_tests, resolve_default_log_path
 from ps_service.main import create_app
 from ps_service.mcp_interface import mcp_server
 from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
@@ -2224,3 +2226,148 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
         if line.get("component") == "query_engine" and line.get("action") == "execute_cypher_query"
     )
     assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID
+
+
+class _FakeStartupGateway:
+    """A startup-recoverable gateway that records how it was driven (no Postgres, no FalkorDB)."""
+
+    def __init__(
+        self, result: RecoveryResult | None = None, failure: Exception | None = None
+    ) -> None:
+        self.result = result if result is not None else RecoveryResult(recovered=(), gated=())
+        self.failure = failure
+        self.recover_threads: list[int] = []
+        self.stop_timeouts: list[float] = []
+
+    def recover(self) -> RecoveryResult:
+        self.recover_threads.append(threading.get_ident())
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+    def stop_reconciler(self, timeout: float) -> bool:
+        self.stop_timeouts.append(timeout)
+        return True
+
+
+def _state_config(**overrides: object) -> ServiceConfig:
+    return _complete_config(state_postgres_host="ps-state.invalid", **overrides)
+
+
+def _startup_recovery_entries(read_lines: ReadLines) -> list[dict[str, object]]:
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    return [
+        line
+        for line in read_lines(resolve_default_log_path())
+        if line.get("action") == "graph_gateway_recovery"
+    ]
+
+
+def test_startup_recovery_builds_nothing_when_state_postgres_is_not_configured() -> None:
+    built: list[ServiceConfig] = []
+
+    def build(config: ServiceConfig) -> _FakeStartupGateway:
+        built.append(config)
+        return _FakeStartupGateway()
+
+    gateway = asyncio.run(
+        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
+            _complete_config(), build=build
+        )
+    )
+
+    assert gateway is None
+    assert built == []
+
+
+def test_startup_recovery_runs_recover_off_the_event_loop_and_logs_the_outcome(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    fake = _FakeStartupGateway(RecoveryResult(recovered=("a", "b"), gated=("c",)))
+
+    async def run() -> tuple[object, int]:
+        gateway = await main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
+            _state_config(), build=lambda _config: fake
+        )
+        return gateway, threading.get_ident()
+
+    gateway, loop_thread = asyncio.run(run())
+
+    assert gateway is fake
+    assert fake.recover_threads
+    assert fake.recover_threads != [loop_thread]
+    (entry,) = _startup_recovery_entries(read_lines)
+    assert entry["outcome"] == "warning"
+    assert (entry["recovered_graphs"], entry["gated_graphs"]) == (2, 1)
+
+
+def test_startup_recovery_that_fails_does_not_block_startup_and_logs_the_class_only(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    fake = _FakeStartupGateway(failure=RuntimeError("secret-host.internal exploded"))
+
+    gateway = asyncio.run(
+        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
+            _state_config(), build=lambda _config: fake
+        )
+    )
+
+    assert gateway is fake  # still the object that gates writes
+    (entry,) = _startup_recovery_entries(read_lines)
+    assert entry["outcome"] == "failure"
+    assert entry["reason"] == "RuntimeError"
+    assert "secret-host" not in json.dumps(entry)
+
+
+def test_startup_recovery_whose_gateway_cannot_be_built_does_not_block_startup(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+
+    def build(_config: ServiceConfig) -> _FakeStartupGateway:
+        message = "secret-host.internal"
+        raise OSError(message)
+
+    gateway = asyncio.run(
+        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
+            _state_config(), build=build
+        )
+    )
+
+    assert gateway is None
+    (entry,) = _startup_recovery_entries(read_lines)
+    assert (entry["outcome"], entry["reason"]) == ("failure", "OSError")
+
+
+def test_lifespan_recovers_the_graph_gateway_at_startup_and_stops_its_reconciler_on_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeStartupGateway()
+
+    def skip_state_migrations(_config: ServiceConfig) -> None:
+        """Stand-in for the migration step, which needs a real Postgres."""
+
+    def build_fake(_config: ServiceConfig) -> _FakeStartupGateway:
+        return fake
+
+    # detroit-exception: the migration step needs a real Postgres; recovery IS the spec (§1.2)
+    monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
+    # detroit-exception: composition-root builder seam handing the lifespan a fake gateway (§1.2)
+    monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build_fake)
+    app = create_app(_state_config())
+
+    with TestClient(app):
+        assert app.state.graph_write_gateway is fake
+        assert fake.recover_threads
+        assert fake.stop_timeouts == []
+
+    assert fake.stop_timeouts == [5.0]
+
+
+def test_lifespan_without_state_postgres_has_no_graph_gateway() -> None:
+    app = create_app(_complete_config())
+
+    with TestClient(app):
+        assert app.state.graph_write_gateway is None

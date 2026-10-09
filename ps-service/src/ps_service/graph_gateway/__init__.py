@@ -1,10 +1,18 @@
-"""ps_service.graph_gateway -- insert-only graph mutation log in the PS state Postgres (issue #205).
+"""ps_service.graph_gateway -- the Graph Write Gateway and its mutation log (issues #205, #206).
 
 Domain path: `ps.service.graphgateway`
-(`docs/architecture/ps-solution-architecture.md`). This package currently holds the store half
-of the Graph Write Gateway: the owner-protected `graph_log` tables and the privileged
-provisioning path that creates them. The gateway proper (submitting resolved mutations) is a
-separate sub-issue.
+(`docs/architecture/ps-solution-architecture.md`). Two halves live here:
+
+- The store (#205): the owner-protected, insert-only `graph_log` tables in the PS state Postgres
+  and the privileged provisioning path that creates them
+  (`python -m ps_service.graph_gateway.provision`).
+- The gateway (#206): `GraphWriteGateway` takes a `MutationGroup` of resolved primitives,
+  validates it (label allow-list, preconditions, no-op filter), appends it to the log (the
+  commit point, log-first), applies the logged entries to FalkorDB with a last-applied marker,
+  and reports a `GroupOutcome`. It also catches a graph up (`catch_up`, `is_caught_up`), recovers
+  every lagging graph at startup (`recover`) and runs a background reconciler.
+  `build_default_graph_write_gateway` composes it for the service; no writer is wired to it yet
+  (the writers move onto it in #208-#214, replay and digest verification are #207).
 
 Owns its migration directory (`MIGRATIONS_DIR`). Unlike every other component's migrations,
 these are NOT applied by the ordinary startup runner (that would make the `ps_state` role their
@@ -29,20 +37,44 @@ GRAPH_LOG_TABLES = (
 """Schema-qualified tables the `0001` migration creates; startup verifies each one."""
 
 # Imported after `MIGRATIONS_DIR` is defined: the provisioning CLI imports it from this package.
+from ps_service.graph_gateway.default_gateway import (  # noqa: E402
+    build_default_graph_write_gateway,
+)
 from ps_service.graph_gateway.errors import (  # noqa: E402
+    GraphApplyBlockedError,
+    GraphApplyError,
     GraphLogPayloadError,
     GraphLogPersistenceError,
     GraphLogUnavailableError,
+    GraphUnavailableError,
+    GraphWriteRejectedError,
+    MissingTargetError,
+    StaleGraphStateError,
+    UnlistedNameError,
 )
+from ps_service.graph_gateway.gateway import GatewaySettings, GraphWriteGateway  # noqa: E402
 from ps_service.graph_gateway.models import (  # noqa: E402
     AppendedGroup,
     AppliedMarker,
+    CatchUpResult,
+    DeleteEdge,
+    DeleteNode,
     DigestCheckpoint,
+    ExpectedPosition,
     GraphLogEntry,
     GraphLogEntryDraft,
     GraphLogGroup,
     GraphLogGroupDraft,
+    GroupOutcome,
+    MergeProperty,
+    MutationGroup,
+    NodeRef,
+    RecoveryResult,
+    RemoveProperty,
+    UpsertEdge,
+    UpsertNode,
 )
+from ps_service.graph_gateway.staged_submission import StagedSubmission  # noqa: E402
 from ps_service.graph_gateway.store import GraphLogStore, PsycopgGraphLogStore  # noqa: E402
 
 __all__ = [
@@ -50,7 +82,14 @@ __all__ = [
     "MIGRATIONS_DIR",
     "AppendedGroup",
     "AppliedMarker",
+    "CatchUpResult",
+    "DeleteEdge",
+    "DeleteNode",
     "DigestCheckpoint",
+    "ExpectedPosition",
+    "GatewaySettings",
+    "GraphApplyBlockedError",
+    "GraphApplyError",
     "GraphLogEntry",
     "GraphLogEntryDraft",
     "GraphLogGroup",
@@ -59,5 +98,21 @@ __all__ = [
     "GraphLogPersistenceError",
     "GraphLogStore",
     "GraphLogUnavailableError",
+    "GraphUnavailableError",
+    "GraphWriteGateway",
+    "GraphWriteRejectedError",
+    "GroupOutcome",
+    "MergeProperty",
+    "MissingTargetError",
+    "MutationGroup",
+    "NodeRef",
     "PsycopgGraphLogStore",
+    "RecoveryResult",
+    "RemoveProperty",
+    "StagedSubmission",
+    "StaleGraphStateError",
+    "UnlistedNameError",
+    "UpsertEdge",
+    "UpsertNode",
+    "build_default_graph_write_gateway",
 ]

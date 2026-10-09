@@ -13,10 +13,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import uvicorn
 from fastapi import FastAPI, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -43,6 +44,7 @@ from ps_service.dependency_health import (
     is_healthy,
 )
 from ps_service.graph_gateway import GRAPH_LOG_TABLES
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
 )
@@ -87,6 +89,8 @@ if TYPE_CHECKING:
     import psycopg
     from psycopg.rows import TupleRow
     from starlette.types import ASGIApp, Receive, Scope, Send
+
+    from ps_service.graph_gateway.models import RecoveryResult
 
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
 # in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
@@ -318,6 +322,68 @@ def _verify_graph_gateway_migrations_at_startup(conn: psycopg.Connection[TupleRo
         sources=[GRAPH_GATEWAY_MIGRATION_SOURCE],
         required_tables=GRAPH_LOG_TABLES,
     )
+
+
+class _StartupGateway(Protocol):
+    """What the lifespan needs of the Graph Write Gateway: recover at startup, stop on teardown."""
+
+    def recover(self) -> RecoveryResult: ...
+
+    def stop_reconciler(self, timeout: float) -> bool: ...
+
+
+_RECONCILER_STOP_TIMEOUT_SECONDS = 5.0
+
+
+async def _recover_graph_gateway_at_startup(
+    config: ServiceConfig,
+    build: Callable[[ServiceConfig], _StartupGateway] | None = None,
+) -> _StartupGateway | None:
+    """Build the Graph Write Gateway and apply every committed-but-unapplied log entry (#206).
+
+    Skipped, returning None, when `config.state_postgres_host` is unset (no log to recover).
+    Never raises: the gateway fails closed per graph on its own (a write to a graph that still
+    owes entries is refused until they are applied), so a Postgres or FalkorDB outage here is
+    logged (exception class only, never its text) and startup goes on. `recover` is blocking, so
+    it runs on a worker thread. No writer is wired to the gateway yet; it is built and recovered
+    only so a lagging graph is caught up before any later writer migration relies on it.
+    """
+    if config.state_postgres_host is None:
+        return None
+    try:
+        gateway = (build or build_default_graph_write_gateway)(config)
+    except Exception as exc:  # noqa: BLE001 - recovery must never crash startup (see docstring)
+        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
+        return None
+    try:
+        result = await run_in_threadpool(gateway.recover)
+    except Exception as exc:  # noqa: BLE001 - recovery must never crash startup (see docstring)
+        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
+    else:
+        _log_graph_gateway_recovery(
+            "warning" if result.gated else "success",
+            {"recovered_graphs": len(result.recovered), "gated_graphs": len(result.gated)},
+        )
+    return gateway
+
+
+def _log_graph_gateway_recovery(outcome: str, extra: dict[str, object]) -> None:
+    emit_log_entry(
+        component="entrypoint", action="graph_gateway_recovery", outcome=outcome, extra=extra
+    )
+
+
+async def _stop_graph_gateway_reconciler(gateway: _StartupGateway | None) -> None:
+    """Stop the gateway's background reconciler at shutdown; never raises, never waits long."""
+    if gateway is None:
+        return
+    try:
+        stopped = await run_in_threadpool(gateway.stop_reconciler, _RECONCILER_STOP_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the reconciler does
+        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
+        return
+    if not stopped:
+        _log_graph_gateway_recovery("warning", {"reason": "reconciler_not_stopped"})
 
 
 def startup_failure_log_extra(exc: Exception) -> dict[str, object]:
@@ -579,9 +645,11 @@ def create_app(config: ServiceConfig) -> FastAPI:
         app.state.config_complete = not missing_config
         _apply_passkey_signing_migrations_at_startup(config)
         _apply_state_migrations_at_startup(config)
+        app.state.graph_write_gateway = await _recover_graph_gateway_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
+            await _stop_graph_gateway_reconciler(app.state.graph_write_gateway)
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)

@@ -250,3 +250,189 @@ def test_ca_apply_pending_migrations_is_no_longer_startup_only() -> None:
     assert "run_as_role" in row
     assert "lock_timeout_seconds" in row
     assert "advisory lock" in row
+
+
+def test_ca_fail_closed_invariant_names_the_two_fixed_sanitized_errors() -> None:
+    text = _read(_CA)
+
+    assert "the caller receives the existing sanitized error" not in text
+    invariant = next(line for line in text.splitlines() if line.startswith("- **Fail-closed:**"))
+    for needle in ("GraphLogUnavailableError", "GraphUnavailableError", "fixed sanitized error"):
+        assert needle in invariant, needle
+
+
+# --- issue #206: the gateway proper (submit, apply, catch-up, recovery) --------------------------
+
+_GATEWAY_PACKAGE = _REPO / "ps-service" / "src" / "ps_service" / "graph_gateway"
+_MECHANISM_WORDS = re.compile(
+    r"\b(sql|tables?|triggers?|locks?|locked|index(?:es)?|batch(?:es)?|cypher|unwind|advisory"
+    r"|psycopg|threads?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _gateway_section(heading: str) -> str:
+    return _section(_section(_read(_CA), "### Graph Write Gateway"), heading)
+
+
+def _registration_rows() -> dict[str, str]:
+    registration = _gateway_section("#### Implementation Registration")
+    return {
+        match.group(1): match.group(0)
+        for match in re.finditer(r"^\| `([^`]+)` \|.*$", registration, flags=re.MULTILINE)
+    }
+
+
+def test_architecture_registration_covers_every_graph_gateway_module() -> None:
+    registered = set(_registration_rows())
+    modules = {
+        f"ps-service/src/ps_service/graph_gateway/{path.name}"
+        for path in _GATEWAY_PACKAGE.glob("*.py")
+    }
+
+    assert modules <= registered, sorted(modules - registered)
+    assert "ps-service/src/ps_service/main.py" in registered
+
+
+def test_architecture_registration_names_exactly_the_error_types_the_package_defines() -> None:
+    row = _registration_rows()["ps-service/src/ps_service/graph_gateway/errors.py"]
+    named = set(re.findall(r"`(\w+Error)`", row))
+    defined = set(
+        re.findall(
+            r"^class (\w+Error)\(", _read(_GATEWAY_PACKAGE / "errors.py"), flags=re.MULTILINE
+        )
+    )
+
+    assert named == defined, (sorted(named - defined), sorted(defined - named))
+    assert "GraphLogInvalidGroupError" not in _read(_CA)
+
+
+def test_architecture_registration_lists_the_gateway_entry_points() -> None:
+    registration = _gateway_section("#### Implementation Registration")
+
+    for entry_point in (
+        "submit_group",
+        "submit_group_in_transaction",
+        "catch_up",
+        "is_caught_up",
+        "recover",
+        "build_default_graph_write_gateway",
+        "_recover_graph_gateway_at_startup",
+    ):
+        assert f"`{entry_point}" in registration, entry_point
+
+
+def test_architecture_actions_table_lists_every_gateway_action() -> None:
+    actions = _gateway_section("#### Actions")
+
+    for action in ("SubmitGroup", "SubmitGroupInTransaction", "CaughtUp", "IsCaughtUp", "Recover"):
+        assert f"| {action} |" in actions, action
+
+
+def test_architecture_gateway_intro_says_what_is_built_and_what_is_not() -> None:
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+    intro = gateway.split("#### Domain Concepts")[0]
+
+    assert "#205" in intro
+    assert "#206" in intro
+    assert "no writer" in intro.lower()
+    assert "#207" in intro
+    assert "#208" in intro
+    assert "the contracts below describe the intended behavior" not in intro
+
+
+def test_architecture_states_the_outcome_of_a_submitted_group() -> None:
+    outcomes = _gateway_section("#### Outcomes").lower()
+
+    for needle in (
+        "applied",
+        "unchanged",
+        "committed, apply pending",
+        "rejected",
+        "graph unavailable",
+        "apply refused",
+        "blocked",
+        "first and last position",
+    ):
+        assert needle in outcomes, needle
+    for error in ("GraphWriteRejectedError", "GraphUnavailableError", "GraphApplyBlockedError"):
+        assert error.lower() in outcomes, error
+
+
+def test_architecture_exceptions_state_the_refused_entry_and_restart_recovery() -> None:
+    exceptions = _gateway_section("#### C-0 exceptions")
+
+    assert "Apply refused" in exceptions
+    assert "blocked" in exceptions
+    assert "CaughtUp" in exceptions
+    assert "restart" in exceptions
+    assert "fails closed" in exceptions or "fail closed" in exceptions
+    assert "the caller receives the sanitized error." not in exceptions
+
+
+def test_architecture_invariants_state_serialisation_and_the_gate_on_unapplied_entries() -> None:
+    invariants = _gateway_section("#### Invariants")
+
+    for name in ("Serialised per graph", "Nothing accepted while behind", "Caller-supplied values"):
+        assert f"**{name}:**" in invariants, name
+
+
+def test_architecture_contract_sections_use_no_mechanism_words() -> None:
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+    actions = _section(gateway, "#### Actions")
+    contract = "\n".join(
+        [
+            _section(gateway, "#### Invariants"),
+            _section(gateway, "#### C-0 exceptions"),
+            _section(gateway, "#### Outcomes"),
+            "\n".join(line for line in actions.splitlines() if line.startswith("| ")),
+        ]
+    )
+
+    assert _MECHANISM_WORDS.findall(contract) == []
+
+
+def test_architecture_guidance_states_lock_order_and_the_single_replica_precondition() -> None:
+    guidance = _gateway_section("#### Kind")
+
+    order = next(line for line in guidance.splitlines() if line.startswith("- Lock order:"))
+    assert order.index("in-process") < order.index("advisory lock")
+    for needle in (
+        "strategy: Recreate",
+        "session advisory lock",
+        "#208",
+        "replicas",
+        "committed_apply_pending",
+        "reconciler",
+        "GatewaySettings",
+    ):
+        assert needle in guidance, needle
+
+
+def test_architecture_guidance_lists_exactly_the_permitted_log_fields() -> None:
+    from ps_service.graph_gateway.gateway_log import ALLOWED_LOG_FIELDS
+
+    guidance = _gateway_section("#### Kind")
+    line = next(row for row in guidance.splitlines() if "Gateway log entries carry" in row)
+
+    named = set(re.findall(r"`(\w+)`", line.split(";")[0]))
+    assert named == set(ALLOWED_LOG_FIELDS)
+
+
+def test_architecture_container_diagram_shows_startup_recovery_of_the_gateway() -> None:
+    ca = _read(_CA)
+
+    assert re.search(r'ProcessHarness -->\|"[^"]*recover[^"]*"\| GraphWriteGateway', ca)
+
+
+def test_architecture_component_row_and_sequence_state_the_implemented_behaviour() -> None:
+    ca = _read(_CA)
+    row = next(line for line in ca.splitlines() if line.startswith("| Graph Write Gateway | `ps."))
+    sequence = _section(
+        ca, "### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)"
+    )
+
+    assert "#206" in row
+    assert "#206" in sequence
+    for needle in ("stale", "blocked"):
+        assert needle in sequence, needle

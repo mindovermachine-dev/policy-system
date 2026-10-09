@@ -215,6 +215,7 @@ graph TB
 
     ProcessHarness -->|"apply_pending_migrations (audit, authz, runtime_config, ingestion_runs)"| Persistence
     ProcessHarness -->|"verify_privileged_migrations (graph_gateway, read-only)"| Persistence
+    ProcessHarness -->|"recover at startup; stop the reconciler at shutdown"| GraphWriteGateway
     Persistence -->|"connect / migrate (ps_state)"| PSPostgres
     Persistence -->|"privileged provisioning (admin)"| PSPostgres
     Persistence -->|"log entries"| Logging
@@ -317,7 +318,7 @@ graph TB
 | Dependency Health | `ps.service.dependencyhealth` | Process-wide registry of whether FalkorDB, LLM Interface, and Cellar/ELI were reachable on their most recent real call; fed by those components' own exception handling, read by Process Harness for `/ready` |
 | Passkey Signing | `ps.service.passkeysigning` | Own WebAuthn relying party for transaction-signing (independent of the OIDC login IdP); PS-Service-owned store in the separate `ps_signing` database of the PS Postgres server for enrolled signing credentials and pending-approval records; dynamically-bound challenge construction/verification; companion-browser enrollment/signing ceremony pages |
 | Audit | `ps.service.audit` | Shared, insert-only audit trail (`audit_events` in the PS state Postgres) for every component that records who did what to what; validates each action's typed `details` against its registered model; writes in the caller's transaction so the audit row and the state change commit or roll back together; operations whose effect is outside Postgres (ingestion, restore, near-miss resolve, invite, `check_regulations` re-ingests) write an opening row first (fail-closed: if it cannot be written the operation does not run) and a best-effort terminal row (issue #195); `list-audit-events` supports an allow-listed `details` filter (`celex`, `regulatory_instrument_id`, `instrument_id`) backed by expression indexes (migration 0002) |
-| Graph Write Gateway | `ps.service.graphgateway` | Target design (not yet implemented; delivered by #205-#214): the single path for graph writes by Ingestion, Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup and Regulatory Change Monitor; record each transaction group in the mutation log (`ps_state`) before it is applied; apply to FalkorDB as a rebuildable projection of the log; replay the log and verify a rebuilt graph against a digest checkpoint; reject labels and relationship types outside the allow-list; fail closed, reporting "committed, apply pending" when only the apply is delayed |
+| Graph Write Gateway | `ps.service.graphgateway` | Mutation log store (#205) and gateway (#206: submit, apply, catch-up, startup recovery) implemented, with no writer wired yet; replay and verify (#207) and the writers' move onto it (#208-#214) are target design: the single path for graph writes by Ingestion, Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup and Regulatory Change Monitor; record each transaction group in the mutation log (`ps_state`) before it is applied; apply to FalkorDB as a rebuildable projection of the log; replay the log and verify a rebuilt graph against a digest checkpoint; reject labels and relationship types outside the allow-list; fail closed, reporting "committed, apply pending" when only the apply is delayed |
 | Persistence | `ps.service.persistence` | Own PS Service's access to the PS state Postgres: per-call connections, connectivity probe, and applying each component's SQL migrations at startup, tracked per component; fails closed when the store is unconfigured or unreachable |
 | Runtime Config | `ps.service.runtimeconfig` | Own runtime-mutable configuration values: each key is declared in a typed registry (name, value type, validator); reject an unregistered key or invalid value before any write; persist values in the `runtime_config` table of the PS state Postgres; audit every set/reset in the same transaction through Audit's public interface |
 | Ingestion Runs | `ps.service.ingestionruns` | Track catalog ingestion runs submitted asynchronously over MCP: persist each run's status and terminal result or sanitized error in the `ingestion_runs` table of the PS state Postgres; run each submission on a background thread tracked by a process-local in-flight registry |
@@ -1513,7 +1514,7 @@ These are PS Service's own operational security records, not PS Conceptual Model
 
 ### Graph Write Gateway
 
-Target design (not yet implemented; delivered by #205-#214): the Graph Write Gateway is the single path through which the writers below change the compliance graphs; the contracts below describe the intended behavior.
+The Graph Write Gateway is the single path through which the writers below change the compliance graphs. Built so far: the mutation log store (#205) and the gateway that validates, records, applies, catches up and recovers groups (#206). No writer submits to it yet: moving each writer onto it is #208-#214, and replaying a log and verifying a digest are #207, so the contracts for those stay target design.
 
 #### Domain Concepts
 
@@ -1612,19 +1613,40 @@ The entities below are defined in [`ps-domain-concepts.md`](../artifacts/ps-doma
 - **Log-first:** a write is durable in the mutation log before it is applied to the graph, and nothing is applied that is not logged.
 - **Insert-only:** log entries and digest checkpoints are only ever added; none is changed or removed.
 - **Deterministic replay:** replaying a graph's log from the beginning reproduces the same graph content and the same canonical digest, every time.
-- **Fail-closed:** when the log cannot accept a group, nothing is logged and nothing is applied, and the caller receives the existing sanitized error.
+- **Fail-closed:** when the log cannot accept a group, or the graph store cannot be reached before the group is logged, nothing is logged and nothing is applied, and the caller receives a fixed sanitized error (`GraphLogUnavailableError` for the log, `GraphUnavailableError` for the graph store) that carries no host, port or driver text.
 - **No-op writes are not logged:** a group whose entries change nothing is not recorded.
 - **Guards before logging:** where a writer's change depends on a guard or pattern condition, the condition is evaluated before anything is logged.
 - **Effect checks only when caught up:** a writer's check on the effect of its own write is made only when the graph's applied marker equals the last recorded position.
+- **Serialised per graph:** groups for one graph are checked, recorded and applied one at a time, in the order they are committed; groups for different graphs do not wait for each other.
+- **Nothing accepted while behind:** a group is checked against, and recorded after, every earlier entry of its graph has been applied; if those entries cannot be applied the group is refused and nothing is logged.
+- **Resumable apply:** applying logged entries again leaves the graph as it was after applying them once, so an interrupted apply resumes from the applied marker.
+- **Caller-supplied values:** every identifier, timestamp and embedding in an entry is supplied by the writer and recorded exactly as given; the gateway generates none.
+- **Logging names no content:** the gateway's own log entries carry only the graph, positions, counts, retry numbers, the command identifier and the error class; never an entry's content, embedding, label, identity, exception text, host or credential.
+
+#### Outcomes
+
+What a writer sees for a submitted group. Positions are the first and last position the group took in the graph's sequence.
+
+| Outcome | Condition | What the caller sees |
+|---|---|---|
+| Applied | The group was recorded and applied | The first and last position |
+| Unchanged | No entry of the group changes the graph, compared with the graph's current state and with the earlier entries of the same group | Nothing is recorded; the outcome carries no positions |
+| Committed, apply pending | The group was recorded, then FalkorDB stayed unreachable through the bounded retries | The first and last position; not an error; the entries stay pending and are applied on recovery |
+| Rejected | Before recording: a label or relationship type off the allow-list (`UnlistedNameError`), an edge endpoint or a property target that does not exist (`MissingTargetError`), an expected position that is stale (`StaleGraphStateError`), or an invalid property | A `GraphWriteRejectedError`; nothing is logged and nothing is applied |
+| Graph unavailable | Before recording: FalkorDB stayed unreachable through the bounded retries while the gateway read the graph or applied entries the graph still owed | `GraphUnavailableError`, a fixed message with no host, port or driver text; nothing is logged |
+| Log unavailable | The PS state store could not be reached through the bounded retries | `GraphLogUnavailableError`; nothing is logged and nothing is applied |
+| Apply refused | FalkorDB refuses a recorded entry with an error that retrying cannot cure | `GraphApplyError` naming the graph and the first unapplied position, without driver text; the graph becomes blocked |
+| Blocked | A group is submitted for a graph blocked by a refused entry | `GraphApplyBlockedError`; nothing is logged; other graphs are unaffected; the graph stays blocked until the service restarts or CaughtUp applies the entry |
 
 #### C-0 exceptions
 
 The gateway deliberately differs from today's direct writes in the caller-visible cases below. Each states the condition under which it occurs and what the caller sees.
 
-- **Committed, apply pending.** Condition: the group is recorded in the log, and FalkorDB then remains unavailable after the gateway's bounded retries. The caller is told the group is committed and will be applied on recovery; this is not an error. When FalkorDB recovers, CaughtUp applies the pending entries in order.
-- **Crash-case completion.** Condition: the process stops after the group is recorded and before it is fully applied. On restart the unapplied entries are applied from the log, so an operation interrupted part-way is completed rather than left partial as today.
+- **Committed, apply pending.** Condition: the group is recorded in the log, and FalkorDB then remains unavailable after the gateway's bounded retries. The caller is told the group is committed and will be applied on recovery; this is not an error. When FalkorDB recovers, a background reconciler (or CaughtUp) applies the pending entries in order. Until then a further group for that graph is refused as graph unavailable with nothing logged, so nothing is accepted while entries are unapplied.
+- **Crash-case completion.** Condition: the process stops after the group is recorded and before it is fully applied. On restart, startup recovery applies the unapplied entries of every graph from the log, so an operation interrupted part-way is completed rather than left partial as today. Startup never waits on it: if FalkorDB is unavailable at start the service still starts, the graph stays gated (a group for it fails closed as graph unavailable) and the reconciler applies the entries when FalkorDB recovers.
+- **Apply refused after commit.** Condition: the group is recorded, and FalkorDB then refuses an entry with an error that retrying cannot cure. The caller receives `GraphApplyError`, not "committed, apply pending". The graph is blocked: further groups for it fail closed with nothing logged until the service restarts or CaughtUp applies the entry, and the reconciler does not retry it.
 - **Re-used Standard or Control id.** Condition: a Standard or Control id is re-used under a different parent. It no longer creates a second node (#211). This cannot occur in normal operation because computed ids embed the parent id.
-- **Pre-commit failure (the contract, not an exception).** Condition: the log cannot accept the group, for example because the PS state store is unavailable before the commit. The group fails closed: nothing is logged, nothing is applied, and the caller receives the sanitized error.
+- **Pre-commit failure (the contract, not an exception).** Condition: the log cannot accept the group, for example because the PS state store is unavailable before the commit. The group fails closed: nothing is logged, nothing is applied, and the caller receives the fixed sanitized error of the store that failed (see Fail-closed).
 
 #### Label allow-list contract
 
@@ -1653,34 +1675,62 @@ A write naming anything else is rejected before anything is logged. If the lists
 - The gateway owns the mutation log store in the PS state Postgres (`ps_state`): the `graph_log` schema with five tables (`groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`). Persistence supplies the state-store connection surface and, since #205, the privileged migration runner that creates these tables (see Persistence: `ApplyPrivilegedMigrations`, `VerifyPrivilegedMigrations`).
 - Immutability is enforced by the database, not by the application: a dedicated non-login owner role (`ps_state_graph_owner`) owns the tables, and the `ps_state` application role holds only `SELECT` and `INSERT` (plus `UPDATE` on the applied marker table). The application role is never a member of the owner role and never holds the admin credential. Database triggers and checks additionally reject a position gap, a group whose range disagrees with its entries, and an applied marker that moves backwards or past the last entry.
 - Residual: `ps_state` owns the `ps_state` database, so it can still `DROP DATABASE` from another connection or drop objects in `public` (`audit_events` is likewise enforced only by omission until #151). The log tables are protected from alteration by that role, not the database that contains them.
-- The store accepts a group with no audit-event identifier (the link is optional at the store, so a bootstrap group can be appended and the store exercised without an audit row); the gateway (#206) will require one, so the Command attribute above is optional at the store and required at the gateway.
+- The store accepts a group with no audit-event identifier (the link is optional at the store, so a bootstrap group can be appended and the store exercised without an audit row); the gateway requires one (`audit_event_id` is mandatory on a `MutationGroup`), so the Command attribute above is optional at the store and required at the gateway.
 - Appends allocate gap-free per-graph positions under a per-graph advisory lock held to the caller's commit and require READ COMMITTED; the gateway's callers must make the audit `record` and the append the last writes of a short transaction.
 - Large payloads (every embedding, and content over 2048 bytes) are stored once, keyed by a `sha256:` hash, in `payloads`; smaller content stays inline in the entry.
 - Writers hold no other path to write to FalkorDB; reads stay direct.
+- Entry points (#206): `submit_group(group)` appends on its own connection; `submit_group_in_transaction(cur, group)` appends on the writer's cursor (so the writer's audit `record` and the group commit or roll back together) and returns a `StagedSubmission` context manager: the writer commits, then calls `complete()` to apply and receive the outcome, or `abort()` after a rollback; leaving the `with` block without completing releases the graph and applies nothing. `catch_up(graph)`, `is_caught_up(graph)` and `recover()` serve CaughtUp, IsCaughtUp and Recover. The gateway is built by `build_default_graph_write_gateway(config)`, which connects to neither store, and every dependency is injected, so tests substitute in-memory fakes for Postgres and FalkorDB only.
+- Property keys and values are validated when a primitive is built, at the trust boundary: interpolated keys (`RemoveProperty.keys`) match `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and are checked again at the point of use (as are labels and types); `id` and `embedding` (and `identity` on edges) are reserved and cannot be written as properties; values are scalars or flat lists of one scalar type. A node's embedding is stored in its `embedding` property. A submitted group is then checked in this order, all before anything is logged: the graph is not blocked, the graph is caught up, label and relationship-type allow-list, the writer's `ExpectedPosition` precondition (the only precondition shape; the gateway adds none of its own), then one batched read of the graph state (chunks of the batch size) that rejects an absent edge endpoint or merge target and drops the primitives that change nothing, comparing with the earlier primitives of the same group, embedding included.
+- Lock order: (1) a per-graph in-process lock, then (2) the Postgres per-graph advisory lock taken inside the append; (1) is never taken while holding (2) on the same thread, and there is one in-transaction submission per transaction. The in-process locks are never evicted (bounded by the number of graphs). That a second process is held back by (2) is proved only by the `postgres_live` variant of the concurrency test.
+- Residual: the in-process lock serialises one process only, so cross-process correctness rests on `replicas: 1`. The chart does not set `strategy: Recreate`, so a rolling update briefly runs two pods; because #206 wires no writer, nothing can interleave during a rollout. `strategy: Recreate` (or holding a session advisory lock for the whole submission) is a precondition of the first writer migration (#208) or of `replicas` above 1.
+- Apply reads the log beyond the applied marker, applies entries in position order in runs of consecutive same-kind entries (node upserts within a run are grouped by label and split at a repeated id; chunks of `GatewaySettings.batch_size`, default 500) and advances the marker after each run; each apply pass lists `CALL db.indexes()` once and creates the missing per-label `id` indexes first, so a restored or flushed graph heals. FalkorDB's "already indexed" answer counts as success. FalkorDB receives set-semantic writes only, so redoing a partly applied run is safe.
+- Retry classes: a FalkorDB connection error or timeout, and `GraphLogUnavailableError`, are transient and retried with `GatewaySettings.max_attempts` (4) attempts and 0.2, 0.4, 0.8 s waits, no jitter; after exhaustion before the commit they surface as the fixed errors above, after the commit as the outcome status `committed_apply_pending`, and FalkorDB is marked unhealthy in Dependency Health (and healthy again on the next success). Any other FalkorDB error is permanent (no retry, FalkorDB not marked unhealthy); `GraphLogPersistenceError` is never retried because the outcome of a failed commit is unknown.
+- The reconciler is a lazily started daemon thread: it starts when the first graph is registered pending, waits with an interruptible `Event.wait` (0.2 s doubling, capped by `reconciler_max_backoff_seconds`, 30 s; unbounded passes), runs `catch_up` for each pending graph and retires when none is left. Lifespan teardown calls `stop_reconciler(timeout=5.0)` before other shutdown; a thread that does not end is abandoned (it is a daemon) and logged. Every write also compares the applied marker with the last position first, so a restarted process needs no separate "reconciled" state.
+- Startup: the lifespan calls `_recover_graph_gateway_at_startup` after the state migrations; it does nothing when the PS state store is not configured, runs `recover()` through `run_in_threadpool`, and never raises (failures are logged with the exception class only).
+- Gateway log entries carry only `graph`, `first_position`, `last_position`, `entry_count`, `attempt`, `backoff_seconds`, `error_class`, `group_id` and `audit_event_id`; `gateway_log.emit_gateway_event` refuses any other key. Actions logged under component `graph_gateway`: `apply_group`, `apply_retry`, `submit_rejected`, `catch_up`, `startup_recovery`, `reconciler_pass`, `reconciler_stop`.
 - Feeds Logging with its log entries and Dependency Health with the health of the stores it uses.
 
 #### Implementation Registration
 
-Registered for #205 (the mutation log store and its provisioning only; the gateway's submit, replay and verify behaviour is registered when #206 and #207 land).
+Registered for #205 (the mutation log store and its provisioning) and #206 (the gateway: submit, apply, catch-up, reconcile, startup recovery); replay and verify behaviour is registered when #207 lands.
 
 | Path | Purpose | Implements |
 |---|---|---|
-| `ps-service/src/ps_service/graph_gateway/__init__.py` | Package front door, `MIGRATIONS_DIR`, `GRAPH_LOG_TABLES` | — |
-| `ps-service/src/ps_service/graph_gateway/store.py` | `GraphLogStore` and `PsycopgGraphLogStore`: append a group (cursor-scoped or standalone), read entries and groups, applied marker, digest checkpoints; no update or delete of log rows | Store behaviour behind SubmitGroup, CaughtUp, Verify (not yet wired) |
-| `ps-service/src/ps_service/graph_gateway/models.py` | Typed drafts and records for entries, groups, markers and checkpoints | — |
+| `ps-service/src/ps_service/graph_gateway/__init__.py` | Package front door: `MIGRATIONS_DIR`, `GRAPH_LOG_TABLES`, and the public store, model and error types | — |
+| `ps-service/src/ps_service/graph_gateway/gateway.py` | `GraphWriteGateway` (`submit_group`, `submit_group_in_transaction`, `catch_up`, `is_caught_up`, `recover`, `stop_reconciler`) and `GatewaySettings` | SubmitGroup, SubmitGroupInTransaction, CaughtUp, IsCaughtUp, Recover |
+| `ps-service/src/ps_service/graph_gateway/default_gateway.py` | `build_default_graph_write_gateway(config)` and the lazily connecting FalkorDB opener | — |
+| `ps-service/src/ps_service/graph_gateway/staged_submission.py` | `StagedSubmission`: the in-transaction submission (`complete`, `abort`, context manager) | SubmitGroupInTransaction |
+| `ps-service/src/ps_service/graph_gateway/validation.py` | Allow-list and expected-position checks before anything is logged | SubmitGroup |
+| `ps-service/src/ps_service/graph_gateway/label_allow_list.py` | The label and relationship-type allow-list, derived from the domain schema and the named exception sets | SubmitGroup |
+| `ps-service/src/ps_service/graph_gateway/noop_filter.py` | Reads the graph state once, rejects absent targets and drops primitives that change nothing | SubmitGroup |
+| `ps-service/src/ps_service/graph_gateway/graph_reader.py` | The batched read of node and edge state behind the filter | SubmitGroup |
+| `ps-service/src/ps_service/graph_gateway/entry_codec.py` | Encodes a primitive as a log entry and decodes it back, so apply and replay share one path | SubmitGroup, CaughtUp |
+| `ps-service/src/ps_service/graph_gateway/applier.py` | Applies logged entries to FalkorDB in runs and chunks, advancing the marker after each run | SubmitGroup, CaughtUp |
+| `ps-service/src/ps_service/graph_gateway/cypher.py` | The fixed query templates and the point-of-use identifier check | — |
+| `ps-service/src/ps_service/graph_gateway/index_manager.py` | Creates the missing per-label `id` indexes at the start of an apply pass | SubmitGroup, CaughtUp |
+| `ps-service/src/ps_service/graph_gateway/graph_locks.py` | The per-graph in-process lock registry (first in the lock order) | SubmitGroup, SubmitGroupInTransaction |
+| `ps-service/src/ps_service/graph_gateway/retry.py` | Transient-versus-permanent classification, bounded backoff and the sanitized errors | SubmitGroup, CaughtUp |
+| `ps-service/src/ps_service/graph_gateway/reconciler.py` | The background reconciler of pending graphs | CaughtUp |
+| `ps-service/src/ps_service/graph_gateway/gateway_log.py` | The gateway's structured log entries and their permitted fields | — |
+| `ps-service/src/ps_service/graph_gateway/store.py` | `GraphLogStore` and `PsycopgGraphLogStore`: append a group (cursor-scoped or standalone), read entries and groups, graphs with pending entries, applied marker, digest checkpoints; no update or delete of log rows | Store behaviour behind SubmitGroup, CaughtUp, Recover, Verify (not yet wired) |
+| `ps-service/src/ps_service/graph_gateway/models.py` | Typed drafts and records for entries, groups, markers and checkpoints; the six mutation primitives, `MutationGroup`, `GroupOutcome`, `CatchUpResult`, `RecoveryResult` | — |
 | `ps-service/src/ps_service/graph_gateway/payloads.py` | Canonical payload encoding and hashing | — |
-| `ps-service/src/ps_service/graph_gateway/errors.py` | `GraphLogUnavailableError`, `GraphLogPersistenceError`, `GraphLogInvalidGroupError`, `GraphLogPayloadError` | — |
+| `ps-service/src/ps_service/graph_gateway/errors.py` | `GraphLogUnavailableError`, `GraphUnavailableError`, `GraphApplyError`, `GraphApplyBlockedError`, `GraphLogPersistenceError`, `GraphLogPayloadError`, `GraphLogEntryDecodeError`, `GraphWriteRejectedError`, `UnlistedNameError`, `MissingTargetError`, `StaleGraphStateError`, `UnexpectedGraphReplyError`, `StagedSubmissionClosedError`, `StagedGroupNotCommittedError` | — |
 | `ps-service/src/ps_service/graph_gateway/provision.py` | Operator command `python -m ps_service.graph_gateway.provision` (admin credential; run by the Helm Job) | Persistence: ApplyPrivilegedMigrations |
 | `ps-service/src/ps_service/graph_gateway/migrations/0001_graph_mutation_log.sql` | The `graph_log` schema, tables, ownership, grants, checks and triggers | — |
+| `ps-service/src/ps_service/main.py` | `_recover_graph_gateway_at_startup` builds and recovers the gateway in the lifespan (non-fatal, off the event loop) and stops its reconciler on teardown; no writer is wired | Recover |
 
 #### Actions
 
 | Action | Purpose | Authentication Required | Authorization Scope | Pre-conditions | Post-conditions | Side Effects | External Dependencies | Processing Time (SLA) | Idempotent | Error Handling Strategy |
 |---|---|---|---|---|---|---|---|---|---|---|
-| SubmitGroup | Accept one transaction group from a writer, record it in the mutation log, then apply it to the graph | No (internal call — the writer has already authenticated and authorized its own command) | n/a | Every label and relationship type named is on the allow-list; the group carries the identifier of its causing command | The group is recorded in the log and applied to FalkorDB; or recorded and reported "committed, apply pending" (not an error) | Appends entries to the mutation log (`ps_state`); writes to FalkorDB; advances the applied marker | PS state Postgres, FalkorDB | Not yet set | No (each submission is a new group) | Off-allow-list names are rejected before anything is logged; if the log cannot accept the group it fails closed with nothing logged or applied; if FalkorDB is unavailable after the commit the caller is told "committed, apply pending" |
+| SubmitGroup | Accept one transaction group from a writer, record it in the mutation log, then apply it to the graph | No (internal call — the writer has already authenticated and authorized its own command) | n/a | Every label and relationship type named is on the allow-list; the group carries the identifier of its causing command; the graph is not blocked and every earlier entry of the graph has been applied; every edge endpoint and merge target exists; a writer's expected position still holds | The group is recorded in the log and applied to FalkorDB, with its first and last position reported; or recorded and reported "committed, apply pending" (not an error); or, when no entry changes the graph, nothing is recorded and the group is reported unchanged | Appends entries to the mutation log (`ps_state`); writes to FalkorDB; advances the applied marker; marks FalkorDB healthy or unhealthy in Dependency Health | PS state Postgres, FalkorDB | Not yet set | No (each submission is a new group) | Rejected before anything is logged (off-allow-list names, absent targets, stale expected position, invalid property); if the log cannot accept the group, or the graph store cannot be reached before the commit, it fails closed with nothing logged or applied; if FalkorDB is unavailable after the commit the caller is told "committed, apply pending"; if FalkorDB refuses a recorded entry the caller receives the apply-refused error and the graph is blocked (see Outcomes) |
+| SubmitGroupInTransaction | Accept one group on the writer's own open database transaction, so the group and the writer's Audit row commit or roll back together; the writer commits, then completes the submission to apply the group | No (internal call) | n/a | As SubmitGroup, and the writer's Audit row is recorded on the same transaction as its last write; at most one such submission per transaction | The group is recorded with the writer's commit; completing the submission afterwards applies it and reports the outcome as SubmitGroup does; if the writer rolls back, or abandons the submission, nothing is recorded and nothing is applied | Holds the graph's submission order until the submission is completed, aborted or abandoned; otherwise as SubmitGroup | PS state Postgres, FalkorDB | Not yet set | No | A refusal (rejected, graph unavailable, blocked) frees the graph before the error is raised; completing a submission whose transaction did not commit is refused with `StagedGroupNotCommittedError` and applies nothing |
 | Replay | Rebuild a graph by applying its log from the beginning | No (internal call) | n/a | The graph's log is available | The graph reflects the log up to its last position, and its applied marker equals that position | Rewrites the graph in FalkorDB from the log | PS state Postgres, FalkorDB | Target only: see #202 AC-BI-013 | Yes (the same log always yields the same graph) | Fails closed if the log cannot be read; a partly rebuilt graph is never reported as caught up |
 | Verify | Compare the canonical digest of a replayed graph with a recorded digest checkpoint | No (internal call) | n/a | A digest checkpoint exists for the graph and position | A match or mismatch is reported; the graph and the log are unchanged | May record a new digest checkpoint | PS state Postgres, FalkorDB | Target only: see #202 AC-BI-013 | Yes | A mismatch is reported as a failure of deterministic replay and never repaired silently |
-| CaughtUp | Apply the log entries beyond a graph's applied marker, for example after FalkorDB recovers or the process restarts | No (internal call) | n/a | The graph's applied marker is behind the last recorded position | The applied marker equals the last recorded position | Applies pending entries to FalkorDB in sequence order; advances the applied marker | PS state Postgres, FalkorDB | Not yet set | Yes (nothing pending means nothing applied) | While FalkorDB stays unavailable the entries remain pending and the writers' groups stay "committed, apply pending" |
+| CaughtUp | Apply the log entries beyond a graph's applied marker, for example after FalkorDB recovers or the process restarts | No (internal call) | n/a | The graph's applied marker is behind the last recorded position | The applied marker equals the last recorded position, and a graph blocked by a refused entry is unblocked | Applies pending entries to FalkorDB in sequence order; advances the applied marker | PS state Postgres, FalkorDB | Not yet set | Yes (nothing pending means nothing applied) | While FalkorDB stays unavailable the entries remain pending, the result says the graph is not caught up, and the writers' groups stay "committed, apply pending"; a refused entry is raised as the apply-refused error and the graph stays blocked; an unreadable log is raised as `GraphLogUnavailableError` |
+| IsCaughtUp | Report whether every committed entry of a graph has been applied | No (internal call) | n/a | None | True only when the applied marker equals the last recorded position | None (read-only) | PS state Postgres | Not yet set | Yes | Fails closed: when the log cannot be read it raises `GraphLogUnavailableError` and never reports the graph as caught up |
+| Recover | Find every graph whose log is ahead of its applied marker and apply the entries it owes, once at service start | No (internal call by the Process Harness) | n/a | The PS state store is configured | Every graph that could be applied is caught up; the others are reported as still gated | As CaughtUp for each lagging graph; starts the background reconciler only if a graph is still pending | PS state Postgres, FalkorDB | Not yet set | Yes | Never blocks or fails startup: a graph whose FalkorDB is down stays gated and is retried in the background, a graph with a refused entry stays blocked, a failure to read the log is logged (exception class only) and startup goes on |
 
 ### Persistence
 
@@ -1968,7 +2018,7 @@ sequenceDiagram
 
 ### Graph Write Gateway: SubmitGroup, commit-then-apply, apply pending (C-0)
 
-Target design (not yet implemented; delivered by #205-#214).
+Implemented by #206 with no writer wired yet (the writers move onto it in #208-#214); replay and verify (#207) are not drawn.
 
 *Every action below may also emit a log entry to Logging; only the write path is diagrammed, to keep the flow focused on business data.*
 
@@ -1981,10 +2031,14 @@ sequenceDiagram
 
     Writer->>GW: SubmitGroup(transaction group)
 
-    alt a label or relationship type is off the allow-list
+    alt the graph is blocked by a refused entry
+        GW-->>Writer: blocked (nothing logged)
+    else a label or relationship type is off the allow-list, a target is missing, or the expected position is stale
         GW-->>Writer: rejected (nothing logged)
-    else the mutation log cannot accept the group
+    else the mutation log or the graph store cannot be reached before the commit
         GW-->>Writer: sanitized error (fail closed: nothing logged, nothing applied)
+    else no entry changes the graph
+        GW-->>Writer: unchanged (nothing logged)
     else group accepted
         GW->>Log: commit group
         Log-->>GW: committed
@@ -1994,7 +2048,9 @@ sequenceDiagram
             GW-->>Writer: committed and applied
         else FalkorDB unavailable
             GW-->>Writer: committed, apply pending (not an error)
-            Note over GW,DB: later, CaughtUp applies the pending entries on recovery
+            Note over GW,DB: later, the reconciler or CaughtUp applies the pending entries on recovery
+        else FalkorDB refuses an entry
+            GW-->>Writer: apply refused (error; the graph is blocked)
         end
     end
 ```
