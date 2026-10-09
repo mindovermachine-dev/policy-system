@@ -27,12 +27,10 @@ from ps_service.api.error_handlers import (
 )
 from ps_service.api.errors import RequestBodyTooLargeError
 from ps_service.api.routes import build_api_router
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.auth.middleware import RestAuthMiddleware
 from ps_service.auth.protected_resource import protected_resource_metadata
 from ps_service.auth.startup import resolve_auth_context
 from ps_service.auth.verifier import PsTokenVerifier
-from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.authz.startup import require_bootstrap_owner_configured
 from ps_service.config import ServiceConfig, load_config, missing_ingestion_config_fields
 from ps_service.dependency_health import (
@@ -45,14 +43,12 @@ from ps_service.dependency_health import (
     is_healthy,
 )
 from ps_service.graph_gateway import GRAPH_LOG_TABLES
-from ps_service.graph_gateway import MIGRATIONS_DIR as GRAPH_GATEWAY_MIGRATIONS_DIR
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
 )
 from ps_service.ingestion.falkordb_client import (
     check_connectivity_from_config as check_falkordb_connectivity,
 )
-from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
 from ps_service.invitations.startup import require_authentik_credential_configured
 from ps_service.llm_interface import (
     check_connectivity as check_llm_interface_connectivity,
@@ -67,10 +63,7 @@ from ps_service.passkey_signing.store import (
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
-from ps_service.persistence import (
-    GraphLogMigrationMissingError,
-    MigrationSource,
-)
+from ps_service.persistence import GraphLogMigrationMissingError
 from ps_service.persistence import (
     apply_pending_migrations as apply_state_migrations,
 )
@@ -83,7 +76,10 @@ from ps_service.persistence import (
 from ps_service.persistence.privileged_migration_runner import (
     verify_privileged_migrations_applied,
 )
-from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
+from ps_service.state_migrations import (
+    GRAPH_GATEWAY_MIGRATION_SOURCE,
+    ORDINARY_STATE_MIGRATION_SOURCES,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -302,12 +298,7 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
         with connect_state_postgres_from_config(config) as conn:
             apply_state_migrations(
                 conn,
-                sources=[
-                    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
-                    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
-                    MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
-                    MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
-                ],
+                sources=ORDINARY_STATE_MIGRATION_SOURCES,
             )
             _verify_graph_gateway_migrations_at_startup(conn)
     except Exception as exc:
@@ -324,7 +315,7 @@ def _verify_graph_gateway_migrations_at_startup(conn: psycopg.Connection[TupleRo
     """Fail startup unless the privileged `graph_gateway` migration is in place (issue #205)."""
     verify_privileged_migrations_applied(
         conn,
-        sources=[MigrationSource("graph_gateway", GRAPH_GATEWAY_MIGRATIONS_DIR)],
+        sources=[GRAPH_GATEWAY_MIGRATION_SOURCE],
         required_tables=GRAPH_LOG_TABLES,
     )
 

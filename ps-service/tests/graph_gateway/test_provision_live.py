@@ -26,6 +26,7 @@ from persistence.provisioned_postgres import (
 )
 from psycopg import sql
 
+from ps_service.graph_gateway.provision import ProvisionResult
 from ps_service.persistence import StatePostgresProvisioningError
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ def test_provisioning_on_empty_ps_state_creates_five_tables_and_records_migratio
 
     applied = provision_graph_log(fresh_provisioned)
 
-    assert applied == [_MIGRATION_ROW[1]]
+    assert applied.graph_gateway_applied == [_MIGRATION_ROW[1]]
     with fresh_provisioned.as_state() as conn:
         tables = conn.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -115,7 +116,7 @@ def test_second_provisioning_run_applies_nothing(fresh_provisioned: Provisioned)
     migrate_state_database(fresh_provisioned)
     provision_graph_log(fresh_provisioned)
 
-    assert provision_graph_log(fresh_provisioned) == []
+    assert provision_graph_log(fresh_provisioned) == ProvisionResult([], [])
 
 
 def test_provisioning_keeps_the_migration_tracking_table_owned_by_the_state_role(
@@ -641,16 +642,3 @@ def test_cli_main_provisions_from_environment_and_logs_no_password(
     assert "0001_graph_mutation_log.sql" in completed.stdout
     with fresh_provisioned.as_state() as conn:
         assert _scalar(conn, "SELECT count(*) FROM graph_log.groups") == 0
-
-
-def test_cli_main_exits_nonzero_without_the_audit_table_and_never_prints_the_password(
-    fresh_provisioned: Provisioned,
-) -> None:
-    password = f"admin-pw-{uuid.uuid4().hex}"
-
-    completed = _run_cli(fresh_provisioned, password)
-
-    assert completed.returncode == 1
-    assert password not in completed.stdout + completed.stderr
-    with fresh_provisioned.superuser_connect(fresh_provisioned.state_db) as conn:
-        assert _scalar(conn, "SELECT to_regnamespace('graph_log') IS NULL") is True

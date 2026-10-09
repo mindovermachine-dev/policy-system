@@ -224,15 +224,33 @@ Job, not by the script:
 1. `helm upgrade` renders the Job `<release>-ps-state-provision-r<revision>`. It runs
    `python -m ps_service.graph_gateway.provision` from the PS Service image with the admin
    credential (the `psPostgres.admin` Secret, which only this Job and the Postgres pod reference;
-   the `ps-service` pod never does). It creates the owner role if absent, then the schema, tables,
-   ownership and grants. The command is idempotent: a repeat run applies nothing.
+   the `ps-service` pod never does). On one admin connection it first applies the pending
+   ordinary `ps_state` migrations (audit, authorization, runtime config, ingestion runs),
+   executing as `ps_state` through `SET ROLE`, so `ps_state` owns every public table exactly as
+   when PS Service applied them itself. It then creates the owner role if absent and the
+   `graph_log` schema, tables, ownership and grants. From an empty database that is the only step
+   needed, so the Job does not wait for PS Service. The command is idempotent: a repeat run
+   applies nothing. The admin credential must be allowed to `SET ROLE` to `ps_state` (the chart's
+   bootstrap superuser is); otherwise the Job fails with `admin connection cannot SET ROLE
+   ps_state`.
 2. [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) and `scripts/deploy-ps-prod.sh` pass
    `--wait --wait-for-jobs`, so a Job that exhausts its retries fails the upgrade with a Helm
    error naming the Job; it does not hang. An upgrade run by hand must pass the same two flags
    (see the command in [Updating to the latest version](#updating-to-the-latest-version-1)).
-3. The Job may start before PS Service has created `audit_events` (the log links to it) and retry
-   until it has; this is expected. `psPostgres.provisioning.backoffLimit` and
-   `psPostgres.provisioning.activeDeadlineSeconds` bound it.
+3. A failing migration exits non-zero naming the component and file (never SQL, host or
+   password) and creates no `graph_log` object; migrations already applied stay and the next run
+   resumes. The Job retries in place up to `psPostgres.provisioning.backoffLimit` (default `3`).
+   While Postgres is still starting, one attempt waits up to
+   `psPostgres.provisioning.connectTimeoutSeconds` (default `120`);
+   `psPostgres.provisioning.activeDeadlineSeconds` (default `900`) bounds the whole Job, and the
+   chart refuses to render when `(backoffLimit + 1) * connectTimeoutSeconds` exceeds it.
+4. The Job and a starting PS Service serialize on a Postgres advisory lock (the migration lock),
+   so they can run at the same time. A runner that cannot get the lock within 60 s (the
+   Job: `PS_STATE_PROVISION_LOCK_TIMEOUT_SECONDS`) fails with `could not acquire the migration
+   lock`. It means another session is holding the lock: a migration is still running, or a stuck
+   session was left behind. Check `pg_locks` for an advisory lock and
+   `pg_stat_activity` for the holder, end a stuck session, then restart PS Service (the Job
+   retries by itself).
 
 Confirm it ran:
 
@@ -418,6 +436,10 @@ PVC) hosting two databases, each with its own role and its own credentials Secre
 | --- | --- | --- | --- |
 | `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), the `graph_log` schema (the insert-only graph mutation log: `groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`, owned by the non-login role `ps_state_graph_owner`), and the `ps_schema_migrations` tracking table (the `graph_gateway` component is tracked there too, but applied by the admin-credential provisioning Job, not by PS Service) | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
 | `ps_signing` | `ps_signing` | Passkey Signing data (`pending_approvals`, `signing_credentials`) and its own `schema_migrations` tracking table | `policy-system-ps-postgres-signing-credentials` (`PS_PASSKEYSIGNING_POSTGRES_PASSWORD`) |
+
+The provisioning Job creates the public `ps_state` tables, executing as `ps_state` (`SET ROLE`),
+so `ps_state` owns them; PS Service at startup applies only migrations newer than the Job's
+image. The `graph_log` tables are owned by `ps_state_graph_owner` instead.
 
 PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and
 `PS_PASSKEYSIGNING_POSTGRES_*`, which the chart wires into the pod. Each role can connect only

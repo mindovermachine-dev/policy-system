@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import psycopg
 from psycopg import sql
@@ -36,15 +36,18 @@ from ps_service.persistence.errors import (
 )
 from ps_service.persistence.migration_runner import (
     CREATE_TRACKING_TABLE,
-    RECORD_APPLIED,
+    DEFAULT_LOCK_TIMEOUT_SECONDS,
     SELECT_ALREADY_APPLIED,
+    acquire_migration_lock,
+    apply_migration_file,
     discover_migration_files,
+    is_migration_applied,
+    set_local_role,
     split_statements,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import LiteralString
 
     from psycopg.rows import TupleRow
 
@@ -91,8 +94,15 @@ def render_migration_sql(sql_text: str, *, owner_role: str, app_role: str) -> st
     return rendered
 
 
-def _ensure_owner_role(conn: psycopg.Connection[TupleRow], *, owner_role: str) -> None:
-    """Create the non-login owner role if absent; refuse an existing role that can log in."""
+def _ensure_owner_role(
+    conn: psycopg.Connection[TupleRow], *, owner_role: str, lock_timeout_seconds: float
+) -> None:
+    """Create the non-login owner role if absent; refuse an existing role that can log in.
+
+    Takes the migration lock first, so the existence check and the create are one unit that a
+    concurrent runner cannot interleave with.
+    """
+    acquire_migration_lock(conn, timeout_seconds=lock_timeout_seconds, subject="owner role setup")
     with conn.cursor() as cur:
         cur.execute(_SELECT_ROLE_CAN_LOGIN, {"role": owner_role})
         row = cur.fetchone()
@@ -122,15 +132,19 @@ def _refuse_app_role_membership(
 
 
 def _ensure_tracking_table_owned_by_app_role(
-    conn: psycopg.Connection[TupleRow], *, app_role: str
+    conn: psycopg.Connection[TupleRow], *, app_role: str, lock_timeout_seconds: float
 ) -> None:
     """Create `ps_schema_migrations` as the app role (if absent) and require that it owns it.
 
     The ordinary runner (running as the app role) must stay able to write to the table, so an
-    admin-created tracking table would break the next service start.
+    admin-created tracking table would break the next service start. Runs under the migration
+    lock, taken before the role switch.
     """
+    acquire_migration_lock(
+        conn, timeout_seconds=lock_timeout_seconds, subject="migration tracking table setup"
+    )
+    set_local_role(conn, app_role)
     with conn.cursor() as cur:
-        cur.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(app_role)))
         cur.execute(CREATE_TRACKING_TABLE)
         cur.execute("RESET ROLE")
         cur.execute(_SELECT_TRACKING_TABLE_OWNER)
@@ -171,6 +185,7 @@ def apply_privileged_migrations(
     owner_role: str,
     app_role: str,
     emitter: LogEmitter | None = None,
+    lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
 ) -> list[str]:
     """Apply every not-yet-recorded migration file of every source, as the admin connection.
 
@@ -181,50 +196,53 @@ def apply_privileged_migrations(
     `persistence`/`apply_privileged_migrations` log entry per call naming `<component>/<file>`
     entries and role names.
 
+    The role and tracking-table setup and each pending file run under the same migration
+    advisory lock as the ordinary runner (`MIGRATION_LOCK_KEY`), with the tracking table
+    re-checked inside it, so a service starting at the same time cannot interleave; the wait is
+    bounded by `lock_timeout_seconds`.
+
     Raises:
         StatePostgresProvisioningError: a precondition failed (see the helpers above).
+        StatePostgresMigrationLockError: the migration lock was not granted in time.
         StatePostgresMigrationApplyError: a file's SQL failed; names the component and file.
     """
-    _ensure_owner_role(admin_conn, owner_role=owner_role)
-    _refuse_app_role_membership(admin_conn, owner_role=owner_role, app_role=app_role)
-    _ensure_tracking_table_owned_by_app_role(admin_conn, app_role=app_role)
-
     applied: list[str] = []
     already_applied_count = 0
-    for source in sources:
-        for migration_file in discover_migration_files(source.directory):
-            key = {"component": source.component, "filename": migration_file.name}
-            with admin_conn.cursor() as cur:
-                cur.execute(SELECT_ALREADY_APPLIED, key)
-                already_applied = cur.fetchone() is not None
-            if already_applied:
-                already_applied_count += 1
-                continue
-            rendered = render_migration_sql(
-                migration_file.read_text(encoding="utf-8"), owner_role=owner_role, app_role=app_role
-            )
-            try:
-                with admin_conn.cursor() as cur:
-                    for statement in split_statements(rendered):
-                        # Hand-authored, repo-owned migration text (role names already rendered
-                        # as quoted identifiers): `cast()` is unavoidable because psycopg's
-                        # `execute()` demands `LiteralString` for a runtime-split string.
-                        cur.execute(cast("LiteralString", statement))
-                    cur.execute(RECORD_APPLIED, key)
-                admin_conn.commit()
-            except psycopg.Error as exc:
-                admin_conn.rollback()
-                _emit_apply_entry(
-                    outcome="failure",
-                    applied=applied,
-                    already_applied=already_applied_count,
-                    owner_role=owner_role,
-                    emitter=emitter,
-                )
-                raise StatePostgresMigrationApplyError(
-                    f"migration {source.component}/{migration_file.name} failed to apply: {exc}"
-                ) from exc
-            applied.append(f"{source.component}/{migration_file.name}")
+    try:
+        _ensure_owner_role(
+            admin_conn, owner_role=owner_role, lock_timeout_seconds=lock_timeout_seconds
+        )
+        _refuse_app_role_membership(admin_conn, owner_role=owner_role, app_role=app_role)
+        _ensure_tracking_table_owned_by_app_role(
+            admin_conn, app_role=app_role, lock_timeout_seconds=lock_timeout_seconds
+        )
+        for source in sources:
+            for migration_file in discover_migration_files(source.directory):
+                key = {"component": source.component, "filename": migration_file.name}
+                if not is_migration_applied(admin_conn, key) and apply_migration_file(
+                    admin_conn,
+                    key=key,
+                    statements=split_statements(
+                        render_migration_sql(
+                            migration_file.read_text(encoding="utf-8"),
+                            owner_role=owner_role,
+                            app_role=app_role,
+                        )
+                    ),
+                    lock_timeout_seconds=lock_timeout_seconds,
+                ):
+                    applied.append(f"{source.component}/{migration_file.name}")
+                else:
+                    already_applied_count += 1
+    except StatePostgresMigrationApplyError:
+        _emit_apply_entry(
+            outcome="failure",
+            applied=applied,
+            already_applied=already_applied_count,
+            owner_role=owner_role,
+            emitter=emitter,
+        )
+        raise
     _emit_apply_entry(
         outcome="success",
         applied=applied,

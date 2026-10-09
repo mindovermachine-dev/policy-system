@@ -15,21 +15,16 @@ import psycopg
 import pytest
 
 from ingestion_runs._fakes import InMemoryIngestionRunStore, RecordingAuditStore
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.audit import AuditQueryFilters, PsycopgAuditStore
-from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import ServiceConfig, load_config
-from ps_service.ingestion_runs import (
-    MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR,
-)
 from ps_service.ingestion_runs import (
     IngestionRunInvalidCompletionError,
     IngestionRunPersistenceError,
     IngestionRunStoreUnavailableError,
     PsycopgIngestionRunStore,
 )
-from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
-from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
+from ps_service.persistence import apply_pending_migrations, connect_from_config
+from ps_service.state_migrations import ORDINARY_STATE_MIGRATION_SOURCES
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -48,13 +43,6 @@ _RESULT: dict[str, object] = {
     "outcome": "fresh",
     "stages": [{"stage": "ingestion", "status": "succeeded", "summary": 3}],
 }
-
-_STATE_SOURCES = [
-    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
-    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
-    MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
-    MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
-]
 
 
 def _config(*, host: str | None, port: int = 5432) -> ServiceConfig:
@@ -89,7 +77,7 @@ def _live_config_on_isolated_schema(  # pyright: ignore[reportUnusedFunction]  #
         conn.execute(cast("LiteralString", f'CREATE SCHEMA "{schema}"'))
     monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn, sources=_STATE_SOURCES)
+        apply_pending_migrations(conn, sources=ORDINARY_STATE_MIGRATION_SOURCES)
     try:
         yield config
     finally:

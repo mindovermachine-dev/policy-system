@@ -23,13 +23,10 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
-from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import ServiceConfig, load_config
-from ps_service.graph_gateway.provision import ProvisioningTarget, provision
-from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
-from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
-from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
+from ps_service.graph_gateway.provision import ProvisioningTarget, ProvisionResult, provision
+from ps_service.persistence import apply_pending_migrations, connect_from_config
+from ps_service.state_migrations import ORDINARY_STATE_MIGRATION_SOURCES
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -42,13 +39,6 @@ INIT_SCRIPT = (
     / "ps-postgres-init.sh"
 )
 INIT_SCRIPT_TIMEOUT_SECONDS = 60
-# The ordinary (state-role) migrations `ps_service.main` applies at startup.
-STATE_SOURCES = [
-    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
-    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
-    MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
-    MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
-]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -211,11 +201,11 @@ def create_provisioned() -> tuple[Provisioned, dict[str, str]]:
 def migrate_state_database(prov: Provisioned) -> None:
     """Apply the ordinary state migrations as the `ps_state` role, as service startup does."""
     with connect_from_config(prov.state_config()) as conn:
-        apply_pending_migrations(conn, sources=STATE_SOURCES)
+        apply_pending_migrations(conn, sources=ORDINARY_STATE_MIGRATION_SOURCES)
 
 
-def provision_graph_log(prov: Provisioned) -> list[str]:
-    """Run the privileged provisioning path (the CLI's `provision`) as the superuser admin."""
+def provision_graph_log(prov: Provisioned) -> ProvisionResult:
+    """Run the provisioning path (the CLI's `provision`) as the superuser admin."""
     return provision(prov.provisioning_target())
 
 
@@ -237,7 +227,6 @@ def fresh_provisioned() -> Iterator[Provisioned]:
 
 @pytest.fixture(scope="module")
 def provisioned_graph_log(provisioned: Provisioned) -> Provisioned:
-    """Provide the module's cluster with state migrations applied and the graph log provisioned."""
-    migrate_state_database(provisioned)
+    """Provide the module's cluster brought up by the provisioning CLI alone (no prelude)."""
     provision_graph_log(provisioned)
     return provisioned

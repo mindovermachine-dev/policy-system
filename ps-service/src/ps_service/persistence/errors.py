@@ -40,6 +40,17 @@ class StatePostgresMigrationApplyError(Exception):
     """
 
 
+class StatePostgresMigrationLockError(StatePostgresMigrationApplyError):
+    """A migration runner could not take the migration advisory lock within its timeout.
+
+    Another session (typically the provisioning Job or a starting service replica running the
+    same migrations) holds the lock, or a stuck session never released it. The message names the
+    migration (or setup step) and the timeout only -- never SQL, a host or driver text -- so it is
+    safe to print. A subclass of :class:`StatePostgresMigrationApplyError`: callers that already
+    treat a failed migration as fatal keep working unchanged.
+    """
+
+
 class StatePostgresProvisioningError(Exception):
     """The privileged provisioning path cannot proceed, or its inputs are unusable (issue #205).
 

@@ -1,6 +1,13 @@
 {{- if .Values.psPostgres.provisioning.enabled }}
-# Creates and migrates the owner-protected graph log tables (issue #205) with the admin
-# credential, by running `python -m ps_service.graph_gateway.provision` from the ps-service image.
+{{- $provisioning := .Values.psPostgres.provisioning }}
+{{- $retryBudgetSeconds := mul (add (int $provisioning.backoffLimit) 1) (int $provisioning.connectTimeoutSeconds) }}
+{{- if gt $retryBudgetSeconds (int $provisioning.activeDeadlineSeconds) }}
+{{- fail (printf "psPostgres.provisioning: (backoffLimit %d + 1) * connectTimeoutSeconds %d = %d exceeds activeDeadlineSeconds %d" (int $provisioning.backoffLimit) (int $provisioning.connectTimeoutSeconds) $retryBudgetSeconds (int $provisioning.activeDeadlineSeconds)) }}
+{{- end }}
+# Applies the ordinary ps_state migrations (as the application role) and then creates and migrates
+# the owner-protected graph log tables (issue #205) with the admin credential, by running
+# `python -m ps_service.graph_gateway.provision` from the ps-service image. One idempotent step
+# from an empty database to ready, so the Job never depends on ps-service having started first.
 # The same Job serves fresh installs and upgrades of existing deployments (the Postgres init
 # script runs only on an empty PGDATA, so it can never reach an existing cluster).
 #
@@ -13,6 +20,11 @@
 # CLI again (new image, re-pushed mutable tag, new migration files or values). The CLI is
 # idempotent, so a no-op run is one connection and one SELECT. Helm removes earlier revisions'
 # Jobs because they leave the manifest. The name budget is 36 + 21 + up to 6 revision digits.
+#
+# Retries: the CLI retries only while the Postgres server is starting (connectTimeoutSeconds);
+# any other failure exits non-zero and restartPolicy OnFailure retries it up to backoffLimit
+# times. The chart refuses to render when (backoffLimit + 1) * connectTimeoutSeconds does not
+# fit in activeDeadlineSeconds.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -32,8 +44,7 @@ spec:
         # Must NOT be `ps-service`: the ps-service Service would route traffic to this pod.
         app.kubernetes.io/component: ps-state-provision
     spec:
-      # Retries in place: the first attempts can precede the audit tables that ps-service's own
-      # startup migrations create (the provisioning step needs public.audit_events).
+      # Retries in place after a transient failure, e.g. Postgres restarting mid-run.
       restartPolicy: OnFailure
       containers:
         - name: ps-state-provision
@@ -53,6 +64,8 @@ spec:
               value: {{ .Values.psPostgres.state.database | quote }}
             - name: PS_STATE_POSTGRES_USER
               value: {{ .Values.psPostgres.state.user | quote }}
+            - name: PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS
+              value: {{ $provisioning.connectTimeoutSeconds | quote }}
             - name: PS_STATE_GRAPH_OWNER_ROLE
               value: {{ .Values.psPostgres.state.graphOwnerRole | quote }}
             - name: PS_STATE_ADMIN_POSTGRES_USER

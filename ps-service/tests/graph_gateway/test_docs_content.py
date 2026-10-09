@@ -98,6 +98,7 @@ def test_values_reference_documents_graph_owner_role_and_provisioning_values() -
         "psPostgres.state.graphOwnerRole",
         "psPostgres.provisioning.enabled",
         "psPostgres.provisioning.backoffLimit",
+        "psPostgres.provisioning.connectTimeoutSeconds",
         "psPostgres.provisioning.activeDeadlineSeconds",
         "PS_STATE_ADMIN_POSTGRES_USER",
         "PS_STATE_ADMIN_POSTGRES_PASSWORD",
@@ -159,3 +160,93 @@ def test_solution_architecture_persistence_row_mentions_privileged_provisioning(
     sa = _read(_SA)
 
     assert needle in sa
+
+
+_RETIRED_PHRASES = (
+    "may start before PS Service has created",
+    "audit tables PS Service's own startup migrations create",
+    "a missing prerequisite table exits non-zero",
+    "`audit_events` exists (the log links to it)",
+)
+
+
+def test_no_doc_or_source_mentions_the_audit_events_missing_exit() -> None:
+    searched = [
+        _OPS,
+        _INSTALL,
+        _VALREF,
+        _CA,
+        _SA,
+        _REPO / "CONTRIBUTING.md",
+        _REPO / "charts" / "policy-system" / "values.yaml",
+        _REPO / "charts" / "policy-system" / "templates" / "ps-state-provision-job.yaml",
+        _REPO / "ps-service" / "src" / "ps_service" / "graph_gateway" / "provision.py",
+    ]
+
+    for path in searched:
+        text = _read(path)
+        for phrase in _RETIRED_PHRASES:
+            assert phrase not in text, f"{path.name}: {phrase}"
+
+
+def test_operations_guide_says_the_cli_applies_ordinary_migrations_first() -> None:
+    section = _section(_read(_OPS), "### Upgrading to the graph mutation log")
+
+    assert "ordinary" in section
+    assert "SET ROLE" in section
+    # Who creates the public tables, so the ps_state ownership is not a surprise.
+    assert "executing as `ps_state`" in section
+    # The Job succeeds from an empty database in one pass; no retry for a missing table.
+    assert "empty database" in section
+
+
+def test_operations_guide_documents_the_lock_timeout_failure_and_remedy() -> None:
+    section = _section(_read(_OPS), "### Upgrading to the graph mutation log")
+
+    assert "migration lock" in section
+    assert "60 s" in section
+    assert "PS_STATE_PROVISION_LOCK_TIMEOUT_SECONDS" in section
+    assert "stuck" in section
+
+
+def test_operations_guide_state_table_names_the_provisioning_job_as_creator() -> None:
+    section = _section(_read(_OPS), "### PS Postgres (`ps_state` and `ps_signing`)")
+
+    assert "provisioning Job" in section
+    assert "executing as `ps_state`" in section
+
+
+def test_values_reference_documents_connect_timeout_backoff_and_the_render_guard() -> None:
+    text = _read(_VALREF)
+
+    assert "psPostgres.provisioning.connectTimeoutSeconds" in text
+    assert "`3` / `120` / `900`" in text
+    assert "(backoffLimit + 1) * connectTimeoutSeconds" in text
+    assert "PS_STATE_PROVISION_LOCK_TIMEOUT_SECONDS" in text
+
+
+def test_ca_apply_privileged_migrations_precondition_has_no_audit_events_wait() -> None:
+    persistence = _section(_read(_CA), "### Persistence")
+    row = next(
+        line
+        for line in persistence.splitlines()
+        if line.startswith("| ApplyPrivilegedMigrations |")
+    )
+
+    assert "audit_events" not in row.split("|")[5]
+    assert "ordinary" in row
+    assert "SET ROLE" in row
+    assert "lock" in row
+
+
+def test_ca_apply_pending_migrations_is_no_longer_startup_only() -> None:
+    persistence = _section(_read(_CA), "### Persistence")
+    row = next(
+        line for line in persistence.splitlines() if line.startswith("| ApplyPendingMigrations |")
+    )
+    cells = row.split("|")
+
+    assert "startup-only" not in cells[4]
+    assert "run_as_role" in row
+    assert "lock_timeout_seconds" in row
+    assert "advisory lock" in row

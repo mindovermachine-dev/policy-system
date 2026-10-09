@@ -21,6 +21,7 @@ would still leave a type-checking gap.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import shutil
@@ -38,7 +39,7 @@ import pytest
 from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator, Iterator
 
 pytestmark = pytest.mark.container_image
 
@@ -300,10 +301,25 @@ _STATE_POSTGRES_DEPENDENCY = "state_postgres"
 # Issue #130: `GET /catalog` reads the catalog-source override from the PS state Postgres and
 # fails closed without one, so the catalog smoke test runs against a real Postgres sidecar.
 _POSTGRES_IMAGE = "postgres:16-alpine"
-_STATE_POSTGRES_SMOKE_ENV = {
-    "POSTGRES_USER": "ps_state",
-    "POSTGRES_PASSWORD": "ps-smoke-state-password",
-    "POSTGRES_DB": "ps_state",
+# The sidecar is provisioned like production: the bootstrap superuser is `postgres_admin` (the
+# chart's `psPostgres.admin.user`), and the real init script creates the unprivileged `ps_state`
+# role and database, so no `POSTGRES_DB` is set (the script's `CREATE DATABASE ps_state OWNER
+# ps_state` would collide with one). The three dicts keep the admin credential, the application
+# credential and the init script's extra inputs apart.
+_STATE_INIT_SCRIPT = _REPO_ROOT / "charts/policy-system/files/ps-postgres-init.sh"
+_ADMIN_PASSWORD_IN_SMOKE = "ps-smoke-admin-password"
+_STATE_ADMIN_ENV = {
+    "POSTGRES_USER": "postgres_admin",
+    "POSTGRES_PASSWORD": _ADMIN_PASSWORD_IN_SMOKE,
+}
+_STATE_APP_CREDS = {
+    "user": "ps_state",
+    "password": "ps-smoke-state-password",
+    "database": "ps_state",
+}
+_STATE_INIT_ENV = {
+    "PS_STATE_POSTGRES_PASSWORD": _STATE_APP_CREDS["password"],
+    "PS_PASSKEYSIGNING_POSTGRES_PASSWORD": "ps-smoke-signing-password",
 }
 _STATE_POSTGRES_DEADLINE_SECONDS = 90.0
 
@@ -750,20 +766,33 @@ def _wait_for_catalog(cli: str, service: _RunningService) -> httpx.Response:
     )
 
 
-@pytest.fixture(scope="module")
-def state_postgres_hostname(container_cli: str, smoke_network: str) -> Iterator[str]:
-    """Run a PS state Postgres sidecar on the smoke network and return its resolvable hostname."""
+def _init_script_volume_flag(cli: str) -> str:
+    """Return the `--volume` value mounting the real init script read-only into the sidecar.
+
+    The file is mode 0644, so the postgres entrypoint sources it (`. file`) instead of executing
+    it; nothing here depends on the exec bit. Podman needs `z` to relabel the bind mount.
+    """
+    options = "ro,z" if "podman" in Path(cli).name else "ro"
+    target = "/docker-entrypoint-initdb.d/ps-postgres-init.sh"
+    return f"{_STATE_INIT_SCRIPT.resolve()}:{target}:{options}"
+
+
+@contextlib.contextmanager
+def _state_postgres_sidecar(cli: str, network: str) -> Generator[str]:
+    """Run a production-shaped PS state Postgres sidecar and yield its resolvable hostname."""
     name = _unique("ps-smoke-state-pg")
     result = _run_container_cli(
-        container_cli,
+        cli,
         [
             "run",
             "--detach",
             "--name",
             name,
             "--network",
-            smoke_network,
-            *_env_flags(_STATE_POSTGRES_SMOKE_ENV),
+            network,
+            *_env_flags({**_STATE_ADMIN_ENV, **_STATE_INIT_ENV}),
+            "--volume",
+            _init_script_volume_flag(cli),
             _POSTGRES_IMAGE,
         ],
         timeout=_PULL_TIMEOUT_SECONDS,
@@ -774,58 +803,141 @@ def state_postgres_hostname(container_cli: str, smoke_network: str) -> Iterator[
         f"{result.stdout}\n{result.stderr}"
     )
     try:
-        _wait_for_state_postgres(container_cli, name)
+        _wait_for_state_postgres(cli, name)
         yield name
     finally:
-        _remove_container(container_cli, name)
+        _remove_container(cli, name)
 
 
-@pytest.fixture(scope="module")
-def catalog_only_service(
-    container_cli: str, image_ref: str, smoke_network: str, state_postgres_hostname: str
-) -> Iterator[_RunningService]:
-    """Start the image under test with no FalkorDB at all, against a PS state Postgres sidecar.
+def _state_target_env(state_hostname: str) -> dict[str, str]:
+    """Return the `PS_STATE_POSTGRES_*` application-role target the CLI and service share."""
+    return {
+        "PS_STATE_POSTGRES_HOST": state_hostname,
+        "PS_STATE_POSTGRES_PORT": "5432",
+        "PS_STATE_POSTGRES_DATABASE": _STATE_APP_CREDS["database"],
+        "PS_STATE_POSTGRES_USER": _STATE_APP_CREDS["user"],
+    }
 
-    New Slice 6.8: `GET /catalog` (AC-BI-011) is provably FalkorDB/LLM-free,
-    so this deliberately does *not* reuse `smoke_service` (which wires a
-    FalkorDB container) -- the route answers with real content with no graph
-    database running at all. Since issue #130 the catalog-source override lives in the PS state
-    Postgres and a failed read fails closed, so this container is given a real Postgres sidecar
-    (the service applies its migrations at startup) instead of none. Bound to loopback with the
-    local-test bypass, same reasoning as `_start_service` (issue #58, AC-BI-002). Also needs
-    `REQUIRED_STARTUP_ENV`, for the same reason `_start_service` does (issue #148).
+
+def _run_provision_cli(
+    cli: str, image_ref: str, network: str, state_hostname: str
+) -> subprocess.CompletedProcess[str]:
+    """Run the provisioning CLI from the image under test, as the Helm Job does.
+
+    The admin credential reaches this one-shot container only; the service container started
+    later never receives it.
     """
-    name = _unique("ps-smoke-catalog")
-    result = _run_container_cli(
-        container_cli,
+    env = {
+        **_state_target_env(state_hostname),
+        "PS_STATE_ADMIN_POSTGRES_USER": _STATE_ADMIN_ENV["POSTGRES_USER"],
+        "PS_STATE_ADMIN_POSTGRES_PASSWORD": _STATE_ADMIN_ENV["POSTGRES_PASSWORD"],
+    }
+    return _run_container_cli(
+        cli,
         [
             "run",
-            "--detach",
-            "--name",
-            name,
+            "--rm",
             "--network",
-            smoke_network,
-            "--env",
-            "PS_SERVICE_HOST=127.0.0.1",
-            "--env",
-            "PS_SERVICE_LOCAL_TEST_BYPASS=true",
-            "--env",
-            f"PS_STATE_POSTGRES_HOST={state_postgres_hostname}",
-            "--env",
-            "PS_STATE_POSTGRES_DATABASE=ps_state",
-            "--env",
-            f"PS_STATE_POSTGRES_USER={_STATE_POSTGRES_SMOKE_ENV['POSTGRES_USER']}",
-            "--env",
-            f"PS_STATE_POSTGRES_PASSWORD={_STATE_POSTGRES_SMOKE_ENV['POSTGRES_PASSWORD']}",
-            *_env_flags(REQUIRED_STARTUP_ENV),
+            network,
+            *_env_flags(env),
             image_ref,
+            "python",
+            "-m",
+            "ps_service.graph_gateway.provision",
         ],
+        timeout=_RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _start_state_postgres_service(
+    cli: str, image_ref: str, network: str, state_hostname: str, name: str
+) -> None:
+    """Start the image under test with no FalkorDB, holding only the `ps_state` credential.
+
+    Bound to loopback with the local-test bypass, same reasoning as `_start_service` (issue #58,
+    AC-BI-002); also needs `REQUIRED_STARTUP_ENV` for the same reason (issue #148).
+    """
+    env = {
+        "PS_SERVICE_HOST": "127.0.0.1",
+        "PS_SERVICE_LOCAL_TEST_BYPASS": "true",
+        **_state_target_env(state_hostname),
+        "PS_STATE_POSTGRES_PASSWORD": _STATE_APP_CREDS["password"],
+        **REQUIRED_STARTUP_ENV,
+    }
+    result = _run_container_cli(
+        cli,
+        ["run", "--detach", "--name", name, "--network", network, *_env_flags(env), image_ref],
         timeout=_RUN_TIMEOUT_SECONDS,
         check=False,
     )
     assert result.returncode == 0, (
         f"starting {image_ref} as {name} failed (exit {result.returncode}):\n"
         f"{result.stdout}\n{result.stderr}"
+    )
+
+
+def _wait_for_exit_logs(cli: str, name: str) -> str:
+    """Return a container's logs once it has exited, failing if it keeps running."""
+    deadline = time.monotonic() + _LIVENESS_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
+        state = _run_container_cli(
+            cli,
+            ["inspect", "--format", "{{.State.Running}}", name],
+            timeout=_INSPECT_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if state.stdout.strip() == "false":
+            return _container_logs(cli, name)
+        time.sleep(_POLL_INTERVAL_SECONDS)
+    pytest.fail(f"{name} kept running although its state database is not provisioned")
+
+
+@pytest.fixture(scope="module")
+def state_postgres_hostname(container_cli: str, smoke_network: str) -> Iterator[str]:
+    """Run a production-shaped PS state Postgres sidecar and return its resolvable hostname.
+
+    Real init script, separate admin role, unprivileged `ps_state` (see the env dicts above).
+    The database is empty: `provisioned_state_postgres` runs the CLI on it.
+    """
+    with _state_postgres_sidecar(container_cli, smoke_network) as hostname:
+        yield hostname
+
+
+@pytest.fixture(scope="module")
+def provisioned_state_postgres(
+    container_cli: str, image_ref: str, smoke_network: str, state_postgres_hostname: str
+) -> str:
+    """Provision the sidecar with the CLI from the image under test, then return its hostname.
+
+    This is the operator flow the Helm Job performs: the service refuses to start until it ran
+    (issue #205), and the CLI needs only the admin credential, never the service's.
+    """
+    result = _run_provision_cli(container_cli, image_ref, smoke_network, state_postgres_hostname)
+    assert result.returncode == 0, (
+        f"provisioning {state_postgres_hostname} failed (exit {result.returncode}):\n"
+        f"{result.stdout}\n{result.stderr}"
+    )
+    return state_postgres_hostname
+
+
+@pytest.fixture(scope="module")
+def catalog_only_service(
+    container_cli: str, image_ref: str, smoke_network: str, provisioned_state_postgres: str
+) -> Iterator[_RunningService]:
+    """Start the image under test with no FalkorDB at all, against a provisioned state Postgres.
+
+    New Slice 6.8: `GET /catalog` (AC-BI-011) is provably FalkorDB/LLM-free,
+    so this deliberately does *not* reuse `smoke_service` (which wires a
+    FalkorDB container) -- the route answers with real content with no graph
+    database running at all. Since issue #130 the catalog-source override lives in the PS state
+    Postgres and a failed read fails closed, so this container is given a real Postgres sidecar.
+    Since issue #205 the service holds `ps_state` credentials only and fails closed until the
+    provisioning CLI ran, which `provisioned_state_postgres` does first.
+    """
+    name = _unique("ps-smoke-catalog")
+    _start_state_postgres_service(
+        container_cli, image_ref, smoke_network, provisioned_state_postgres, name
     )
     service = _RunningService(name=name)
     try:
@@ -944,3 +1056,97 @@ def test_runtime_image_ships_graph_gateway_migrations_and_provision_cli_entry(
     assert "PS_STATE_ADMIN_POSTGRES_USER" in usage.stdout
     assert migrations.returncode == 0, f"listing migrations failed:\n{migrations.stderr}"
     assert _GRAPH_GATEWAY_MIGRATION in migrations.stdout.split()
+
+
+def _psql_in_sidecar(cli: str, sidecar: str, statement: str, *, database: str = "postgres") -> str:
+    """Run one SQL statement as the sidecar's admin role and return its unaligned output."""
+    result = _run_container_cli(
+        cli,
+        [
+            "exec",
+            sidecar,
+            "psql",
+            "--username",
+            _STATE_ADMIN_ENV["POSTGRES_USER"],
+            "--dbname",
+            database,
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--command",
+            statement,
+        ],
+        timeout=_INSPECT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    assert result.returncode == 0, f"psql failed in {sidecar}:\n{result.stderr}"
+    return result.stdout.strip()
+
+
+def test_state_postgres_sidecar_matches_production_roles(
+    container_cli: str, state_postgres_hostname: str
+) -> None:
+    """The sidecar is built by the real init script, so the smoke test cannot pass on a lax one.
+
+    A superuser `ps_state` (the old fixture) would make the startup verifier's ownership check
+    meaningless, so the application role must be an unprivileged login that owns only its own
+    database, and the graph owner role must be NOLOGIN.
+    """
+    roles = _psql_in_sidecar(
+        container_cli,
+        state_postgres_hostname,
+        "SELECT r.rolsuper, r.rolcanlogin, "
+        "(SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'postgres'), "
+        "(SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'ps_state'), "
+        "(SELECT NOT rolcanlogin FROM pg_roles WHERE rolname = 'ps_state_graph_owner') "
+        "FROM pg_roles r WHERE r.rolname = 'ps_state'",
+    )
+
+    assert roles == "f|t|postgres_admin|ps_state|t"
+
+
+def test_provision_cli_in_built_image_provisions_empty_state_postgres_and_is_idempotent(
+    container_cli: str, image_ref: str, smoke_network: str
+) -> None:
+    """AC-FR-001/002/006: the CLI shipped in the image takes an empty ps_state to ready, twice.
+
+    Uses its own sidecar: the shared one is already provisioned by `provisioned_state_postgres`,
+    so the first run would be a no-op there.
+    """
+    with _state_postgres_sidecar(container_cli, smoke_network) as sidecar:
+        first = _run_provision_cli(container_cli, image_ref, smoke_network, sidecar)
+        second = _run_provision_cli(container_cli, image_ref, smoke_network, sidecar)
+        tables = _psql_in_sidecar(
+            container_cli,
+            sidecar,
+            "SELECT count(*) FROM pg_tables WHERE schemaname = 'graph_log'",
+            database=_STATE_APP_CREDS["database"],
+        )
+
+    assert first.returncode == 0, f"first provision failed:\n{first.stdout}\n{first.stderr}"
+    assert "0001_graph_mutation_log.sql" in first.stdout
+    assert second.returncode == 0, f"second provision failed:\n{second.stdout}\n{second.stderr}"
+    assert "none (already up to date)" in second.stdout
+    assert tables == "5"
+    assert _ADMIN_PASSWORD_IN_SMOKE not in first.stdout + first.stderr
+
+
+def test_service_fails_closed_in_image_on_unprovisioned_state_postgres(
+    container_cli: str, image_ref: str, smoke_network: str
+) -> None:
+    """Negative control for AC-FR-006: the service never comes up without the CLI step.
+
+    Same sidecar and service wiring as `catalog_only_service`, minus the provisioning run. The
+    process exits at startup with the verifier's fixed reason, so a green catalog test cannot be
+    explained by a verifier that quietly stopped checking.
+    """
+    with _state_postgres_sidecar(container_cli, smoke_network) as sidecar:
+        name = _unique("ps-smoke-unprovisioned")
+        _start_state_postgres_service(container_cli, image_ref, smoke_network, sidecar, name)
+        try:
+            logs = _wait_for_exit_logs(container_cli, name)
+        finally:
+            _remove_container(container_cli, name)
+
+    assert "migration_not_recorded" in logs
+    assert _ADMIN_PASSWORD_IN_SMOKE not in logs

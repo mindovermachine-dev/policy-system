@@ -83,6 +83,7 @@ tests:
   - it: Job retry and deadline come from psPostgres.provisioning values
     set:
       psPostgres.provisioning.backoffLimit: 4
+      psPostgres.provisioning.connectTimeoutSeconds: 30
       psPostgres.provisioning.activeDeadlineSeconds: 300
     asserts:
       - equal:
@@ -91,6 +92,58 @@ tests:
       - equal:
           path: spec.activeDeadlineSeconds
           value: 300
+
+  - it: Job renders the connect-retry timeout explicitly so it does not rely on a CLI default (AC-FR-005)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS")].value
+          value: "120"
+
+  - it: connect-retry timeout follows psPostgres.provisioning.connectTimeoutSeconds
+    set:
+      psPostgres.provisioning.connectTimeoutSeconds: 60
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS")].value
+          value: "60"
+
+  - it: default backoffLimit is 3 because a failure is no longer an expected ordering wait
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 3
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 900
+
+  - it: Job has no init container and does not wait for ps-service
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: render fails when the retry budget cannot fit in the deadline
+    set:
+      psPostgres.provisioning.connectTimeoutSeconds: 300
+    asserts:
+      - failedTemplate:
+          errorPattern: "exceeds activeDeadlineSeconds"
+
+  - it: render fails naming the three values when backoffLimit pushes the budget past the deadline
+    set:
+      psPostgres.provisioning.backoffLimit: 10
+    asserts:
+      - failedTemplate:
+          errorPattern: "backoffLimit"
+
+  - it: render accepts a budget exactly equal to the deadline
+    set:
+      psPostgres.provisioning.backoffLimit: 4
+      psPostgres.provisioning.connectTimeoutSeconds: 100
+      psPostgres.provisioning.activeDeadlineSeconds: 500
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 4
 
   - it: Job pod retries in place on failure
     asserts:

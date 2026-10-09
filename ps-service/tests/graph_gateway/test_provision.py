@@ -130,3 +130,22 @@ def test_main_keeps_retrying_an_unreachable_server_until_the_deadline_then_exits
     assert "did not accept connections within 2 seconds" in captured.err
     assert "s3cret-admin-password" not in captured.out + captured.err
     assert "127.0.0.1" not in captured.out + captured.err
+
+
+def test_provisioning_target_reads_the_lock_timeout_with_a_one_minute_default() -> None:
+    explicit = ProvisioningTarget.from_environ(
+        {**_ENVIRON, "PS_STATE_PROVISION_LOCK_TIMEOUT_SECONDS": "5"}
+    )
+
+    assert explicit.lock_timeout_seconds == 5
+    assert ProvisioningTarget.from_environ(_ENVIRON).lock_timeout_seconds == 60
+
+
+@pytest.mark.parametrize("value", ["soon", "0", "-3"])
+def test_provisioning_target_rejects_a_non_positive_lock_timeout_by_variable_name(
+    value: str,
+) -> None:
+    environ = {**_ENVIRON, "PS_STATE_PROVISION_LOCK_TIMEOUT_SECONDS": value}
+
+    with pytest.raises(StatePostgresProvisioningError, match="PS_STATE_PROVISION_LOCK_TIMEOUT"):
+        ProvisioningTarget.from_environ(environ)

@@ -29,7 +29,6 @@ from persistence.provisioned_postgres import Provisioned, provision_graph_log
 
 import ps_service.main as main_module
 from ps_service import dependency_health
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.config import ServiceConfig, load_config
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
@@ -41,8 +40,7 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
-from ps_service.persistence import GraphLogMigrationMissingError, MigrationSource
-from ps_service.persistence import apply_pending_migrations as apply_state_migrations
+from ps_service.persistence import GraphLogMigrationMissingError
 from ps_service.persistence import (
     check_connectivity_from_config as check_state_postgres_connectivity,
 )
@@ -1437,29 +1435,35 @@ def _config_for_cluster(prov: Provisioned) -> ServiceConfig:
 
 
 @pytest.mark.postgres_live
-def test_state_migrations_run_at_startup_apply_every_component_baseline(
+def test_startup_after_the_provisioning_cli_on_an_empty_database_applies_nothing_and_comes_up(
     provisioned: Provisioned,
 ) -> None:
     """Startup wires the real PS state connection to the runner for every component.
 
     `postgres_live`-marked, like the Passkey Signing twin above: runs the real
     `create_app`/`lifespan` path against a scratch PS Postgres built by the real Helm init
-    script, then reads back the real `ps_schema_migrations` tracking rows (issue #130: audit,
-    access roles, runtime config, ingestion runs). The privileged `graph_gateway` migration is
-    applied by the provisioning step before startup (issue #205: startup never creates those
-    tables, it only verifies them), which needs only the audit tables to exist first.
+    script and brought up by the provisioning CLI alone (issue #205 follow-up: from an empty
+    database it applies the ordinary component migrations as `ps_state` and then the privileged
+    `graph_gateway` one), with `ps_state` credentials only. Startup then finds every migration
+    recorded (issue #130: audit, access roles, runtime config, ingestion runs; #205: the graph
+    log, which startup only verifies) and applies nothing: the tracking rows, `applied_at`
+    included, are unchanged by it.
     """
-    with connect_state_postgres_from_config(_config_for_cluster(provisioned)) as conn:
-        apply_state_migrations(conn, sources=[MigrationSource("audit", AUDIT_MIGRATIONS_DIR)])
     provision_graph_log(provisioned)
     config = _config_for_cluster(provisioned)
+
+    with connect_state_postgres_from_config(config) as conn, conn.cursor() as cur:
+        cur.execute("SELECT component, filename, applied_at FROM ps_schema_migrations")
+        before = set(cur.fetchall())
 
     with TestClient(create_app(config)):
         pass
 
     with connect_state_postgres_from_config(config) as conn, conn.cursor() as cur:
-        cur.execute("SELECT component, filename FROM ps_schema_migrations")
-        tracked = {(row[0], row[1]) for row in cur.fetchall()}
+        cur.execute("SELECT component, filename, applied_at FROM ps_schema_migrations")
+        after = set(cur.fetchall())
+    tracked = {(row[0], row[1]) for row in after}
+    assert after == before
     assert {
         ("audit", "0001_audit_events.sql"),
         ("audit", "0002_audit_events_details_indexes.sql"),

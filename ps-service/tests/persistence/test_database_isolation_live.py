@@ -24,7 +24,6 @@ import pytest
 from psycopg import sql
 
 from persistence.provisioned_postgres import (
-    STATE_SOURCES,
     Provisioned,
     drop_cluster_objects,
     init_names,
@@ -38,6 +37,7 @@ from ps_service.config import ServiceConfig, load_config
 from ps_service.curated_source.store import get_override, reset_override, set_override
 from ps_service.persistence import apply_pending_migrations, connect_from_config
 from ps_service.runtime_config import PsycopgRuntimeConfigStore
+from ps_service.state_migrations import ORDINARY_STATE_MIGRATION_SOURCES
 
 pytestmark = pytest.mark.postgres_live
 
@@ -157,7 +157,7 @@ def test_migrations_and_catalog_tool_work_as_the_least_privilege_state_role(
     store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn, sources=STATE_SOURCES)
+        apply_pending_migrations(conn, sources=ORDINARY_STATE_MIGRATION_SOURCES)
     set_override(store, "https://example.com/least-privilege", actor=actor)
 
     assert get_override(store) == "https://example.com/least-privilege"

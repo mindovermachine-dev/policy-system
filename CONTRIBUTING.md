@@ -79,7 +79,9 @@ Running PS Service against your own state Postgres (`scripts/ps-service.sh start
 immutable graph log tables are created by a privileged step, not by PS Service, so startup fails
 closed until you run `python -m ps_service.graph_gateway.provision` once with admin credentials
 (`PS_STATE_ADMIN_POSTGRES_USER`, `PS_STATE_ADMIN_POSTGRES_PASSWORD`, plus the usual
-`PS_STATE_POSTGRES_*`). See the [Operations Guide](docs/artifacts/operations-guide.md#upgrading-to-the-graph-mutation-log).
+`PS_STATE_POSTGRES_*`). The same command first applies the ordinary `ps_state` migrations as the
+application role, so it also works against an empty database. The admin role must be able to
+`SET ROLE` to the application role. See the [Operations Guide](docs/artifacts/operations-guide.md#upgrading-to-the-graph-mutation-log).
 
 ## Coding Standards
 

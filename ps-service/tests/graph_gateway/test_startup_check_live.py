@@ -62,8 +62,7 @@ def _verify_as_state_role(prov: Provisioned, emitter: LogEmitter | None = None) 
 
 
 def _provisioned_cluster(prov: Provisioned) -> Provisioned:
-    migrate_state_database(prov)
-    provision_graph_log(prov)
+    provision_graph_log(prov)  # the CLI alone takes an empty ps_state to ready
     return prov
 
 
