@@ -52,8 +52,8 @@ a PS Service connector. From here on, "the PS Service connector" means the
 - If it exposes neither of those but does expose `ingest_regulation` (an
   older PS Service), use the blocking fallback (Process step 2b) instead.
 - A connector that exposes none of these three tools is **not** a PS Service
-  connector, whatever it is named — report it as unreachable (see the
-  error-state table under Process) rather than proceeding against it.
+  connector, whatever it is named — report it as unreachable (see
+  `references/error-states.md`) rather than proceeding against it.
 
 ## Core Principles
 
@@ -64,8 +64,6 @@ a PS Service connector. From here on, "the PS Service connector" means the
   or a non-curated CELEX alike. Ask the user to supply the value they intend;
   it is used as given (normalized to upper case by the tool) — never silently
   substitute a different value than what the user asked for.
-- Never fabricate a run summary, a stage, or a status — report exactly what
-  the tools returned.
 - A slow run is not a failed run. Never resubmit a run whose status is still
   `running`, and never silently retry a failed one — report the named
   failure and stop.
@@ -98,12 +96,8 @@ a PS Service connector. From here on, "the PS Service connector" means the
    which case nothing was started: classify it with the table in step 4 and
    stop.
 
-   2b. **Fallback (older PS Service only, see On Load).** Call
-   `ingest_regulation` with the same two inputs instead. This fallback is a
-   blocking call that can take minutes — do not report a failure just
-   because it is still in flight. Its result is either the same summary a
-   succeeded run's `result` holds or an `error:` string; go straight to
-   step 4/5 with it.
+   2b. **Fallback (older PS Service only, see On Load).** read
+   `references/blocking-fallback.md` and follow it instead of steps 2-3.
 
 3. **Poll and narrate.** Call `get_ingestion_status` with that `run_id`.
    Every answer has the same shape: `{"run_id", "status", "stage",
@@ -141,28 +135,8 @@ a PS Service connector. From here on, "the PS Service connector" means the
    `start_ingestion`, as a failed run's `error`, from `get_ingestion_status`
    itself, or from the fallback — never collapsed into a generic
    "ingestion failed":
-
-   | Tool result                                                                                                  | Named state to report                                                                                                                                                                                                                                                                                        |
-   | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-   | Connection/transport failure, or an auth-rejection-shaped error                                              | "PS Service is unreachable or the caller is unauthenticated"                                                                                                                                                                                                                                                 |
-   | `error: this action requires a real authenticated caller`                                                    | The call carried no authenticated identity — report it as an authentication problem                                                                                                                                                                                                                          |
-   | `error: You do not have the required access role for this action.`                                           | The caller lacks the `ComplianceOfficer` role needed to ingest or to check an ingestion — report it; this is not something retrying fixes                                                                                                                                                                    |
-   | `error: CELEX <celex> is already ingested as short_name '<existing>'`                                        | This CELEX is already in the graph, under any `short_name` — report the existing `short_name` and that nothing new ran; do not retry under a different name                                                                                                                                                  |
-   | `error: short_name '<given>' is already claimed by CELEX <other celex>`                                      | The `short_name` (compared case-insensitively) belongs to a different regulation — report the other CELEX and ask the user for a different `short_name`                                                                                                                                                      |
-   | `error: CELEX '<celex>' does not exist on Cellar/ELI.`                                                       | This CELEX does not exist on Cellar/ELI — report it as not found, do not retry                                                                                                                                                                                                                               |
-   | `error: ingestion configuration incomplete: ...`                                                             | PS Service itself is missing a required LLM/embedding model or similarity-threshold setting — report this as a service-configuration problem, not something the user's input can fix                                                                                                                         |
-   | `error: LLM Interface is unavailable.`                                                                       | The LLM Interface dependency is currently unreachable — report it distinctly from a PS Service outage; do not retry silently                                                                                                                                                                                 |
-   | `error: the policy graph database is not reachable`                                                          | The compliance graph database cannot be reached — report it distinctly from an LLM Interface or transport failure                                                                                                                                                                                            |
-   | `error: too many ingestion runs are already in progress (limit <n>); wait for one to finish, then try again` | PS Service is already running its maximum number of ingestions — nothing was started; offer to submit again later, never automatically                                                                                                                                                                       |
-   | `error: The ingestion run store is temporarily unavailable.`                                                 | PS Service cannot reach the store that tracks ingestion runs — from `start_ingestion` nothing was started; from `get_ingestion_status` the run itself may still be going                                                                                                                                     |
-   | `error: an ingestion run for short_name '<short_name>' is already in progress; ...`                          | A run for this regulation is already going. Nothing new was started. Do not resubmit                                                                                                                                                                                                                         |
-   | `error: The ingestion run could not be recorded.`                                                            | PS Service could not record the run — nothing was started                                                                                                                                                                                                                                                    |
-   | `error: <stage> stage failed: <reason>`                                                                      | One pipeline stage (ingestion, extraction, derivation, or merge) genuinely failed mid-run — name the failing stage exactly as returned; earlier stages' work is not implied to be undone                                                                                                                     |
-   | `error: the ingestion run was interrupted before it finished; its outcome is unknown`                        | The run stopped before finishing (e.g. PS Service restarted) — its effect on the graph is unknown; tell the user, and let them decide whether to submit again                                                                                                                                                |
-   | `error: The audit trail is temporarily unavailable; the operation was not performed.`                        | The audit trail could not record the operation, so it was NOT run (no run was started) — report it distinctly from an outage of the graph or of PS Service; nothing changed                                                                                                                                  |
-   | `error: an unexpected error occurred`                                                                        | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                                                                                                            |
-   | `status: "succeeded"` with `result.outcome: "already_ingested"` and an empty `result.stages`                 | A legacy celex-less instrument already existed for this identifier (issue #135; a CELEX-bearing node is rejected with the already-ingested error above instead) — Domain Mapper and Company Merge did not run this time; report that the regulation is already ingested, not a fresh run's per-stage summary |
-   | `status: "succeeded"` with `result.outcome: "fresh"`                                                         | Report `regulatory_instrument_id`, `source`, and each stage's name and summary plainly                                                                                                                                                                                                                       |
+   To classify a result, read `references/error-states.md` and match it against
+   the table there; report the named state, never a generic failure.
 
 5. **Output**, in this shape on a fresh run (`outcome: "fresh"`):
 

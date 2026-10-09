@@ -43,7 +43,7 @@ Service. Claude lists it as `plugin:ps-plugin:ps-mcp`. Any other name is not
 a PS Service connector. A connector that is present
 under the right name but does not expose a `create-policy-draft` tool is
 **not** a PS Service connector either, whatever it is named — report it as
-unreachable (see the error-state table under Process) rather than
+unreachable (see `references/error-states.md`) rather than
 proceeding against it. From here on, "the PS Service connector" means the `ps-mcp` connector.
 
 ## Core Principles
@@ -97,64 +97,14 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
 2. **Confirm before an effectful call.** For every tool except `get-policy`,
    confirm the exact target and action with the user, and that they want to
    proceed, before calling the tool.
-3. **Know who can do what, and from which status, before calling:**
-
-   | Action                   | Who                                                                                                                                       | Required current status | Resulting status                                                                                                                                                                                                                                                                                                                                                           |
-   | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | `create-policy-draft`    | any authenticated caller (becomes the owner; no role is required to claim Capabilities via `capability_ids`)                              | — (new Policy)          | `draft`                                                                                                                                                                                                                                                                                                                                                                    |
-   | `get-policy`             | Draft: owner, or a caller holding `SystemOwner`/`SystemAdmin`. Proposed/Approved/Deprecated: any authenticated caller.                    | any                     | unchanged (read-only)                                                                                                                                                                                                                                                                                                                                                      |
-   | `propose-policy`         | owner only (no role required)                                                                                                             | `draft`                 | `proposed`                                                                                                                                                                                                                                                                                                                                                                 |
-   | `approve-policy`         | a caller holding `PolicyManager`, and never the Policy's own owner (self-approval always blocked, even for a `PolicyManager` who owns it) | `proposed`              | `approved` (and, if this Policy has an approved prior linked via `SUPERSEDED_BY`, that prior's whole tree auto-cascades to `deprecated` in the same call, as its own separate event; for a fork, the Capabilities the prior governed move to this Policy in the same operation as the status change, and a fork whose prior governs none approves without moving any edge) |
-   | `reject-policy`          | same as `approve-policy` (`PolicyManager`, never the owner)                                                                               | `proposed`              | `draft`                                                                                                                                                                                                                                                                                                                                                                    |
-   | `revert-policy-to-draft` | owner only — **not** role-gated; a `PolicyManager` who isn't the owner is rejected exactly like any other non-owner                       | `proposed`              | `draft`                                                                                                                                                                                                                                                                                                                                                                    |
-
-   Every action's cascade applies to the Policy **and every Standard/Control
-   in its tree** in one write. `approve-policy`/`reject-policy` require the
-   caller and owner to differ in _either_ subject or issuer — the same
-   subject under a different issuer is treated as a different person and
-   may approve/reject (this also means it is never blocked as
-   self-approval).
-
-4. **Completeness gate (propose only):** `propose-policy` requires the
-   Policy to have at least one `Standard` attached; a Standard with zero
-   Controls is never checked. There is no minimum for approve/reject/revert
-   beyond the status/ownership/role gates above.
-5. **Local-test-bypass caveat:** under the local-test bypass, every one of
-   these six tools treats the bypass as a real authenticated caller, always
-   resolving to the same fixed identity for both the acting caller and (for
-   Policies it creates) the owner. Because `approve-policy`/`reject-policy`
-   always compare the same fixed identity against itself, self-approval is
-   always blocked under the bypass — **`approve-policy` and `reject-policy`
-   are not exercisable under the local-test bypass**; only
-   `create-policy-draft`/`get-policy`/`propose-policy`/
-   `revert-policy-to-draft` can be meaningfully tested that way.
-6. **Call the tool** — `create-policy-draft` (`title`, optional
+3. **Know who can do what, and from which status, before calling.** For `create-policy-draft` and `get-policy`, no further rules are needed. Before calling `propose-policy`, `approve-policy`, `reject-policy` or `revert-policy-to-draft`, read `references/transition-rules.md` and follow it: it holds the who/status/resulting-status table, the cascade and approver-differs rules, and the propose completeness gate (at least one `Standard`).
+4. **Local-test-bypass caveat:** if the PS Service connector is running under the local-test bypass, read `references/local-test-bypass.md` first -- `approve-policy` and `reject-policy` are not exercisable under it.
+5. **Call the tool** — `create-policy-draft` (`title`, optional
    `standards`, optional `capability_ids`, optional `supersedes_policy_id`), `get-policy` (`policy_id`), `propose-policy` (`policy_id`),
    `approve-policy` (`policy_id`), `reject-policy` (`policy_id`), or
    `revert-policy-to-draft` (`policy_id`) — on the PS Service connector
    selected at On Load.
-7. **Report the result**, distinguishing every non-success outcome into one
-   of the following named states — never collapsed into a generic "action
-   failed":
-
-   | Tool result shape                                                                                                                                                         | Named state to report                                                                                                                                                                                                                                          | Applies to                                                                                  |
-   | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-   | Connection/transport failure, or `error: this action requires a real authenticated caller (the local-test bypass counts as one)`                                          | `unauthenticated` — the caller has no real authenticated session (unlike access-role management, the local-test bypass DOES count as one here)                                                                                                                 | all six                                                                                     |
-   | `error: the policy graph database is not reachable`                                                                                                                       | `policy_graph_unavailable` — the FalkorDB-backed policy graph cannot be reached                                                                                                                                                                                | all six                                                                                     |
-   | `error: no Policy exists with id '<policy_id>'`                                                                                                                           | `policy_not_found` — no Policy exists with the given id                                                                                                                                                                                                        | `get-policy`, `propose-policy`, `approve-policy`, `reject-policy`, `revert-policy-to-draft` |
-   | `error: you do not have access to this Policy`                                                                                                                            | `draft_access_denied` — the caller is neither the owner nor `SystemOwner`/`SystemAdmin` (for `get-policy` on a Draft) or is not the owner (for `propose-policy`/`revert-policy-to-draft`); never reveals whether the Policy exists, who owns it, or its status | `get-policy`, `propose-policy`, `revert-policy-to-draft`                                    |
-   | `error: a Policy titled '<title>' already exists (id '<existing_policy_id>'); amend it via the supersede workflow, or choose a different title`                           | `title_already_exists` — the derived id for `title` collides with an existing Policy                                                                                                                                                                           | `create-policy-draft`                                                                       |
-   | `error: standards[<i>]...` (or `standards[<i>].controls[<j>]...`)                                                                                                         | `malformed_standards_input` — the optional `standards` argument (or a nested Standard/Control entry) is shaped wrong: not a list of objects, a required `title` missing/empty, or an invalid `control_type`; names the exact offending position                | `create-policy-draft`                                                                       |
-   | `error: no Capability exists with id(s) '<capability_id>'; check the Capability ids and retry`                                                                            | `capability_not_found` — a `capability_ids` entry matches no Capability; nothing was written                                                                                                                                                                   | `create-policy-draft`                                                                       |
-   | `error: Capability id(s) '<capability_id>' already governed by a Policy; amend that Policy via the supersede workflow instead`                                            | `capability_already_governed` — a `capability_ids` entry already has a governing Policy (checked before writing, and again atomically at write time); nothing was written                                                                                      | `create-policy-draft`                                                                       |
-   | `error: Policy '<policy_id>' was not approved: the Capabilities governed by the Policy it supersedes changed during approval and nothing was changed; retry the approval` | `governance_conflict` — `approve-policy` of a fork found the superseded Policy's governed Capabilities changed between read and write; the Policy stays `proposed` and no edge moved — report it and let the user retry                                        | `approve-policy`                                                                            |
-   | `error: at least one Standard is required before a Policy can be proposed`                                                                                                | `incomplete_for_proposal` — the Policy has zero Standards attached                                                                                                                                                                                             | `propose-policy`                                                                            |
-   | `error: cannot <action> a Policy in status '<current_status>' (requires status '<required_status>')`                                                                      | `invalid_status_transition` — the Policy is not currently in the status this action requires                                                                                                                                                                   | `propose-policy`, `approve-policy`, `reject-policy`, `revert-policy-to-draft`               |
-   | `error: You do not have the required access role for this action.`                                                                                                        | `access_denied` — the caller does not hold `PolicyManager`                                                                                                                                                                                                     | `approve-policy`, `reject-policy`                                                           |
-   | `error: you cannot approve or reject a Policy you own`                                                                                                                    | `self_approval_blocked` — the caller is the Policy's own owner; report this distinctly, it is a deliberate safety rejection, not a bug                                                                                                                         | `approve-policy`, `reject-policy`                                                           |
-   | `error: The authorization store is temporarily unavailable.`                                                                                                              | `authorization_store_unavailable` — the role-authorization store cannot be reached; role-gated actions fail closed until it is                                                                                                                                 | `approve-policy`, `reject-policy`                                                           |
-   | `error: an unexpected error occurred`                                                                                                                                     | An unrecognised failure — report it as an unexpected error, distinct from every other named state above; never guess at its cause                                                                                                                              | all six                                                                                     |
-   | Successful structured response                                                                                                                                            | Report the created/read Policy or the transition's own confirmation                                                                                                                                                                                            | all six                                                                                     |
+6. **Report the result.** On a successful structured response, report the created/read Policy or the transition's own confirmation. On anything else, read `references/error-states.md` and report exactly one of its named states -- never collapsed into each other or into a generic "action failed"; an unrecognised failure is reported as an unexpected error, never guessed at.
 
 ## Output
 
@@ -181,35 +131,7 @@ Policy <policy_id> — "<title>"
     ...
 ```
 
-For `propose-policy`/`approve-policy`/`reject-policy`/
-`revert-policy-to-draft`:
-
-```text
-<Proposed|Approved|Rejected|Reverted>: <policy_id>, now <status>
-  Standards affected: <standard_ids>
-  Controls affected: <control_ids>
-```
-
-`approve-policy` additionally reports, when non-null:
-
-```text
-  Auto-deprecated prior version: <auto_deprecated_policy_id>
-```
-
-and, when `governed_capability_ids` is non-empty (an approved fork took
-over its prior's Capabilities):
-
-```text
-  Capabilities now governed by this Policy: <governed_capability_ids>
-```
-
-`create-policy-draft` reports `governed_capability_ids` (the Capabilities a
-fresh draft claimed; empty for a fork or when none were passed) in its
-created-Policy confirmation when non-empty:
-
-```text
-  Governs Capabilities: <governed_capability_ids>
-```
+On a successful `propose-policy`/`approve-policy`/`reject-policy`/`revert-policy-to-draft`, or when `create-policy-draft` returns a non-empty `governed_capability_ids`, read `references/transition-output.md` and use its shapes (including `approve-policy`'s auto-deprecated prior and governed Capabilities lines).
 
 On a named error state, report that state plainly instead — do not emit an
 Output block that implies a successful action when none occurred.

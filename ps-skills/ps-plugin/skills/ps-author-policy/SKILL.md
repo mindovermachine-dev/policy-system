@@ -46,14 +46,8 @@ whatever it is named -- report it as unreachable rather than proceeding
 against it. From here on, "the PS Service connector" means the one
 selected here.
 
-(This convention mirrors `ps-ingest-regulation/SKILL.md`'s own On Load
-section verbatim, lines 28-46, adapted only to this skill's own signature
-tool, `create-policy-draft`, in place of `ingest_regulation`.)
-
-Once the connector is selected, call the `domain_concepts` tool once per
-session (same On-Load-time convention `ps-qna/SKILL.md` already uses) to
-ground this session's own vocabulary against `ps-domain-concepts.md`'s
-entities/relationships -- not required again per call, only once at load.
+No `domain_concepts` fetch is made on load: every entity, property and
+status this skill uses is named inline below.
 
 ## Core Principles
 
@@ -79,14 +73,8 @@ entities/relationships -- not required again per call, only once at load.
   itself is rejected by the tool with a named error, which is reported
   plainly -- never treated as if the fork had been silently blocked before
   it was attempted.
-- If two or more named Capabilities' `GOVERNED_BY` lookups disagree (e.g.
-  one Capability has no governing Policy while another is already governed
-  by a Draft or a Proposed/Approved Policy), report the disagreement
-  plainly to the user and ask how to proceed (which Capability's situation
-  to follow, or whether to split the request into separate sessions) --
-  never guess or silently pick one Capability's branch. No
-  `create-policy-draft`, `get-policy`, or any other content-CRUD tool call
-  is made until the user resolves the disagreement.
+- If the named Capabilities' `GOVERNED_BY` lookups disagree, stop and ask
+  the user how to proceed -- see Guardrails.
 - Every persisted field update happens immediately after the user answers
   it, before re-scoring or asking the next question -- never batched,
   never deferred.
@@ -243,179 +231,15 @@ of every Capability found by the step 2 existence check>])`. The
 
 ### Standard authoring loop
 
-Reached once the Policy authoring loop's own `overall_score` clears its
-`pass_threshold` (or, for "add another Standard", looped back into from
-step 4 below under the same `policy_id`).
-
-1. **Scaffold.** Derive a provisional title from the user's stated intent
-   for this Standard and call `add-standard-to-draft(policy_id,
-title=<derived>)` -- no `fields` at creation time, the same title-only
-   creation shape as `create-policy-draft`. The new Standard is minted
-   `status="draft"` (governance) and `implementation_status="draft"`
-   (content) by the tool itself; neither is ever supplied by this skill.
-2. **Field-by-field loop.** For each of S-001 Procedure Specificity, S-002
-   Role Clarity, S-003 Boundary Clarity, S-004 Verification Readiness,
-   S-005 Change Traceability, and S-006 Lifecycle Honesty
-   (`standard-rubric.md`'s own listed order, or starting from whichever is
-   weakest-scoring on a resumed Standard), ask exactly one Socratic
-   question targeting that criterion's own Pass/Partial/Fail description
-   (`standard-template.md`'s matching section). Immediately before drafting
-   S-001's `procedure` or S-004's `verification_notes` specifically --
-   both "how" content -- follow the "Web research and citations" note
-   below. On the user's answer, call
-   `update-standard-draft(standard_id, fields={<property>: <answer>})`
-   immediately -- persisting before re-scoring or asking the next
-   question. `procedure`, `applicability_boundary`, `verification_notes`,
-   `change_rationale`, and `implementation_status` are each one property
-   patched by their own call; S-002 Role Clarity is the one criterion with
-   two properties (`implementer_role` and `reviewer_role`) -- both
-   answered by a single question ("who implements this, and who reviews
-   it?") and persisted together in one call, the same one-criterion/
-   compound-field pattern the Policy loop's own P-001 scaffold used for
-   `scope_in`/`scope_out`.
-3. **S-006 Lifecycle Honesty is asked about, unlike Policy's P-007.**
-   `implementation_status` is a genuine content property of Standard
-   (distinct from its own immutable governance `status`, which this skill
-   never touches) and is patchable through `update-standard-draft` -- so,
-   unlike the Policy loop's P-007 (which scores the immutable `status` and
-   is never asked about), S-006 gets its own Socratic question like every
-   other S-00x criterion. The honest answer while this skill is authoring
-   is almost always `"draft"` (matching the governance `status`), but the
-   question is still asked and the answer still persisted, since
-   `scoring-model.md`'s own Lifecycle Honesty check is about whether the
-   _stated_ maturity matches the other properties, not merely about
-   restating the default.
-4. **Immediate-persist-then-rescore.** After each field is persisted, re-
-   read the Standard's six content properties (`procedure`,
-   `implementer_role`, `reviewer_role`, `applicability_boundary`,
-   `verification_notes`, `change_rationale`) plus `implementation_status`
-   via `cypher` and compute `overall_score` per `scoring-model.md` §4
-   (`100 * Σ(weight_i * score_i) / 2`) against `standard-rubric.md`'s own
-   six weights (S-001..S-006) -- never a different rubric's weights, never
-   an ad hoc score.
-5. **Stop condition.** Once `overall_score >= 80` (`standard-rubric.md`'s
-   own `pass_threshold`), report this Standard as passing and stop
-   iterating its field loop, even if a lower-weight S-00x criterion is
-   still Partial or Fail.
-6. **Cardinality question.** Once this Standard's own rubric passes, ask
-   exactly one question -- never a pre-asked target count: add another
-   Standard, move to Controls, or finish. Nothing is inferred or assumed;
-   whichever the user answers is the only branch taken.
-   - **Add another Standard** -- loop back to step 1 under the same
-     `policy_id`, scaffolding a second Standard.
-   - **Move to Controls** -- hand off to the Control authoring loop's own
-     step 1 for this Standard.
-   - **Finish** -- hand off to Session end below; no further tool call is
-     made here.
+Once the Policy's `overall_score` clears its `pass_threshold` (or the user asks to add another Standard), read `references/standard-loop.md` and follow it. It scaffolds each Standard with `add-standard-to-draft`, walks S-001..S-006 with `update-standard-draft`, and ends with the Standard cardinality question.
 
 ### Control authoring loop
 
-Reached once a Standard's own rubric passes and the user chooses "move to
-Controls" (Standard loop's own cardinality question), or looped back into
-from step 4 below under the same `standard_id`.
-
-1. **Scaffold.** Derive a provisional title from the user's stated intent
-   for this Control and ask, as part of this Control's first question,
-   whether it is `automated` or `manual` (`control_type`). Call
-   `add-control-to-draft(standard_id, title=<derived>,
-control_type=<answer>)` -- no `fields` at creation time, the same
-   title-only creation shape as `create-policy-draft`/
-   `add-standard-to-draft`. The new Control is minted governance
-   `status="draft"` and content `implementation_status="planned"` by the
-   tool itself -- **`"planned"`, not `"draft"`**: Control's own workflow
-   starts one step later than Standard's (`ps-domain-concepts.md`'s
-   "earliest state in status workflow" convention for Control). Never
-   describe a freshly scaffolded Control's `implementation_status` as
-   `"draft"` in any question, report, or summary -- that word names only
-   the separate, immutable governance `status`, which this skill never
-   sets and never asks about.
-2. **Field-by-field loop.** For each of C-001 Pass/Fail Objectivity, C-002
-   Execution Clarity, C-003 Evidence Path Defined, C-004 Ownership Clarity,
-   C-005 Risk Alignment, and C-006 Lifecycle Honesty
-   (`control-rubric.md`'s own listed order, or starting from whichever is
-   weakest-scoring on a resumed Control), ask exactly one Socratic question
-   targeting that criterion's own Pass/Partial/Fail description
-   (`control-template.md`'s matching section). Immediately before drafting
-   C-002's `execution_method` specifically -- "how" content -- follow the
-   "Web research and citations" note below. On the user's answer, call
-   `update-control-draft(control_id, fields={<property>: <answer>})`
-   immediately -- persisting before re-scoring or asking the next question.
-   `pass_fail_criteria`, `execution_method`, `evidence_plan`, and
-   `risk_alignment_rationale` are each one property patched by their own
-   call; `implementation_status` is C-006's own property, asked about and
-   persisted the same way (the honest answer while this skill is authoring
-   is almost always `"planned"`, matching the server's own default, but the
-   question is still asked and the answer still persisted -- same
-   Lifecycle-Honesty discipline as the Standard loop's own S-006, never
-   merely restating the default unasked). C-004 Ownership Clarity is the
-   one criterion with two properties (`executor_role` and `reviewer_role`)
-   -- both answered by a single question ("who executes this Control, and
-   who reviews the result?") and persisted together in one call, the same
-   one-criterion/compound-field pattern the Policy loop's P-001 and the
-   Standard loop's S-002 already used.
-3. **`control_type` is patchable after creation too, unlike at creation
-   time.** `add-control-to-draft`'s own `fields` parameter excludes
-   `"type"` -- `control_type` is the only way to set it when the Control is
-   minted. But `update-control-draft`'s `fields` allow-list does include
-   `"type"` -- if the user wants to change `automated`/`manual` after
-   creation, patch it with `update-control-draft(control_id,
-fields={"type": <answer>})`, the only post-creation path to change it.
-4. **Immediate-persist-then-rescore.** After each field is persisted, re-
-   read the Control's content properties (`pass_fail_criteria`,
-   `execution_method`, `evidence_plan`, `executor_role`, `reviewer_role`,
-   `risk_alignment_rationale`, `implementation_status`) via `cypher` and
-   compute `overall_score` per `scoring-model.md` §4
-   (`100 * Σ(weight_i * score_i) / 2`) against `control-rubric.md`'s own
-   six weights (C-001..C-006) -- never a different rubric's weights, never
-   an ad hoc score.
-5. **Stop condition.** Once `overall_score >= 80` (`control-rubric.md`'s
-   own `pass_threshold`), report this Control as passing and stop iterating
-   its field loop, even if a lower-weight C-00x criterion is still Partial
-   or Fail.
-6. **Cardinality question.** Once this Control's own rubric passes, **or
-   the user declines to add a Control to this Standard at all**, ask
-   exactly one question -- never a pre-asked target count: add another
-   Control, add another Standard, or finish. A Standard can legitimately
-   have zero Controls (the schema's own cardinality requires exactly one
-   `IMPLEMENTED_BY` inbound edge _per Control_ that exists, never a minimum
-   count _per Standard_) -- declining is never treated as an incomplete or
-   abandoned step, and leads to the same three-way question a passing
-   Control would.
-   - **Add another Control** -- loop back to step 1 under the same
-     `standard_id`, scaffolding a second Control.
-   - **Add another Standard** -- hand back to the Standard authoring
-     loop's own step 1 under the same `policy_id`.
-   - **Finish** -- hand off to Session end below; no further tool call is
-     made here.
+When the user chooses "move to Controls" for a passing Standard (or asks to add another Control), read `references/control-loop.md` and follow it. It scaffolds each Control with `add-control-to-draft`, walks C-001..C-006 with `update-control-draft`, and ends with the Control cardinality question. A freshly scaffolded Control's `implementation_status` is `"planned"`, never `"draft"`.
 
 ### Web research and citations
 
-Applies immediately before drafting three specific fields -- S-001's
-`procedure`, C-002's `execution_method`, and S-004's `verification_notes`
--- each genuinely "how" content, unlike every other criterion's field.
-
-1. **Offer, never require.** Before drafting the field, offer the user a
-   web-research lookup using the host's own web-search/browsing
-   capability -- **never a PS Service tool call** (no MCP tool call is
-   made for the offer itself). If the user declines, or the offer isn't
-   taken up, proceed on the user's own drafting as normal -- identical to
-   the plain field-by-field flow above, with nothing appended to the
-   value.
-2. **If research is used, cite it -- honestly.** When the user accepts
-   and web research is actually incorporated into the drafted value,
-   append a literal `Sources: <url>[, <url>...]` line to the end of that
-   field's value, separated from the drafted text by a blank line, before
-   calling the same `update-standard-draft`/`update-control-draft` used
-   in the field-by-field loop above. List **only the URL(s) actually
-   retrieved by that lookup** -- never fabricate a URL, and never
-   construct or guess one from memory or plausibility. If research was
-   declined or not used, the `Sources:` line is never appended -- the
-   suffix is only ever present when it names real, retrieved sources.
-3. Neither `update-standard-draft` nor `update-control-draft` requires or
-   rejects a `Sources:` suffix -- the tool round-trips the field's value
-   either way. The discipline above (append only when research was used,
-   only real retrieved URLs, never fabricated, never required) is this
-   skill's own, not the tool's.
+Before drafting S-001's `procedure`, S-004's `verification_notes` or C-002's `execution_method`, read `references/web-research.md` and follow it. Research is offered, never required, and a `Sources:` line is appended only for URLs actually retrieved.
 
 ### Session end
 

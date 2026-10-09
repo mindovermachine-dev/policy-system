@@ -15,8 +15,29 @@ _PLUGIN = _REPO / "ps-skills" / "ps-plugin"
 _SKILL = _PLUGIN / "skills" / "ps-graph-cleanup" / "SKILL.md"
 
 
+_REFS = _SKILL.parent / "references"
+_REFERENCES = {
+    "release-governance.md": "when the user wants to release a capability",
+    "unmerge.md": "when the user wants to reverse a capability or obligation merge",
+    "merge-case-reference.md": "when explaining what a merge involves per governance case",
+    "error-reference.md": "when a tool returns an error",
+    "known-limitation.md": "when two capabilities are governed by two approved policies",
+    "reconciliation.md": "when `check-cleanup-approval` reports a signed approval with no outcome",
+}
+
+
 def _text() -> str:
     return " ".join(_SKILL.read_text(encoding="utf-8").split())
+
+
+def _ref(name: str) -> str:
+    """A reference file's whitespace-normalised text (issue #200: moved out of SKILL.md)."""
+    return " ".join((_REFS / name).read_text(encoding="utf-8").split())
+
+
+def _full() -> str:
+    """SKILL.md plus every reference file, whitespace-normalised."""
+    return " ".join([_text(), *(_ref(name) for name in _REFERENCES)])
 
 
 def test_skill_has_frontmatter_name_and_description() -> None:
@@ -204,8 +225,7 @@ def test_skill_names_the_obligation_merge_errors() -> None:
 
 
 def test_skill_walks_the_release_governance_flow_in_order() -> None:
-    text = _text()
-    section = text[text.index("### Releasing a capability from a policy") :]
+    section = _ref("release-governance.md")
 
     assert "release-capability-governance" in section
     positions = [
@@ -222,7 +242,7 @@ def test_skill_walks_the_release_governance_flow_in_order() -> None:
 
 
 def test_skill_explains_the_release_effect_and_the_draft_only_rule() -> None:
-    section = _text()[_text().index("### Releasing a capability from a policy") :]
+    section = _ref("release-governance.md")
 
     assert "draft" in section
     assert "`GOVERNED_BY`" in section
@@ -233,7 +253,7 @@ def test_skill_explains_the_release_effect_and_the_draft_only_rule() -> None:
 
 
 def test_skill_points_approved_policies_at_the_policy_lifecycle_and_states_the_fork_limit() -> None:
-    section = _text()[_text().index("### Releasing a capability from a policy") :]
+    section = _ref("release-governance.md")
 
     assert "approved" in section
     assert "deprecated" in section
@@ -244,18 +264,17 @@ def test_skill_points_approved_policies_at_the_policy_lifecycle_and_states_the_f
 
 
 def test_skill_names_the_release_governance_errors() -> None:
-    text = _text()
+    text = _ref("release-governance.md")
 
     assert "release-capability-governance" in text
     assert "error: capability" in text
     assert "is not governed by any policy" in text
     assert "works only on a draft policy" in text
-    assert "Releasing governance and unmerging" not in text
+    assert "Releasing governance and unmerging" not in _full()
 
 
 def test_skill_walks_the_capability_unmerge_flow_in_order() -> None:
-    text = _text()
-    section = text[text.index("### Unmerging a merge") :]
+    section = _ref("unmerge.md")
 
     assert "`unmerge`" in section
     positions = [
@@ -272,7 +291,7 @@ def test_skill_walks_the_capability_unmerge_flow_in_order() -> None:
 
 
 def test_skill_explains_what_a_capability_unmerge_restores_and_leaves_alone() -> None:
-    section = _text()[_text().index("### Unmerging a merge") :]
+    section = _ref("unmerge.md")
 
     assert "`active`" in section
     assert "`MERGED_INTO`" in section
@@ -285,7 +304,7 @@ def test_skill_explains_what_a_capability_unmerge_restores_and_leaves_alone() ->
 
 
 def test_skill_explains_unmerge_conflicts_and_that_nothing_is_forced() -> None:
-    section = _text()[_text().index("### Unmerging a merge") :]
+    section = _ref("unmerge.md")
 
     assert "conflict" in section
     assert "no longer active" in section
@@ -303,7 +322,7 @@ def test_skill_no_longer_says_unmerging_an_obligation_merge_is_unavailable() -> 
 
 
 def test_skill_explains_what_an_obligation_unmerge_recreates_and_leaves_alone() -> None:
-    section = _text()[_text().index("### Unmerging a merge") :]
+    section = _ref("unmerge.md")
 
     assert "obligation" in section.lower()
     assert "original id" in section
@@ -317,7 +336,7 @@ def test_skill_explains_what_an_obligation_unmerge_recreates_and_leaves_alone() 
 
 
 def test_skill_names_the_obligation_unmerge_conflicts() -> None:
-    section = _text()[_text().index("### Unmerging a merge") :]
+    section = _ref("unmerge.md")
 
     assert "already exists again" in section
     assert "no `MergedObligation` marker" in section or "no MergedObligation marker" in section
@@ -328,15 +347,15 @@ def test_skill_names_the_obligation_unmerge_conflicts() -> None:
 # --- Slice 18: skill finalisation (case table, error table, E1 limitation, reconciliation) ----
 
 
-def _section(heading: str) -> str:
-    text = _text()
+def _section(heading: str, reference: str) -> str:
+    text = _ref(reference)
     start = text.index(heading)
     following = text.find(" ## ", start + len(heading))
     return text[start : following if following != -1 else len(text)]
 
 
 def test_skill_has_a_merge_case_reference_covering_every_case() -> None:
-    section = _section("## Merge case reference")
+    section = _section("## Merge case reference", "merge-case-reference.md")
 
     for row in (
         "Case 1",
@@ -353,7 +372,7 @@ def test_skill_has_a_merge_case_reference_covering_every_case() -> None:
 
 
 def test_skill_has_one_consolidated_error_reference_for_every_tool() -> None:
-    section = _section("## Error reference")
+    section = _section("## Error reference", "error-reference.md")
 
     for tool in (
         "find-capability-merge-candidates",
@@ -378,7 +397,7 @@ def test_skill_has_one_consolidated_error_reference_for_every_tool() -> None:
 
 
 def test_skill_states_the_approved_policy_limitation_and_the_follow_on() -> None:
-    section = _section("## Known limitation")
+    section = _section("## Known limitation", "known-limitation.md")
 
     assert "two approved policies" in section
     assert "no completion path" in section
@@ -388,7 +407,7 @@ def test_skill_states_the_approved_policy_limitation_and_the_follow_on() -> None
 
 
 def test_skill_explains_reconciliation_of_an_interrupted_approval() -> None:
-    section = _section("## Reconciliation of an interrupted approval")
+    section = _section("## Reconciliation of an interrupted approval", "reconciliation.md")
 
     assert "five minutes" in section
     assert "reconciled: applied" in section
@@ -399,7 +418,7 @@ def test_skill_explains_reconciliation_of_an_interrupted_approval() -> None:
 
 
 def test_skill_is_complete_no_scope_so_far_language_and_all_seven_tools_have_a_flow() -> None:
-    text = _text()
+    text = _full()
 
     assert "Scope covered so far" not in text
     assert "grows one step per released tool" not in text
@@ -418,4 +437,14 @@ def test_skill_is_complete_no_scope_so_far_language_and_all_seven_tools_have_a_f
         "## Guardrails",
     ):
         assert heading in text, heading
-    assert text.index("## Merge case reference") < text.index("## Guardrails")
+    assert "## Guardrails" in _text()
+
+
+def test_issue_200_on_demand_references_exist_and_are_named_with_their_condition() -> None:
+    skill = _text()
+
+    for name, condition in _REFERENCES.items():
+        assert (_REFS / name).is_file(), f"{name} is missing"
+        assert f"read `references/{name}`" in skill, f"SKILL.md never says when to read {name}"
+        assert condition in skill.lower(), name
+        assert "Guardrail" in _ref(name), f"{name} must say the Guardrails still apply"

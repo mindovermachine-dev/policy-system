@@ -38,13 +38,15 @@ from typing import cast
 
 import yaml
 
-_SKILL_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "ps-skills"
-    / "ps-plugin"
-    / "skills"
-    / "ps-author-policy"
-    / "SKILL.md"
+_SKILL_DIR = (
+    Path(__file__).resolve().parents[3] / "ps-skills" / "ps-plugin" / "skills" / "ps-author-policy"
+)
+_SKILL_PATH = _SKILL_DIR / "SKILL.md"
+# Issue #200: the Standard/Control loops and the web-research note are read on demand.
+_REFERENCES: tuple[str, ...] = (
+    "references/standard-loop.md",
+    "references/control-loop.md",
+    "references/web-research.md",
 )
 
 _REQUIRED_HEADINGS_IN_ORDER: tuple[str, ...] = (
@@ -78,7 +80,6 @@ _CALLED_TOOL_NAMES: tuple[str, ...] = (
     "update-standard-draft",
     "add-control-to-draft",
     "update-control-draft",
-    "domain_concepts",
 )
 
 # PLAN.md §6.6, each substring re-verified directly against
@@ -219,12 +220,11 @@ def test_never_describes_a_freshly_scaffolded_control_as_draft_implementation_st
     text = _SKILL_PATH.read_text(encoding="utf-8")
     _frontmatter, body = _split_frontmatter(text)
     process = _section_text(body, "## Process")
-    process_one_line = " ".join(process.split())
+    control_loop = " ".join((_SKILL_DIR / "references/control-loop.md").read_text("utf-8").split())
 
     assert '"planned"' in process
     assert (
-        "Never describe a freshly scaffolded Control's `implementation_status` as"
-        in process_one_line
+        "Never describe a freshly scaffolded Control's `implementation_status` as" in control_loop
     )
 
 
@@ -249,3 +249,19 @@ def test_issue_185_branch_detection_follows_superseded_by_and_scaffold_passes_ca
     assert "create-policy-draft(title=<derived>, capability_ids=[" in process_one_line
     # A fork never carries capability_ids (the edges move at approval).
     assert "never pass `capability_ids` together with `supersedes_policy_id`" in process_one_line
+
+
+def test_issue_200_on_demand_references_exist_and_are_named_with_their_condition() -> None:
+    text = " ".join(_SKILL_PATH.read_text(encoding="utf-8").split())
+
+    for reference in _REFERENCES:
+        assert (_SKILL_DIR / reference).is_file(), f"{reference} is missing"
+        assert f"read `{reference}`" in text, f"SKILL.md never says when to read {reference}"
+
+
+def test_issue_200_on_load_makes_no_domain_concepts_fetch() -> None:
+    text = _SKILL_PATH.read_text(encoding="utf-8")
+    _frontmatter, body = _split_frontmatter(text)
+    on_load = " ".join(_section_text(body, "## On Load").split())
+
+    assert "call the `domain_concepts` tool" not in on_load

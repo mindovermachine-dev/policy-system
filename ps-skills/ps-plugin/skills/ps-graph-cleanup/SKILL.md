@@ -255,192 +255,20 @@ Named states for `merge-obligations`, never collapsed into each other:
 
 ### Releasing a capability from a policy
 
-`release-capability-governance` removes the `GOVERNED_BY` edge between one Capability and its
-governing **draft** policy, so the Capability becomes ungoverned. It is the step the
-different-policies merge error points at. It never edits a Policy, a Standard or a Control,
-and it works only while the policy is a `draft`.
-
-1. **Check.** Ask which Capability to release (the id; for a blocked merge, the absorbed one
-   named in the error). Do not guess which policy; the tool derives it.
-2. **Preview.** Call `release-capability-governance` with `capability_id`. This call never
-   edits the graph. It returns `preview` (`capability_id`, `capability_name`, `policy_id`,
-   `policy_title`, `policy_status`, the policy's governed set before and after) plus
-   `pending_approval_id`, `approval_url` and `expires_at`. Show every field plainly and say
-   that the Capability becomes ungoverned.
-3. **Confirm.** Ask the Compliance Officer to confirm, in their own words, that this
-   Capability should no longer be governed by that policy. Do not continue on silence or on
-   your own judgement.
-4. **Passkey.** Give the officer the `approval_url` to open in a browser and sign with a
-   passkey. The approval is bound to this Capability, its policy and the previewed state,
-   and is valid for 15 minutes. Never open, sign or complete it on the officer's behalf.
-5. **Result.** Call `check-cleanup-approval` with the `pending_approval_id`. `released: true`
-   means the edge was removed and the change was audited (`capability.release_governance`,
-   with a before/after snapshot); `error` means the graph was not changed by this approval;
-   `reconciled: applied` means the release was found in the graph after an interrupted run.
-
-A policy that is not a draft is rejected before any approval exists:
-
-- `proposed`: its owner can return it to draft with `revert-policy-to-draft` (see
-  `ps-policy-lifecycle`), after which the release can be retried.
-- `approved` or `deprecated`: point at the policy lifecycle (`ps-policy-lifecycle`) and say
-  plainly what the error says: amending an approved policy is done by forking it, but a fork
-  carries the whole governed set, so it does not by itself free this Capability. There is
-  currently no completion path for releasing one Capability from an approved policy; do not
-  invent a workaround, do not edit the graph another way and do not retry.
-
-Named states for `release-capability-governance`, never collapsed into each other:
-
-| Tool result                                                                                                          | Named state to report                                                                   |
-| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| the gate and graph errors listed in the discovery table above                                                        | the same named states as discovery                                                      |
-| `error: the capability does not exist`                                                                               | "Capability not found" — check the id                                                   |
-| `error: capability ... is a merged tombstone and cannot be released`                                                 | "Already merged" — a tombstone cannot be released                                       |
-| `error: capability ... is not governed by any policy; nothing to release`                                            | "Not governed" — nothing to do                                                          |
-| `error: release-capability-governance works only on a draft policy ...` and the policy is `proposed`                 | "Policy proposed" — relay the `revert-policy-to-draft` pointer                          |
-| `error: release-capability-governance works only on a draft policy ...` and the policy is `approved` or `deprecated` | "Policy not a draft" — relay the lifecycle pointer and the no-completion-path statement |
-| `outcome.error` of a signed approval                                                                                 | Report the message; the approval is spent, so a retry needs a new preview and approval  |
+When the user wants to release a Capability from its draft governing policy (or a blocked different-policies merge points here), read `references/release-governance.md` and follow it. It covers the check -> preview -> confirm -> passkey -> result flow for `release-capability-governance` and its named states.
 
 ### Unmerging a merge
 
-`unmerge` reverses a merge made with `merge-capabilities` or `merge-obligations`, from the audit
-snapshot (`capability.merge` or `obligation.merge`) that merge recorded. It takes only
-`merged_id`: the id that was absorbed (a `merged` Capability tombstone, or a deleted Obligation).
-The tool works out which kind it is from the audit trail; `preview.kind` says so. The flow is
-locate -> preview -> confirm -> passkey -> result; never skip a step.
+When the user wants to reverse a Capability or Obligation merge, read `references/unmerge.md` and follow it. It covers the locate -> preview -> confirm -> passkey -> result flow for `unmerge`, its conflicts and its named states.
 
-1. **Locate.** Ask which absorbed id to unmerge (its `merged_id`). The tool finds the newest merge
-   of that id that actually applied; do not guess a different id.
-2. **Preview.** Call `unmerge` with `merged_id`. This call never edits the graph. It returns
-   `preview` plus `pending_approval_id`, `approval_url` and `expires_at`. Show every field plainly
-   and say what will happen.
-   - **Capability** (`kind` `capability`): the preview has `merged_id`, `survivor_id`,
-     `merge_approval_id`, `edges_to_restore` and `edges_removed_from_survivor` per class
-     (`requires`, `covers`, `mitigated_by`, `governed_by`) and `survivor_added_edges`. The
-     tombstone returns to `active` and its `MERGED_INTO` edge is removed; exactly the edges the
-     merge moved off it come back from the snapshot (an edge the survivor already had before the
-     merge stays on the survivor); edges added to the survivor since the merge stay in place and
-     are listed in `survivor_added_edges`, so the officer can see what the survivor gained.
-   - **Obligation** (`kind` `obligation`): the preview has `merged_id`, `merged_text`,
-     `survivor_id`, `role_id`, `merge_approval_id`, `edges_to_restore` (`satisfied_by`,
-     `requires`), `survivor_added_edges`, `survivor_edges_possibly_from_merge` and a `note`. The
-     deleted Obligation is recreated under its original id with its properties and its `HAS` edge
-     from the Role, its `SATISFIED_BY` and `REQUIRES` edges are restored exactly as the snapshot
-     recorded them, and its `MergedObligation` marker is removed. The survivor's edges are never
-     removed, because a union of edges cannot be attributed: edges added since the merge are in
-     `survivor_added_edges`, and those in `survivor_edges_possibly_from_merge` may originate from
-     the merge. Say so plainly; the officer may want to review them afterwards.
-3. **Confirm.** Ask the Compliance Officer to confirm, in their own words, that this merge
-   should be reversed. Do not continue on silence or on your own judgement.
-4. **Passkey.** Give the officer the `approval_url` to open in a browser and sign with a
-   passkey. The approval is bound to this merge and to the previewed state, and is valid for
-   15 minutes. Never open, sign or complete it on the officer's behalf.
-5. **Result.** Call `check-cleanup-approval` with the `pending_approval_id`. `unmerged: true`
-   means the node is back and the change was audited (`capability.unmerge` or
-   `obligation.unmerge`, with a before/after snapshot, the restored edges and
-   `survivor_added_edges`); `error` means the graph was not changed by this approval;
-   `reconciled: applied` means the unmerge was found in the graph after an interrupted run.
+## On-demand references
 
-A conflict is rejected before any approval exists, with an explanation; pass it on verbatim.
-There is no approval, and nothing is forced. Conflicts for a Capability include: the survivor
-is no longer active (it was merged away or removed; the message names where it went), the
-tombstone was re-pointed by a later merge (the message names the current target), the survivor's
-governance changed since the merge so restoring the governing policy would contradict it, a
-restored edge's endpoint no longer exists, or the Capability is not (or no longer) a merged
-tombstone. Conflicts for an Obligation include: the Obligation already exists again, it has no
-`MergedObligation` marker or the marker now points elsewhere, the survivor obligation no longer
-exists (the message names where it went), the Role, a Requirement or a Capability endpoint is
-gone, or a Capability endpoint is now a merged tombstone. If no merge of the id is in the audit
-trail the tool says so. Do not invent a workaround, do not edit the graph another way and do not
-retry.
+Read these only when the condition holds; each one is bound by the Guardrails below.
 
-Named states for `unmerge`, never collapsed into each other:
-
-| Tool result                                                                                                                | Named state to report                                                                         |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| the gate and graph errors listed in the discovery table above                                                              | the same named states as discovery                                                            |
-| `error: the audit trail could not be read right now; try again shortly`                                                    | "Audit trail unavailable" — nothing changed; try again later                                  |
-| `error: no merge of ... was found in the audit trail; ...`                                                                 | "No merge to reverse" — check the id; only merges made with the cleanup tools can be unmerged |
-| `error: capability ... is not a merged tombstone ...`                                                                      | "Not merged" — nothing to unmerge (never merged, or already unmerged)                         |
-| `error: obligation ... already exists again; ...`                                                                          | "Obligation exists again" — nothing to unmerge                                                |
-| `error: obligation ... has no MergedObligation marker ...`                                                                 | "No marker" — a conflict; report it, nothing is forced                                        |
-| `error: the survivor capability ... is no longer active ...` or `error: the survivor obligation ... no longer exists ...`  | "Survivor changed" — a conflict; relay where it went; no approval exists                      |
-| `error: capability ... was merged into ..., but its redirect now points at ...`                                            | "Redirect changed" — a conflict; relay the current target; no approval exists                 |
-| `error: the survivor's governance changed since the merge ...`                                                             | "Governance conflict" — relay both policies; no approval exists                               |
-| `error: ... no longer exists ...` for a Role, Requirement, Capability or edge endpoint, or `... is now a merged tombstone` | "Endpoint gone" — a conflict; relay the ids; no approval exists                               |
-| `outcome.error` of a signed approval                                                                                       | Report the message; the approval is spent, so a retry needs a new preview and approval        |
-
-## Merge case reference
-
-One table for what `merge-capabilities` does in each governance case, so the officer is told the
-same thing everywhere. The case is derived from the two Capabilities' governing policies
-(`GOVERNED_BY`); for Obligations see the last row.
-
-| Case                              | Situation                                     | What the first call does                                                                   | What the officer must do                                                                                                             |
-| --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Case 1                            | Neither Capability has a governing policy     | Returns the preview and the approval                                                       | Confirm, then sign the passkey approval                                                                                              |
-| Case 2                            | Exactly one Capability has a governing policy | Returns the preview only (`acknowledgment_required: true`), **no approval**                | Acknowledge the governance change in their own words; then repeat with `acknowledge_governance_change`; then sign                    |
-| Case 3, same policy               | Both are governed by the **same** policy      | Returns the preview and the approval; no acknowledgment applies                            | Confirm, then sign; the absorbed Capability leaves the policy's governed set                                                         |
-| Case 3, different policies        | Both are governed, by **different** policies  | Returns an `error:` naming both policies, **no approval**                                  | Release the absorbed Capability from a **draft** policy with `release-capability-governance`, then start again; see Known limitation |
-| Obligations (`merge-obligations`) | Two Obligations under the **same Role**       | Returns the preview and the approval; a pair across two Roles is rejected, **no approval** | Confirm, then sign; the absorbed Obligation is deleted and a `MergedObligation` marker remains                                       |
-
-In every case the graph changes only after the officer signs the passkey approval.
-
-## Error reference
-
-Every error a tool can return, in one place. Each row is its own named state; never collapse
-them. The per-tool tables above give the exact wording for the preview-time rejections.
-
-| Tool                               | Error or outcome                                                                                                                           | Named state and what to tell the officer                                                    |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| every tool                         | `error: graph cleanup requires a real authenticated caller`                                                                                | "Not signed in with a real session" (never available under the local-test bypass)           |
-| every tool                         | `error: You do not have the required access role for this action.`                                                                         | "ComplianceOfficer grant missing" (no admin override)                                       |
-| every tool                         | `error: The authorization store is temporarily unavailable.`                                                                               | "Authorization store unavailable" (denied, fail-closed)                                     |
-| every tool                         | `error: the policy graph database is not reachable`                                                                                        | Graph database unreachable (distinct from a PS Service transport failure)                   |
-| every tool                         | `error: an unexpected error occurred`                                                                                                      | Unexpected failure; never guess at its cause                                                |
-| `find-capability-merge-candidates` | the gate and graph errors above                                                                                                            | Same named states; discovery changed nothing                                                |
-| `find-duplicate-obligations`       | the gate and graph errors above                                                                                                            | Same named states; discovery changed nothing                                                |
-| `merge-capabilities`               | rejected at preview (same node, not found, already merged, not active, different policies)                                                 | The per-tool named state; no approval exists                                                |
-| `merge-obligations`                | rejected at preview (same node, not found, different roles, role integrity)                                                                | The per-tool named state; no approval exists                                                |
-| `release-capability-governance`    | rejected at preview (not found, merged, not governed, policy not a draft)                                                                  | The per-tool named state; no approval exists                                                |
-| `unmerge`                          | rejected at preview (no merge to reverse, not merged, a conflict, `error: the audit trail could not be read right now; try again shortly`) | The per-tool named state; no approval exists, nothing is forced                             |
-| `check-cleanup-approval`           | `error: no pending approval with id ...`                                                                                                   | "Approval not found": wrong id, or it belongs to another officer                            |
-| `check-cleanup-approval`           | `error: the approval status could not be settled right now; try again shortly`                                                             | "Status unavailable": try again shortly; nothing was changed by checking                    |
-| any signed approval                | `outcome.error`: the graph changed since the preview; nothing was changed, ask for a new approval                                          | "Stale": start again from the preview                                                       |
-| any signed approval                | `outcome.error`: ... could not be audited; nothing was changed                                                                             | "Not audited": the edit was refused because its audit row could not be written; start again |
-| any signed approval                | `outcome.error`: ... could not be completed; check its status with check-cleanup-approval before retrying                                  | "Write failed": the approval is spent; check the status, then start again from the preview  |
-| any signed approval                | `outcome.error`: this approval could not be executed; ask for a new approval                                                               | "Approval unusable": start again from the preview                                           |
-
-An `outcome.error` always means the graph was not changed by that approval, except where the
-message says to check the status first. Never describe an approval as done unless
-`check-cleanup-approval` returned `merged: true`, `released: true`, `unmerged: true` or
-`reconciled: applied`.
-
-## Known limitation
-
-Two Capabilities governed by two approved policies have no completion path. A merge between
-them is rejected because the policies differ, and `release-capability-governance` works only on
-a **draft** policy. Amending an approved policy is done by forking it, but a fork carries the
-whole governed set, so it cannot drop one Capability. Say so plainly and do not invent a
-workaround: do not edit the graph another way, do not retry, and do not use the
-acknowledgment, which does not apply. A follow-on change to let a fork draft drop a single
-Capability is tracked separately; this skill must not pretend it exists.
-
-## Reconciliation of an interrupted approval
-
-The passkey is signed in a browser, so an approval can be signed and then be interrupted before
-its outcome is recorded. `check-cleanup-approval` settles such an approval lazily. When a signed
-approval has no outcome and is more than five minutes past its expiry, the tool checks the
-graph for the edit:
-
-- the edit is present: the outcome becomes `reconciled: applied`, and the officer is told the
-  change was found in the graph after an interrupted run;
-- the edit is absent: a `failed` audit row with reason `interrupted_no_effect` is recorded
-  under the same approval id and the outcome becomes an `error`; nothing was changed.
-
-An `applied` audit row followed by a `failed` row for one approval id means no edit occurred.
-An approval still inside that window is reported as it is (`pending`, `expired`, or `signed`
-without an outcome): say so and let the officer retry the check later; never poll in a loop.
-Only the officer who created the approval can see it.
+- When explaining what a merge involves per governance case, read `references/merge-case-reference.md`.
+- When a tool returns an error or a signed approval has an `outcome.error` and the right named state is unclear, read `references/error-reference.md`.
+- When two Capabilities are governed by two approved policies (no completion path), read `references/known-limitation.md`.
+- When `check-cleanup-approval` reports a signed approval with no outcome or an interrupted run, read `references/reconciliation.md`.
 
 ## Guardrails
 
