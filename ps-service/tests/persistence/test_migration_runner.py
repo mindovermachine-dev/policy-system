@@ -35,7 +35,7 @@ from ps_service.persistence import (
     migration_runner,
 )
 from ps_service.persistence.migration_runner import (
-    _split_statements,  # pyright: ignore[reportPrivateUsage]  -- test-only reuse so the semicolon-in-comment guard checks the runner's own statement-splitting logic
+    split_statements,
 )
 from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
 
@@ -143,7 +143,7 @@ def test_migration_sql_files_contain_no_semicolon_inside_comments() -> None:
         for sql_file in sorted(source.directory.glob("*.sql")):
             sql = sql_file.read_text(encoding="utf-8")
             code_only = re.sub(r"--[^\n]*", "", sql)
-            assert len(_split_statements(sql)) == code_only.count(";"), sql_file
+            assert len(split_statements(sql)) == code_only.count(";"), sql_file
 
 
 def test_migration_runner_module_documents_append_only_rule() -> None:

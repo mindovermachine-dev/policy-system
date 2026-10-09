@@ -213,10 +213,22 @@ does not change an existing role's password (run `ALTER ROLE` by hand).
 | `psPostgres.admin.user` | `postgres_admin` | Superuser that runs the init script. Its Secret is consumed only by the Postgres container; the `ps-service` pod never references it. |
 | `psPostgres.state.database` / `psPostgres.state.user` | `ps_state` / `ps_state` | `PS_STATE_POSTGRES_DATABASE` / `PS_STATE_POSTGRES_USER` — plain (non-secret) env vars on `ps-service`, and the names the init script creates. |
 | `psPostgres.signing.database` / `psPostgres.signing.user` | `ps_signing` / `ps_signing` | `PS_PASSKEYSIGNING_POSTGRES_DATABASE` / `PS_PASSKEYSIGNING_POSTGRES_USER` — same wiring for Passkey Signing. |
+| `psPostgres.state.graphOwnerRole` | `ps_state_graph_owner` | Name of the non-login role that owns the insert-only `graph_log` tables (issue #205). Created by the init script on first start and by the provisioning Job on an existing cluster; `ps_state` is never a member of it. Passed to the Job as `PS_STATE_GRAPH_OWNER_ROLE`. Never reuse the state role's name. |
+| `psPostgres.provisioning.enabled` | `true` | Renders the `ps-state-provision` Job that creates and migrates the `graph_log` tables with the admin credential, on fresh installs and on every `helm upgrade`, and admits it through the Postgres NetworkPolicy. Set `false` only if you run `python -m ps_service.graph_gateway.provision` yourself: PS Service fails closed at startup until the tables exist. Upgrades must pass `--wait --wait-for-jobs` so a failed Job fails the upgrade. |
+| `psPostgres.provisioning.backoffLimit` / `psPostgres.provisioning.activeDeadlineSeconds` | `10` / `900` | Retry budget and overall deadline of that Job. Retries are generous because the first attempts can precede the audit tables PS Service's own startup migrations create. |
 | **`psPostgres.admin.existingSecret`** / **`psPostgres.state.existingSecret`** / **`psPostgres.signing.existingSecret`** | `""` | **(AC-BI-002/AC-BI-007, issue #159)** When a value is unset (the default in both profiles), the chart generates and persists that credential itself via a `lookup`+`randAlphaNum` idiom (`templates/ps-postgres-secret.yaml`; Secrets `<fullname>-ps-postgres-{admin,state,signing}-credentials`, e.g. `policy-system-ps-postgres-{admin,state,signing}-credentials` for release `policy-system`; `<fullname>` is the release name when it already contains `policy-system`, else `<release>-policy-system`), reused verbatim — no Key Vault or other external call — on every subsequent `helm upgrade`. Set to reuse an operator-managed Secret name instead; each value suppresses only its own Secret. Required keys: `POSTGRES_PASSWORD` (admin), `PS_STATE_POSTGRES_PASSWORD` (state), `PS_PASSKEYSIGNING_POSTGRES_PASSWORD` (signing). |
 | `psPostgres.persistence.size` | `10Gi` | PVC storage request for the data volume. |
 | `psPostgres.persistence.storageClassName` | `""` | Empty string = let the cluster pick its own default StorageClass. Only consulted when `durableStorageClass.enabled` below is `false`. |
 | `psPostgres.persistence.durableStorageClass.enabled` | `false` (`true` in prod) | Toggles a dedicated Premium SSD, Retain-reclaim StorageClass for this PVC (mirrors `falkordb.persistence.durableStorageClass` / `authentik.postgres.persistence.durableStorageClass` exactly). |
+
+The provisioning Job (never the `ps-service` pod) receives `PS_STATE_POSTGRES_HOST`, `_PORT`,
+`_DATABASE`, `_USER` (target and application role), `PS_STATE_GRAPH_OWNER_ROLE` (from
+`psPostgres.state.graphOwnerRole`), and the admin credential as `PS_STATE_ADMIN_POSTGRES_USER`
+(from `psPostgres.admin.user`) and `PS_STATE_ADMIN_POSTGRES_PASSWORD` (from the admin Secret's
+`POSTGRES_PASSWORD`). `PS_STATE_PROVISION_CONNECT_TIMEOUT_SECONDS` (default `120`) bounds how
+long the command waits for the server to accept connections. These variables are read only by
+`python -m ps_service.graph_gateway.provision`; `ps-service` ignores them and never holds the admin
+credential.
 
 `ps-service`'s Deployment consumes the server via ten env vars, five per database:
 `PS_STATE_POSTGRES_*` and `PS_PASSKEYSIGNING_POSTGRES_*` — `_HOST` (the chart's own

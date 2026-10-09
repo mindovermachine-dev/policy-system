@@ -97,7 +97,7 @@ class _FakeAuditStore:
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Not exercised here -- `create_policy_draft` only ever calls `record_standalone`."""
         del cur, actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
         raise NotImplementedError
@@ -466,7 +466,7 @@ class _TransitionFakeAuditStore:
         self._recorder = recorder
         self.calls: list[_RecordedTransitionAuditCall] = []
 
-    def record(self, *args: object, **kwargs: object) -> None:
+    def record(self, *args: object, **kwargs: object) -> str:
         """Not exercised here -- `propose_policy` only ever calls `record_standalone`."""
         del args, kwargs
         raise NotImplementedError

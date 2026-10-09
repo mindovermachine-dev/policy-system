@@ -173,8 +173,23 @@ psPostgres:
   state:
     database: ps_state
     user: ps_state
+    # NOLOGIN role that owns the insert-only graph mutation log tables (issue #205). Created
+    # by the init script on first start and by the provisioning step on an existing cluster;
+    # the state role is never a member of it. Never reuse the state role's name here.
+    graphOwnerRole: ps_state_graph_owner
     # Operator-managed Secret (key PS_STATE_POSTGRES_PASSWORD); empty = chart-generated.
     existingSecret: ""
+  # Job that creates and migrates the owner-protected graph log tables in ps_state with the
+  # admin credential (issue #205); runs on fresh installs and on every `helm upgrade`. Disable it
+  # only if the operator provisions by hand (`python -m ps_service.graph_gateway.provision`):
+  # ps-service fails closed at startup until the tables exist. Upgrades must be run with
+  # `--wait --wait-for-jobs` so a failed Job fails the upgrade.
+  provisioning:
+    enabled: true
+    # The first attempts can precede ps-service's own audit-table migrations (the step needs
+    # public.audit_events), so retries are generous; the deadline bounds the whole Job.
+    backoffLimit: 10
+    activeDeadlineSeconds: 900
   signing:
     database: ps_signing
     user: ps_signing

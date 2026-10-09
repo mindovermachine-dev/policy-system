@@ -75,6 +75,12 @@ gh ext install devx-cafe/gh-insitu
 gh insitu run post-create
 ```
 
+Running PS Service against your own state Postgres (`scripts/ps-service.sh start`): the
+immutable graph log tables are created by a privileged step, not by PS Service, so startup fails
+closed until you run `python -m ps_service.graph_gateway.provision` once with admin credentials
+(`PS_STATE_ADMIN_POSTGRES_USER`, `PS_STATE_ADMIN_POSTGRES_PASSWORD`, plus the usual
+`PS_STATE_POSTGRES_*`). See the [Operations Guide](docs/artifacts/operations-guide.md#upgrading-to-the-graph-mutation-log).
+
 ## Coding Standards
 
 See [`docs/coding-standards/level2-python-instructions.md`](docs/coding-standards/level2-python-instructions.md)
@@ -109,6 +115,11 @@ Selecting a live marker group with `-m` (for example `-m falkordb_live`) runs in
 process automatically, because those tests share external services and are not safe to run
 concurrently. Passing `-n` explicitly together with a live marker overrides that and is
 unsupported.
+
+A test that needs several external services carries every one of their markers (for example
+`falkordb_live` and `llm_live` on the real-socket startup test, which also provisions a scratch
+Postgres through a fixture), so a run selecting one marker picks only tests whose sole external service is that one.
+Run a multi-service test with the conjunction, for example `-m "integration and falkordb_live"`.
 
 Run the full local gate exactly as CI does:
 

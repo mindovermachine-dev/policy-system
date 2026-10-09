@@ -109,3 +109,42 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_SIGNING_DATABASE")].value
           value: ps_signing
+
+  - it: init creates a NOLOGIN owner role for the immutable tables
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'CREATE ROLE :"owner_role" NOLOGIN NOINHERIT'
+      - matchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: "PS_STATE_GRAPH_OWNER_ROLE:=ps_state_graph_owner"
+
+  - it: init never grants the owner role to the state role or anyone else
+    template: ps-postgres-init-configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'GRANT\s+:"owner_role"'
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'IN ROLE :"owner_role"'
+      - notMatchRegex:
+          path: data["10-ps-init.sh"]
+          pattern: 'ALTER ROLE :"owner_role"'
+
+  - it: postgres deployment passes PS_STATE_GRAPH_OWNER_ROLE to the init script
+    template: ps-postgres-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_GRAPH_OWNER_ROLE")].value
+          value: ps_state_graph_owner
+
+  - it: postgres deployment takes the owner role name from psPostgres.state.graphOwnerRole
+    template: ps-postgres-deployment.yaml
+    set:
+      psPostgres.state.graphOwnerRole: custom_graph_owner
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_GRAPH_OWNER_ROLE")].value
+          value: custom_graph_owner

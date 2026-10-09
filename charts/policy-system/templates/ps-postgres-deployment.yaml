@@ -50,6 +50,8 @@ spec:
               value: {{ .Values.psPostgres.state.database | quote }}
             - name: PS_STATE_USER
               value: {{ .Values.psPostgres.state.user | quote }}
+            - name: PS_STATE_GRAPH_OWNER_ROLE
+              value: {{ .Values.psPostgres.state.graphOwnerRole | quote }}
             - name: PS_STATE_POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:

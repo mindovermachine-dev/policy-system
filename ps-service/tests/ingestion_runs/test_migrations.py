@@ -15,7 +15,7 @@ from ps_service.config import load_config
 from ps_service.ingestion_runs import MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR
 from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
 from ps_service.persistence.migration_runner import (
-    _split_statements,  # pyright: ignore[reportPrivateUsage]  -- test-only reuse so the semicolon-in-comment guard checks the runner's own statement-splitting logic
+    split_statements,
 )
 from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
 
@@ -49,7 +49,7 @@ def test_the_migration_file_has_no_semicolon_inside_a_comment() -> None:
     sql = _FILE.read_text(encoding="utf-8")
     code_only = re.sub(r"--[^\n]*", "", sql)
 
-    assert len(_split_statements(sql)) == code_only.count(";")
+    assert len(split_statements(sql)) == code_only.count(";")
 
 
 def _isolated() -> tuple[psycopg.Connection[tuple[object, ...]], str]:

@@ -1,0 +1,67 @@
+{{- if .Values.psPostgres.provisioning.enabled }}
+# Creates and migrates the owner-protected graph log tables (issue #205) with the admin
+# credential, by running `python -m ps_service.graph_gateway.provision` from the ps-service image.
+# The same Job serves fresh installs and upgrades of existing deployments (the Postgres init
+# script runs only on an empty PGDATA, so it can never reach an existing cluster).
+#
+# A normal release resource, not a Helm hook: a post-install hook runs only after `--wait`
+# succeeds and ps-service is deliberately not Ready until these tables exist, which would
+# deadlock. `helm upgrade --wait --wait-for-jobs` (scripts/ps-upgrade.sh, scripts/deploy-ps-prod.sh)
+# waits for it, and a Job that exhausts backoffLimit/activeDeadlineSeconds fails the upgrade.
+#
+# Named by release revision: a Job's pod template is immutable, and every upgrade must run the
+# CLI again (new image, re-pushed mutable tag, new migration files or values). The CLI is
+# idempotent, so a no-op run is one connection and one SELECT. Helm removes earlier revisions'
+# Jobs because they leave the manifest. The name budget is 36 + 21 + up to 6 revision digits.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "policy-system.fullname" . | trunc 36 | trimSuffix "-" }}-ps-state-provision-r{{ .Release.Revision }}
+  labels:
+    {{- include "policy-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ps-state-provision
+    policy-system/image-tag: {{ .Values.psService.image.tag | default .Chart.AppVersion | quote }}
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: {{ .Values.psPostgres.provisioning.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.psPostgres.provisioning.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "policy-system.selectorLabels" . | nindent 8 }}
+        # Must NOT be `ps-service`: the ps-service Service would route traffic to this pod.
+        app.kubernetes.io/component: ps-state-provision
+    spec:
+      # Retries in place: the first attempts can precede the audit tables that ps-service's own
+      # startup migrations create (the provisioning step needs public.audit_events).
+      restartPolicy: OnFailure
+      containers:
+        - name: ps-state-provision
+          image: "{{ .Values.psService.image.repository }}:{{ .Values.psService.image.tag | default .Chart.AppVersion }}"
+          # Same mutable-tag reasoning as the ps-service container.
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 10001
+            runAsNonRoot: true
+          command: ["python", "-m", "ps_service.graph_gateway.provision"]
+          env:
+            - name: PS_STATE_POSTGRES_HOST
+              value: {{ printf "%s-ps-postgres" (include "policy-system.fullname" .) }}
+            - name: PS_STATE_POSTGRES_PORT
+              value: "5432"
+            - name: PS_STATE_POSTGRES_DATABASE
+              value: {{ .Values.psPostgres.state.database | quote }}
+            - name: PS_STATE_POSTGRES_USER
+              value: {{ .Values.psPostgres.state.user | quote }}
+            - name: PS_STATE_GRAPH_OWNER_ROLE
+              value: {{ .Values.psPostgres.state.graphOwnerRole | quote }}
+            - name: PS_STATE_ADMIN_POSTGRES_USER
+              value: {{ .Values.psPostgres.admin.user | quote }}
+            - name: PS_STATE_ADMIN_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  # Admin (superuser) Secret: referenced by the Postgres Deployment and this
+                  # Job only, never by the ps-service pod.
+                  name: {{ include "policy-system.psPostgresAdminSecretName" . }}
+                  key: POSTGRES_PASSWORD
+{{- end }}

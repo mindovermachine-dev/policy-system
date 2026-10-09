@@ -12,6 +12,7 @@
   - [Rotating the Azure LLM API key](#rotating-the-azure-llm-api-key)
 - [Production operations](#production-operations)
   - [Updating to the latest version](#updating-to-the-latest-version-1)
+  - [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
@@ -51,11 +52,14 @@ To do the same by hand (Helm 3.14 or newer):
 
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
-  --reset-then-reuse-values --set llm.existingSecret=policy-system-llm-credentials --wait
+  --reset-then-reuse-values --set llm.existingSecret=policy-system-llm-credentials --wait --wait-for-jobs
 ```
 
 `scripts/deploy-ps-eval.sh` re-applies its values only when they changed, so it does not pick
 up a newer chart version by itself.
+
+The upgrade also runs a provisioning Job for the graph mutation log; see
+[Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log).
 
 Then check the PS Service pod:
 
@@ -186,7 +190,7 @@ not been run against a live AKS upgrade. By hand (Helm 3.14 or newer):
 ```bash
 helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/policy-system \
   -f charts/policy-system/values-prod.yaml --reset-then-reuse-values \
-  --set llm.existingSecret=policy-system-llm-credentials --wait
+  --set llm.existingSecret=policy-system-llm-credentials --wait --wait-for-jobs
 ```
 
 `ps-cli/install.sh` updates the client (the script runs it for you).
@@ -195,6 +199,90 @@ helm upgrade --install policy-system oci://ghcr.io/mindovermachine-dev/charts/po
 kubectl get pods -l app.kubernetes.io/component=ps-service \
   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[0].image,STATUS:.status.phase'
 ```
+
+The upgrade also runs a provisioning Job for the graph mutation log. See
+[Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log).
+
+### Upgrading to the graph mutation log
+
+**Applies to:** every `helm upgrade` of a release installed before the graph mutation log
+existed (the evaluator and production profiles alike), and to fresh installs, which take the same
+path.
+
+PS Postgres gains a `graph_log` schema in the `ps_state` database. It holds five tables: the
+insert-only mutation log (`groups`, `entries`, `payloads`), the digest `checkpoints`, and the
+`applied_markers` (the only table that is updated). A dedicated non-login owner role
+(`ps_state_graph_owner` by default, `psPostgres.state.graphOwnerRole`) owns them. The `ps_state`
+role that PS Service connects as is not a member of that role and holds only `SELECT` and
+`INSERT` on the log tables (plus `UPDATE` on the markers), so PS Service cannot alter, truncate
+or drop the log. Existing `ps_state` tables and their rows are not touched.
+
+The Postgres init script that creates the owner role runs **only on an empty `PGDATA`**, so it
+can never reach an existing cluster. Existing deployments are covered by the `ps-state-provision`
+Job, not by the script:
+
+1. `helm upgrade` renders the Job `<release>-ps-state-provision-r<revision>`. It runs
+   `python -m ps_service.graph_gateway.provision` from the PS Service image with the admin
+   credential (the `psPostgres.admin` Secret, which only this Job and the Postgres pod reference;
+   the `ps-service` pod never does). It creates the owner role if absent, then the schema, tables,
+   ownership and grants. The command is idempotent: a repeat run applies nothing.
+2. [`scripts/ps-upgrade.sh`](../../scripts/ps-upgrade.sh) and `scripts/deploy-ps-prod.sh` pass
+   `--wait --wait-for-jobs`, so a Job that exhausts its retries fails the upgrade with a Helm
+   error naming the Job; it does not hang. An upgrade run by hand must pass the same two flags
+   (see the command in [Updating to the latest version](#updating-to-the-latest-version-1)).
+3. The Job may start before PS Service has created `audit_events` (the log links to it) and retry
+   until it has; this is expected. `psPostgres.provisioning.backoffLimit` and
+   `psPostgres.provisioning.activeDeadlineSeconds` bound it.
+
+Confirm it ran:
+
+```bash
+kubectl get job -l app.kubernetes.io/component=ps-state-provision
+kubectl logs job/<job-name>     # the name printed above
+POD=$(kubectl get pod -l app.kubernetes.io/component=ps-postgres -o jsonpath='{.items[0].metadata.name}')
+STATE_PW=$(kubectl get secret policy-system-ps-postgres-state-credentials \
+  -o jsonpath='{.data.PS_STATE_POSTGRES_PASSWORD}' | base64 -d)
+kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" psql -h 127.0.0.1 -U ps_state -d ps_state \
+  -c "SELECT tablename, tableowner FROM pg_tables WHERE schemaname = 'graph_log';"
+```
+
+Every table is owned by `ps_state_graph_owner`, not by `ps_state`.
+
+**If it has not run** (for example `psPostgres.provisioning.enabled=false`, or the Job failed):
+PS Service fails closed at startup and exits, and `/ready` reports `not_ready`. The log names the
+missing migration and gives the remedy; the message reads `privileged migration
+graph_gateway/0001_graph_mutation_log.sql is not in place (<reason>); run
+python -m ps_service.graph_gateway.provision with the admin credential`. PS Service never
+creates these tables itself. To run the step by hand, use the same CLI with the admin Secret
+(`PS_STATE_ADMIN_POSTGRES_USER`, `PS_STATE_ADMIN_POSTGRES_PASSWORD`, the target
+`PS_STATE_POSTGRES_HOST`, `_PORT`, `_DATABASE`, `_USER`, and optionally `PS_STATE_GRAPH_OWNER_ROLE`):
+
+```bash
+kubectl port-forward svc/policy-system-ps-postgres 5432:5432 &
+ADMIN_PW=$(kubectl get secret policy-system-ps-postgres-admin-credentials \
+  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+PS_STATE_POSTGRES_HOST=127.0.0.1 PS_STATE_POSTGRES_PORT=5432 \
+  PS_STATE_POSTGRES_DATABASE=ps_state PS_STATE_POSTGRES_USER=ps_state \
+  PS_STATE_ADMIN_POSTGRES_USER=postgres_admin PS_STATE_ADMIN_POSTGRES_PASSWORD="$ADMIN_PW" \
+  uv run python -m ps_service.graph_gateway.provision
+```
+
+Use `psPostgres.admin.existingSecret`'s `POSTGRES_PASSWORD` instead if you set one. The command
+runs from a checkout (or any environment with the PS Service package) and goes through the
+port-forward, because the NetworkPolicy admits Postgres ingress for the provisioning Job pod only
+while `psPostgres.provisioning.enabled` is true. Developers running `scripts/ps-service.sh start`
+against their own state Postgres run the same command once with admin credentials; until then PS
+Service refuses to start.
+
+**Backup and restore.** `pg_dump` as `ps_state` is unchanged and includes `graph_log`. Restoring
+`ps_state` now needs the admin credential and the owner role; see
+[Restore](#ps-postgres-ps_state-and-ps_signing-1). The single-backup design is tracked in #216.
+
+**What this does not protect.** The `ps_state` role still owns the `ps_state` database (and the
+`public` schema, including `audit_events`). It can therefore `DROP DATABASE` from another
+connection or drop `public` objects; the log tables are protected from alteration by that role,
+not the database containing them. Making `audit_events` insert-only is #151, and moving database
+ownership is outside this change. Do not describe the log as undroppable.
 
 ### Owner recovery and the Authentik admin UI
 
@@ -328,7 +416,7 @@ PVC) hosting two databases, each with its own role and its own credentials Secre
 
 | Database | Role | Holds | Password Secret (key) |
 | --- | --- | --- | --- |
-| `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), and the `ps_schema_migrations` tracking table | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
+| `ps_state` | `ps_state` | `access_role_assignments`, `audit_events` (the permanent, insert-only audit trail), `runtime_config` (runtime-mutable settings, including the curated-catalog source override), `ingestion_runs` (status and result of each MCP-submitted ingestion run), the `graph_log` schema (the insert-only graph mutation log: `groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`, owned by the non-login role `ps_state_graph_owner`), and the `ps_schema_migrations` tracking table (the `graph_gateway` component is tracked there too, but applied by the admin-credential provisioning Job, not by PS Service) | `policy-system-ps-postgres-state-credentials` (`PS_STATE_POSTGRES_PASSWORD`) |
 | `ps_signing` | `ps_signing` | Passkey Signing data (`pending_approvals`, `signing_credentials`) and its own `schema_migrations` tracking table | `policy-system-ps-postgres-signing-credentials` (`PS_PASSKEYSIGNING_POSTGRES_PASSWORD`) |
 
 PS Service reads its connection settings from `PS_STATE_POSTGRES_*` and
@@ -375,6 +463,10 @@ Store the two `.dump` files wherever your backup retention policy requires — t
 are a complete, standalone copy of everything PS Service keeps in Postgres. Both files
 contain sensitive data (the audit trail and enrolled signing credentials); protect them
 accordingly.
+
+`pg_dump` as `ps_state` still captures the `graph_log` tables (the role holds `SELECT` on them);
+the dump records their owner as `ps_state_graph_owner` and their grants. Restoring them needs more
+than `ps_state` can do; see Restore below.
 
 Two operational notes:
 
@@ -427,14 +519,25 @@ catalog-source override recorded in its `runtime_config` table.
    ```
 3. Restore each database, dropping and recreating every object the dump contains before
    loading it (`--clean --if-exists` — safe on a database that already has some or all of the
-   same tables, and on an empty one):
+   same tables, and on an empty one). **`ps_state` must be restored with the admin credential**,
+   not as `ps_state`: the `graph_log` tables are owned by `ps_state_graph_owner`, and `--clean`
+   drops and recreates them, which `ps_state` is deliberately unable to do (it would fail on the
+   first `graph_log` table). The owner role must exist first (the provisioning Job and the init
+   script create it; a restore into a brand-new server needs one of them to have run, because
+   `pg_dump` does not carry roles). `ps_signing` is unaffected:
    ```bash
-   kubectl exec "$POD" -- env PGPASSWORD="$STATE_PW" \
-     pg_restore -h 127.0.0.1 -U ps_state -d ps_state --clean --if-exists /tmp/ps_state.dump
+   ADMIN_PW=$(kubectl get secret policy-system-ps-postgres-admin-credentials \
+     -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)
+   kubectl exec "$POD" -- env PGPASSWORD="$ADMIN_PW" \
+     pg_restore -h 127.0.0.1 -U postgres_admin -d ps_state --clean --if-exists /tmp/ps_state.dump
    kubectl exec "$POD" -- env PGPASSWORD="$SIGNING_PW" \
      pg_restore -h 127.0.0.1 -U ps_signing -d ps_signing --clean --if-exists /tmp/ps_signing.dump
    kubectl exec "$POD" -- rm /tmp/ps_state.dump /tmp/ps_signing.dump
    ```
+   Use `psPostgres.admin.existingSecret`'s `POSTGRES_PASSWORD` if you set one, and
+   `psPostgres.admin.user` if you changed it from `postgres_admin`. The dump is restored with its
+   original owners and grants, so the log tables stay owned by `ps_state_graph_owner`. A single
+   backup that covers PS Postgres end to end is tracked in #216.
 4. Restart `ps-service` so it starts from a consistent view of the restored databases and its
    migration runners re-check the restored schemas against their tracking tables:
    ```bash

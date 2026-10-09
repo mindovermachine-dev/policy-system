@@ -11,7 +11,7 @@ import re
 from ps_service.audit import MIGRATIONS_DIR
 from ps_service.audit.models import AUDIT_DETAILS_FILTER_KEYS
 from ps_service.persistence.migration_runner import (
-    _split_statements,  # pyright: ignore[reportPrivateUsage]  -- the same comment-semicolon guard the other components' migration tests use
+    split_statements,
 )
 
 _FILE = MIGRATIONS_DIR / "0002_audit_events_details_indexes.sql"
@@ -34,7 +34,7 @@ def test_0002_creates_one_expression_index_per_allow_listed_key() -> None:
 def test_0002_has_no_semicolon_inside_a_comment() -> None:
     sql = _FILE.read_text(encoding="utf-8")
 
-    assert len(_split_statements(sql)) == _code_only().count(";")
+    assert len(split_statements(sql)) == _code_only().count(";")
 
 
 def test_0002_carries_the_append_only_rule_header() -> None:

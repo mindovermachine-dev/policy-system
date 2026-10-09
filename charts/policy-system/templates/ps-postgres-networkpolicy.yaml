@@ -26,6 +26,13 @@ spec:
             matchLabels:
               {{- include "policy-system.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: ps-service
+        {{- if .Values.psPostgres.provisioning.enabled }}
+        # The provisioning Job (issue #205) connects with the admin credential.
+        - podSelector:
+            matchLabels:
+              {{- include "policy-system.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ps-state-provision
+        {{- end }}
       ports:
         - protocol: TCP
           port: 5432

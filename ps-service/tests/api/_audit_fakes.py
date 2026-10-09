@@ -42,7 +42,7 @@ class InMemoryAuditStore:
     events: list[str] = field(default_factory=list)
     fail_on_outcome: dict[str, Exception] = field(default_factory=dict)
 
-    def record(self, cur: object, **kwargs: object) -> None:
+    def record(self, cur: object, **kwargs: object) -> str:
         del cur, kwargs
         raise NotImplementedError
 

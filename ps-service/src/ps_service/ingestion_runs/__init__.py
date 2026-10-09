@@ -18,6 +18,7 @@ from ps_service.ingestion_runs import (
     audit_actions,  # registers `ingestion_run.*` with `ps_service.audit` at import
 )
 from ps_service.ingestion_runs.errors import (
+    IngestionRunInvalidCompletionError,
     IngestionRunPersistenceError,
     IngestionRunStoreError,
     IngestionRunStoreUnavailableError,
@@ -30,6 +31,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 __all__ = [
     "MIGRATIONS_DIR",
+    "IngestionRunInvalidCompletionError",
     "IngestionRunPersistenceError",
     "IngestionRunRow",
     "IngestionRunStatus",

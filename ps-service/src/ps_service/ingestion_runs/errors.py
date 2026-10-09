@@ -36,6 +36,18 @@ class IngestionRunAlreadyInProgressError(Exception):
         )
 
 
+class IngestionRunInvalidCompletionError(Exception):
+    """A completion call broke the contract: `reason_code` is required exactly when failed.
+
+    A caller bug, not a store error: raised before anything is read or written, so the run
+    stays `running` and no audit row is attempted (AC-BI-010: a failure is an enumerated cause).
+    """
+
+    def __init__(self) -> None:
+        """Build the fixed text; it never echoes caller-supplied values."""
+        super().__init__("reason_code is required exactly when the completion status is 'failed'")
+
+
 class IngestionRunStoreError(Exception):
     """Base type of every `ingestion_runs` store error."""
 

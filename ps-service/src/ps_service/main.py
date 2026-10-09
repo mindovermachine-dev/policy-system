@@ -44,6 +44,8 @@ from ps_service.dependency_health import (
     all_healthy,
     is_healthy,
 )
+from ps_service.graph_gateway import GRAPH_LOG_TABLES
+from ps_service.graph_gateway import MIGRATIONS_DIR as GRAPH_GATEWAY_MIGRATIONS_DIR
 from ps_service.ingestion.adapters.cellar_eli.fetch import (
     check_connectivity as check_cellar_eli_connectivity,
 )
@@ -66,6 +68,7 @@ from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
 from ps_service.persistence import (
+    GraphLogMigrationMissingError,
     MigrationSource,
 )
 from ps_service.persistence import (
@@ -77,11 +80,16 @@ from ps_service.persistence import (
 from ps_service.persistence import (
     connect_from_config as connect_state_postgres_from_config,
 )
+from ps_service.persistence.privileged_migration_runner import (
+    verify_privileged_migrations_applied,
+)
 from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
+    import psycopg
+    from psycopg.rows import TupleRow
     from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
@@ -281,6 +289,12 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
     up to date must never come up looking healthy. This deliberately differs from
     `_apply_passkey_signing_migrations_at_startup`, whose store is optional pilot-scope
     infrastructure whose failure only degrades one gated merge path.
+
+    After the ordinary migrations it verifies, read-only and with the same `ps_state`
+    credentials, that the privileged `graph_gateway` migration (the owner-protected graph log
+    tables, issue #205) was applied by `python -m ps_service.graph_gateway.provision`: the
+    service never creates those tables itself, so a missing one is also FATAL, with a failure
+    entry that names the missing migration.
     """
     if config.state_postgres_host is None:
         return
@@ -295,14 +309,37 @@ def _apply_state_migrations_at_startup(config: ServiceConfig) -> None:
                     MigrationSource("ingestion_runs", INGESTION_RUNS_MIGRATIONS_DIR),
                 ],
             )
+            _verify_graph_gateway_migrations_at_startup(conn)
     except Exception as exc:
         emit_log_entry(
             component="entrypoint",
             action="startup",
             outcome="failure",
-            extra={"dependency": STATE_POSTGRES, "reason": type(exc).__name__},
+            extra=startup_failure_log_extra(exc),
         )
         raise
+
+
+def _verify_graph_gateway_migrations_at_startup(conn: psycopg.Connection[TupleRow]) -> None:
+    """Fail startup unless the privileged `graph_gateway` migration is in place (issue #205)."""
+    verify_privileged_migrations_applied(
+        conn,
+        sources=[MigrationSource("graph_gateway", GRAPH_GATEWAY_MIGRATIONS_DIR)],
+        required_tables=GRAPH_LOG_TABLES,
+    )
+
+
+def startup_failure_log_extra(exc: Exception) -> dict[str, object]:
+    """Return the `extra` of a fatal state-Postgres startup failure: class names only.
+
+    Never the exception text (it can carry hosts or driver detail). A missing privileged
+    migration also names the migration and the fixed reason, the facts an operator acts on.
+    """
+    extra: dict[str, object] = {"dependency": STATE_POSTGRES, "reason": type(exc).__name__}
+    if isinstance(exc, GraphLogMigrationMissingError):
+        extra["missing_migration"] = exc.missing_migration
+        extra["missing_reason"] = exc.reason
+    return extra
 
 
 def _check_dependencies_at_startup(config: ServiceConfig) -> bool:

@@ -69,6 +69,7 @@ INSERT INTO audit_events (
     %(actor_subject)s, %(actor_issuer)s, %(action)s, %(resource_type)s, %(resource_id)s,
     %(outcome)s, %(details)s
 )
+RETURNING id
 """
 
 _SELECT_AUDIT_EVENTS_COLUMNS = (
@@ -228,8 +229,12 @@ class AuditStore(Protocol):
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Validate `details` against `action`'s registered model, then `INSERT` one row.
+
+        Returns the new row's generated `id` (a UUID string), so the caller can link other
+        writes in the same transaction to this audit row (issue #205: the graph mutation log's
+        group carries it as a foreign key).
 
         Uses the CALLER's own already-open cursor/transaction, never a
         connection this method opens itself -- so this insert commits or
@@ -332,7 +337,7 @@ class PsycopgAuditStore:
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Validate `details` against `action`'s registered model, then `INSERT` one row.
 
         See `AuditStore.record`'s docstring for the full contract. Stored
@@ -363,6 +368,11 @@ class PsycopgAuditStore:
                 "details": Json(validated_details.model_dump(mode="json", exclude_none=True)),
             },
         )
+        inserted = cur.fetchone()
+        if inserted is None:  # pragma: no cover - INSERT ... RETURNING always yields its row
+            message = f"audit insert for action {action!r} returned no row"
+            raise AuditPersistenceError(message)
+        return str(inserted[0])
 
     def record_standalone(
         self,

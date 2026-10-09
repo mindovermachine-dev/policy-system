@@ -1143,7 +1143,8 @@ ensure_release() {
     --set psService.authzBootstrapOwner.subject="$owner_subject" \
     --set psService.authzBootstrapOwner.issuer="$owner_issuer" \
     --set psService.authentik.baseUrl="$authentik_base_url" \
-    --set psService.authentik.publicUrl="$authentik_public_url" >/dev/null
+    --set psService.authentik.publicUrl="$authentik_public_url" \
+    --wait --wait-for-jobs --timeout 10m >/dev/null
   made_changes=true
 }
 

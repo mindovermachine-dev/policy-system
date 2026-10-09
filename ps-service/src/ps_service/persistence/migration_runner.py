@@ -28,6 +28,7 @@ component; after it, that freedom is gone.
 from __future__ import annotations
 
 import contextlib
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -55,7 +56,7 @@ class MigrationSource:
     directory: Path
 
 
-_CREATE_TRACKING_TABLE = """
+CREATE_TRACKING_TABLE = """
 CREATE TABLE IF NOT EXISTS ps_schema_migrations (
     component text NOT NULL,
     filename text NOT NULL,
@@ -64,15 +65,18 @@ CREATE TABLE IF NOT EXISTS ps_schema_migrations (
 )
 """
 
-_SELECT_ALREADY_APPLIED = (
+SELECT_ALREADY_APPLIED = (
     "SELECT 1 FROM ps_schema_migrations WHERE component = %(component)s AND filename = %(filename)s"
 )
-_RECORD_APPLIED = (
+RECORD_APPLIED = (
     "INSERT INTO ps_schema_migrations (component, filename) VALUES (%(component)s, %(filename)s)"
 )
 
 
-def _discover_migration_files(directory: Path) -> list[Path]:
+_SPLIT_TOKEN = re.compile(r";|\$[A-Za-z_]?[A-Za-z0-9_]*\$")
+
+
+def discover_migration_files(directory: Path) -> list[Path]:
     """Return every `*.sql` file under `directory`, sorted by filename.
 
     Filename order is the whole ordering contract -- `NNNN_description.sql`
@@ -82,17 +86,31 @@ def _discover_migration_files(directory: Path) -> list[Path]:
     return sorted(directory.glob("*.sql"))
 
 
-def _split_statements(sql: str) -> Sequence[str]:
+def split_statements(sql: str) -> Sequence[str]:
     """Split a migration file's SQL text into individual statements.
 
     `psycopg` (v3) always uses PostgreSQL's extended query protocol, which
     rejects more than one command in a single `execute()` call -- unlike
     `psycopg2`'s simple-query-protocol default. Splitting on `;` is safe for
-    the hand-written DDL migrations (no string literals or
-    dollar-quoted bodies contain a literal `;` today); revisit this if a
-    future migration ever needs one.
+    the hand-written DDL migrations as long as no string literal or comment
+    contains a literal `;`. A dollar-quoted body (`$$ ... $$` or `$tag$ ... $tag$`,
+    as used by a PL/pgSQL trigger function) is kept whole, so its inner `;`
+    never splits the statement.
     """
-    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+    statements: list[str] = []
+    statement_start = 0
+    open_quote: str | None = None
+    for match in _SPLIT_TOKEN.finditer(sql):
+        matched = match.group()
+        if open_quote is not None:
+            open_quote = None if matched == open_quote else open_quote
+        elif matched == ";":
+            statements.append(sql[statement_start : match.start()])
+            statement_start = match.end()
+        else:
+            open_quote = matched
+    statements.append(sql[statement_start:])
+    return [statement.strip() for statement in statements if statement.strip()]
 
 
 def _emit_apply_entry(
@@ -138,16 +156,16 @@ def apply_pending_migrations(
             underlying `psycopg.Error` is chained via `from exc`.
     """
     with conn.cursor() as cur:
-        cur.execute(_CREATE_TRACKING_TABLE)
+        cur.execute(CREATE_TRACKING_TABLE)
     conn.commit()
 
     applied: list[str] = []
     already_applied_count = 0
     for source in sources:
-        for migration_file in _discover_migration_files(source.directory):
+        for migration_file in discover_migration_files(source.directory):
             key = {"component": source.component, "filename": migration_file.name}
             with conn.cursor() as cur:
-                cur.execute(_SELECT_ALREADY_APPLIED, key)
+                cur.execute(SELECT_ALREADY_APPLIED, key)
                 already_applied = cur.fetchone() is not None
             if already_applied:
                 already_applied_count += 1
@@ -156,14 +174,14 @@ def apply_pending_migrations(
             sql = migration_file.read_text(encoding="utf-8")
             try:
                 with conn.cursor() as cur:
-                    for statement in _split_statements(sql):
+                    for statement in split_statements(sql):
                         # `statement` is dynamically split from a hand-authored, trusted
                         # migration file (never user input) -- `cast()` is unavoidable
                         # here because `psycopg`'s `execute()` typing requires
                         # `LiteralString` for its query argument, which a runtime
                         # `str.split()` result can never statically be (L2 cast() policy).
                         cur.execute(cast("LiteralString", statement))
-                    cur.execute(_RECORD_APPLIED, key)
+                    cur.execute(RECORD_APPLIED, key)
                 conn.commit()
             except psycopg.Error as exc:
                 conn.rollback()

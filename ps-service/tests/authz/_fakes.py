@@ -415,7 +415,7 @@ class FakeAuditStore:
         resource_id: str,
         outcome: str,
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Not exercised here -- present only for `Protocol` conformance."""
         del cur, actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
         raise NotImplementedError

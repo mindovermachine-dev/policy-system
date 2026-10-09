@@ -112,7 +112,7 @@ class _RaisingAuditStore:
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         del cur, actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
         raise psycopg.errors.OperationalError("simulated audit_events insert failure")
 

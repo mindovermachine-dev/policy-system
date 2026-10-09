@@ -1,0 +1,177 @@
+suite: ps state provisioning job
+templates:
+  - ps-state-provision-job.yaml
+chart:
+  appVersion: 9.9.9
+release:
+  name: policy-system
+  revision: 2
+set:
+  llm.provider: ollama
+  psService.localTestBypass.enabled: true
+tests:
+  # --- issue #205 slice 7: owner-protected graph log tables created by a chart-rendered Job ---
+
+  - it: renders one Job running the graph_gateway provision module from the ps-service image
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Job
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["python", "-m", "ps_service.graph_gateway.provision"]
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:9.9.9
+
+  - it: image tag follows psService.image.tag when set
+    set:
+      psService.image.tag: "1.2.3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/mindovermachine-dev/ps-service:1.2.3
+
+  - it: is a plain release resource, not a Helm hook (a hook would deadlock behind the fail-closed ps-service)
+    asserts:
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+
+  - it: Job name carries the release revision
+    asserts:
+      - equal:
+          path: metadata.name
+          value: policy-system-ps-state-provision-r2
+
+  - it: Job name changes on the next revision so every upgrade runs a fresh immutable Job
+    release:
+      revision: 3
+    asserts:
+      - equal:
+          path: metadata.name
+          value: policy-system-ps-state-provision-r3
+
+  - it: Job name stays within the Kubernetes name limit for a long fullname
+    set:
+      fullnameOverride: a-very-long-name-that-goes-well-beyond-the-sixty-three-character-limit
+    release:
+      revision: 12345
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: "-ps-state-provision-r12345$"
+      - matchRegex:
+          path: metadata.name
+          pattern: "^.{62}$"
+
+  - it: Job carries the image tag as a label only
+    asserts:
+      - equal:
+          path: metadata.labels["policy-system/image-tag"]
+          value: "9.9.9"
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: ps-state-provision
+
+  - it: Job sets ttlSecondsAfterFinished so finished Jobs do not accumulate
+    asserts:
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 86400
+
+  - it: Job retry and deadline come from psPostgres.provisioning values
+    set:
+      psPostgres.provisioning.backoffLimit: 4
+      psPostgres.provisioning.activeDeadlineSeconds: 300
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 4
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+
+  - it: Job pod retries in place on failure
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: OnFailure
+
+  - it: Job reads the admin password only from the admin Secret
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_ADMIN_POSTGRES_PASSWORD")].valueFrom.secretKeyRef
+          value:
+            name: policy-system-ps-postgres-admin-credentials
+            key: POSTGRES_PASSWORD
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_ADMIN_POSTGRES_USER")].value
+          value: postgres_admin
+
+  - it: Job honours an operator-managed admin Secret
+    set:
+      psPostgres.admin.existingSecret: my-admin
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_ADMIN_POSTGRES_PASSWORD")].valueFrom.secretKeyRef.name
+          value: my-admin
+
+  - it: Job never holds the state role password
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PASSWORD")]
+
+  - it: Job targets the ps-postgres Service and the state database and role
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_HOST")].value
+          value: policy-system-ps-postgres
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_PORT")].value
+          value: "5432"
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_DATABASE")].value
+          value: ps_state
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_POSTGRES_USER")].value
+          value: ps_state
+
+  - it: Job pod template env follows graphOwnerRole value
+    set:
+      psPostgres.state.graphOwnerRole: custom_owner
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_GRAPH_OWNER_ROLE")].value
+          value: custom_owner
+
+  - it: Job pod is not selected by the ps-service Service
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: ps-state-provision
+      - notEqual:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: ps-service
+
+  - it: Job pod runs non-root like the ps-service container
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+
+  - it: Job pulls the image fresh because release tags are mutable
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+
+  - it: provisioning can be disabled by value
+    set:
+      psPostgres.provisioning.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

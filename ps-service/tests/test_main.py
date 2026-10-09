@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import dataclasses
 import inspect
 import json
 import tomllib
@@ -24,9 +25,11 @@ import psycopg
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from persistence.provisioned_postgres import Provisioned, provision_graph_log
 
 import ps_service.main as main_module
 from ps_service import dependency_health
+from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
 from ps_service.config import ServiceConfig, load_config
 from ps_service.ingestion.errors import IngestionConfigurationError
 from ps_service.llm_interface import LlmProviderError
@@ -38,6 +41,8 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.passkey_signing.store import (
     connect_from_config as connect_passkey_signing_postgres_from_config,
 )
+from ps_service.persistence import GraphLogMigrationMissingError, MigrationSource
+from ps_service.persistence import apply_pending_migrations as apply_state_migrations
 from ps_service.persistence import (
     check_connectivity_from_config as check_state_postgres_connectivity,
 )
@@ -1419,25 +1424,35 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
     }
 
 
+def _config_for_cluster(prov: Provisioned) -> ServiceConfig:
+    """A complete config whose state Postgres is the `ps_state` role of the scratch cluster."""
+    return dataclasses.replace(
+        _complete_config(),
+        state_postgres_host=prov.host,
+        state_postgres_port=prov.port,
+        state_postgres_database=prov.state_db,
+        state_postgres_user=prov.state_user,
+        state_postgres_password=prov.state_password,
+    )
+
+
 @pytest.mark.postgres_live
-def test_state_migrations_run_at_startup_apply_every_component_baseline() -> None:
-    """Startup wires the real PS state connection to the runner for all three components.
+def test_state_migrations_run_at_startup_apply_every_component_baseline(
+    provisioned: Provisioned,
+) -> None:
+    """Startup wires the real PS state connection to the runner for every component.
 
     `postgres_live`-marked, like the Passkey Signing twin above: runs the real
-    `create_app`/`lifespan` path against a reachable PS state Postgres, then reads back the
-    real `ps_schema_migrations` tracking rows (issue #130: audit, access roles, runtime config).
+    `create_app`/`lifespan` path against a scratch PS Postgres built by the real Helm init
+    script, then reads back the real `ps_schema_migrations` tracking rows (issue #130: audit,
+    access roles, runtime config, ingestion runs). The privileged `graph_gateway` migration is
+    applied by the provisioning step before startup (issue #205: startup never creates those
+    tables, it only verifies them), which needs only the audit tables to exist first.
     """
-    real_config = load_config()
-    assert real_config.state_postgres_host is not None, (
-        "postgres_live requires PS_STATE_POSTGRES_HOST to be set"
-    )
-    config = _complete_config(
-        state_postgres_host=real_config.state_postgres_host,
-        state_postgres_port=real_config.state_postgres_port,
-        state_postgres_database=real_config.state_postgres_database,
-        state_postgres_user=real_config.state_postgres_user,
-        state_postgres_password=real_config.state_postgres_password,
-    )
+    with connect_state_postgres_from_config(_config_for_cluster(provisioned)) as conn:
+        apply_state_migrations(conn, sources=[MigrationSource("audit", AUDIT_MIGRATIONS_DIR)])
+    provision_graph_log(provisioned)
+    config = _config_for_cluster(provisioned)
 
     with TestClient(create_app(config)):
         pass
@@ -1451,7 +1466,46 @@ def test_state_migrations_run_at_startup_apply_every_component_baseline() -> Non
         ("authz", "0001_access_role_assignments.sql"),
         ("runtime_config", "0001_runtime_config.sql"),
         ("ingestion_runs", "0001_ingestion_runs.sql"),
+        ("graph_gateway", "0001_graph_mutation_log.sql"),
     } <= tracked
+
+
+@pytest.mark.postgres_live
+def test_startup_fails_closed_naming_the_missing_graph_gateway_migration(
+    fresh_provisioned: Provisioned,
+) -> None:
+    """AC-BI-012: with `ps_state` credentials only and no provisioning, startup fails closed."""
+    config = _config_for_cluster(fresh_provisioned)
+
+    with pytest.raises(GraphLogMigrationMissingError) as raised, TestClient(create_app(config)):
+        pass
+
+    assert raised.value.missing_migration == "graph_gateway/0001_graph_mutation_log.sql"
+    assert "python -m ps_service.graph_gateway.provision" in str(raised.value)
+
+
+@pytest.mark.postgres_live
+def test_startup_failure_entry_names_the_missing_migration_and_no_connection_detail(
+    fresh_provisioned: Provisioned, tmp_path: Path, read_lines: ReadLines
+) -> None:
+    """The fatal startup log entry carries `missing_migration`, never host or credentials."""
+    config = _config_for_cluster(fresh_provisioned)
+
+    with pytest.raises(GraphLogMigrationMissingError), TestClient(create_app(config)):
+        pass
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+
+    failures = [
+        line
+        for line in read_lines(tmp_path / "ps-service.jsonl")
+        if line.get("component") == "entrypoint" and line.get("outcome") == "failure"
+    ]
+    assert len(failures) == 1
+    assert failures[0]["missing_migration"] == "graph_gateway/0001_graph_mutation_log.sql"
+    assert failures[0]["reason"] == "GraphLogMigrationMissingError"
+    rendered = str(failures[0])
+    assert fresh_provisioned.state_password not in rendered
+    assert fresh_provisioned.state_db not in rendered
 
 
 def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_successful_startup(

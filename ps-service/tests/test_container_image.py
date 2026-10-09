@@ -911,3 +911,36 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
         }
     finally:
         _remove_container(container_cli, name)
+
+
+_GRAPH_GATEWAY_MIGRATION = "0001_graph_mutation_log.sql"
+_LIST_GRAPH_GATEWAY_MIGRATIONS = (
+    "import importlib.resources as r; "
+    "print(*sorted(p.name for p in r.files('ps_service.graph_gateway.migrations').iterdir() "
+    "if p.name.endswith('.sql')))"
+)
+
+
+def test_runtime_image_ships_graph_gateway_migrations_and_provision_cli_entry(
+    container_cli: str, image_ref: str
+) -> None:
+    """Issue #205 AC-BI-011/012: the image the chart's provisioning Job runs carries both parts.
+
+    The Job runs `python -m ps_service.graph_gateway.provision` from this image, so the module
+    must be runnable (`--help` prints usage and never connects) and the migration file it applies
+    must be packaged.
+    """
+    usage = _run_container_cli(
+        container_cli,
+        ["run", "--rm", image_ref, "python", "-m", "ps_service.graph_gateway.provision", "--help"],
+        timeout=_RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+    migrations = _python_in_image(
+        container_cli, image_ref, _LIST_GRAPH_GATEWAY_MIGRATIONS, check=False
+    )
+
+    assert usage.returncode == 0, f"provision --help failed in {image_ref}:\n{usage.stderr}"
+    assert "PS_STATE_ADMIN_POSTGRES_USER" in usage.stdout
+    assert migrations.returncode == 0, f"listing migrations failed:\n{migrations.stderr}"
+    assert _GRAPH_GATEWAY_MIGRATION in migrations.stdout.split()

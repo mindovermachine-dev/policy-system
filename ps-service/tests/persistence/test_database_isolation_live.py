@@ -17,155 +17,39 @@ Deselected by default -- run with `uv run pytest -m postgres_live`. Needs
 from __future__ import annotations
 
 import dataclasses
-import os
-import subprocess
 import uuid
-from pathlib import Path
-from typing import TYPE_CHECKING
 
 import psycopg
 import pytest
 from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
 
-from ps_service.audit import MIGRATIONS_DIR as AUDIT_MIGRATIONS_DIR
+from persistence.provisioned_postgres import (
+    STATE_SOURCES,
+    Provisioned,
+    drop_cluster_objects,
+    init_names,
+    migrate_state_database,
+    provision_graph_log,
+    run_init_script,
+    superuser_params,
+)
 from ps_service.audit import PsycopgAuditStore
-from ps_service.authz import MIGRATIONS_DIR as AUTHZ_MIGRATIONS_DIR
 from ps_service.config import ServiceConfig, load_config
 from ps_service.curated_source.store import get_override, reset_override, set_override
-from ps_service.persistence import MigrationSource, apply_pending_migrations, connect_from_config
-from ps_service.runtime_config import MIGRATIONS_DIR as RUNTIME_CONFIG_MIGRATIONS_DIR
+from ps_service.persistence import apply_pending_migrations, connect_from_config
 from ps_service.runtime_config import PsycopgRuntimeConfigStore
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 pytestmark = pytest.mark.postgres_live
 
-_INIT_SCRIPT = (
-    Path(__file__).resolve().parents[3]
-    / "charts"
-    / "policy-system"
-    / "files"
-    / "ps-postgres-init.sh"
-)
-_INIT_SCRIPT_TIMEOUT_SECONDS = 60
-_STATE_SOURCES = [
-    MigrationSource("audit", AUDIT_MIGRATIONS_DIR),
-    MigrationSource("authz", AUTHZ_MIGRATIONS_DIR),
-    MigrationSource("runtime_config", RUNTIME_CONFIG_MIGRATIONS_DIR),
-]
 _ISSUER = "https://issuer.example.com/"
-
-
-@dataclasses.dataclass(frozen=True)
-class Provisioned:
-    """One provisioned PS Postgres: superuser connection params plus both roles' identities."""
-
-    host: str
-    port: int
-    superuser: str
-    state_db: str
-    state_user: str
-    state_password: str
-    signing_db: str
-    signing_user: str
-    signing_password: str
-
-    def superuser_connect(self, dbname: str = "postgres") -> psycopg.Connection[tuple[object, ...]]:
-        return psycopg.connect(
-            host=self.host, port=self.port, user=self.superuser, dbname=dbname, autocommit=True
-        )
-
-    def connect_as(
-        self, user: str, password: str, dbname: str
-    ) -> psycopg.Connection[tuple[object, ...]]:
-        return psycopg.connect(
-            host=self.host,
-            port=self.port,
-            user=user,
-            password=password,
-            dbname=dbname,
-            autocommit=True,
-        )
-
-    def as_state(self, dbname: str | None = None) -> psycopg.Connection[tuple[object, ...]]:
-        return self.connect_as(self.state_user, self.state_password, dbname or self.state_db)
-
-    def as_signing(self, dbname: str | None = None) -> psycopg.Connection[tuple[object, ...]]:
-        return self.connect_as(self.signing_user, self.signing_password, dbname or self.signing_db)
-
-
-def _superuser_params() -> dict[str, str]:
-    dsn = os.environ.get("PS_TEST_POSTGRES_SUPERUSER_DSN")
-    assert dsn, "postgres_live isolation tests require PS_TEST_POSTGRES_SUPERUSER_DSN"
-    return {key: str(value) for key, value in conninfo_to_dict(dsn).items()}
-
-
-def _run_init_script(
-    params: dict[str, str], names: dict[str, str]
-) -> subprocess.CompletedProcess[str]:
-    env = {
-        **os.environ,
-        "PGHOST": params.get("host", "127.0.0.1"),
-        "PGPORT": params.get("port", "5432"),
-        "POSTGRES_USER": params["user"],
-        **names,
-    }
-    if "password" in params:
-        env["PGPASSWORD"] = params["password"]
-    return subprocess.run(  # noqa: S603  # fixed argv, repo-owned script, no shell
-        ["/bin/sh", str(_INIT_SCRIPT)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_INIT_SCRIPT_TIMEOUT_SECONDS,
-    )
-
-
-def _init_names(suffix: str) -> dict[str, str]:
-    return {
-        "PS_STATE_DATABASE": f"ps_state_{suffix}",
-        "PS_STATE_USER": f"ps_state_{suffix}",
-        "PS_SIGNING_DATABASE": f"ps_signing_{suffix}",
-        "PS_SIGNING_USER": f"ps_signing_{suffix}",
-        "PS_STATE_POSTGRES_PASSWORD": f"state-pw-{uuid.uuid4().hex}",
-        "PS_PASSKEYSIGNING_POSTGRES_PASSWORD": f"signing-pw-{uuid.uuid4().hex}",
-    }
-
-
-@pytest.fixture(scope="module")
-def provisioned() -> Iterator[Provisioned]:
-    params = _superuser_params()
-    names = _init_names(uuid.uuid4().hex[:8])
-    result = _run_init_script(params, names)
-    assert result.returncode == 0, result.stderr
-    prov = Provisioned(
-        host=params.get("host", "127.0.0.1"),
-        port=int(params.get("port", "5432")),
-        superuser=params["user"],
-        state_db=names["PS_STATE_DATABASE"],
-        state_user=names["PS_STATE_USER"],
-        state_password=names["PS_STATE_POSTGRES_PASSWORD"],
-        signing_db=names["PS_SIGNING_DATABASE"],
-        signing_user=names["PS_SIGNING_USER"],
-        signing_password=names["PS_PASSKEYSIGNING_POSTGRES_PASSWORD"],
-    )
-    yield prov
-    with prov.superuser_connect() as conn:
-        for database in (prov.state_db, prov.signing_db):
-            conn.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(database))
-            )
-        for role in (prov.state_user, prov.signing_user):
-            conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+_GRAPH_LOG_TABLES = ("groups", "entries", "payloads", "checkpoints", "applied_markers")
+_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
 def test_init_script_output_never_contains_a_password() -> None:
-    names = _init_names(uuid.uuid4().hex[:8])
+    names = init_names(uuid.uuid4().hex[:8])
 
-    result = _run_init_script(_superuser_params(), names)
+    result = run_init_script(superuser_params(), names)
 
     try:
         assert result.returncode == 0, result.stderr
@@ -176,26 +60,7 @@ def test_init_script_output_never_contains_a_password() -> None:
             assert secret not in result.stdout
             assert secret not in result.stderr
     finally:
-        with _superuser_connection() as conn:
-            for database in (names["PS_STATE_DATABASE"], names["PS_SIGNING_DATABASE"]):
-                conn.execute(
-                    sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                        sql.Identifier(database)
-                    )
-                )
-            for role in (names["PS_STATE_USER"], names["PS_SIGNING_USER"]):
-                conn.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
-
-
-def _superuser_connection() -> psycopg.Connection[tuple[object, ...]]:
-    params = _superuser_params()
-    return psycopg.connect(
-        host=params.get("host", "127.0.0.1"),
-        port=int(params.get("port", "5432")),
-        user=params["user"],
-        dbname="postgres",
-        autocommit=True,
-    )
+        drop_cluster_objects(names)
 
 
 def test_each_role_can_connect_and_create_in_its_own_database(provisioned: Provisioned) -> None:
@@ -271,7 +136,7 @@ def test_init_script_rerun_fails_loudly_and_never_silently_succeeds(
         "PS_PASSKEYSIGNING_POSTGRES_PASSWORD": provisioned.signing_password,
     }
 
-    result = _run_init_script(_superuser_params(), names)
+    result = run_init_script(superuser_params(), names)
 
     assert result.returncode != 0
     assert "already exists" in result.stderr
@@ -292,7 +157,7 @@ def test_migrations_and_catalog_tool_work_as_the_least_privilege_state_role(
     store = PsycopgRuntimeConfigStore(config, audit_store=PsycopgAuditStore(config))
 
     with connect_from_config(config) as conn:
-        apply_pending_migrations(conn, sources=_STATE_SOURCES)
+        apply_pending_migrations(conn, sources=STATE_SOURCES)
     set_override(store, "https://example.com/least-privilege", actor=actor)
 
     assert get_override(store) == "https://example.com/least-privilege"
@@ -304,3 +169,58 @@ def test_migrations_and_catalog_tool_work_as_the_least_privilege_state_role(
         ).fetchone()
     assert row is not None
     assert row[0] == 2
+
+
+def test_init_script_creates_nologin_owner_role_and_state_role_is_not_a_member(
+    provisioned: Provisioned,
+) -> None:
+    with provisioned.superuser_connect() as conn:
+        role = conn.execute(
+            "SELECT rolcanlogin, rolsuper FROM pg_roles WHERE rolname = %s",
+            (provisioned.owner_role,),
+        ).fetchone()
+        is_member = conn.execute(
+            "SELECT pg_has_role(%s, %s, 'MEMBER')", (provisioned.state_user, provisioned.owner_role)
+        ).fetchone()
+
+    assert role == (False, False)
+    assert is_member == (False,)
+
+
+def test_owner_role_cannot_log_in(provisioned: Provisioned) -> None:
+    with pytest.raises(psycopg.OperationalError, match="not permitted to log in"):
+        provisioned.connect_as(provisioned.owner_role, "irrelevant", provisioned.state_db).close()
+
+
+def test_init_then_provisioning_yields_owner_owned_tables_with_insert_select_only_for_state_role(
+    fresh_provisioned: Provisioned,
+) -> None:
+    migrate_state_database(fresh_provisioned)
+
+    provision_graph_log(fresh_provisioned)
+
+    with fresh_provisioned.superuser_connect(fresh_provisioned.state_db) as conn:
+        owners = conn.execute(
+            "SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'graph_log'"
+        ).fetchall()
+        granted = {
+            (table, privilege): conn.execute(
+                "SELECT has_table_privilege(%s, %s, %s)",
+                (fresh_provisioned.state_user, f"graph_log.{table}", privilege),
+            ).fetchone()
+            for table in _GRAPH_LOG_TABLES
+            for privilege in _TABLE_PRIVILEGES
+        }
+    assert owners == [(fresh_provisioned.owner_role,)]
+    for (table, privilege), row in granted.items():
+        expected = privilege in {"INSERT", "SELECT"} or (
+            table == "applied_markers" and privilege == "UPDATE"
+        )
+        assert row == (expected,), f"{privilege} on graph_log.{table}"
+
+
+def test_signing_role_still_cannot_connect_to_state_database_after_owner_role_added(
+    provisioned_graph_log: Provisioned,
+) -> None:
+    with pytest.raises(psycopg.OperationalError, match="permission denied for database"):
+        provisioned_graph_log.as_signing(provisioned_graph_log.state_db).close()

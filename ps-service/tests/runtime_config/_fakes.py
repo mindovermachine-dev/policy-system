@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ class RecordingAuditStore:
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Remember the call; never touches `cur`."""
         del cur
         self.recorded.append(
@@ -45,6 +46,7 @@ class RecordingAuditStore:
                 "details": dict(details),
             }
         )
+        return str(uuid.uuid4())
 
     def record_standalone(
         self,

@@ -22,13 +22,30 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.ingress[0].from
-          count: 1
+          count: 2
       - equal:
           path: spec.ingress[0].from[0].podSelector.matchLabels
           value:
             app.kubernetes.io/name: policy-system
             app.kubernetes.io/instance: RELEASE-NAME
             app.kubernetes.io/component: ps-service
+
+  - it: network policy admits the provision Job to Postgres (issue #205)
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[1].podSelector.matchLabels
+          value:
+            app.kubernetes.io/name: policy-system
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: ps-state-provision
+
+  - it: network policy omits the provision Job when provisioning is disabled
+    set:
+      psPostgres.provisioning.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 1
 
   - it: NetworkPolicy restricts to port 5432 TCP only
     asserts:

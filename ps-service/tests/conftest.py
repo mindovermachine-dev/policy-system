@@ -24,6 +24,11 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from persistence.provisioned_postgres import (  # pytest discovers these by name
+    fresh_provisioned,
+    provisioned,
+    provisioned_graph_log,
+)
 
 from ps_service.dependency_health import (
     reset_for_tests as reset_dependency_health_for_tests,
@@ -98,3 +103,6 @@ def read_lines():
         ]
 
     return _read
+
+
+__all__ = ["fresh_provisioned", "provisioned", "provisioned_graph_log"]

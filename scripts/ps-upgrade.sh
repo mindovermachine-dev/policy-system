@@ -76,7 +76,7 @@ upgrade_local_test() {
   log_step "Upgrading Policy System (Evaluator/local-test)"
   helm upgrade --install "$RELEASE_NAME" "$CHART_REF" \
     --reset-then-reuse-values \
-    --set llm.existingSecret="$LLM_SECRET" --wait
+    --set llm.existingSecret="$LLM_SECRET" --wait --wait-for-jobs
 }
 
 upgrade_production() {
@@ -88,7 +88,7 @@ upgrade_production() {
     -f "$PROD_VALUES_FILE" \
     --reset-then-reuse-values \
     --set llm.existingSecret="$LLM_SECRET" \
-    --wait
+    --wait --wait-for-jobs
 }
 
 verify_pods() {

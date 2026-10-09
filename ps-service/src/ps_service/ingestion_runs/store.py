@@ -21,6 +21,7 @@ from ps_service.dependency_health import STATE_POSTGRES, mark_healthy, mark_unhe
 from ps_service.ingestion_runs.audit_actions import (
     INGESTION_RUN_RESOURCE_TYPE,
     completion_audit_entry,
+    require_reason_code_iff_failed,
     submission_audit_entry,
 )
 from ps_service.ingestion_runs.errors import (
@@ -106,6 +107,8 @@ class IngestionRunStore(Protocol):
         row never carries it, only the enumerated `reason_code` (required when `status='failed'`).
 
         Raises:
+            IngestionRunInvalidCompletionError: `reason_code` is missing on a failure or present
+                on a success; nothing was read or written.
             IngestionRunStoreUnavailableError: the store could not be reached.
             IngestionRunPersistenceError: the update failed; nothing was written.
         """
@@ -240,6 +243,7 @@ class PsycopgIngestionRunStore:
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
         """Compare-and-swap a `running` row to a terminal status; see the Protocol."""
+        require_reason_code_iff_failed(status=status, reason_code=reason_code)
         params = {
             "run_id": run_id,
             "status": status,

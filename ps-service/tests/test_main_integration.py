@@ -74,9 +74,12 @@ from ps_service.mcp_interface.http_transport import MCP_HTTP_MOUNT_PATH
 from ps_service.query_engine.cypher_query import (
     _SEED_CHECK_QUERY,  # pyright: ignore[reportPrivateUsage]  # test pins the exact seed-check query text
 )
+from ps_test_support.required_startup_env import REQUIRED_STARTUP_ENV
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+    from persistence.provisioned_postgres import Provisioned
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -477,7 +480,11 @@ _JSON_RPC_ACCEPT = "application/json, text/event-stream"
 
 
 @pytest.mark.integration
-def test_mcp_streamable_http_transport_reachable_over_a_real_socket(tmp_path: Path) -> None:
+@pytest.mark.falkordb_live
+@pytest.mark.llm_live
+def test_mcp_streamable_http_transport_reachable_over_a_real_socket(
+    tmp_path: Path, provisioned_graph_log: Provisioned
+) -> None:
     """AC-BI-001/002 (issue #39, PLAN.md Slice 8): the mounted Streamable HTTP
     transport is reachable over a real TCP socket, not just `TestClient`'s
     virtual transport.
@@ -501,16 +508,31 @@ def test_mcp_streamable_http_transport_reachable_over_a_real_socket(tmp_path: Pa
     on a different machine" claim, matching the exact proxy this file's own
     AC-BI-004/005 subprocess tests above already rely on.
     """
-    # `/ready` gates on state Postgres (issue #130 F1), so the spawned process (which inherits
-    # this environment) needs `PS_STATE_POSTGRES_*` pointing at a reachable, provisioned server,
-    # like the `postgres_live` tests. Fail loudly on the missing precondition rather than
-    # letting `_wait_until_healthy` time out on an opaque 503.
-    assert os.environ.get("PS_STATE_POSTGRES_HOST"), (
-        "this test needs /ready 200, which requires PS_STATE_POSTGRES_HOST (and the rest of "
-        "PS_STATE_POSTGRES_*) to point at a live state Postgres"
-    )
+    # Markers: `/ready` 200 needs FalkorDB and the LLM Interface as well as Postgres, so the test
+    # carries `falkordb_live` and `llm_live` and is NOT `postgres_live` (a `-m postgres_live` run
+    # must not go red for services it does not provide). Its Postgres comes from the
+    # `provisioned_graph_log` fixture, which needs `PS_TEST_POSTGRES_SUPERUSER_DSN` and `psql`.
+    # `/ready` gates on state Postgres (issue #130 F1) and startup fails closed unless the
+    # privileged graph log tables exist (issue #205), so the spawned process gets the `ps_state`
+    # and `ps_signing` roles of a scratch cluster built by the real init script and provisioned
+    # by the real provisioning path (`provisioned_graph_log`), not whatever the environment holds.
+    prov = provisioned_graph_log
+    cluster_env = {
+        **REQUIRED_STARTUP_ENV,
+        "PS_SERVICE_LOCAL_TEST_BYPASS": "true",
+        "PS_STATE_POSTGRES_HOST": prov.host,
+        "PS_STATE_POSTGRES_PORT": str(prov.port),
+        "PS_STATE_POSTGRES_DATABASE": prov.state_db,
+        "PS_STATE_POSTGRES_USER": prov.state_user,
+        "PS_STATE_POSTGRES_PASSWORD": prov.state_password,
+        "PS_PASSKEYSIGNING_POSTGRES_HOST": prov.host,
+        "PS_PASSKEYSIGNING_POSTGRES_PORT": str(prov.port),
+        "PS_PASSKEYSIGNING_POSTGRES_DATABASE": prov.signing_db,
+        "PS_PASSKEYSIGNING_POSTGRES_USER": prov.signing_user,
+        "PS_PASSKEYSIGNING_POSTGRES_PASSWORD": prov.signing_password,
+    }
     port = _OVERRIDE_PORT
-    proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(port)})
+    proc = _spawn_direct(tmp_path, extra_env={"PS_SERVICE_PORT": str(port), **cluster_env})
     try:
         ready_response = _wait_until_healthy(url=f"http://{_HOST}:{port}/ready")
         assert ready_response.status_code == 200

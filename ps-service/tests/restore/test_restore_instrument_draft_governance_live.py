@@ -49,7 +49,7 @@ _ACTOR = "test-actor"
 class _FakeAuditStore:
     """Accepts and discards the lifecycle's audit calls -- this file asserts on graph state."""
 
-    def record(self, *args: object, **kwargs: object) -> None:
+    def record(self, *args: object, **kwargs: object) -> str:
         raise NotImplementedError
 
     def record_standalone(

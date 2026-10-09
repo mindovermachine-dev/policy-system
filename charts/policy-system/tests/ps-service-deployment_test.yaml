@@ -516,3 +516,15 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_SUBJECT")]
       - notExists:
           path: spec.template.spec.containers[0].env[?(@.name=="PS_AUTHZ_BOOTSTRAP_OWNER_ISSUER")]
+
+  # --- issue #205: the service pod never holds the admin credential ---
+
+  - it: ps-service deployment never references the admin Secret or PS_STATE_ADMIN vars
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_ADMIN_POSTGRES_USER")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name=="PS_STATE_ADMIN_POSTGRES_PASSWORD")]
+      # POSTGRES_PASSWORD is the key of the admin Secret (and only of it).
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.valueFrom.secretKeyRef.key=="POSTGRES_PASSWORD")]

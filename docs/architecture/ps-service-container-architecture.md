@@ -214,7 +214,9 @@ graph TB
     Audit -->|"read/write audit_events (ps_state)"| PSPostgres
 
     ProcessHarness -->|"apply_pending_migrations (audit, authz, runtime_config, ingestion_runs)"| Persistence
+    ProcessHarness -->|"verify_privileged_migrations (graph_gateway, read-only)"| Persistence
     Persistence -->|"connect / migrate (ps_state)"| PSPostgres
+    Persistence -->|"privileged provisioning (admin)"| PSPostgres
     Persistence -->|"log entries"| Logging
     GraphWriteGateway -->|"apply writes; replay"| FalkorDB
     GraphWriteGateway -->|"append/read mutation log (ps_state)"| PSPostgres
@@ -1644,17 +1646,32 @@ A write naming anything else is rejected before anything is logged. If the lists
 
 | Kind | Framework | Language | Project Pattern | Namespace Pattern |
 |---|---|---|---|---|
-| Internal component (Python package) | None | Python 3.14 | To be set by #205 (not yet created) | To be set by #205 (not yet created) |
+| Internal component (Python package) | None (`psycopg[binary]`, `pydantic`) | Python 3.14 | `ps-service/src/ps_service/graph_gateway/` | `ps_service.graph_gateway` |
 
 **Implementation Guidance:**
 
-- The gateway owns the mutation log store in the PS state Postgres (`ps_state`). Persistence is unchanged and only supplies the state-store connection surface.
+- The gateway owns the mutation log store in the PS state Postgres (`ps_state`): the `graph_log` schema with five tables (`groups`, `entries`, `payloads`, `checkpoints`, `applied_markers`). Persistence supplies the state-store connection surface and, since #205, the privileged migration runner that creates these tables (see Persistence: `ApplyPrivilegedMigrations`, `VerifyPrivilegedMigrations`).
+- Immutability is enforced by the database, not by the application: a dedicated non-login owner role (`ps_state_graph_owner`) owns the tables, and the `ps_state` application role holds only `SELECT` and `INSERT` (plus `UPDATE` on the applied marker table). The application role is never a member of the owner role and never holds the admin credential. Database triggers and checks additionally reject a position gap, a group whose range disagrees with its entries, and an applied marker that moves backwards or past the last entry.
+- Residual: `ps_state` owns the `ps_state` database, so it can still `DROP DATABASE` from another connection or drop objects in `public` (`audit_events` is likewise enforced only by omission until #151). The log tables are protected from alteration by that role, not the database that contains them.
+- The store accepts a group with no audit-event identifier (the link is optional at the store, so a bootstrap group can be appended and the store exercised without an audit row); the gateway (#206) will require one, so the Command attribute above is optional at the store and required at the gateway.
+- Appends allocate gap-free per-graph positions under a per-graph advisory lock held to the caller's commit and require READ COMMITTED; the gateway's callers must make the audit `record` and the append the last writes of a short transaction.
+- Large payloads (every embedding, and content over 2048 bytes) are stored once, keyed by a `sha256:` hash, in `payloads`; smaller content stays inline in the entry.
 - Writers hold no other path to write to FalkorDB; reads stay direct.
 - Feeds Logging with its log entries and Dependency Health with the health of the stores it uses.
 
 #### Implementation Registration
 
-None yet: registered when the implementing issues land (#205, #206, #207).
+Registered for #205 (the mutation log store and its provisioning only; the gateway's submit, replay and verify behaviour is registered when #206 and #207 land).
+
+| Path | Purpose | Implements |
+|---|---|---|
+| `ps-service/src/ps_service/graph_gateway/__init__.py` | Package front door, `MIGRATIONS_DIR`, `GRAPH_LOG_TABLES` | — |
+| `ps-service/src/ps_service/graph_gateway/store.py` | `GraphLogStore` and `PsycopgGraphLogStore`: append a group (cursor-scoped or standalone), read entries and groups, applied marker, digest checkpoints; no update or delete of log rows | Store behaviour behind SubmitGroup, CaughtUp, Verify (not yet wired) |
+| `ps-service/src/ps_service/graph_gateway/models.py` | Typed drafts and records for entries, groups, markers and checkpoints | — |
+| `ps-service/src/ps_service/graph_gateway/payloads.py` | Canonical payload encoding and hashing | — |
+| `ps-service/src/ps_service/graph_gateway/errors.py` | `GraphLogUnavailableError`, `GraphLogPersistenceError`, `GraphLogInvalidGroupError`, `GraphLogPayloadError` | — |
+| `ps-service/src/ps_service/graph_gateway/provision.py` | Operator command `python -m ps_service.graph_gateway.provision` (admin credential; run by the Helm Job) | Persistence: ApplyPrivilegedMigrations |
+| `ps-service/src/ps_service/graph_gateway/migrations/0001_graph_mutation_log.sql` | The `graph_log` schema, tables, ownership, grants, checks and triggers | — |
 
 #### Actions
 
@@ -1683,6 +1700,8 @@ None — shared infrastructure utility, like Logging; owns the PS state Postgres
 - Fails closed on an unconfigured store: unlike Passkey Signing's own connectivity probe (a no-op when unset, since it has no caller that must fail closed), `connect_from_config` raises `StatePostgresConnectionError` immediately when `PS_STATE_POSTGRES_HOST` is unset, without attempting a doomed connection — every state-store caller (Authorization, Audit, Runtime Config, Ingestion Runs) must fail closed rather than silently no-op, since an unconfigured store would otherwise mean every role-gated action silently passes or silently fails open.
 - The migration runner is component-agnostic: the composition root passes explicit `MigrationSource(component, directory)` entries (currently `audit`, `authz`, `runtime_config`, `ingestion_runs`) — this package never imports a consumer component package. Each source's `.sql` files are applied in filename order, skipping any not yet recorded for that `(component, filename)` pair, each inside its own transaction; a second run applies nothing new.
 - Migrations are append-only from the first deployment onward — never edit, renumber, or delete an applied migration file; add a new, higher-numbered file instead. The runner records each applied file by `(component, filename)` and never re-checks its contents, so an edited already-applied file silently diverges from every database that already ran it.
+- Privileged path (#205): tables whose immutability must not depend on the application role are created by `apply_privileged_migrations` (`persistence/privileged_migration_runner.py`), driven by the operator command `python -m ps_service.graph_gateway.provision` with the admin credential (`PS_STATE_ADMIN_POSTGRES_USER`, `PS_STATE_ADMIN_POSTGRES_PASSWORD`) and the owner role name (`PS_STATE_GRAPH_OWNER_ROLE`). It creates the owner role if absent, refuses if the application role is a member of it, applies the pending `graph_gateway` files with the same per-file transaction and `ps_schema_migrations` tracking as the ordinary runner, and leaves each object owned by the owner role. It runs as the chart's `ps-state-provision` Job (once per `helm upgrade`); the ordinary startup runner never lists `graph_gateway`, and the service pod never receives the admin credential.
+- Startup verification (#205): after the ordinary migrations, `verify_privileged_migrations_applied` runs with application credentials only and is read-only. It requires a tracking row per privileged migration file, every `graph_log` table, and that the application role neither owns nor is a member of the owner of any of them. Any failure raises `GraphLogMigrationMissingError`, whose fixed message names `graph_gateway/0001_graph_mutation_log.sql` and the remedy, and startup is fatal.
 - Tracked in its own `ps_schema_migrations` table, keyed `(component, filename)` — deliberately not the bare `schema_migrations` name Passkey Signing's own separate runner uses, so the two runners can never silently collide even if ever pointed at the same physical Postgres instance/database.
 
 #### Implementation Registration
@@ -1692,7 +1711,8 @@ None — shared infrastructure utility, like Logging; owns the PS state Postgres
 | `ps-service/src/ps_service/persistence/__init__.py` | Package front door | — |
 | `ps-service/src/ps_service/persistence/connection.py` | `connect_from_config`, `check_connectivity_from_config` — the PS state Postgres connection helper and its connectivity probe | CheckConnectivity (PS state Postgres) |
 | `ps-service/src/ps_service/persistence/migration_runner.py` | `MigrationSource`, `apply_pending_migrations` — the component-agnostic SQL migration runner, tracked via `ps_schema_migrations` | ApplyPendingMigrations |
-| `ps-service/src/ps_service/persistence/errors.py` | `StatePostgresConnectionError`, `StatePostgresMigrationApplyError` | — |
+| `ps-service/src/ps_service/persistence/errors.py` | `StatePostgresConnectionError`, `StatePostgresMigrationApplyError`, `StatePostgresProvisioningError`, `GraphLogMigrationMissingError` | — |
+| `ps-service/src/ps_service/persistence/privileged_migration_runner.py` | `apply_privileged_migrations`, `verify_privileged_migrations_applied` — the admin-credential runner and the read-only startup check | ApplyPrivilegedMigrations, VerifyPrivilegedMigrations |
 
 #### Actions
 
@@ -1700,6 +1720,8 @@ None — shared infrastructure utility, like Logging; owns the PS state Postgres
 |---|---|---|---|---|---|---|---|---|---|---|
 | CheckConnectivity (PS state Postgres) | Confirm the PS state Postgres instance is reachable — Process Harness's `/ready` startup probe | No (internal call) | n/a | None | Records the outcome in Dependency Health | One round-trip query (`SELECT 1`) — no write | PS state Postgres | Cheapest real round-trip available; no target set | Yes | Raises `StatePostgresConnectionError` for both an unconfigured store and a configured-but-unreachable one — unconfigured is treated as unhealthy, not a healthy "not applicable" state |
 | ApplyPendingMigrations | Apply every not-yet-recorded `.sql` migration file of every registered component's migration directory, in list then filename order | No (startup-only, internal) | n/a | `PS_STATE_POSTGRES_HOST` is configured (gated by the composition root; a no-op call is never made when it isn't) | Every pending file applied and recorded in `ps_schema_migrations`; returns the filenames actually applied this call (empty on an already-up-to-date database) | Writes DDL plus `ps_schema_migrations` bookkeeping rows, one file's statements + its tracking row per transaction | PS state Postgres | Not yet set — bounded by the pending migrations' own DDL cost | Yes (a repeat run applies nothing new) | `StatePostgresMigrationApplyError` names the failing `component/filename`; a mid-file failure rolls back that file's own transaction, never leaving it half-applied-but-unrecorded |
+| ApplyPrivilegedMigrations | Create and migrate the owner-protected tables (the `graph_gateway` component) with the admin credential, leaving them owned by a dedicated non-login owner role the application role is not a member of | No (operator command or Helm Job, internal) | n/a | The admin credential and the target database are configured; `audit_events` exists (the log links to it) | Every pending `graph_gateway` file applied and recorded in `ps_schema_migrations`; the owner role exists; the application role holds only the privileges the migration grants; returns the filenames applied (empty when up to date) | Creates the owner role if absent; writes DDL, ownership and grants, and tracking rows (one file's statements and its tracking row per transaction) | PS state Postgres (admin credential) | Not yet set; the command retries only while no server answers, within a configured timeout | Yes (a repeat run applies nothing) | Refuses to run if the application role is a member of the owner role; `StatePostgresProvisioningError` / `StatePostgresMigrationApplyError` name the failing `component/filename`; an authentication or permission failure exits at once, a missing prerequisite table exits non-zero so the Job retries |
+| VerifyPrivilegedMigrations | Confirm at startup that the privileged migrations are in place and the application role does not control the protected tables | No (startup-only, internal) | n/a | `PS_STATE_POSTGRES_HOST` is configured; the ordinary migrations have been applied | Returns normally only when every privileged migration file is recorded, every protected table exists, and the application role neither owns nor is a member of the owner of any of them | One read-only round of catalog queries; one log entry per call; no write | PS state Postgres (application credentials only) | One connection, a handful of catalog reads; no target set | Yes | Raises `GraphLogMigrationMissingError` with fixed text naming `graph_gateway/0001_graph_mutation_log.sql`, a fixed reason (`migration_not_recorded`, `table_missing`, `state_role_controls_table`) and the remedy; startup treats it as fatal, and the message never carries a host, SQL or driver text |
 
 ---
 

@@ -23,6 +23,7 @@ from ps_service.ingestion_runs import (
     MIGRATIONS_DIR as INGESTION_RUNS_MIGRATIONS_DIR,
 )
 from ps_service.ingestion_runs import (
+    IngestionRunInvalidCompletionError,
     IngestionRunPersistenceError,
     IngestionRunStoreUnavailableError,
     PsycopgIngestionRunStore,
@@ -163,7 +164,9 @@ def test_complete_run_wins_once_and_keeps_the_first_result(store: IngestionRunSt
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
     first = store.complete_run(run_id, status="succeeded", result=_RESULT, error=None)
-    second = store.complete_run(run_id, status="failed", result=None, error="error: late")
+    second = store.complete_run(
+        run_id, status="failed", result=None, error="error: late", reason_code="interrupted"
+    )
 
     assert first is True
     assert second is False
@@ -179,11 +182,42 @@ def test_complete_run_failed_stores_the_error_text(store: IngestionRunStore) -> 
     run_id = _new_id()
     store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
 
-    assert store.complete_run(run_id, status="failed", result=None, error="error: boom") is True
+    completed = store.complete_run(
+        run_id, status="failed", result=None, error="error: boom", reason_code="unexpected_error"
+    )
 
+    assert completed is True
     row = store.get_run(run_id)
     assert row is not None
     assert (row.status, row.result, row.error) == ("failed", None, "error: boom")
+
+
+def test_complete_run_rejects_a_failure_without_a_reason_code_and_leaves_the_run_running(
+    store: IngestionRunStore,
+) -> None:
+    run_id = _new_id()
+    store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
+
+    with pytest.raises(IngestionRunInvalidCompletionError):
+        store.complete_run(run_id, status="failed", result=None, error="error: boom")
+
+    row = store.get_run(run_id)
+    assert row is not None
+    assert (row.status, row.error) == ("running", None)
+
+
+def test_complete_run_rejects_a_success_carrying_a_reason_code(store: IngestionRunStore) -> None:
+    run_id = _new_id()
+    store.create_run(run_id=run_id, celex="32024R2847", short_name="cra", actor=_ACTOR)
+
+    with pytest.raises(IngestionRunInvalidCompletionError):
+        store.complete_run(
+            run_id, status="succeeded", result=_RESULT, error=None, reason_code="interrupted"
+        )
+
+    row = store.get_run(run_id)
+    assert row is not None
+    assert row.status == "running"
 
 
 def test_unconfigured_psycopg_store_raises_the_fixed_unavailable_message() -> None:
@@ -272,7 +306,7 @@ class _RaisingAuditStore(RecordingAuditStore):
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         del cur, actor_subject, actor_issuer, action, resource_type, resource_id, outcome, details
         raise psycopg.errors.OperationalError("simulated audit_events insert failure")
 

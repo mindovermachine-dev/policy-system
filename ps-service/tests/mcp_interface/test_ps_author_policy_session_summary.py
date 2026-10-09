@@ -380,7 +380,7 @@ class _FakeAuditStore:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def record(self, *args: object, **kwargs: object) -> None:
+    def record(self, *args: object, **kwargs: object) -> str:
         raise NotImplementedError
 
     def record_standalone(self, **kwargs: object) -> None:

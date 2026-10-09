@@ -108,7 +108,7 @@ class _FakeAuditStore:
     covered per-action in `test_service.py`).
     """
 
-    def record(self, *args: object, **kwargs: object) -> None:
+    def record(self, *args: object, **kwargs: object) -> str:
         raise NotImplementedError
 
     def record_standalone(

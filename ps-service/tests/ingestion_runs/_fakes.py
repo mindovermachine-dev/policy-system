@@ -16,6 +16,7 @@ from ps_service.ingestion_runs import (
 from ps_service.ingestion_runs.audit_actions import (
     IngestionRunAuditEntry,
     completion_audit_entry,
+    require_reason_code_iff_failed,
     submission_audit_entry,
 )
 
@@ -47,7 +48,7 @@ class RecordingAuditStore:
         resource_id: str,
         outcome: Literal["applied", "rejected", "failed"],
         details: Mapping[str, object],
-    ) -> None:
+    ) -> str:
         """Remember the call."""
         del cur
         self.recorded.append(
@@ -61,6 +62,7 @@ class RecordingAuditStore:
                 "details": dict(details),
             }
         )
+        return str(uuid.uuid4())
 
     def record_standalone(
         self,
@@ -174,6 +176,7 @@ class InMemoryIngestionRunStore:
         audit_actor: tuple[str, str] | None = None,
     ) -> bool:
         """Single-winner compare-and-swap out of `running`; the winner also records its audit."""
+        require_reason_code_iff_failed(status=status, reason_code=reason_code)
         with self._lock:
             if self.unavailable:
                 raise IngestionRunStoreUnavailableError

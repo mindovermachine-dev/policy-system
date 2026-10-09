@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal, Self
 from pydantic import NonNegativeInt, model_validator
 
 from ps_service.audit import AuditDetails, register_audit_action, register_audit_resource_type
+from ps_service.ingestion_runs.errors import IngestionRunInvalidCompletionError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -153,6 +154,22 @@ def submission_audit_entry(
     )
 
 
+def require_reason_code_iff_failed(
+    *, status: Literal["succeeded", "failed"], reason_code: IngestionReasonCode | None
+) -> None:
+    """Fail fast when a completion's `reason_code` disagrees with its status (AC-BI-010).
+
+    The same rule `IngestionRunCompleteDetails` enforces at audit time, checked at the store
+    boundary so a bad call is rejected before any write rather than deep inside a transaction.
+
+    Raises:
+        IngestionRunInvalidCompletionError: `reason_code` is missing on a failure, or present
+            on a success.
+    """
+    if (status == "failed") != (reason_code is not None):
+        raise IngestionRunInvalidCompletionError
+
+
 def completion_audit_entry(
     *,
     status: Literal["succeeded", "failed"],
@@ -200,5 +217,6 @@ __all__ = [
     "IngestionRunSubmitDetails",
     "IngestionTrigger",
     "completion_audit_entry",
+    "require_reason_code_iff_failed",
     "submission_audit_entry",
 ]

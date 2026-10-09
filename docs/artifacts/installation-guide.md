@@ -1058,6 +1058,12 @@ again.
 **Cluster with the old plain-HTTP port mapping:** you must recreate it in all cases. See the
 warning in [step 4](#4-create-the-local-cluster).
 
+**Graph mutation log.** Upgrading to a version with the graph mutation log also runs a
+provisioning Job that creates the owner-protected `graph_log` tables in `ps_state`. The Postgres
+init script cannot do this on an existing cluster. The upgrade command must pass
+`--wait --wait-for-jobs`. See the [Operations Guide: Upgrading to the graph mutation
+log](./operations-guide.md#upgrading-to-the-graph-mutation-log).
+
 ## Verification status
 
 This section lists what the flows above were verified against, and what they were not. Read it

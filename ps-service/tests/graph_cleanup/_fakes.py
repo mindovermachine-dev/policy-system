@@ -117,7 +117,7 @@ class RecordingAuditStore:
     query_error: Exception | None = None
     query_calls: int = 0
 
-    def record(self, cur: object, **kwargs: object) -> None:
+    def record(self, cur: object, **kwargs: object) -> str:
         del cur, kwargs
         raise NotImplementedError
 

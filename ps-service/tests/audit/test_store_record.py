@@ -104,6 +104,34 @@ def test_record_with_valid_details_inserts_exactly_one_row_with_correct_fields()
 
 
 @pytest.mark.postgres_live
+def test_record_returns_the_new_audit_event_id() -> None:
+    """`record` returns the generated row id, usable to link other writes to the audit row."""
+    _require_configured_postgres()
+    config = load_config()
+    store: AuditStore = PsycopgAuditStore(config)
+
+    with connect_from_config(config) as conn:
+        apply_pending_migrations(conn, sources=STATE_MIGRATION_SOURCES)
+        with conn.cursor() as cur:
+            event_id = store.record(
+                cur,
+                actor_subject="test-actor-subject",
+                actor_issuer="https://issuer.example.com/",
+                action="access_role.grant",
+                resource_type="principal",
+                resource_id="test-target-subject",
+                outcome="applied",
+                details={"access_role": "SystemAdmin"},
+            )
+            cur.execute("SELECT id::text, action FROM audit_events WHERE id = %s", (event_id,))
+            row = cur.fetchone()
+        conn.rollback()
+
+    assert isinstance(event_id, str)
+    assert row == (event_id, "access_role.grant")
+
+
+@pytest.mark.postgres_live
 def test_record_with_unregistered_action_raises_before_any_insert() -> None:
     """An unregistered `action` raises `AuditUnknownActionError` and never calls `cur.execute`."""
     _require_configured_postgres()
