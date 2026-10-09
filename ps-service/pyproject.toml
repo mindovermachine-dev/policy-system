@@ -1,6 +1,6 @@
 [project]
 name = "ps-service"
-version = "3.19.4"
+version = "3.20.0"
 description = "Policy System backend service: EU regulation ingestion, compliance knowledge graph, query interface"
 requires-python = ">=3.14"
 dependencies = [
