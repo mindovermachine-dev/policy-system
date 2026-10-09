@@ -34,8 +34,13 @@ class _FakeAdapter:
     is satisfied by duck typing (Protocol), not by inheritance.
     """
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
-        del graph  # unused by this fake — the Protocol imposes no naming convention of its own
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
+        del (
+            graph,
+            regulatory_instrument_id,
+        )  # unused by this fake — the Protocol imposes no naming convention of its own
         return (
             ExtractionUnit(
                 citation_ref="Art. 13(1)",
@@ -49,5 +54,5 @@ class _FakeAdapter:
 
 def test_fake_adapter_satisfies_domain_mapping_adapter_protocol() -> None:
     adapter: DomainMappingAdapter = _FakeAdapter()
-    units = adapter.read_native_units(graph=_FakeGraphHandle())
+    units = adapter.read_native_units(graph=_FakeGraphHandle(), regulatory_instrument_id="CRA-1.0")
     assert units[0].citation_ref == "Art. 13(1)"

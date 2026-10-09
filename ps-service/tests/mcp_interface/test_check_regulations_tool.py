@@ -59,6 +59,7 @@ from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.logging import configure
 from ps_service.logging.facade import resolve_default_log_path
 from ps_service.mcp_interface import mcp_server
+from ps_service.mcp_interface.errors import McpGraphUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -187,7 +188,6 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
         new_regulatory_instrument_id="id_amendment-1.0",
         run_id="reingest-run-amend-1",
         outcome="superseded",
-        ingest_counts={},
     )
     skip_exc = NationalTranspositionNotSupportedError(
         "Re-ingestion of a national_transposition instrument is not supported..."
@@ -225,7 +225,7 @@ def test_happy_path_sweep_reports_all_six_outcome_buckets_with_principal_logged(
     assert outcomes["id_not_configured"]["outcome"] == "not_configured"
     assert outcomes["id_amendment"]["outcome"] == "amendment_reingested"
     assert outcomes["id_amendment"]["reingest_run_id"] == "reingest-run-amend-1"
-    assert outcomes["id_amendment"]["detail"] == "id_amendment-1.0 (superseded)"
+    assert outcomes["id_amendment"]["detail"] == "id_amendment-1.0 (superseded, fresh)"
     assert outcomes["id_skipped"]["outcome"] == "skipped"
     assert outcomes["id_skipped"]["detail"] == str(skip_exc)
     assert outcomes["id_reingest_failed"]["outcome"] == "reingest_failed"
@@ -365,3 +365,30 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
     assert "ValueError" in str(failed_line.get("detail"))
+
+
+def test_sanitizer_wraps_the_pipeline_baseline_opener_so_a_driver_error_never_leaks() -> None:
+    """Issue #201: the sweep now opens the baseline graph (inside the re-ingest), so the
+    MCP sanitiser must wrap that opener too -- a raw driver error carries host/port detail.
+    """
+    fake = build_fake_change_check_dependencies()
+    graphs = fake.dependencies.pipeline.graphs
+
+    def _raising_baseline(config: object, short_name: str) -> object:
+        _ = (config, short_name)
+        message = "connection refused to 10.0.0.1:6379"  # must never reach the caller
+        raise ConnectionError(message)
+
+    broken = dataclasses.replace(
+        fake.dependencies,
+        pipeline=dataclasses.replace(
+            fake.dependencies.pipeline,
+            graphs=dataclasses.replace(graphs, baseline=_raising_baseline),  # pyright: ignore[reportArgumentType]
+        ),
+    )
+
+    sanitized = mcp_server._sanitize_change_check_graph_opens(broken)  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(McpGraphUnavailableError) as raised:
+        sanitized.pipeline.graphs.baseline(object(), "CRA")  # pyright: ignore[reportArgumentType]
+    assert "10.0.0.1" not in str(raised.value)

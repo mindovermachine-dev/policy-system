@@ -83,7 +83,6 @@ def _amended_fake() -> FakeChangeCheckDependencies:
             new_regulatory_instrument_id="CRA-1.0",
             run_id="ingest-run-1",
             outcome="superseded",
-            ingest_counts={},
         ),
     )
 

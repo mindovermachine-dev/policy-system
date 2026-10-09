@@ -21,7 +21,7 @@ here.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -73,7 +73,12 @@ def test_extraction_prompt_yields_multiple_duties_from_real_cra_annex_i(
     native_graph = select_graph(db, native_graph_name("CRA"))
 
     adapter = CellarEliDomainMappingAdapter()
-    units = adapter.read_native_units(native_graph)
+    instrument_rows = cast(
+        "list[list[object]]",
+        native_graph.query("MATCH (r:RegulatoryInstrument) RETURN r.id").result_set,
+    )
+    assert len(instrument_rows) == 1
+    units = adapter.read_native_units(native_graph, cast("str", instrument_rows[0][0]))
 
     annex_i_units = [unit for unit in units if unit.citation_ref == "Annex I"]
     assert len(annex_i_units) == 1, (

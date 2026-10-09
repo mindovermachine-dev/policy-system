@@ -180,7 +180,6 @@ def test_sweep_calls_trigger_reingestion_with_the_exact_ac_bi_004_argument_contr
         new_regulatory_instrument_id="CRA-1.0",
         run_id="ingest-run-1",
         outcome="superseded",
-        ingest_counts={},
     )
     sentinel_graph = FakeGraphHandle()
     sentinel_adapter = FakeIngestionAdapter()
@@ -234,7 +233,6 @@ def test_sweep_reports_amendment_reingested_with_detail_and_reingest_run_id_on_f
         new_regulatory_instrument_id="CRA-1.0",
         run_id="ingest-run-1",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -282,7 +280,6 @@ def test_sweep_reports_amendment_reingested_with_none_run_id_on_already_processe
         new_regulatory_instrument_id="CRA-1.0",
         run_id=None,
         outcome="already_processed",
-        ingest_counts=None,
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -465,7 +462,6 @@ def test_sweep_isolates_a_reingest_failure_and_continues_to_remaining_instrument
         new_regulatory_instrument_id="GDPR-1.0",
         run_id="ingest-run-2",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -494,13 +490,13 @@ def test_sweep_isolates_a_reingest_failure_and_continues_to_remaining_instrument
     assert outcomes["GDPR-1.0"].reingest_run_id == "ingest-run-2"
 
 
-def test_reingest_failed_detail_is_scrubbed_and_length_capped(
+def test_reingest_failed_detail_is_an_enumerated_reason_not_raw_exception_text(
     app_config: ServiceConfig, make_emitter: MakeEmitter
 ) -> None:
     """A `trigger_reingestion` exception whose message embeds an absolute
-    filesystem path and a `host:port` token -> the returned `detail`
-    contains neither raw substring (`_scrub_text`'s own already-tested
-    placeholders instead), and `len(detail) <= 300` (D11).
+    filesystem path and a `host:port` token -> the returned `detail` is the
+    enumerated `unexpected_error` reason code and carries no part of the
+    exception text at all (AC-BI-007).
     """
     emitter, _ = make_emitter()
     tracked = (_node("CRA-1.0"),)
@@ -533,10 +529,7 @@ def test_reingest_failed_detail_is_scrubbed_and_length_capped(
 
     (outcome,) = result.instruments
     assert outcome.outcome == "reingest_failed"
-    assert outcome.detail is not None
-    assert leaky_path not in outcome.detail
-    assert leaky_addr not in outcome.detail
-    assert len(outcome.detail) <= 300
+    assert outcome.detail == "unexpected_error"
 
 
 def test_sweep_emits_started_and_succeeded_change_check_sweep_entries_carrying_the_run_id(
@@ -654,7 +647,6 @@ def test_sweep_calls_trigger_reingestion_at_most_once_per_tracked_instrument_id(
         new_regulatory_instrument_id="new",
         run_id="ingest-run",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -700,7 +692,6 @@ def test_sweep_never_calls_poll_for_amendments_more_than_once(
         new_regulatory_instrument_id="new",
         run_id="ingest-run",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -744,7 +735,6 @@ def test_sweep_result_instrument_count_equals_read_tracked_instruments_count_exa
         new_regulatory_instrument_id="new",
         run_id="ingest-run",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -791,7 +781,6 @@ def test_change_check_sweep_still_resolves_via_catalog_find_by_celex_and_canonic
         new_regulatory_instrument_id="CRA-1.0",
         run_id="ingest-run-1",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=(_node("CRA-1.0"),),

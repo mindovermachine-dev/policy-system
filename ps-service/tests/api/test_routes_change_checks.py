@@ -223,7 +223,6 @@ def test_post_change_checks_reingests_a_detected_amendment_via_dependency_overri
         new_regulatory_instrument_id="CRA-1.0",
         run_id="ingest-run-1",
         outcome="superseded",
-        ingest_counts={},
     )
     fake = build_fake_change_check_dependencies(
         tracked=tracked,
@@ -425,7 +424,6 @@ def _amended_fake() -> FakeChangeCheckDependencies:
             new_regulatory_instrument_id="CRA-1.0",
             run_id="ingest-run-1",
             outcome="superseded",
-            ingest_counts={},
         ),
     )
 

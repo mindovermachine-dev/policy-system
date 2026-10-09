@@ -21,6 +21,7 @@ import pytest
 from api._fakes import (
     FakeGraphHandle,
     FakeIngestionAdapter,
+    FakePipeline,
     FakeQueryResult,
     MakeEmitter,
     ReadLines,
@@ -37,10 +38,15 @@ from ps_service.api.errors import (
     ShortNameCollisionError,
 )
 from ps_service.api.ingestion_orchestration import (
+    _STAGE_ORDER,  # pyright: ignore[reportPrivateUsage] — internal constant under test
+    StageReport,
     _classify_stage_failure,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _derive_short_name,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _execute_catalog_stages,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _is_already_merged,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     _merge_summary,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _OpenGraphs,  # pyright: ignore[reportPrivateUsage] — internal helper under test
+    _require_ingestion_config,  # pyright: ignore[reportPrivateUsage] — internal helper under test
     check_short_name_collision,
     classify_ingestion_failure,
     normalize_short_name,
@@ -49,6 +55,8 @@ from ps_service.api.ingestion_orchestration import (
     run_catalog_ingestion_pipeline,
 )
 from ps_service.api.run_status import get_stage
+from ps_service.change_monitor.errors import ChangeMonitorStateError, SuccessionPersistenceError
+from ps_service.change_monitor.models import PIPELINE_STAGES
 from ps_service.company_merge.models import MergeResult, NearMissPair
 from ps_service.config import ServiceConfig
 from ps_service.dependency_health import CELLAR_ELI, is_healthy
@@ -229,7 +237,8 @@ def test_catalog_pipeline_runs_ingest_extract_derive_merge_in_order(
         emitter=emitter,
     )
 
-    assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
+    expected_order = ["ingestion", "extraction", "derivation", "merge"]
+    assert fake.recorder.order == expected_order
     assert outcome.source == "catalog"
     assert outcome.regulatory_instrument_id == "CRA-1.0"
     assert [report.stage for report in outcome.stages] == [
@@ -457,6 +466,11 @@ def test_ingestion_run_log_without_a_trigger_is_unchanged(
         (CatalogIdentifierNotFoundError("x"), "celex_not_found"),
         (ShortNameCollisionError("x"), "short_name_collision"),
         (PipelineStageError(stage="merge", reason="boom /Users/x"), "pipeline_stage_failed"),
+        (ChangeMonitorStateError("no single active prior"), "inconsistent_graph_state"),
+        (
+            SuccessionPersistenceError("FalkorDB succession write failed: 10.0.0.1"),
+            "graph_unavailable",
+        ),
         (RuntimeError("boom"), "unexpected_error"),
     ],
 )
@@ -1136,6 +1150,117 @@ def test_execute_catalog_stages_records_each_stage_as_current_before_running_it(
     )
 
 
+def test_execute_catalog_stages_default_runs_all_four_in_order(
+    make_emitter: MakeEmitter,
+) -> None:
+    """Characterization (#201 S0): the shared sequence with no stage subset runs
+    ingestion -> extraction -> derivation -> merge in order, feeds each later stage
+    the id the ingest stage returned, and returns that id plus one report per stage
+    in pipeline order. Pins the catalog path before `_execute_catalog_stages` gains
+    `stages_to_run` / `on_stage_complete`.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="CRA-9.9")
+
+    rid, reports = _execute_catalog_stages(
+        _ENTRY,
+        run_id="run-characterize",
+        resolved=_require_ingestion_config(_complete_config()),
+        graphs=_OpenGraphs(
+            native=fake.native, baseline=fake.baseline, single_tenant=fake.single_tenant
+        ),
+        dependencies=fake.dependencies,
+        emitter=emitter,
+    )
+
+    expected_order = ["ingestion", "extraction", "derivation", "merge"]
+    assert fake.recorder.order == expected_order
+    assert [call.regulatory_instrument_id for call in fake.recorder.calls[1:]] == ["CRA-9.9"] * 3
+    assert rid == "CRA-9.9"
+    assert [report.stage for report in reports] == [
+        "ingestion",
+        "extraction",
+        "derivation",
+        "merge",
+    ]
+
+
+def _run_selected(
+    fake: FakePipeline,
+    emitter: LogEmitter,
+    *,
+    stages_to_run: tuple[str, ...] | None,
+    completed: list[str] | None = None,
+) -> tuple[str, tuple[StageReport, ...]]:
+    """Drive `_execute_catalog_stages` over `fake`, optionally recording `on_stage_complete`."""
+    return _execute_catalog_stages(
+        _ENTRY,
+        run_id="run-subset",
+        resolved=_require_ingestion_config(_complete_config()),
+        graphs=_OpenGraphs(
+            native=fake.native, baseline=fake.baseline, single_tenant=fake.single_tenant
+        ),
+        dependencies=fake.dependencies,
+        emitter=emitter,
+        stages_to_run=stages_to_run,
+        on_stage_complete=completed.append if completed is not None else None,
+    )
+
+
+def test_execute_catalog_stages_subset_skips_unrequested_stages_and_derives_rid(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#201 S1a: with `ingestion` not requested the ingest stage never runs and the
+    instrument id is `<short_name>-<version>` (the formula the ingest stage uses), so
+    the later stages still receive an id; only the requested stages are reported.
+    """
+    emitter, _ = make_emitter()
+    fake = build_fake_pipeline_dependencies(rid="SHOULD-NOT-BE-USED")
+
+    rid, reports = _run_selected(fake, emitter, stages_to_run=("derivation", "merge"))
+
+    assert fake.recorder.order == ["derivation", "merge"]
+    assert [call.regulatory_instrument_id for call in fake.recorder.calls] == ["CRA-1.0"] * 2
+    assert rid == "CRA-1.0"
+    assert [report.stage for report in reports] == ["derivation", "merge"]
+
+
+def test_stage_order_mirrors_the_change_monitor_pipeline_stages() -> None:
+    """#201 S1a: `api` cannot import `change_monitor` at module level (M6), so the two
+    stage-name tuples are duplicated and must never drift.
+    """
+    assert _STAGE_ORDER == PIPELINE_STAGES
+
+
+def test_execute_catalog_stages_reports_each_completed_stage_to_the_callback_in_order(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#201 S1a: `on_stage_complete(name)` fires once per stage, after that stage returned."""
+    emitter, _ = make_emitter()
+    completed: list[str] = []
+
+    _run_selected(
+        build_fake_pipeline_dependencies(), emitter, stages_to_run=None, completed=completed
+    )
+
+    assert completed == ["ingestion", "extraction", "derivation", "merge"]
+
+
+def test_execute_catalog_stages_does_not_report_a_stage_that_failed(
+    make_emitter: MakeEmitter,
+) -> None:
+    """#201 S1a: a failing stage is never reported complete, and later stages never run."""
+    emitter, _ = make_emitter()
+    completed: list[str] = []
+    fake = build_fake_pipeline_dependencies(derive_error=DomainMapperExtractionError("boom"))
+
+    with pytest.raises(PipelineStageError):
+        _run_selected(fake, emitter, stages_to_run=None, completed=completed)
+
+    assert completed == ["ingestion", "extraction"]
+    assert fake.recorder.order == ["ingestion", "extraction", "derivation"]
+
+
 def test_run_catalog_ingestion_pipeline_clears_stage_tracking_on_success(
     make_emitter: MakeEmitter,
 ) -> None:
@@ -1309,7 +1434,8 @@ def test_preflight_miss_runs_pipeline_exactly_as_before(make_emitter: MakeEmitte
     )
 
     assert outcome.outcome == "fresh"
-    assert fake.recorder.order == ["ingestion", "extraction", "derivation", "merge"]
+    expected_order = ["ingestion", "extraction", "derivation", "merge"]
+    assert fake.recorder.order == expected_order
     assert [report.stage for report in outcome.stages] == [
         "ingestion",
         "extraction",

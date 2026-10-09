@@ -5,7 +5,9 @@ the exact native-graph shape that component writes.
 
 PLAN_REVIEWED.md §4.2: one `ExtractionUnit` per `PARAGRAPH` when an
 `ARTICLE` has them, one per whole `ARTICLE` when it doesn't. Query pattern
-(verbatim, per the plan): `MATCH (a:ARTICLE) RETURN a.id, a.citation_ref,
+(per the plan, anchored on the requested instrument version because
+`{short}_native` holds every version): `MATCH (:RegulatoryInstrument {id:
+$rid})-[:HAS*1..]->(a:ARTICLE) RETURN a.id, a.citation_ref,
 a.text, a.heading ORDER BY a.id`, then per-article `MATCH (:ARTICLE {id:
 $id})-[:HAS]->(p:PARAGRAPH) RETURN p.citation_ref, p.text ORDER BY p.order`.
 
@@ -61,12 +63,21 @@ class CellarEliDomainMappingAdapter:
     structural graph and returns the ordered sequence of extraction units.
     """
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
-        """Return the graph's extraction units in document order (article, then paragraph)."""
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
+        """Return one instrument version's extraction units in document order.
+
+        Articles and annexes are reached by traversing `HAS` from the
+        `RegulatoryInstrument` node named by `regulatory_instrument_id`, so a prior version
+        sharing the same `{short}_native` graph contributes nothing.
+        """
         article_rows = cast(
             "list[list[object]]",
             graph.query(
-                "MATCH (a:ARTICLE) RETURN a.id, a.citation_ref, a.text, a.heading ORDER BY a.id"
+                "MATCH (:RegulatoryInstrument {id: $rid})-[:HAS*1..]->(a:ARTICLE) "
+                "RETURN a.id, a.citation_ref, a.text, a.heading ORDER BY a.id",
+                params={"rid": regulatory_instrument_id},
             ).result_set,
         )
 
@@ -79,7 +90,9 @@ class CellarEliDomainMappingAdapter:
         annex_rows = cast(
             "list[list[object]]",
             graph.query(
-                "MATCH (a:ANNEX) RETURN a.citation_ref, a.text ORDER BY a.order"
+                "MATCH (:RegulatoryInstrument {id: $rid})-[:HAS*1..]->(a:ANNEX) "
+                "RETURN a.citation_ref, a.text ORDER BY a.order",
+                params={"rid": regulatory_instrument_id},
             ).result_set,
         )
         annex_units = [self._annex_unit(row) for row in annex_rows]

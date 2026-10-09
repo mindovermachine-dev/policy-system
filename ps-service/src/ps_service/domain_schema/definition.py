@@ -434,7 +434,11 @@ _EDGES = (
         "RegulatoryInstrument",
         "RegulatoryInstrument",
         "0..1 : 0..1",
-        note="Self-relationship tracking regulatory version succession.",
+        note=(
+            "Self-relationship tracking regulatory version succession; the native-graph "
+            "edge also carries an operational boolean `absorbed` (see "
+            "change_monitor.succession), not part of the domain vocabulary."
+        ),
         provenance_rule="n/a \u2014 version succession, not a provenance fact",
     ),
     _edge(

@@ -90,8 +90,10 @@ class _LimitedDomainMappingAdapter:
         self._inner = inner
         self._limit = limit
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
-        return self._inner.read_native_units(graph)[: self._limit]
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
+        return self._inner.read_native_units(graph, regulatory_instrument_id)[: self._limit]
 
 
 class _AnnexOnlyDomainMappingAdapter:
@@ -104,10 +106,12 @@ class _AnnexOnlyDomainMappingAdapter:
     def __init__(self, inner: DomainMappingAdapter) -> None:
         self._inner = inner
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         return tuple(
             unit
-            for unit in self._inner.read_native_units(graph)
+            for unit in self._inner.read_native_units(graph, regulatory_instrument_id)
             if unit.citation_ref.startswith("Annex ")
         )
 
@@ -121,7 +125,9 @@ class _FakeDomainMappingAdapter:
     def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
         self._units = units
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         return self._units
 
 
@@ -150,7 +156,7 @@ def test_annex_only_domain_mapping_adapter_filters_to_annex_citation_refs_only()
     inner = _FakeDomainMappingAdapter((article_unit, annex_i_unit, annex_ii_unit))
     adapter = _AnnexOnlyDomainMappingAdapter(inner)
 
-    result = adapter.read_native_units(cast("GraphHandle", object()))
+    result = adapter.read_native_units(cast("GraphHandle", object()), "REG-1.0")
 
     assert result == (annex_i_unit, annex_ii_unit)
 

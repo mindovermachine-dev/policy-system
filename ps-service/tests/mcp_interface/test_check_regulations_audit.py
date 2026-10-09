@@ -79,7 +79,6 @@ def _amended_instrument(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ig
             new_regulatory_instrument_id="CRA-1.0",
             run_id="ingest-run-1",
             outcome="superseded",
-            ingest_counts={},
         ),
     )
     monkeypatch.setattr(

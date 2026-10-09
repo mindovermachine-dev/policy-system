@@ -31,13 +31,19 @@ imported) becomes ``skipped``; any other exception becomes
 ``reingest_failed`` -- never propagated past this boundary, so the sweep
 always continues to the next tracked instrument (AC-BI-006/AC-BI-007).
 
-Slice 5 (PLAN.md §4) wires ``_safe_reason`` (D11) into that generic
-``reingest_failed`` branch: its ``detail`` is scrubbed and length-capped,
-reusing the exact shared scrubber ``ingestion_orchestration.
-_classify_stage_failure`` already uses (``error_handlers._scrub_text``) --
-this endpoint's per-instrument ``detail`` is returned as normal
-200-response body content, never through an ``ApiError``/exception
-handler, so scrubbing it is this module's own responsibility.
+A ``reingest_failed`` instrument's ``detail`` is never exception text: it is the
+enumerated audit ``reason_code``, plus the failing pipeline stage when one is
+known (``pipeline_stage_failed (stage: derivation)``). The full failure detail is
+logged server-side only.
+
+A detected amendment runs the SAME stage sequence the catalog pipeline uses --
+Ingestion, Domain Mapper (extract, derive), Company Merge -- through a
+``PipelineRunner`` built here (:func:`_build_pipeline_runner`) and injected into
+``trigger_reingestion`` (``change_monitor`` must not import ``ps_service.api``).
+The runner checks the pipeline configuration first (missing chat model, embed model
+or merge threshold is a ``reingest_failed`` before any graph write), and the
+succession is written only after the merge stage returned; a failed stage leaves the
+prior version ``active`` and the next sweep re-runs only the missing stages.
 
 Slice 6 (PLAN.md §4, per ``CHANGES.md``'s scope reduction -- the ps-cli
 display work originally planned for this slice was moved into and
@@ -59,16 +65,20 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from ps_service.api.catalog import find_by_celex
-from ps_service.api.error_handlers import (
-    _scrub_text,  # pyright: ignore[reportPrivateUsage]  -- shared scrubber; PLAN.md §1 D11 sanctions reuse, mirrors ingestion_orchestration.py:42-44's own precedent
-)
+from ps_service.api.catalog import CatalogEntry, find_by_celex
+from ps_service.api.errors import PipelineStageError
 from ps_service.api.ingestion_orchestration import (
+    PipelineDependencies,
     _default_ingestion_adapter,  # pyright: ignore[reportPrivateUsage]  -- shared graph/adapter factory; reused per PLAN.md §0.4/D9's main.py:22-25 precedent
+    _execute_catalog_stages,  # pyright: ignore[reportPrivateUsage]  -- the shared stage sequence the sweep re-uses
     _open_native_graph,  # pyright: ignore[reportPrivateUsage]  -- see above
     _open_single_tenant_graph,  # pyright: ignore[reportPrivateUsage]  -- see above
+    _OpenGraphs,  # pyright: ignore[reportPrivateUsage]  -- see above
+    _require_ingestion_config,  # pyright: ignore[reportPrivateUsage]  -- config-completeness guard, run first by the runner (AC-BI-006)
+    build_default_pipeline_dependencies,
     classify_ingestion_failure,
 )
+from ps_service.api.run_status import clear_stage
 from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
 from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.ingestion_runs.audit_actions import (
@@ -85,11 +95,11 @@ from ps_service.logging.run_context import bind_run_context
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-    from ps_service.api.catalog import CatalogEntry
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.audit.emit import AuditContext
     from ps_service.change_monitor.models import (
         AmendmentFinding,
+        PipelineRunner,
         PollReport,
         ReingestionOutcome,
         TrackedInstrumentNode,
@@ -108,30 +118,6 @@ _INSTRUMENT_ACTION = "change_check_instrument"
 # `error_handlers._SAFE_VERBATIM_NAMES`'s own established idiom for the
 # identical cross-component situation.
 _NATIONAL_TRANSPOSITION_ERROR_NAME = "NationalTranspositionNotSupportedError"
-
-# D11: matches `ingestion_orchestration._STAGE_REASON_MAX_LEN` exactly.
-_REASON_MAX_LEN = 300
-
-
-def _safe_reason(exc: Exception) -> str:
-    """Scrub and length-cap an exception's message for a `reingest_failed` `detail` (D11).
-
-    Mirrors `ingestion_orchestration._classify_stage_failure`'s own shape
-    exactly, reusing the same shared `_scrub_text` scrubber -- this
-    endpoint's `detail` is returned as normal 200-response body content,
-    never through an `ApiError`/exception handler, so scrubbing it here is
-    this module's own responsibility (not inherited for free).
-
-    Args:
-        exc: The exception `trigger_reingestion` raised.
-
-    Returns:
-        `f"{type(exc).__name__}: {exc}"`, scrubbed of filesystem paths, the
-        repo/home dirs, `host:port` tokens, and URLs, then truncated to
-        `_REASON_MAX_LEN` characters.
-    """
-    return _scrub_text(f"{type(exc).__name__}: {exc}")[:_REASON_MAX_LEN]
-
 
 # The six outcome buckets a tracked instrument can land in (PLAN.md §1 D6/D7).
 # Declared here, not re-derived from `api.models.InstrumentCheckOutcomeBody`,
@@ -158,6 +144,8 @@ class InstrumentCheckOutcome:
     outcome: InstrumentCheckOutcomeValue
     detail: str | None = None
     reingest_run_id: str | None = None
+    reason_code: IngestionReasonCode | None = None
+    failing_stage: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +178,7 @@ class PollForAmendmentsCall(Protocol):
 class TriggerReingestionCall(Protocol):
     """Call shape of ``change_monitor.trigger.trigger_reingestion``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors trigger_reingestion's signature exactly
         self,
         identifier: str,
         short_name: str,
@@ -198,10 +186,12 @@ class TriggerReingestionCall(Protocol):
         *,
         adapter: MetadataFetchingAdapter,
         graph: GraphHandle,
+        single_tenant: GraphHandle,
         emitter: LogEmitter | None = None,
         run_id: str | None = None,
+        run_pipeline: PipelineRunner | None = None,
     ) -> ReingestionOutcome:
-        """Re-ingest `identifier` as `new_version` and record its succession."""
+        """Re-ingest `identifier` as `new_version` through the full pipeline; link it."""
         ...
 
 
@@ -218,11 +208,9 @@ class ChangeCheckDependencies:
     """Everything ``run_change_check_sweep`` needs that is not per-request.
 
     Mirrors ``PipelineDependencies``/``RestoreDependencies``'s own injection-
-    seam shape (PLAN.md §2). ``open_native``/``trigger_reingestion``/
-    ``default_adapter`` go unused until Slice 3 wires the ``finding_ids``
-    branch for real -- present now so this bundle's shape is stable across
-    every later slice, no repeated construction-site edits (mirrors Slice 1's
-    "declare all six outcome values up front" rationale for the wire model).
+    seam shape (PLAN.md §2). ``pipeline`` is the catalog pipeline's own
+    stage/adapter/graph-opener bundle: the sweep re-uses its stage sequence, so a
+    detected amendment runs Ingestion -> Domain Mapper -> Company Merge (UC-4).
     """
 
     open_single_tenant: Callable[[ServiceConfig], GraphHandle]
@@ -233,6 +221,7 @@ class ChangeCheckDependencies:
     default_adapter: Callable[[], MetadataFetchingAdapter]
     find_catalog_entry: Callable[[str], CatalogEntry | None]
     will_reingest: WillReingestCall
+    pipeline: PipelineDependencies
 
 
 def _emit_sweep(
@@ -274,6 +263,7 @@ def _emit_instrument(
     instrument_id: str,
     outcome: InstrumentCheckOutcomeValue,
     emitter: LogEmitter | None,
+    extra: Mapping[str, object] | None = None,
 ) -> None:
     """Emit one ``change_check_instrument`` log entry (D8, AC-BI-008 full).
 
@@ -288,6 +278,8 @@ def _emit_instrument(
         instrument_id: The tracked instrument's ``regulatory_instrument_id``.
         outcome: The bucket this instrument landed in.
         emitter: Optional explicit emitter; otherwise the process default.
+        extra: Optional structured fields: the enumerated ``reason_code`` and the
+            ``failing_stage`` of a ``reingest_failed`` / ``skipped`` instrument.
     """
     emit_log_entry(
         component=_COMPONENT,
@@ -295,6 +287,7 @@ def _emit_instrument(
         entity_id=instrument_id,
         outcome=outcome,
         run_id=run_id,
+        extra=extra,
         emitter=emitter,
     )
 
@@ -314,13 +307,11 @@ def run_change_check_sweep(
     ``poll_for_amendments`` against that same graph handle, then classify
     each tracked instrument by set membership against the returned
     ``PollReport``'s own ``failed_ids``/``unconfigured_ids`` buckets --
-    ``poll_failed`` / ``not_configured`` / ``current`` (this slice). An
-    instrument whose id is one of ``poll_report.findings``'s own ids (an
-    amendment was detected) hits the ``finding_ids`` branch below, a
-    structural stub this slice (PLAN.md §4 Slice 2's own note) -- Slice 3
-    replaces it with a real ``_reingest_one`` call implementing D2-D7's full
-    call contract; no Slice-2 test scripts a non-empty ``findings`` tuple,
-    so this branch is present but unreached.
+    ``poll_failed`` / ``not_configured`` / ``current``. An instrument whose id
+    is one of ``poll_report.findings``'s own ids (an amendment was detected) goes to
+    ``_reingest_one``, which runs the full UC-4 re-ingest (Ingestion, Domain Mapper,
+    Company Merge) and records the succession last; a failure of one instrument is
+    reported for that instrument and the sweep continues with the next.
 
     Slice 6 (D8, AC-BI-008 full) wraps this with ``_emit_sweep``'s
     ``"started"``/``"succeeded"`` pair and one ``_emit_instrument`` entry per
@@ -375,6 +366,7 @@ def run_change_check_sweep(
                     finding,
                     celex_by_id[instrument_id],
                     config=config,
+                    single_tenant=single_tenant,
                     dependencies=dependencies,
                     audit=audit,
                     emitter=emitter,
@@ -398,7 +390,11 @@ def run_change_check_sweep(
         else:
             outcome = InstrumentCheckOutcome(instrument_id, "current")
         _emit_instrument(
-            run_id=run_id, instrument_id=instrument_id, outcome=outcome.outcome, emitter=emitter
+            run_id=run_id,
+            instrument_id=instrument_id,
+            outcome=outcome.outcome,
+            emitter=emitter,
+            extra=_failure_extra(outcome),
         )
         outcomes.append(outcome)
     _emit_sweep(
@@ -415,6 +411,7 @@ def _reingest_one(
     celex: str | None,
     *,
     config: ServiceConfig,
+    single_tenant: GraphHandle,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,
     emitter: LogEmitter | None,
@@ -466,7 +463,8 @@ def _reingest_one(
         celex: The tracked instrument's own `celex` (from `celex_by_id`),
             or `None` if somehow absent (see above).
         config: The resolved service configuration, passed through to
-            `dependencies.open_native`.
+            `dependencies.open_native` and the pipeline runner.
+        single_tenant: The already-opened merged `policy_system` graph (Company Merge writes to it).
         dependencies: The injected dependency bundle.
         audit: Who triggered the sweep and where the audit rows go (issue #195). A pair is
             written only when ``dependencies.will_reingest`` says a real re-ingest will run
@@ -499,15 +497,32 @@ def _reingest_one(
     graph = dependencies.open_native(config, entry.short_name)
     new_version = finding.detected_consolidated_celex
     try:
-        fresh = dependencies.will_reingest(graph, entry.short_name, new_version)
+        runs_stages = dependencies.will_reingest(graph, entry.short_name, new_version)
     except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
         return _failed_outcome(instrument_id, exc)
-    if not fresh:
-        # `resume` / `already_processed` ingest nothing, so there is no ingestion to audit
-        # (CHANGES F-4); the supersession log entry already covers `resume`.
+    run_pipeline = _build_pipeline_runner(
+        entry,
+        new_version,
+        config=config,
+        adapter=adapter,
+        native=graph,
+        single_tenant=single_tenant,
+        dependencies=dependencies,
+        emitter=emitter,
+    )
+    if not runs_stages:
+        # No pipeline stage will run (`already_processed`, or a link-only resume), so there is
+        # no ingestion to audit (CHANGES F-4); the supersession log entry covers the link.
         try:
             outcome = dependencies.trigger_reingestion(
-                celex, entry.short_name, new_version, adapter=adapter, graph=graph
+                celex,
+                entry.short_name,
+                new_version,
+                adapter=adapter,
+                graph=graph,
+                single_tenant=single_tenant,
+                emitter=emitter,
+                run_pipeline=run_pipeline,
             )
         except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary
             return _failed_outcome(instrument_id, exc)
@@ -519,17 +534,112 @@ def _reingest_one(
         new_version,
         adapter=adapter,
         graph=graph,
+        single_tenant=single_tenant,
+        run_pipeline=run_pipeline,
         dependencies=dependencies,
         audit=audit,
         emitter=emitter,
     )
 
 
+def _build_pipeline_runner(
+    entry: CatalogEntry,
+    new_version: str,
+    *,
+    config: ServiceConfig,
+    adapter: MetadataFetchingAdapter,
+    native: GraphHandle,
+    single_tenant: GraphHandle,
+    dependencies: ChangeCheckDependencies,
+    emitter: LogEmitter | None,
+) -> PipelineRunner:
+    """Build the `PipelineRunner` `trigger_reingestion` runs its stages through.
+
+    `change_monitor` must not import `ps_service.api`, so the shared stage sequence
+    (`ingestion_orchestration._execute_catalog_stages`: ingest, extract, derive, merge) is
+    handed to it as this callable. The runner checks the pipeline config FIRST, before the
+    baseline graph is opened or any stage runs (AC-BI-006), runs exactly the requested
+    stage subset for `new_version`'s instrument id, reports each completed stage to
+    `on_stage_complete`, and always clears the `run_status` entry. Nothing is caught:
+    a `PipelineStageError` or `IngestionConfigIncompleteError` propagates to the sweep's
+    per-instrument boundary.
+    """
+    from ps_service.change_monitor.models import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
+        PipelineRunResult,
+        StageSummary,
+    )
+
+    def _run(
+        *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
+    ) -> PipelineRunResult:
+        resolved = _require_ingestion_config(config)
+        graphs = _OpenGraphs(
+            native=native,
+            baseline=dependencies.pipeline.graphs.baseline(config, entry.short_name),
+            single_tenant=single_tenant,
+        )
+        versioned = CatalogEntry(entry.celex, entry.title, entry.short_name, new_version)
+        try:
+            _, reports = _execute_catalog_stages(
+                versioned,
+                run_id=run_id,
+                resolved=resolved,
+                graphs=graphs,
+                dependencies=dependencies.pipeline,
+                emitter=emitter,
+                ingestion_adapter=adapter,
+                stages_to_run=stages,
+                on_stage_complete=on_stage_complete,
+            )
+        finally:
+            clear_stage(run_id)
+        return PipelineRunResult(
+            stages=tuple(StageSummary(report.stage, report.summary) for report in reports)
+        )
+
+    return _run
+
+
+def _failure_extra(outcome: InstrumentCheckOutcome) -> dict[str, object] | None:
+    """The structured log fields of a failed instrument (enumerated codes only), else `None`."""
+    if outcome.reason_code is None:
+        return None
+    extra: dict[str, object] = {"reason_code": outcome.reason_code}
+    if outcome.failing_stage is not None:
+        extra["failing_stage"] = outcome.failing_stage
+    return extra
+
+
 def _failed_outcome(instrument_id: str, exc: Exception) -> InstrumentCheckOutcome:
-    """Map a `trigger_reingestion` failure to `skipped` (D10) or `reingest_failed` (D6/D11)."""
+    """Map a `trigger_reingestion` failure to `skipped` (D10) or `reingest_failed` (AC-BI-007).
+
+    The user-visible `detail` of a `reingest_failed` instrument is the enumerated audit
+    `reason_code`, plus the failing pipeline stage (a fixed set of stage names) when one is
+    known: `pipeline_stage_failed (stage: derivation)`. The exception message is never copied
+    anywhere user-visible -- a stage failure's full detail is already logged server-side by
+    `ingestion_orchestration._classify_stage_failure`. `skipped` keeps `str(exc)`: the
+    national-transposition guard's message is a known, safe, domain-level explanation.
+    """
+    reason_code = _audit_reason_code(exc)
     if type(exc).__name__ == _NATIONAL_TRANSPOSITION_ERROR_NAME:
-        return InstrumentCheckOutcome(instrument_id, "skipped", detail=str(exc))
-    return InstrumentCheckOutcome(instrument_id, "reingest_failed", detail=_safe_reason(exc))
+        return InstrumentCheckOutcome(
+            instrument_id, "skipped", detail=str(exc), reason_code=reason_code
+        )
+    stage = exc.stage if isinstance(exc, PipelineStageError) else None
+    return InstrumentCheckOutcome(
+        instrument_id,
+        "reingest_failed",
+        detail=reason_code if stage is None else f"{reason_code} (stage: {stage})",
+        reason_code=reason_code,
+        failing_stage=stage,
+    )
+
+
+def _reingested_detail(outcome: ReingestionOutcome) -> str:
+    """`<new id> (superseded, <state>)` -- the state shows a `resume` / `repair` / `finalize`."""
+    if outcome.outcome == "already_processed":
+        return f"{outcome.new_regulatory_instrument_id} ({outcome.outcome})"
+    return f"{outcome.new_regulatory_instrument_id} ({outcome.outcome}, {outcome.state})"
 
 
 def _reingested_outcome(instrument_id: str, outcome: ReingestionOutcome) -> InstrumentCheckOutcome:
@@ -537,7 +647,7 @@ def _reingested_outcome(instrument_id: str, outcome: ReingestionOutcome) -> Inst
     return InstrumentCheckOutcome(
         instrument_id,
         "amendment_reingested",
-        detail=f"{outcome.new_regulatory_instrument_id} ({outcome.outcome})",
+        detail=_reingested_detail(outcome),
         reingest_run_id=outcome.run_id,
     )
 
@@ -557,6 +667,8 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
     *,
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
+    single_tenant: GraphHandle,
+    run_pipeline: PipelineRunner,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,
     emitter: LogEmitter | None,
@@ -589,21 +701,22 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
                 new_version,
                 adapter=adapter,
                 graph=graph,
+                single_tenant=single_tenant,
+                emitter=emitter,
                 run_id=reingest_run_id,
+                run_pipeline=run_pipeline,
             )
         except Exception as exc:  # noqa: BLE001 -- per-instrument isolation boundary, AC-BI-006/007
             reason = _audit_reason_code(exc)
             _record_terminal_row(audit, reingest_run_id, celex, None, reason, emitter)
             return _failed_outcome(instrument_id, exc)
-        # Counts are 0/0/0 on purpose: the sweep re-runs ONLY the Ingestion stage (+ the
-        # SUPERSEDED_BY write); Domain Mapper and Company Merge do not run, so it writes no
-        # Obligation or Capability (verified against the graph in AC-BI-016's test). The
-        # doc/code gap with UC-4 (amendment absorption "Ingestion -> Domain Mapper -> Company
-        # Merge") is tracked in GitHub issue #201; once the sweep runs the full pipeline, take
-        # the counts from its MergeResult here.
         result: dict[str, object] = {
             "regulatory_instrument_id": outcome.new_regulatory_instrument_id,
             "outcome": "fresh",
+            "stages": [
+                {"stage": stage.stage, "summary": stage.summary}
+                for stage in outcome.stage_summaries
+            ],
         }
         _record_terminal_row(audit, reingest_run_id, celex, result, None, emitter)
     return _reingested_outcome(instrument_id, outcome)
@@ -668,6 +781,7 @@ def build_default_change_check_dependencies() -> ChangeCheckDependencies:
     )
 
     return ChangeCheckDependencies(
+        pipeline=build_default_pipeline_dependencies(),
         open_single_tenant=_open_single_tenant_graph,
         open_native=_open_native_graph,
         read_tracked_instruments=read_tracked_instruments,

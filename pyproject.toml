@@ -38,6 +38,14 @@ testpaths = ["ps-service/tests", "ps-cli/tests", "ps-test-support/tests"]
 # single process when `-m` selects a live-marked test (they share external services and are not
 # xdist-safe) unless `-n` is passed explicitly; `ps-service/tests/release/test_release_ci.py`
 # fails if `-n` is ever dropped from here.
+# Cross-package test imports (`from change_monitor._fakes import ...` inside tests/api, `from api._fakes
+# import ...` inside tests/mcp_interface, ...) are a deliberate convention. Under importlib mode they only
+# resolved by accident of collection order: pytest registers a test package in `sys.modules` as its
+# files are collected, so an import worked only if the target package sorted EARLIER alphabetically
+# (`api` -> `change_monitor` failed in a repo-root run; xdist worker ordering made it worse). Putting
+# `ps-service/tests` on `sys.path` makes every sibling test package importable regardless of order, while
+# the importlib-mode module names stay identical (`change_monitor._fakes`), so no module is loaded twice.
+pythonpath = ["ps-service/tests"]
 addopts = [
     "--import-mode=importlib",
     "-n",

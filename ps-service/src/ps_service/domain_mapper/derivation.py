@@ -72,7 +72,7 @@ _ACTION = "derive_obligations_and_capabilities"
 _VERIFY_REUSE_ACTION = "verify_capability_reuse"
 
 _READ_REQUIREMENTS_BY_ROLE_QUERY = (
-    "MATCH (req:Requirement) "
+    "MATCH (:RegulatoryInstrument {id: $rid})-[:EXPRESSES]->(req:Requirement) "
     "OPTIONAL MATCH (rl:Role {id: req.role_id}) "
     "RETURN req.id, req.text, req.role_id, rl.id, rl.name"
 )
@@ -92,7 +92,8 @@ def derive_obligations_and_capabilities(
     graph's own fixed PS-Conceptual-Model shape, identical regardless of
     source.
 
-    1. `_read_requirements_by_role(baseline_graph)` — §7.2's read-back,
+    1. `_read_requirements_by_role(baseline_graph, regulatory_instrument_id)` — §7.2's read-back
+       (scoped to the Requirements this instrument version `EXPRESSES`),
        including its whole-collection dangling-`role_id` check, which runs
        to completion (raising on the first violation found) before any LLM
        call is made anywhere in this function.
@@ -119,7 +120,7 @@ def derive_obligations_and_capabilities(
        caller already bound, or `None`.
     6. Returns `DerivationResult`.
     """
-    roles = tuple(_read_requirements_by_role(baseline_graph).values())
+    roles = tuple(_read_requirements_by_role(baseline_graph, regulatory_instrument_id).values())
 
     obligation_nodes, has_edges, satisfied_by_edges, unmatched_requirement_ids = (
         _derive_obligations(roles, model=model, call_completion=call_completion, emitter=emitter)
@@ -154,10 +155,13 @@ def derive_obligations_and_capabilities(
     )
 
 
-def _read_requirements_by_role(baseline_graph: GraphHandle) -> dict[str, RoleRequirements]:
+def _read_requirements_by_role(
+    baseline_graph: GraphHandle, regulatory_instrument_id: str
+) -> dict[str, RoleRequirements]:
     """PLAN_REVIEWED.md §7.2's exact Cypher and validation logic — the B3 read-side fix.
 
-    `MATCH (req:Requirement) OPTIONAL MATCH (rl:Role {id: req.role_id})
+    `MATCH (:RegulatoryInstrument {id: $rid})-[:EXPRESSES]->(req:Requirement)
+    OPTIONAL MATCH (rl:Role {id: req.role_id})
     RETURN req.id, req.text, req.role_id, rl.id, rl.name` — every row is
     materialized FIRST, then every row's `rl.id` (the `OPTIONAL MATCH`
     result) is checked non-null for every row whose `req.role_id` is itself
@@ -182,7 +186,9 @@ def _read_requirements_by_role(baseline_graph: GraphHandle) -> dict[str, RoleReq
     by their resolved Role node id in the order each Role is first
     encountered among the rows, each Role's own Requirements in row order.
     """
-    result = baseline_graph.query(_READ_REQUIREMENTS_BY_ROLE_QUERY)
+    result = baseline_graph.query(
+        _READ_REQUIREMENTS_BY_ROLE_QUERY, params={"rid": regulatory_instrument_id}
+    )
     rows = cast("list[list[object]]", result.result_set)
 
     for row in rows:

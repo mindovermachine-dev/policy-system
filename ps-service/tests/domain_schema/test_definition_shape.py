@@ -30,3 +30,15 @@ def test_classification_edges_are_many_to_many() -> None:
     assert len(edges) == len(_CLASSIFICATION_EDGES)
     assert {str(edge.cardinality) for edge in edges} == {"1..* : 0..*"}
     assert {str(edge.cardinality.flipped()) for edge in edges} == {"0..* : 1..*"}
+
+
+def test_instrument_superseded_by_note_documents_the_native_only_absorbed_flag() -> None:
+    """#201: the native-graph `absorbed` edge flag is operational, outside the vocabulary."""
+    [edge] = [
+        e
+        for e in DOMAIN_SCHEMA.edges
+        if e.type == "SUPERSEDED_BY" and e.source == "RegulatoryInstrument"
+    ]
+
+    assert "absorbed" in edge.note
+    assert all(prop.name != "absorbed" for prop in edge.properties)

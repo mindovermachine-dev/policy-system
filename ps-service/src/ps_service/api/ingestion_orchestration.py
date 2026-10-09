@@ -74,7 +74,7 @@ from ps_service.logging.facade import emit_log_entry
 from ps_service.logging.run_context import bind_run_context
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Collection
 
     from ps_service.audit.emit import AuditContext
     from ps_service.change_monitor.trigger import MetadataFetchingAdapter
@@ -416,11 +416,16 @@ _REASON_BY_EXCEPTION_NAME: dict[str, IngestionReasonCode] = {
     "CatalogIdentifierNotFoundError": "celex_not_found",
     "ShortNameCollisionError": "short_name_collision",
     "PipelineStageError": "pipeline_stage_failed",
+    "ChangeMonitorStateError": "inconsistent_graph_state",
+    "SuccessionPersistenceError": "graph_unavailable",
 }
 """Failure class name -> the enumerated audit `reason_code` (issue #195, AC-BI-010).
 
 ``McpGraphUnavailableError`` is matched by class name so ``api`` does not import
-``mcp_interface`` (the idiom of ``change_check_orchestration._NATIONAL_TRANSPOSITION_ERROR_NAME``).
+``mcp_interface`` (the idiom of ``change_check_orchestration._NATIONAL_TRANSPOSITION_ERROR_NAME``);
+``ChangeMonitorStateError`` / ``SuccessionPersistenceError`` (the amendment sweep's graph-state
+and persistence failures) are matched by name for the same reason (``api`` must not import
+``change_monitor`` at module load, M6).
 """
 
 
@@ -966,6 +971,11 @@ def check_short_name_collision(
 
 # --- the sequencer ---
 
+_STAGE_ORDER = ("ingestion", "extraction", "derivation", "merge")
+"""The stage names, in run order. Mirrors ``change_monitor.models.PIPELINE_STAGES``
+(duplicated, not imported: ``api`` must not import ``ps_service.change_monitor`` at
+module level, M6; a test pins the two equal)."""
+
 
 @dataclass(frozen=True, slots=True)
 class _OpenGraphs:
@@ -976,7 +986,7 @@ class _OpenGraphs:
     single_tenant: GraphHandle
 
 
-def _execute_catalog_stages(
+def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus the stage subset/callback; no natural grouping
     entry: CatalogEntry,
     *,
     run_id: str,
@@ -985,6 +995,8 @@ def _execute_catalog_stages(
     dependencies: PipelineDependencies,
     emitter: LogEmitter | None,
     ingestion_adapter: IngestionAdapter | None = None,
+    stages_to_run: Collection[str] | None = None,
+    on_stage_complete: Callable[[str], None] | None = None,
 ) -> tuple[str, tuple[StageReport, ...]]:
     """Run ingest -> extract -> derive -> merge, aborting at the first failure.
 
@@ -1008,68 +1020,85 @@ def _execute_catalog_stages(
             (AC-BI-006 -- the fetch-once Cellar-fallback adapter); when
             ``None``, ``dependencies.adapters.ingestion()`` builds the default
             one, exactly as the curated path does today.
+        stages_to_run: The stage names to run (the amendment
+            re-ingest resumes at the stages a new version is missing); ``None``
+            runs all four. Skipped stages are neither run, ``set_stage``d nor
+            reported. When ``ingestion`` is skipped the instrument id is
+            ``<short_name>-<version>``, the id the ingest stage would return.
+        on_stage_complete: Called with the stage name after each run stage
+            returns (never for a stage that raised), before the next stage starts.
 
     Returns:
-        The ``regulatory_instrument_id`` and the per-stage :class:`StageReport`
-        tuple, in pipeline order.
+        The ``regulatory_instrument_id`` and the :class:`StageReport` tuple of
+        the stages that ran, in pipeline order.
     """
+    selected = frozenset(_STAGE_ORDER if stages_to_run is None else stages_to_run)
     stages = dependencies.stages
-    resolved_ingestion_adapter = (
-        ingestion_adapter if ingestion_adapter is not None else dependencies.adapters.ingestion()
-    )
     mapping_adapter = dependencies.adapters.mapping()
+    reports: list[StageReport] = []
 
-    set_stage(run_id, "ingestion")
-    ingest_result = _run_stage(
-        "ingestion",
-        lambda: stages.ingest(
-            entry.celex,
-            entry.short_name,
-            version=entry.version,
-            adapter=resolved_ingestion_adapter,
-            graph=graphs.native,
-            run_id=run_id,
-        ),
-        emitter=emitter,
-    )
-    rid = ingest_result.regulatory_instrument_id
-    set_stage(run_id, "extraction")
-    extract_result = _run_stage(
-        "extraction",
-        lambda: stages.extract(
-            rid,
-            adapter=mapping_adapter,
-            native_graph=graphs.native,
-            baseline_graph=graphs.baseline,
-            model=resolved.chat_model,
-        ),
-        emitter=emitter,
-    )
-    set_stage(run_id, "derivation")
-    derive_result = _run_stage(
-        "derivation",
-        lambda: stages.derive(rid, baseline_graph=graphs.baseline, model=resolved.chat_model),
-        emitter=emitter,
-    )
-    set_stage(run_id, "merge")
-    merge_result = _run_stage(
-        "merge",
-        lambda: stages.merge(
-            rid,
-            baseline_graph=graphs.baseline,
-            single_tenant_graph=graphs.single_tenant,
-            embed_model=resolved.embed_model,
-            similarity_threshold=resolved.similarity_threshold,
-        ),
-        emitter=emitter,
-    )
-    reports = (
-        StageReport("ingestion", _ingestion_summary(ingest_result)),
-        StageReport("extraction", _extraction_summary(extract_result)),
-        StageReport("derivation", _derivation_summary(derive_result)),
-        StageReport("merge", _merge_summary(merge_result)),
-    )
-    return rid, reports
+    def complete(stage: str, summary: dict[str, int]) -> None:
+        reports.append(StageReport(stage, summary))
+        if on_stage_complete is not None:
+            on_stage_complete(stage)
+
+    rid = f"{entry.short_name}-{entry.version}"
+    if "ingestion" in selected:
+        ingest_adapter = (
+            dependencies.adapters.ingestion() if ingestion_adapter is None else ingestion_adapter
+        )
+        set_stage(run_id, "ingestion")
+        ingest_result = _run_stage(
+            "ingestion",
+            lambda: stages.ingest(
+                entry.celex,
+                entry.short_name,
+                version=entry.version,
+                adapter=ingest_adapter,
+                graph=graphs.native,
+                run_id=run_id,
+            ),
+            emitter=emitter,
+        )
+        rid = ingest_result.regulatory_instrument_id
+        complete("ingestion", _ingestion_summary(ingest_result))
+    if "extraction" in selected:
+        set_stage(run_id, "extraction")
+        extract_result = _run_stage(
+            "extraction",
+            lambda: stages.extract(
+                rid,
+                adapter=mapping_adapter,
+                native_graph=graphs.native,
+                baseline_graph=graphs.baseline,
+                model=resolved.chat_model,
+            ),
+            emitter=emitter,
+        )
+        complete("extraction", _extraction_summary(extract_result))
+    if "derivation" in selected:
+        set_stage(run_id, "derivation")
+        derive_result = _run_stage(
+            "derivation",
+            lambda: stages.derive(rid, baseline_graph=graphs.baseline, model=resolved.chat_model),
+            emitter=emitter,
+        )
+        complete("derivation", _derivation_summary(derive_result))
+    if "merge" in selected:
+        set_stage(run_id, "merge")
+        merge_result = _run_stage(
+            "merge",
+            lambda: stages.merge(
+                rid,
+                baseline_graph=graphs.baseline,
+                single_tenant_graph=graphs.single_tenant,
+                embed_model=resolved.embed_model,
+                similarity_threshold=resolved.similarity_threshold,
+            ),
+            emitter=emitter,
+        )
+        complete("merge", _merge_summary(merge_result))
+    return rid, tuple(reports)
 
 
 def _audit_facts(trigger: IngestionTrigger, reports: tuple[StageReport, ...]) -> dict[str, object]:

@@ -64,7 +64,7 @@ if TYPE_CHECKING:
     from ps_service.api.catalog import CatalogEntry, CuratedInstrumentEntry
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
     from ps_service.api.ingestion_orchestration import GraphHandle
-    from ps_service.change_monitor.models import TrackedInstrumentNode
+    from ps_service.change_monitor.models import PipelineRunner, TrackedInstrumentNode
     from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
@@ -187,16 +187,58 @@ class StageRecorder:
         return [call.stage for call in self.calls]
 
 
+class _LedgerCalls(list[StageCall]):
+    """A call log that also lands each stage call on a shared event timeline."""
+
+    def __init__(self, events: list[str], on_ingest: Callable[[StageCall], None]) -> None:
+        super().__init__()
+        self._events = events
+        self._on_ingest = on_ingest
+
+    def append(self, call: StageCall) -> None:
+        """Record the call, put ``stage:<name>`` on the timeline and create the node on ingest."""
+        self._events.append(f"stage:{call.stage}")
+        if call.stage == "ingestion":
+            self._on_ingest(call)
+        super().append(call)
+
+
+class LedgerStageRecorder(StageRecorder):
+    """A :class:`StageRecorder` whose calls share an event timeline with a native-graph ledger.
+
+    ``events`` is the ledger's own write log (``LedgerNativeGraph.events``), so one list shows
+    stage calls and graph writes in the order they happened. A completed ingest stage also
+    runs ``on_ingest`` -- the test's hook that creates the new version's node, as the real
+    Ingestion stage's register write does.
+    """
+
+    def __init__(self, events: list[str], on_ingest: Callable[[StageCall], None]) -> None:
+        """Share ``events`` with the ledger and run ``on_ingest(call)`` when ingestion is called."""
+        super().__init__()
+        self.calls = _LedgerCalls(events, on_ingest)
+
+
 class FakeIngestStage:
     """Stand-in for ``ingest_regulatory_instrument`` — records the call, returns a canned result."""
 
     def __init__(
-        self, recorder: StageRecorder, *, rid: str = "CRA-1.0", error: Exception | None = None
+        self,
+        recorder: StageRecorder,
+        *,
+        rid: str | None = "CRA-1.0",
+        error: Exception | None = None,
+        error_once: bool = False,
     ) -> None:
-        """Prime the recorder, the id to return, and an optional error to raise."""
+        """Prime the recorder, the id to return, and an optional error to raise.
+
+        ``rid=None`` returns ``<short_name>-<version>`` (the id the real stage mints);
+        ``error_once`` raises ``error`` on the first call only (a transient failure, so a
+        retry succeeds).
+        """
         self._recorder = recorder
         self._rid = rid
         self._error = error
+        self._error_once = error_once
 
     def __call__(
         self,
@@ -225,19 +267,27 @@ class FakeIngestStage:
             )
         )
         if self._error is not None:
-            raise self._error
+            error = self._error
+            if self._error_once:
+                self._error = None
+            raise error
         return IngestResult(
-            regulatory_instrument_id=self._rid, run_id=run_id or "fake-run", counts={}
+            regulatory_instrument_id=self._rid or f"{short_name}-{version}",
+            run_id=run_id or "fake-run",
+            counts={},
         )
 
 
 class FakeExtractStage:
     """Stand-in for ``extract_roles_and_requirements``."""
 
-    def __init__(self, recorder: StageRecorder, *, error: Exception | None = None) -> None:
-        """Prime the recorder and an optional error to raise."""
+    def __init__(
+        self, recorder: StageRecorder, *, error: Exception | None = None, error_once: bool = False
+    ) -> None:
+        """Prime the recorder and an optional error to raise (``error_once``: first call only)."""
         self._recorder = recorder
         self._error = error
+        self._error_once = error_once
 
     def __call__(
         self,
@@ -256,7 +306,10 @@ class FakeExtractStage:
             StageCall("extraction", regulatory_instrument_id, {"model": model})
         )
         if self._error is not None:
-            raise self._error
+            error = self._error
+            if self._error_once:
+                self._error = None
+            raise error
         return ExtractionResult(
             regulatory_instrument_id=regulatory_instrument_id,
             role_node_ids={},
@@ -276,6 +329,7 @@ class FakeDeriveStage:
         *,
         error: Exception | None = None,
         unmatched_obligation_ids: tuple[str, ...] = (),
+        error_once: bool = False,
     ) -> None:
         """Prime the recorder, an optional error to raise, and the canned
         ``unmatched_obligation_ids`` (issue #64 slice 9 -- lets a test exercise
@@ -284,6 +338,7 @@ class FakeDeriveStage:
         """
         self._recorder = recorder
         self._error = error
+        self._error_once = error_once
         self._unmatched_obligation_ids = unmatched_obligation_ids
 
     def __call__(
@@ -301,7 +356,10 @@ class FakeDeriveStage:
             StageCall("derivation", regulatory_instrument_id, {"model": model})
         )
         if self._error is not None:
-            raise self._error
+            error = self._error
+            if self._error_once:
+                self._error = None
+            raise error
         return DerivationResult(
             regulatory_instrument_id=regulatory_instrument_id,
             obligation_node_ids=(),
@@ -312,12 +370,34 @@ class FakeDeriveStage:
 
 
 class FakeMergeStage:
-    """Stand-in for ``merge_baseline_graph``."""
+    """Stand-in for ``merge_baseline_graph``.
 
-    def __init__(self, recorder: StageRecorder, *, error: Exception | None = None) -> None:
-        """Prime the recorder and an optional error to raise."""
+    ``new_obligations`` / ``new_capabilities`` / ``matched_capabilities`` script the net-new and
+    matched facts the real merge computes (issue #201: the sweep's audit row takes them from the
+    merge result). With ``writes_nodes`` the stage also issues one ``MERGE`` per net-new
+    Obligation / Capability on the single-tenant handle it was given, as the real merge's
+    ``ON CREATE`` writes do, so a test can compare the audited counts with the graph delta.
+    """
+
+    def __init__(
+        self,
+        recorder: StageRecorder,
+        *,
+        error: Exception | None = None,
+        error_once: bool = False,
+        new_obligations: int = 0,
+        new_capabilities: int = 0,
+        matched_capabilities: int = 0,
+        writes_nodes: bool = False,
+    ) -> None:
+        """Prime the recorder, an optional error to raise and the scripted merge facts."""
         self._recorder = recorder
         self._error = error
+        self._error_once = error_once
+        self._new_obligations = new_obligations
+        self._new_capabilities = new_capabilities
+        self._matched_capabilities = matched_capabilities
+        self._writes_nodes = writes_nodes
 
     def __call__(
         self,
@@ -331,7 +411,7 @@ class FakeMergeStage:
         emitter: LogEmitter | None = None,
     ) -> MergeResult:
         """Record the call and return (or raise) a canned :class:`MergeResult`."""
-        _ = (baseline_graph, single_tenant_graph, embed_model, call_embedding, emitter)
+        _ = (baseline_graph, call_embedding, emitter)
         self._recorder.calls.append(
             StageCall(
                 "merge",
@@ -340,12 +420,30 @@ class FakeMergeStage:
             )
         )
         if self._error is not None:
-            raise self._error
+            error = self._error
+            if self._error_once:
+                self._error = None
+            raise error
+        if self._writes_nodes:
+            for label, count in (
+                ("Obligation", self._new_obligations),
+                ("Capability", self._new_capabilities),
+            ):
+                for index in range(count):
+                    single_tenant_graph.query(
+                        f"MERGE (n:{label} {{id: $id}})", {"id": f"{label}-{index}"}
+                    )
         return MergeResult(
             regulatory_instrument_id=regulatory_instrument_id,
-            obligation_ids=(),
-            capability_canonical_ids=(),
+            obligation_ids=tuple(f"ob-{index}" for index in range(self._new_obligations)),
+            capability_canonical_ids=tuple(
+                f"cap-{index}"
+                for index in range(self._new_capabilities + self._matched_capabilities)
+            ),
             near_misses=(),
+            new_obligation_count=self._new_obligations,
+            new_capability_count=self._new_capabilities,
+            matched_capability_count=self._matched_capabilities,
         )
 
 
@@ -434,7 +532,9 @@ class FakeIngestionAdapter:
 class FakeDomainMappingAdapter:
     """Satisfies ``ps_service.domain_mapper.adapters.base.DomainMappingAdapter`` structurally."""
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         """Fail loudly if the faked pipeline ever actually calls the adapter."""
         _ = graph
         message = "the faked extract stage must not read native units"
@@ -454,7 +554,7 @@ class FakePipeline:
 
 def build_fake_pipeline_dependencies(
     *,
-    rid: str = "CRA-1.0",
+    rid: str | None = "CRA-1.0",
     ingest_error: Exception | None = None,
     extract_error: Exception | None = None,
     derive_error: Exception | None = None,
@@ -468,6 +568,12 @@ def build_fake_pipeline_dependencies(
     collision_error: Exception | None = None,
     celex_row: str | None = None,
     celex_error: Exception | None = None,
+    recorder: StageRecorder | None = None,
+    merge_new_obligations: int = 0,
+    merge_new_capabilities: int = 0,
+    merge_matched_capabilities: int = 0,
+    merge_writes_nodes: bool = False,
+    errors_once: bool = False,
 ) -> FakePipeline:
     """Assemble a :class:`FakePipeline` around one shared :class:`StageRecorder`.
 
@@ -502,12 +608,21 @@ def build_fake_pipeline_dependencies(
             returns -- simulating a CELEX already ingested under that id.
         celex_error: If set, the CELEX-existence query raises this instead of
             returning (issue #193, AC-BI-007 -- e.g. a graph-unreachable error).
+        recorder: The :class:`StageRecorder` every fake stage records into (issue #201 --
+            lets a test share a timeline with a native-graph ledger). Defaults to a fresh one.
+        merge_new_obligations: Net-new Obligations the fake merge reports (issue #201).
+        merge_new_capabilities: Net-new Capabilities the fake merge reports.
+        merge_matched_capabilities: Capabilities the fake merge resolves onto existing nodes.
+        errors_once: Make the injected ``*_error`` of each external stage fire on its first call
+            only (a transient failure: the next sweep's retry of that stage succeeds).
+        merge_writes_nodes: Also write one node per net-new Obligation / Capability to the
+            single-tenant graph, so the graph delta can be compared with the reported counts.
 
     Returns:
         A :class:`FakePipeline` whose ``dependencies`` can be passed straight into
         ``run_catalog_ingestion_pipeline``/``run_internal_ingestion_pipeline``.
     """
-    recorder = StageRecorder()
+    recorder = recorder if recorder is not None else StageRecorder()
     native = FakeGraphHandle()
     baseline = FakeGraphHandle()
     # `single_tenant` is dispatched by query text (`responses_by_query`/
@@ -555,14 +670,23 @@ def build_fake_pipeline_dependencies(
             native=_open_native, baseline=_open_baseline, single_tenant=_open_single_tenant
         ),
         stages=PipelineStages(
-            ingest=FakeIngestStage(recorder, rid=rid, error=ingest_error),
-            extract=FakeExtractStage(recorder, error=extract_error),
+            ingest=FakeIngestStage(recorder, rid=rid, error=ingest_error, error_once=errors_once),
+            extract=FakeExtractStage(recorder, error=extract_error, error_once=errors_once),
             derive=FakeDeriveStage(
                 recorder,
                 error=derive_error,
+                error_once=errors_once,
                 unmatched_obligation_ids=derive_unmatched_obligation_ids,
             ),
-            merge=FakeMergeStage(recorder, error=merge_error),
+            merge=FakeMergeStage(
+                recorder,
+                error=merge_error,
+                error_once=errors_once,
+                new_obligations=merge_new_obligations,
+                new_capabilities=merge_new_capabilities,
+                matched_capabilities=merge_matched_capabilities,
+                writes_nodes=merge_writes_nodes,
+            ),
             ingest_internal=FakeIngestInternalStage(
                 recorder, rid=internal_rid, error=ingest_internal_error
             ),
@@ -674,8 +798,10 @@ def _never_trigger_reingestion(
     *,
     adapter: IngestionAdapter,
     graph: GraphHandle,
+    single_tenant: GraphHandle,
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
+    run_pipeline: PipelineRunner | None = None,
 ) -> ReingestionOutcome:
     """Fail loudly if a faked sweep with no scripted ``reingestion_result`` calls this.
 
@@ -686,7 +812,7 @@ def _never_trigger_reingestion(
     D5 "no curated catalog entry" test (the missing-entry short-circuit
     happens before `trigger_reingestion` would ever be called).
     """
-    _ = (adapter, graph, emitter, run_id)
+    _ = (adapter, graph, single_tenant, emitter, run_id, run_pipeline)
     message = (
         "trigger_reingestion must not be called in this test "
         f"(identifier={identifier!r}, short_name={short_name!r}, new_version={new_version!r})"
@@ -722,6 +848,7 @@ class TriggerReingestionCallRecord:
     adapter: IngestionAdapter
     graph: GraphHandle
     run_id: str | None = None
+    run_pipeline: PipelineRunner | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -730,6 +857,7 @@ class FakeChangeCheckDependencies:
 
     dependencies: ChangeCheckDependencies
     single_tenant: FakeGraphHandle
+    pipeline: FakePipeline
     read_tracked_instruments_graphs: list[GraphHandle]
     poll_for_amendments_graphs: list[GraphHandle]
     find_catalog_entry_calls: list[str]
@@ -748,6 +876,7 @@ def build_fake_change_check_dependencies(
     native_graph: FakeGraphHandle | None = None,
     ingestion_adapter: MetadataFetchingAdapter | None = None,
     will_reingest_error: BaseException | None = None,
+    pipeline: FakePipeline | None = None,
 ) -> FakeChangeCheckDependencies:
     """Assemble a :class:`FakeChangeCheckDependencies` around scripted tracked/poll results.
 
@@ -806,12 +935,15 @@ def build_fake_change_check_dependencies(
             instead of answering. Without it the probe answers like the real one against the
             scripted result: False when the next scripted `ReingestionOutcome` carries
             `run_id=None` (a `resume` / `already_processed` outcome), otherwise True.
+        pipeline: The stage / adapter / graph-opener doubles the sweep's pipeline runner uses
+            (issue #201). Defaults to a fresh :func:`build_fake_pipeline_dependencies`.
 
     Returns:
         A :class:`FakeChangeCheckDependencies` whose `dependencies` can be
         passed straight into `run_change_check_sweep`.
     """
     single_tenant = FakeGraphHandle()
+    fake_pipeline = pipeline if pipeline is not None else build_fake_pipeline_dependencies()
     report = (
         poll_report
         if poll_report is not None
@@ -883,13 +1015,15 @@ def build_fake_change_check_dependencies(
             *,
             adapter: IngestionAdapter,
             graph: GraphHandle,
+            single_tenant: GraphHandle,
             emitter: LogEmitter | None = None,
             run_id: str | None = None,
+            run_pipeline: PipelineRunner | None = None,
         ) -> ReingestionOutcome:
-            _ = emitter
+            _ = (emitter, single_tenant)
             trigger_reingestion_calls.append(
                 TriggerReingestionCallRecord(
-                    identifier, short_name, new_version, adapter, graph, run_id
+                    identifier, short_name, new_version, adapter, graph, run_id, run_pipeline
                 )
             )
             if scripted is not None:
@@ -918,6 +1052,7 @@ def build_fake_change_check_dependencies(
         return not (isinstance(upcoming, ReingestionOutcome) and upcoming.run_id is None)
 
     dependencies = ChangeCheckDependencies(
+        pipeline=fake_pipeline.dependencies,
         open_single_tenant=_open_single_tenant,
         open_native=open_native,
         read_tracked_instruments=_read_tracked_instruments,
@@ -930,6 +1065,7 @@ def build_fake_change_check_dependencies(
     return FakeChangeCheckDependencies(
         dependencies=dependencies,
         single_tenant=single_tenant,
+        pipeline=fake_pipeline,
         read_tracked_instruments_graphs=read_tracked_instruments_graphs,
         poll_for_amendments_graphs=poll_for_amendments_graphs,
         find_catalog_entry_calls=find_catalog_entry_calls,

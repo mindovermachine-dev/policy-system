@@ -125,6 +125,18 @@ _RECORDS_DIR = _REPO_ROOT / ".orchestrator" / "tracker" / "issue-27-exclusion-au
 _CRA_RECORDS_PATH = _RECORDS_DIR / "cra.json"
 
 _REGULATION = "CRA"
+
+
+def _only_instrument_id(native_graph: GraphHandle) -> str:
+    """The id of the single `RegulatoryInstrument` these live graphs hold (one version each)."""
+    rows = cast(
+        "list[list[object]]",
+        native_graph.query("MATCH (r:RegulatoryInstrument) RETURN r.id").result_set,
+    )
+    assert len(rows) == 1, f"expected exactly one RegulatoryInstrument, got {len(rows)}"
+    return cast("str", rows[0][0])
+
+
 _LIVE_UNIT_LIMIT = 5  # CHANGES.md row 1: Slice 2's own hard scope, no more.
 # CHANGES.md row 1: cumulative ceiling shared across Slices 2-4, zero margin.
 _MAX_CUMULATIVE_EXTRACTION_CALLS = 120
@@ -276,7 +288,7 @@ def test_live_audit_captures_first_five_cra_units(make_emitter: MakeEmitter) -> 
     baseline_count_before = _node_count(baseline_graph)
 
     adapter = CellarEliDomainMappingAdapter()
-    all_units = adapter.read_native_units(native_graph)
+    all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
     assert len(all_units) >= _LIVE_UNIT_LIMIT, (
         f"cra_native has only {len(all_units)} ExtractionUnits; need at least {_LIVE_UNIT_LIMIT}"
     )
@@ -419,7 +431,7 @@ def test_live_audit_extends_cra_sample_to_tier_a_and_b(make_emitter: MakeEmitter
     baseline_count_before = _node_count(baseline_graph)
 
     adapter = CellarEliDomainMappingAdapter()
-    all_units = adapter.read_native_units(native_graph)
+    all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
 
     cached_by_ref = _load_cached_cra_records()
     assert cached_by_ref, (
@@ -572,7 +584,7 @@ def _run_fresh_regulation_sample(
     baseline_count_before = _node_count(baseline_graph)
 
     adapter = CellarEliDomainMappingAdapter()
-    all_units = adapter.read_native_units(native_graph)
+    all_units = adapter.read_native_units(native_graph, _only_instrument_id(native_graph))
 
     sampled = module.select_sample_units(
         all_units, tier_a_size=_SLICE_4_TIER_A_SIZE, tier_b_size=_SLICE_4_TIER_B_SIZE

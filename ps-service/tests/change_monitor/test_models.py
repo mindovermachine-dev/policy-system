@@ -9,9 +9,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from ps_service.change_monitor.models import (
+    LINKED,
+    PIPELINE_STAGES,
     AmendmentFinding,
+    PipelineRunResult,
     PollReport,
     ReingestionOutcome,
+    StageSummary,
     TrackedInstrumentNode,
 )
 
@@ -65,7 +69,6 @@ def _reingestion_outcome() -> ReingestionOutcome:
         new_regulatory_instrument_id="CRA-2.0",
         run_id="run-abc",
         outcome="superseded",
-        ingest_counts=None,
     )
 
 
@@ -133,15 +136,32 @@ def test_poll_report_tuples_and_counts_are_readable() -> None:
     assert report.unconfigured_ids == ("DORA-1.0",)
 
 
-def test_reingestion_outcome_allows_null_run_id_and_counts() -> None:
+def test_reingestion_outcome_allows_null_run_id_and_no_stage_summaries() -> None:
     outcome = ReingestionOutcome(
         prior_regulatory_instrument_id="CRA-1.0",
         new_regulatory_instrument_id="CRA-2.0",
         run_id=None,
         outcome="already_processed",
-        ingest_counts=None,
     )
 
     assert outcome.run_id is None
-    assert outcome.ingest_counts is None
+    assert outcome.stage_summaries == ()
     assert outcome.outcome == "already_processed"
+
+
+def test_pipeline_stages_are_the_four_stages_in_run_order_and_linked_is_not_one_of_them() -> None:
+    """#201 S1a: the stage names reuse `_execute_catalog_stages`' strings; `LINKED` is the
+    marker value for "all stages done, succession written", not a pipeline stage.
+    """
+    assert PIPELINE_STAGES == ("ingestion", "extraction", "derivation", "merge")
+    assert LINKED == "linked"
+    assert LINKED not in PIPELINE_STAGES
+
+
+def test_pipeline_run_result_carries_stage_summaries_and_is_frozen() -> None:
+    summary = StageSummary(stage="merge", summary={"new_obligations": 2})
+    result = PipelineRunResult(stages=(summary,))
+
+    assert result.stages[0].summary == {"new_obligations": 2}
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        _mutate(result, "stages", ())

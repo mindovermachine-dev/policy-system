@@ -109,9 +109,11 @@ class _LimitedDomainMappingAdapter:
         self._inner = inner
         self._limit = limit
 
-    def read_native_units(self, graph: DomainMappingGraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: DomainMappingGraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         """Return the inner adapter's units, truncated to the first ``limit``."""
-        return self._inner.read_native_units(graph)[: self._limit]
+        return self._inner.read_native_units(graph, regulatory_instrument_id)[: self._limit]
 
 
 @dataclass(frozen=True, slots=True)

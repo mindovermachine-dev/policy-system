@@ -315,10 +315,13 @@ class InstrumentCheckOutcomeBody(BaseModel):
     produces an empty `instruments` list -- keeps the wire contract stable
     across every later slice, no repeated model edits. ``current`` /
     ``poll_failed`` / ``not_configured`` are the poll-stage buckets (Slice 2);
-    ``amendment_reingested`` covers all three of ``trigger_reingestion``'s
-    success states (Slice 3, D7); ``skipped`` is the national-transposition
-    guard (Slice 4); ``reingest_failed`` is the sixth, plan-added bucket for
-    any other re-ingest-stage failure (Slice 5, D6).
+    ``amendment_reingested`` covers every state in which ``trigger_reingestion``
+    leaves the new version fully absorbed (``fresh``, ``resume``, ``repair``,
+    ``finalize`` and ``already_processed``; the ``detail`` names which);
+    ``skipped`` is the national-transposition guard (Slice 4);
+    ``reingest_failed`` is the sixth, plan-added bucket for any other
+    re-ingest-stage failure (Slice 5, D6); its ``detail`` is an enumerated
+    reason code, never exception text.
     """
 
     model_config = ConfigDict(frozen=True)

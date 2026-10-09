@@ -74,8 +74,8 @@ def extract_roles_and_requirements(
        MERGEs it into `baseline_graph` first (via
        `persist_role_and_requirement_graph`, step 6 below) — the
        `DEFINES`/`EXPRESSES` edges originate from it.
-    2. `adapter.read_native_units(native_graph)`. An empty result is not an
-       error (Q2 fix) — the RegulatoryInstrument node is still MERGEd and a
+    2. `adapter.read_native_units(native_graph, regulatory_instrument_id)`. An empty result is
+       not an error (Q2 fix) — the RegulatoryInstrument node is still MERGEd and a
        well-formed, all-zero `ExtractionResult` is returned.
     3. Calls `_extract_candidates_for_unit` per unit, with per-unit failure
        isolation: a `DomainMapperExtractionError` for one unit is caught,
@@ -103,7 +103,7 @@ def extract_roles_and_requirements(
     regulatory_instrument_properties = _read_regulatory_instrument_properties(
         native_graph, regulatory_instrument_id
     )
-    units = adapter.read_native_units(native_graph)
+    units = adapter.read_native_units(native_graph, regulatory_instrument_id)
 
     candidates, skipped_unit_count = _extract_all_candidates(
         units, model=model, call_completion=call_completion, emitter=emitter
@@ -170,16 +170,19 @@ def _read_regulatory_instrument_properties(
 ) -> dict[str, object]:
     """PLAN_REVIEWED.md §5.2 step 1: read the RegulatoryInstrument node's properties.
 
-    `MATCH (r:RegulatoryInstrument) RETURN r`, read back as a plain
-    properties dict for `persist_role_and_requirement_graph` to MERGE into
-    `baseline_graph`.
+    `MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r` (the native graph holds every
+    ingested version of a regulation), read back as a plain properties dict for
+    `persist_role_and_requirement_graph` to MERGE into `baseline_graph`.
 
     Raises `DomainMapperExtractionError` if no RegulatoryInstrument node is found —
     `ExtractRolesAndRequirements`'s own pre-condition
     (`PersistNativeStructuralGraph` completed for this regulation) was not
     met.
     """
-    result = native_graph.query("MATCH (r:RegulatoryInstrument) RETURN r")
+    result = native_graph.query(
+        "MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r",
+        params={"rid": regulatory_instrument_id},
+    )
     rows = cast("list[list[object]]", result.result_set)
     if not rows:
         raise DomainMapperExtractionError(

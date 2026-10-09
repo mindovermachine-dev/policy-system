@@ -25,6 +25,12 @@ class DomainMappingAdapter(Protocol):
     Adapter's output shape exactly.
     """
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
-        """Return the regulation's ordered extraction units read from `graph`."""
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
+        """Return the ordered extraction units of ONE instrument version read from `graph`.
+
+        `{short}_native` holds every ingested version of a regulation side by side, so the
+        read is anchored on `regulatory_instrument_id` and reaches only that node's subtree.
+        """
         ...

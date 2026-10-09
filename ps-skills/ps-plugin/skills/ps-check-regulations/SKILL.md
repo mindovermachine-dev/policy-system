@@ -28,9 +28,10 @@ state on failure.
 **Audit:** every re-ingest the sweep actually runs is recorded in the audit
 trail as an `ingestion_run.submit` / `ingestion_run.complete` pair with
 `trigger` = `amendment_check`, the caller as actor, and the re-ingest's own
-`reingest_run_id` as the row's resource. The counts are always 0 new
-Obligations / 0 new Capabilities / 0 matched Capabilities because the sweep
-re-runs only the Ingestion stage. If the audit trail cannot record a
+`reingest_run_id` as the row's resource. The completion row carries the real
+new-Obligation, new-Capability and matched-Capability counts of the amendment's
+full re-ingest (Ingestion, Domain Mapper, Company Merge), or the failure
+`reason_code`. If the audit trail cannot record a
 re-ingest, the sweep stops with the audit error below; re-ingests already done
 earlier in that sweep stay recorded but their outcomes are not returned. Read
 the rows with `ps-list-audit-events`.
@@ -87,14 +88,14 @@ proceeding against it. From here on, "the PS Service connector" means the `ps-mc
    distinctly — never collapse the six buckets into each other or into one
    generic "checked":
 
-   | Outcome                | What it means                                                                                           | What to report                                                   |
-   | ---------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-   | `current`              | No newer consolidated version was found                                                                 | State the instrument is up to date                               |
-   | `poll_failed`          | Polling this instrument's source failed                                                                 | Report as a poll failure, not "up to date" or "no amendment"     |
-   | `not_configured`       | This instrument has no poll source configured                                                           | Report as unconfigured, distinct from a poll failure             |
-   | `amendment_reingested` | An amendment was detected and successfully re-ingested                                                  | Report the `detail` and `reingest_run_id` the tool returned      |
-   | `skipped`              | Re-ingestion was skipped (e.g. a national-transposition instrument, which this tool does not re-ingest) | Report the `detail` the tool returned, naming why it was skipped |
-   | `reingest_failed`      | An amendment was detected but re-ingestion failed                                                       | Report the `detail` the tool returned as the failure reason      |
+   | Outcome                | What it means                                                                                                                      | What to report                                                                                              |
+   | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+   | `current`              | No newer consolidated version was found                                                                                            | State the instrument is up to date                                                                          |
+   | `poll_failed`          | Polling this instrument's source failed                                                                                            | Report as a poll failure, not "up to date" or "no amendment"                                                |
+   | `not_configured`       | This instrument has no poll source configured                                                                                      | Report as unconfigured, distinct from a poll failure                                                        |
+   | `amendment_reingested` | An amendment was detected and fully absorbed (ingested, mapped and merged; the prior version is now `superseded`)                  | Report the `detail` and `reingest_run_id` the tool returned                                                 |
+   | `skipped`              | Re-ingestion was skipped (e.g. a national-transposition instrument, which this tool does not re-ingest)                            | Report the `detail` the tool returned, naming why it was skipped                                            |
+   | `reingest_failed`      | An amendment was detected but re-ingestion failed; the prior version stays `active` and the next sweep resumes at the failed stage | Report the `detail` (a reason code, e.g. `pipeline_stage_failed (stage: derivation)`) as the failure reason |
 
 4. **Output**, in this shape on success:
 

@@ -35,6 +35,7 @@ class _FakeNode:
     text: str = ""
     heading: str = ""
     order: int = 0
+    rid: str = "reg"
 
 
 class _FakeGraphQueryResult:
@@ -63,11 +64,13 @@ class _FakeGraphHandle:
         self._nodes_by_id = {node.id: node for node in self.nodes}
 
     def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
-        if q.strip().startswith("MATCH (a:ARTICLE)"):
+        if "(a:ARTICLE)" in q and "PARAGRAPH" not in q:
+            assert "{id: $rid}" in q, "ARTICLE read must be anchored on the requested instrument"
+            assert params is not None
             rows = [
                 [node.id, node.citation_ref, node.text, node.heading]
                 for node in self.nodes
-                if node.label == "ARTICLE"
+                if node.label == "ARTICLE" and node.rid == params["rid"]
             ]
             rows.sort(key=lambda row: row[0])
             return _FakeGraphQueryResult([*rows])
@@ -81,8 +84,12 @@ class _FakeGraphHandle:
                 for child_id in child_ids
             ]
             return _FakeGraphQueryResult([*rows])
-        if q.strip().startswith("MATCH (a:ANNEX)"):
-            annex_nodes = [node for node in self.nodes if node.label == "ANNEX"]
+        if "(a:ANNEX)" in q:
+            assert "{id: $rid}" in q, "ANNEX read must be anchored on the requested instrument"
+            assert params is not None
+            annex_nodes = [
+                node for node in self.nodes if node.label == "ANNEX" and node.rid == params["rid"]
+            ]
             annex_nodes.sort(key=lambda node: node.order)
             rows = [[node.citation_ref, node.text] for node in annex_nodes]
             return _FakeGraphQueryResult([*rows])
@@ -107,7 +114,7 @@ def test_reads_one_unit_per_paragraph_when_article_has_them() -> None:
         article_children={"reg#art_1": ["reg#001.001", "reg#001.002"]},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert units == (
         ExtractionUnit(
@@ -142,7 +149,7 @@ def test_reads_one_unit_for_whole_article_when_it_has_no_paragraphs() -> None:
         article_children={},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert units == (
         ExtractionUnit(
@@ -173,7 +180,7 @@ def test_document_order_is_by_numeric_article_and_paragraph_number_not_id_string
         article_children={"reg#art_1": ["reg#001.001", "reg#001.002"]},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert [unit.citation_ref for unit in units] == [
         "Art. 1(1)",
@@ -200,7 +207,7 @@ def test_annex_units_ordered_by_native_order_after_articles_and_paragraphs() -> 
         article_children={},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert [unit.citation_ref for unit in units] == ["Art. 2", "Annex IV", "Annex I"]
 
@@ -213,7 +220,7 @@ def test_reads_one_unit_for_whole_annex_node() -> None:
         article_children={},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert units == (
         ExtractionUnit(
@@ -245,7 +252,7 @@ def test_no_annex_nodes_returns_only_article_paragraph_units() -> None:
         article_children={"reg#art_1": ["reg#001.001", "reg#001.002"]},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     assert units == (
         ExtractionUnit(
@@ -274,7 +281,7 @@ def test_raises_on_malformed_annex_citation_ref() -> None:
     )
 
     with pytest.raises(DomainMapperExtractionError, match="unexpected Annex citation_ref shape"):
-        _adapter().read_native_units(graph)
+        _adapter().read_native_units(graph, "reg")
 
 
 def test_raises_on_digit_only_annex_citation_ref() -> None:
@@ -290,7 +297,7 @@ def test_raises_on_digit_only_annex_citation_ref() -> None:
     )
 
     with pytest.raises(DomainMapperExtractionError, match="unexpected Annex citation_ref shape"):
-        _adapter().read_native_units(graph)
+        _adapter().read_native_units(graph, "reg")
 
 
 def test_recital_chapter_section_nodes_are_ignored_but_annex_is_read() -> None:
@@ -310,7 +317,7 @@ def test_recital_chapter_section_nodes_are_ignored_but_annex_is_read() -> None:
         article_children={},
     )
 
-    units = _adapter().read_native_units(graph)
+    units = _adapter().read_native_units(graph, "reg")
 
     ignored_keywords = ("Recital", "Chapter", "Section")
     citation_refs = [unit.citation_ref for unit in units]
@@ -318,3 +325,23 @@ def test_recital_chapter_section_nodes_are_ignored_but_annex_is_read() -> None:
     assert "Art. 1" in citation_refs
     assert "Annex I" in citation_refs
     assert not any(keyword in ref for ref in citation_refs for keyword in ignored_keywords)
+
+
+def test_reads_only_the_requested_instruments_subtree_when_two_versions_share_the_graph() -> None:
+    """A re-ingested amendment shares `{short}_native` with its prior version (#201)."""
+    graph = _FakeGraphHandle(
+        nodes=[
+            _FakeNode("ARTICLE", "v1#art_1", "Art. 1", text="Prior text.", heading="H", rid="v1"),
+            _FakeNode("ANNEX", "v1#anx_I", "Annex I", text="Prior annex.", rid="v1"),
+            _FakeNode("ARTICLE", "v2#art_1", "Art. 1", text="New text.", heading="H", rid="v2"),
+            _FakeNode("ARTICLE", "v2#art_2", "Art. 2", text="Added.", heading="H2", rid="v2"),
+        ],
+        article_children={},
+    )
+
+    units = _adapter().read_native_units(graph, "v2")
+
+    assert [(unit.citation_ref, unit.text) for unit in units] == [
+        ("Art. 1", "New text."),
+        ("Art. 2", "Added."),
+    ]

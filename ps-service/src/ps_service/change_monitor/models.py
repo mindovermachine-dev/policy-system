@@ -11,12 +11,11 @@ Pydantic. `ConsolidatedVersionInfo` deliberately lives in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import date
-
-    from ps_service.ingestion.models import ReachabilityCount
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,17 +81,62 @@ class PollReport:
     unconfigured_ids: tuple[str, ...]
 
 
+PIPELINE_STAGES: tuple[str, ...] = ("ingestion", "extraction", "derivation", "merge")
+"""The re-ingest pipeline stage names, in run order (the strings
+`api.ingestion_orchestration._execute_catalog_stages` uses)."""
+
+LINKED = "linked"
+"""The `ReingestProgress` marker value meaning every stage finished and the
+succession is being (or has been) written. Not a pipeline stage."""
+
+
 @dataclass(frozen=True, slots=True)
 class ReingestionOutcome:
     """The outcome of one `trigger_reingestion` call.
 
-    `run_id` is the re-ingest's `IngestResult.run_id` on the `fresh` path and
-    `None` on the `resume` / `already_processed` paths (no `IngestResult` in
-    hand). `ingest_counts` is `None` whenever no re-ingest ran.
+    `state` is the classification the call acted on (`fresh`, `resume`, `repair`,
+    `finalize` or `already_processed`; see `trigger.classify_reingestion`). `outcome` is
+    `superseded` when the succession is now complete (written by this call), else
+    `already_processed`. `run_id` is the pipeline run's id when at least one stage ran in this
+    call and `None` otherwise (a link-only or `already_processed` call). `stage_summaries` are
+    the stages this call ran, in order (empty when none ran); the audit completion row takes
+    its Obligation / Capability counts from the `merge` entry.
     """
 
     prior_regulatory_instrument_id: str
     new_regulatory_instrument_id: str
     run_id: str | None
     outcome: Literal["superseded", "already_processed"]
-    ingest_counts: dict[str, ReachabilityCount] | None
+    state: Literal["fresh", "resume", "repair", "already_processed", "finalize"] = "fresh"
+    stage_summaries: tuple[StageSummary, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class StageSummary:
+    """One completed pipeline stage and the small integer summary it produced."""
+
+    stage: str
+    summary: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineRunResult:
+    """The stages one `PipelineRunner` call ran, in run order."""
+
+    stages: tuple[StageSummary, ...]
+
+
+class PipelineRunner(Protocol):
+    """Runs a subset of the re-ingest stages (built by the api layer, injected here).
+
+    `change_monitor` must not import `ps_service.api`, so the shared stage
+    sequence is handed to `trigger_reingestion` as this callable.
+    `on_stage_complete(stage)` is invoked after each stage returns, never for a
+    stage that raised.
+    """
+
+    def __call__(
+        self, *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
+    ) -> PipelineRunResult:
+        """Run `stages` in order and return their summaries."""
+        ...

@@ -314,9 +314,9 @@ _EDGE_READ_RE = re.compile(
     r"^MATCH \(s:(?P<source_label>\w+)\)-\[:(?P<rel>\w+)\]->\(t:(?P<target_label>\w+)\) "
     r"RETURN s\.id, t\.id$"
 )
-_RI_PLAIN_READ_QUERY = "MATCH (r:RegulatoryInstrument) RETURN r"
+_RI_SCOPED_READ_QUERY = "MATCH (r:RegulatoryInstrument {id: $rid}) RETURN r"
 _DERIVATION_READ_QUERY = (
-    "MATCH (req:Requirement) "
+    "MATCH (:RegulatoryInstrument {id: $rid})-[:EXPRESSES]->(req:Requirement) "
     "OPTIONAL MATCH (rl:Role {id: req.role_id}) "
     "RETURN req.id, req.text, req.role_id, rl.id, rl.name"
 )
@@ -346,11 +346,9 @@ class _MiniGraph:
 
     def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
         params = params or {}
-        if q == _RI_PLAIN_READ_QUERY:
-            table = self._nodes.get("RegulatoryInstrument", {})
-            if not table:
-                return _FakeQueryResult([])
-            return _FakeQueryResult([[_FakeGraphNode(dict(next(iter(table.values()))))]])
+        if q == _RI_SCOPED_READ_QUERY:
+            row = self._nodes.get("RegulatoryInstrument", {}).get(str(params["rid"]))
+            return _FakeQueryResult([] if row is None else [[_FakeGraphNode(dict(row))]])
         if q == _DERIVATION_READ_QUERY:
             return self._read_requirements_by_role()
         if "MERGED_INTO" in q or "MergedObligation" in q:
@@ -617,7 +615,9 @@ class _RecordingDomainMappingAdapter:
         self._stage_order = stage_order
         self._error = error
 
-    def read_native_units(self, graph: object) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: object, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         _ = graph
         self._stage_order.append("extraction")
         if self._error is not None:

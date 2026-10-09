@@ -518,8 +518,12 @@ class _FakeAdapter:
 
     def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
         self._units = units
+        self.requested_instrument_ids: list[str] = []
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
+        self.requested_instrument_ids.append(regulatory_instrument_id)
         return self._units
 
 
@@ -1083,6 +1087,82 @@ def test_read_regulatory_instrument_properties_includes_instrument_type() -> Non
     result = _read_regulatory_instrument_properties(native_graph, "NIS2-1.0")
 
     assert result["instrument_type"] == "directive"
+
+
+class _TwoVersionNativeGraph:
+    """A native graph holding two `RegulatoryInstrument` nodes (a re-ingested amendment).
+
+    A query naming `{id: $rid}` answers with exactly that node; the unscoped
+    `MATCH (r:RegulatoryInstrument) RETURN r` answers with the FIRST node, which is the
+    prior version -- the leak this scoping closes.
+    """
+
+    def __init__(self, nodes: dict[str, dict[str, object]]) -> None:
+        self._nodes = nodes
+        self.queries: list[tuple[str, dict[str, object] | None]] = []
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        self.queries.append((q, params))
+        if "{id: $rid}" in q:
+            assert params is not None
+            rid = params["rid"]
+            assert isinstance(rid, str)
+            found = self._nodes.get(rid)
+            return _FakeQueryResult(
+                [] if found is None else [[_FakeRegulatoryInstrumentNode(found)]]
+            )
+        first = next(iter(self._nodes.values()))
+        return _FakeQueryResult([[_FakeRegulatoryInstrumentNode(first)]])
+
+
+def test_read_regulatory_instrument_properties_reads_only_the_requested_versions_node() -> None:
+    native_graph = _TwoVersionNativeGraph(
+        {
+            "CRA-1.0": {"id": "CRA-1.0", "version": "1.0"},
+            "CRA-2.0": {"id": "CRA-2.0", "version": "2.0"},
+        }
+    )
+
+    result = _read_regulatory_instrument_properties(native_graph, "CRA-2.0")
+
+    assert result == {"id": "CRA-2.0", "version": "2.0"}
+
+
+def test_read_regulatory_instrument_properties_raises_when_the_requested_version_is_absent() -> (
+    None
+):
+    native_graph = _TwoVersionNativeGraph({"CRA-1.0": {"id": "CRA-1.0"}})
+
+    with pytest.raises(DomainMapperExtractionError, match=r"CRA-2\.0"):
+        _read_regulatory_instrument_properties(native_graph, "CRA-2.0")
+
+
+def test_extract_reads_only_the_requested_versions_instrument_node_and_subtree(
+    make_emitter: MakeEmitter,
+) -> None:
+    emitter, _ = make_emitter()
+    native_graph = _TwoVersionNativeGraph(
+        {
+            "CRA-1.0": {"id": "CRA-1.0", "version": "1.0"},
+            "CRA-2.0": {"id": "CRA-2.0", "version": "2.0"},
+        }
+    )
+    baseline_graph = _FakeBaselineGraph()
+    adapter = _FakeAdapter(())
+
+    extract_roles_and_requirements(
+        "CRA-2.0",
+        adapter=adapter,
+        native_graph=native_graph,
+        baseline_graph=baseline_graph,
+        model="test-model",
+        emitter=emitter,
+    )
+
+    assert adapter.requested_instrument_ids == ["CRA-2.0"]
+    written = repr(baseline_graph.calls)
+    assert "2.0" in written  # the requested version's properties reached the baseline graph
+    assert "1.0" not in written  # and the prior version's did not
 
 
 # --- _is_definitions_unit (issue #26, AC-BI-002) ---------------------------

@@ -48,6 +48,7 @@ from ps_service.change_monitor.falkordb_client import (
     native_graph_name,
     select_graph,
 )
+from ps_service.change_monitor.models import PipelineRunResult, StageSummary
 from ps_service.change_monitor.trigger import trigger_reingestion
 from ps_service.config import load_config
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
@@ -55,7 +56,10 @@ from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import EmitterConfig, LogEmitter
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ps_service.change_monitor.falkordb_client import GraphHandle
+    from ps_service.change_monitor.models import PipelineRunner
 
 pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
 
@@ -71,6 +75,39 @@ _SEED_VERSION = "1.0"
 _NEW_VERSION = "2.0"
 _SEED_ID = f"{_CAPSTONE_SHORT}-{_SEED_VERSION}"
 _NEW_ID = f"{_CAPSTONE_SHORT}-{_NEW_VERSION}"
+
+
+def _ingestion_only_runner(
+    adapter: CellarEliAdapter, graph: GraphHandle, emitter: LogEmitter
+) -> PipelineRunner:
+    """A `PipelineRunner` that runs the REAL Ingestion stage and no-ops the later stages.
+
+    This capstone proves the live Cellar ingest of a consolidated expression and the
+    succession write. Domain Mapper / Company Merge need an LLM and are covered by their own
+    tests; each is reported complete without running so `trigger_reingestion`'s bookkeeping
+    (markers, succession last) is exercised unchanged.
+    """
+
+    def _run(
+        *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
+    ) -> PipelineRunResult:
+        done: list[StageSummary] = []
+        for stage in stages:
+            if stage == "ingestion":
+                ingest_regulatory_instrument(
+                    _LATEST_CONSOLIDATED_CELEX,
+                    _CAPSTONE_SHORT,
+                    version=_NEW_VERSION,
+                    adapter=adapter,
+                    graph=graph,
+                    emitter=emitter,
+                    run_id=run_id,
+                )
+            done.append(StageSummary(stage, {}))
+            on_stage_complete(stage)
+        return PipelineRunResult(stages=tuple(done))
+
+    return _run
 
 
 def _scalar(graph: GraphHandle, query: str, params: dict[str, object] | None = None) -> object:
@@ -194,7 +231,9 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             _NEW_VERSION,
             adapter=adapter,
             graph=graph,
+            single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
             emitter=emitter,
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter),
         )
 
         assert outcome.outcome == "superseded"
@@ -248,7 +287,9 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             _NEW_VERSION,
             adapter=adapter,
             graph=graph,
+            single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
             emitter=emitter,
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter),
         )
 
         assert rerun.outcome == "already_processed"

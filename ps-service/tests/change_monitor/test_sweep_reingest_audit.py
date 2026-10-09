@@ -1,26 +1,28 @@
-"""AC-BI-016 / AC-BI-007: the sweep's audited counts equal the graph delta of an amended re-ingest.
+"""AC-BI-011: the sweep's audited counts equal the graph delta of an amended re-ingest.
 
-Runs the REAL `will_reingest` / `trigger_reingestion` (and through them the real Ingestion
-pipeline) over a scripted native graph, with a single-tenant graph double that counts the
-Obligation and Capability nodes written to it. The delta observed in that graph must equal the
-counts recorded on the `ingestion_run.complete` row.
+Runs the REAL `will_reingest` / `trigger_reingestion` / `succession` over a stateful native
+graph (`LedgerNativeGraph`) with the hand-written pipeline stage doubles, and a single-tenant
+graph double that counts the Obligation and Capability nodes written to it. The delta observed
+in that graph must equal the counts recorded on the `ingestion_run.complete` row.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import functools
 from datetime import date
 from typing import TYPE_CHECKING
 
 from api._audit_fakes import InMemoryAuditStore
-from api._fakes import build_fake_change_check_dependencies
+from api._fakes import (
+    LedgerStageRecorder,
+    build_fake_change_check_dependencies,
+    build_fake_pipeline_dependencies,
+)
 
-from change_monitor._fakes import FakeAdapter, FakeGraph, FakeQueryResult
+from change_monitor._fakes import FakeAdapter, FakeQueryResult, LedgerNativeGraph
 from change_monitor.test_trigger import (
     _IDENTIFIER,  # pyright: ignore[reportPrivateUsage]  -- reuse the trigger tests' fixtures verbatim
     _PRIOR_ID,  # pyright: ignore[reportPrivateUsage]  -- same reuse
-    _ingest_completion_results,  # pyright: ignore[reportPrivateUsage]  -- same reuse
     _structure,  # pyright: ignore[reportPrivateUsage]  -- same reuse
 )
 from ps_service.api.catalog import CatalogEntry
@@ -39,7 +41,12 @@ _CONFIG = ServiceConfig(
     port=8000,
     graceful_shutdown_seconds=10,
     logging_dir=None,
+    llm_interface_model="azure/gpt-4o",
+    llm_interface_embed_model="azure/text-embedding-3-large",
+    company_merge_similarity_threshold=0.83,
 )
+_NEW_VERSION = "32024R2847C01"
+_NEW_ID = f"CRA-{_NEW_VERSION}"
 
 
 class _CountingSingleTenantGraph:
@@ -52,6 +59,8 @@ class _CountingSingleTenantGraph:
     def query(self, q: str, params: dict[str, object] | None = None) -> FakeQueryResult:
         del params
         self.queries.append(q)
+        if "SET prior.status = 'superseded'" in q:  # the succession mirror write
+            return FakeQueryResult([[_PRIOR_ID]])
         for label in self.nodes:
             if f"count(n:{label})" in q:
                 return FakeQueryResult([[self.nodes[label]]])
@@ -66,27 +75,30 @@ def test_amendment_reingest_counts_equal_the_obligation_and_capability_delta_in_
     emitter, _ = make_emitter()
     single_tenant = _CountingSingleTenantGraph()
     before = dict(single_tenant.nodes)
+    native = LedgerNativeGraph()
+    native.seed_instrument(_PRIOR_ID)
+    pipeline = build_fake_pipeline_dependencies(
+        rid=_NEW_ID,
+        merge_new_obligations=2,
+        merge_new_capabilities=1,
+        merge_matched_capabilities=3,
+        merge_writes_nodes=True,
+        recorder=LedgerStageRecorder(native.events, lambda _call: native.seed_instrument(_NEW_ID)),
+    )
     node = TrackedInstrumentNode(
-        regulatory_instrument_id="CRA-1.0",
+        regulatory_instrument_id=_PRIOR_ID,
         celex=_IDENTIFIER,
         instrument_type="regulation",
         effective_date="2024-01-01",
     )
     finding = AmendmentFinding(
-        regulatory_instrument_id="CRA-1.0",
+        regulatory_instrument_id=_PRIOR_ID,
         instrument_type="regulation",
         baseline_reference="2024-01-01",
-        detected_consolidated_celex="32024R2847C01",
+        detected_consolidated_celex=_NEW_VERSION,
         detected_consolidation_date=date(2025, 1, 1),
         reason="newer_consolidation",
     )
-    # `will_reingest` and `trigger_reingestion` each run the 3-read preflight on the fresh state.
-    preflight = [
-        FakeQueryResult([]),
-        FakeQueryResult([]),
-        FakeQueryResult([[_PRIOR_ID, "regulation"]]),
-    ]
-    native = FakeGraph([*preflight, *preflight, *_ingest_completion_results()])
     fake = build_fake_change_check_dependencies(
         tracked=(node,),
         poll_report=PollReport(
@@ -98,13 +110,14 @@ def test_amendment_reingest_counts_equal_the_obligation_and_capability_delta_in_
             )
         },
         reingestion_result=None,
+        pipeline=pipeline,
     )
     deps = dataclasses.replace(
         fake.dependencies,
         open_single_tenant=lambda _config: single_tenant,  # pyright: ignore[reportUnknownLambdaType]
         open_native=lambda _config, _short_name: native,  # pyright: ignore[reportUnknownLambdaType]
         default_adapter=lambda: FakeAdapter({_IDENTIFIER: _structure()}),
-        trigger_reingestion=functools.partial(trigger_reingestion, emitter=emitter),  # pyright: ignore[reportArgumentType]
+        trigger_reingestion=trigger_reingestion,  # pyright: ignore[reportArgumentType]
         will_reingest=will_reingest,  # pyright: ignore[reportArgumentType]
     )
     store = InMemoryAuditStore()
@@ -118,15 +131,15 @@ def test_amendment_reingest_counts_equal_the_obligation_and_capability_delta_in_
     )
 
     assert [(o.outcome, o.detail) for o in result.instruments] == [
-        ("amendment_reingested", "CRA-32024R2847C01 (superseded)")
+        ("amendment_reingested", f"{_NEW_ID} (superseded, fresh)")
     ]
     delta = {label: single_tenant.nodes[label] - before[label] for label in before}
     complete = store.rows[1].details
-    assert delta == {"Obligation": 0, "Capability": 0}
+    assert delta == {"Obligation": 2, "Capability": 1}
     assert complete["new_obligations"] == delta["Obligation"]
     assert complete["new_capabilities"] == delta["Capability"]
-    assert complete["matched_capabilities"] == 0
-    assert isinstance(native, FakeGraph) and native.writes  # the Ingestion stage did write natively
+    assert complete["matched_capabilities"] == 3
+    assert native.status_of(_PRIOR_ID) == "superseded"
     assert (
         result.instruments[0].reingest_run_id
         == store.rows[0].resource_id

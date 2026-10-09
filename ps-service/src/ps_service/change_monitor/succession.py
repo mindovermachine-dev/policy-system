@@ -1,6 +1,6 @@
 """`SUPERSEDED_BY` + status succession bookkeeping against a `{short}_native` graph.
 
-The five small graph operations `trigger_reingestion` composes
+The small graph operations `trigger_reingestion` composes
 (PLAN_REVIEWED.md §1.4, §2 "succession.py"). Every read and write goes
 through the local `_execute_query`, an exact copy of
 `ps_service.ingestion.graph_writer._execute_query`: a
@@ -9,9 +9,13 @@ FalkorDB is marked unhealthy in `ps_service.dependency_health`, self-healing
 on the next successful call.
 
 Atomicity (PLAN_REVIEWED.md §0, flaw 2): `link_and_supersede` is a *single*
-fused Cypher statement -- the `SUPERSEDED_BY` edge and `prior.status =
+fused Cypher statement -- the `SUPERSEDED_BY` edge, `absorbed` and `prior.status =
 'superseded'` are written together, so no edge-without-status sub-state can
-ever exist. `find_prior_instrument` uses the deterministic lookup that stays
+ever exist. The whole succession is split into three idempotent writes,
+in order: `link_and_supersede` (native: edge, `absorbed`, status, marker `linked`),
+`supersede_in_single_tenant` (`policy_system`: edge + status), `clear_marker`. A crash
+between them leaves the `linked` marker, which classifies as `finalize` and resumes
+at step 2. `find_prior_instrument` uses the deterministic lookup that stays
 unambiguous even mid-crash-window (it excludes the new node and any node
 already superseded into it).
 
@@ -23,6 +27,7 @@ identifiers, never externally sourced, so no allow-list check applies
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import redis.exceptions
@@ -60,11 +65,42 @@ _SET_VERSION_QUERY = (
     f"MATCH (n:{_REGULATORY_INSTRUMENT} {{id: $new_id}}) SET n.version = $new_version"
 )
 
+# Operational bookkeeping label (see domain_schema.vocabulary_exceptions.OPERATIONAL_LABELS):
+# one marker node per in-flight re-ingest, holding the last completed stage.
+_REINGEST_PROGRESS = "ReingestProgress"
+
+# The 'linked' literal below equals models.LINKED. It is inlined, not interpolated: an f-string
+# placeholder in Cypher counts as a dynamic site in the vocabulary scan's pinned totals.
 _FUSED_SUCCESSION_QUERY = f"""\
 MATCH (prior:{_REGULATORY_INSTRUMENT} {{id: $prior_id}}),
       (new:{_REGULATORY_INSTRUMENT} {{id: $new_id}})
+MERGE (prior)-[e:{_SUPERSEDED_BY}]->(new)
+SET e.absorbed = true, prior.status = 'superseded'
+WITH new
+MERGE (m:{_REINGEST_PROGRESS} {{id: $new_id}})
+SET m.stage = 'linked'"""
+
+_REINGESTION_FACTS_QUERY = f"""\
+MATCH (n:{_REGULATORY_INSTRUMENT} {{id: $new_id}})
+OPTIONAL MATCH (p:{_REGULATORY_INSTRUMENT})-[e:{_SUPERSEDED_BY}]->(n)
+OPTIONAL MATCH (m:{_REINGEST_PROGRESS} {{id: $new_id}})
+RETURN p.id AS prior_id, p.instrument_type AS prior_instrument_type,
+       p.status AS prior_status, e.absorbed AS absorbed, m.stage AS stage"""
+
+_MARK_STAGE_QUERY = f"""\
+MERGE (m:{_REINGEST_PROGRESS} {{id: $new_id}})
+SET m.stage = $stage"""
+
+# The `policy_system` side of the succession (D2). Runs on the single-tenant handle:
+# the merged graph is what the tracked set (`status = 'active'`) and `ps-list-ingested` read.
+_SINGLE_TENANT_SUPERSEDE_QUERY = f"""\
+MATCH (prior:{_REGULATORY_INSTRUMENT} {{id: $prior_id}}),
+      (new:{_REGULATORY_INSTRUMENT} {{id: $new_id}})
 MERGE (prior)-[:{_SUPERSEDED_BY}]->(new)
-SET prior.status = 'superseded'"""
+SET prior.status = 'superseded'
+RETURN prior.id AS prior_id"""
+
+_CLEAR_MARKER_QUERY = f"MATCH (m:{_REINGEST_PROGRESS} {{id: $new_id}}) DELETE m"
 
 
 def _execute_query(
@@ -148,12 +184,108 @@ def set_new_version_property(graph: GraphHandle, new_id: str, new_version: str) 
     _execute_query(graph, _SET_VERSION_QUERY, {"new_id": new_id, "new_version": new_version})
 
 
-def link_and_supersede(graph: GraphHandle, prior_id: str, new_id: str) -> None:
-    """Write the `SUPERSEDED_BY` edge and `prior.status='superseded'` in one statement.
+@dataclass(frozen=True, slots=True)
+class ReingestionFacts:
+    """What the `{short}_native` graph says about one new-version id (read-only, one query).
 
-    THE fused succession write (PLAN_REVIEWED.md §0, flaw 2): edge + status
-    change together, so no edge-without-status window can exist. `MERGE` +
-    `SET` are both idempotent, so re-running against an already-superseded
-    prior is a clean no-op.
+    `node_exists` is false when the new `RegulatoryInstrument` node is absent (zero
+    rows). `prior_id` / `prior_instrument_type` / `prior_status` describe the node
+    holding a `SUPERSEDED_BY` edge into the new one (all `None` without an edge);
+    `absorbed` is that edge's property (`None` when unset, i.e. a legacy
+    ingestion-only link). `marker_stage` is the `ReingestProgress` marker's last
+    completed stage, or `None`.
+    """
+
+    node_exists: bool
+    prior_id: str | None
+    prior_instrument_type: str | None
+    prior_status: str | None
+    absorbed: bool | None
+    marker_stage: str | None
+
+
+def _optional_str(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def read_reingestion_facts(graph: GraphHandle, new_id: str) -> ReingestionFacts:
+    """Read the node / incoming-edge / marker facts for `new_id` in one query.
+
+    Raises `ChangeMonitorStateError` when more than one node is superseded into
+    `new_id` (a genuinely inconsistent graph).
+    """
+    rows = _rows(_execute_query(graph, _REINGESTION_FACTS_QUERY, {"new_id": new_id}))
+    if not rows:
+        return ReingestionFacts(
+            node_exists=False,
+            prior_id=None,
+            prior_instrument_type=None,
+            prior_status=None,
+            absorbed=None,
+            marker_stage=None,
+        )
+    priors = [row for row in rows if row[0] is not None]
+    if len(priors) > 1:
+        ids = ", ".join(str(row[0]) for row in priors)
+        raise ChangeMonitorStateError(f"multiple nodes superseded into {new_id!r}: {ids}")
+    row = priors[0] if priors else rows[0]
+    prior_id, prior_type, prior_status, absorbed, stage = row
+    return ReingestionFacts(
+        node_exists=True,
+        prior_id=_optional_str(prior_id),
+        prior_instrument_type=_optional_str(prior_type),
+        prior_status=_optional_str(prior_status),
+        absorbed=None if absorbed is None else bool(absorbed),
+        marker_stage=_optional_str(stage),
+    )
+
+
+def mark_stage_complete(graph: GraphHandle, new_id: str, stage: str) -> None:
+    """Upsert the `ReingestProgress` marker for `new_id` to `stage` (idempotent).
+
+    Called only after `stage` returned, so the marker is a durable "this stage is
+    done" fact in the store the succession lives in. Operational bookkeeping, not
+    UC-4 content; deleted when the succession completes.
+    """
+    _execute_query(graph, _MARK_STAGE_QUERY, {"new_id": new_id, "stage": stage})
+
+
+def clear_marker(graph: GraphHandle, new_id: str) -> None:
+    """Delete the `ReingestProgress` marker for `new_id` (a clean no-op when absent)."""
+    _execute_query(graph, _CLEAR_MARKER_QUERY, {"new_id": new_id})
+
+
+def link_and_supersede(graph: GraphHandle, prior_id: str, new_id: str) -> None:
+    """Write the native-graph succession in one statement: edge, `absorbed`, status, marker.
+
+    THE fused succession write (PLAN_REVIEWED.md §0, flaw 2): the `SUPERSEDED_BY`
+    edge, `e.absorbed = true`, `prior.status = 'superseded'` and the
+    `ReingestProgress` marker moved to `linked` land together, so no
+    edge-without-status or edge-without-absorbed window can exist. The marker
+    is deleted afterwards by :func:`clear_marker`. `MERGE` + `SET` are idempotent,
+    so re-running is a clean no-op.
     """
     _execute_query(graph, _FUSED_SUCCESSION_QUERY, {"prior_id": prior_id, "new_id": new_id})
+
+
+def supersede_in_single_tenant(single_tenant: GraphHandle, prior_id: str, new_id: str) -> None:
+    """Write the succession into the merged `policy_system` graph (step 2 of 3, D2).
+
+    `MERGE (prior)-[:SUPERSEDED_BY]->(new)` and `prior.status = 'superseded'` on the
+    single-tenant handle, so the tracked set (`status = 'active'`) stops revisiting the prior and
+    `ps-list-ingested` shows `superseded_by`. Idempotent. Zero matched rows means the prior or
+    the new node is missing from `policy_system` (Company Merge did not land it), an
+    inconsistent graph: raises `ChangeMonitorStateError` and writes nothing, leaving the native
+    `linked` marker in place so the next sweep retries.
+    """
+    rows = _rows(
+        _execute_query(
+            single_tenant,
+            _SINGLE_TENANT_SUPERSEDE_QUERY,
+            {"prior_id": prior_id, "new_id": new_id},
+        )
+    )
+    if not rows:
+        raise ChangeMonitorStateError(
+            f"policy_system has no {prior_id!r} and {new_id!r} pair to link with SUPERSEDED_BY"
+        )

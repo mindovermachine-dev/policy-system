@@ -258,7 +258,7 @@ Within `external`, a second axis — `instrument_type` — records what kind of 
 | `TRANSPOSES` (inbound) | RegulatoryInstrument | 1 : 0..* | — | See [RegulatoryInstrument → TRANSPOSES](#regulatory-instrument). |
 | `DEFINES` (outbound) | Role | 1 : 0..* | `source_ref` (string, required) | The article/section where this RegulatoryInstrument defines this Role. Lives on the edge, not on Role, because the defining act is specific to this RegulatoryInstrument–Role pair. |
 | `EXPRESSES` (outbound) | Requirement | 1 : 0..* | `source_ref` (string, required) | Article/section where the instrument expresses the Requirement; lives on the edge. |
-| `SUPERSEDED_BY` (outbound) | RegulatoryInstrument | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession. |
+| `SUPERSEDED_BY` (outbound) | RegulatoryInstrument | 0..1 : 0..1 | — | Self-relationship tracking regulatory version succession; the native-graph edge also carries an operational boolean `absorbed` (see change_monitor.succession), not part of the domain vocabulary. |
 | `TRANSPOSES` (outbound) | RegulatoryInstrument | 0..* : 1 | — | A national_transposition node links to the single directive it implements. |
 
 <!-- END GENERATED relationships:RegulatoryInstrument -->

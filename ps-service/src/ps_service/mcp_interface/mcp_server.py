@@ -797,7 +797,7 @@ def _sanitize_pipeline_graph_opens(dependencies: PipelineDependencies) -> Pipeli
 def _sanitize_change_check_graph_opens(
     dependencies: ChangeCheckDependencies,
 ) -> ChangeCheckDependencies:
-    """Wrap `open_single_tenant`/`open_native` (D-SANITIZE-UNEXPECTED).
+    """Wrap `open_single_tenant`/`open_native` and the pipeline's openers (D-SANITIZE-UNEXPECTED).
 
     `run_change_check_sweep` calls `dependencies.open_single_tenant`
     directly, with no try/except of its own, and `_reingest_one` calls
@@ -811,6 +811,7 @@ def _sanitize_change_check_graph_opens(
         dependencies,
         open_single_tenant=_sanitize_graph_open(dependencies.open_single_tenant),
         open_native=_sanitize_graph_open(dependencies.open_native),
+        pipeline=_sanitize_pipeline_graph_opens(dependencies.pipeline),
     )
 
 
@@ -1433,10 +1434,11 @@ def check_regulations() -> dict[str, object] | str:
 
     Audit (issue #195): every re-ingest the sweep actually runs writes an
     `ingestion_run.submit` row (`trigger='amendment_check'`, before the
-    re-ingest) and an `ingestion_run.complete` row (instrument id; counts
-    0/0/0 because the sweep re-runs only the Ingestion stage), keyed by the
-    re-ingest's own run id (the `reingest_run_id` in the result) and
-    attributed to the caller. Read them with `list-audit-events`.
+    re-ingest) and an `ingestion_run.complete` row (instrument id and the
+    real Obligation / Capability counts from the Company Merge result, or the
+    failure `reason_code`), keyed by the re-ingest's own run id (the
+    `reingest_run_id` in the result) and attributed to the caller. Read them with
+    `list-audit-events`.
     """
     config = load_config()
     principal = _resolve_principal(config)

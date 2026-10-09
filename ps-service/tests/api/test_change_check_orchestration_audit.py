@@ -24,11 +24,12 @@ from ps_service.api.change_check_orchestration import (
     run_change_check_sweep,
 )
 from ps_service.audit import AuditContext, AuditPersistenceError, AuditTrailUnavailableError
-from ps_service.change_monitor.errors import ChangeMonitorStateError
+from ps_service.change_monitor.errors import ChangeMonitorStateError, SuccessionPersistenceError
 from ps_service.change_monitor.models import (
     AmendmentFinding,
     PollReport,
     ReingestionOutcome,
+    StageSummary,
     TrackedInstrumentNode,
 )
 
@@ -72,13 +73,15 @@ def _finding(instrument_id: str) -> AmendmentFinding:
     )
 
 
-def _outcome(run_id: str | None = "ingest-run-1") -> ReingestionOutcome:
+def _outcome(
+    run_id: str | None = "ingest-run-1", *, stages: tuple[StageSummary, ...] = ()
+) -> ReingestionOutcome:
     return ReingestionOutcome(
         prior_regulatory_instrument_id="CRA-0.9",
         new_regulatory_instrument_id="CRA-32024R2847C01",
         run_id=run_id,
         outcome="superseded",
-        ingest_counts={},
+        stage_summaries=stages,
     )
 
 
@@ -207,13 +210,22 @@ def test_reingest_submit_row_carries_base_celex_short_name_and_trigger_amendment
     }
 
 
-def test_reingest_complete_row_carries_new_instrument_id_and_zero_counts(
+def test_reingest_complete_row_carries_the_merge_result_counts(
     app_config: ServiceConfig, make_emitter: MakeEmitter
 ) -> None:
     emitter, _ = make_emitter()
     store = InMemoryAuditStore()
+    merged = _outcome(
+        stages=(
+            StageSummary("extraction", {"roles": 1}),
+            StageSummary(
+                "merge",
+                {"new_obligations": 2, "new_capabilities": 1, "matched_capabilities": 3},
+            ),
+        )
+    )
 
-    _sweep(app_config, _fake(results=[_outcome()], tracked=(_node("CRA-1"),)), store, emitter)
+    _sweep(app_config, _fake(results=[merged], tracked=(_node("CRA-1"),)), store, emitter)
 
     complete = store.rows[1]
     assert (complete.action, complete.outcome) == ("ingestion_run.complete", "applied")
@@ -223,10 +235,28 @@ def test_reingest_complete_row_carries_new_instrument_id_and_zero_counts(
         "trigger": "amendment_check",
         "regulatory_instrument_id": "CRA-32024R2847C01",
         "outcome": "fresh",
-        "new_obligations": 0,
-        "new_capabilities": 0,
-        "matched_capabilities": 0,
+        "new_obligations": 2,
+        "new_capabilities": 1,
+        "matched_capabilities": 3,
     }
+
+
+def test_reingest_complete_row_counts_are_zero_when_the_outcome_has_no_merge_stage(
+    app_config: ServiceConfig, make_emitter: MakeEmitter
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+
+    _sweep(app_config, _fake(results=[_outcome()], tracked=(_node("CRA-1"),)), store, emitter)
+
+    complete = store.rows[1].details
+    assert [
+        complete[k] for k in ("new_obligations", "new_capabilities", "matched_capabilities")
+    ] == [
+        0,
+        0,
+        0,
+    ]
 
 
 @pytest.mark.parametrize("run_id", [None])
@@ -285,6 +315,36 @@ def test_reingest_failure_records_failed_with_classified_reason_code_and_sweep_c
     assert [r.outcome for r in store.rows] == ["applied", "failed", "applied", "applied"]
 
 
+@pytest.mark.parametrize(
+    ("exc", "reason_code"),
+    [
+        (
+            ChangeMonitorStateError("no single active prior for CRA-2 /srv/x"),
+            "inconsistent_graph_state",
+        ),
+        (
+            SuccessionPersistenceError("FalkorDB succession write failed: 10.0.0.1:6379"),
+            "graph_unavailable",
+        ),
+        (RuntimeError("boom 10.0.0.1:6379 /srv/x"), "unexpected_error"),
+    ],
+)
+def test_graph_state_and_persistence_failures_record_an_enumerated_reason_and_no_text(
+    exc: Exception, reason_code: str, app_config: ServiceConfig, make_emitter: MakeEmitter
+) -> None:
+    emitter, _ = make_emitter()
+    store = InMemoryAuditStore()
+    fake = _fake(results=[exc], tracked=(_node("CRA-1"),))
+
+    result = _sweep(app_config, fake, store, emitter)
+
+    [outcome] = result.instruments
+    assert (outcome.outcome, outcome.detail) == ("reingest_failed", reason_code)
+    assert store.rows[1].details["reason_code"] == reason_code
+    assert "10.0.0.1" not in str(store.rows) + str(result)
+    assert "/srv" not in str(store.rows) + str(result)
+
+
 def test_two_amended_instruments_record_two_distinct_pairs(
     app_config: ServiceConfig, make_emitter: MakeEmitter
 ) -> None:
@@ -326,7 +386,9 @@ def test_probe_failure_is_isolated_and_writes_no_row(
 
     result = _sweep(app_config, fake, store, emitter)
 
-    assert [o.outcome for o in result.instruments] == ["reingest_failed"]
+    assert [(o.outcome, o.detail) for o in result.instruments] == [
+        ("reingest_failed", "inconsistent_graph_state")
+    ]
     assert store.rows == []
     assert fake.trigger_reingestion_calls == []
 

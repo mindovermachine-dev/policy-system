@@ -28,10 +28,12 @@ Conventions (the audit trail's row-shape contract):
   exists writes no row. Polling a run (`get_ingestion_status`) writes nothing, except the
   reconciler's single terminal row for an orphaned run.
 - `check_regulations`. One pair per re-ingest that actually runs (`trigger='amendment_check'`,
-  the re-ingest's own run id as `resource_id`, the sweep caller as actor); `resume` and
-  `already_processed` outcomes ingest nothing and write no row. The counts are 0/0/0 because the
-  sweep re-runs only the Ingestion stage (GitHub issue #201 tracks the UC-4 doc/code gap). An
-  unwritable opening row aborts the whole sweep; pairs already written stay.
+  the re-ingest's own run id as `resource_id`, the sweep caller as actor); a call that runs no
+  pipeline stage (`already_processed`, or a link-only completion) writes no row. The sweep runs
+  the full UC-4 pipeline (Ingestion, Domain Mapper, Company Merge), so the completion row carries
+  the real `new_obligations`, `new_capabilities` and `matched_capabilities` from the merge result;
+  a failed run carries its `reason_code`. An unwritable opening row aborts the whole sweep;
+  pairs already written stay.
 - Passkey-approved merge. The `near_miss.resolve` row is written when the approver signs, with
   the approver as actor and the `approval_id`. If its opening row cannot be written the merge
   does not run and the single-use approval is already consumed, so a new approval is needed.

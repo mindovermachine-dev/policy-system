@@ -33,6 +33,7 @@ type IngestionReasonCode = Literal[
     "short_name_collision",
     "pipeline_stage_failed",
     "unsupported_instrument_type",
+    "inconsistent_graph_state",
     "interrupted",
     "unexpected_error",
 ]
@@ -105,7 +106,7 @@ class IngestionCounts:
     def from_result(cls, result: dict[str, object] | None) -> IngestionCounts:
         """Read the counts from the `merge` stage summary of an accepted-response dict.
 
-        Zero when there is no result, no merge stage (already ingested, sweep re-ingest) or a
+        Zero when there is no result, no merge stage (an already-ingested catalog request) or a
         non-integer value.
         """
         return cls.from_merge_summary(_merge_summary_of(result))

@@ -105,9 +105,11 @@ class GatedMappingAdapter:
         self._inner = inner
         self._gate_for = gate_for
 
-    def read_native_units(self, graph: object) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: object, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         self._gate_for(graph).wait(timeout=_GATE_WAIT_SECONDS)
-        return self._inner.read_native_units(graph)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+        return self._inner.read_native_units(graph, regulatory_instrument_id)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

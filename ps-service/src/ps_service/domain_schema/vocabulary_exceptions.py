@@ -28,6 +28,10 @@ OPERATIONAL_LABELS: Mapping[str, str] = MappingProxyType(
     {
         "MergedObligation": "graph-cleanup marker node, not a domain node",
         "PendingReview": "near-miss review store, not a domain node",
+        "ReingestProgress": (
+            "change-monitor re-ingest stage marker in the native graph; "
+            "deleted on success, not a domain node"
+        ),
     }
 )
 

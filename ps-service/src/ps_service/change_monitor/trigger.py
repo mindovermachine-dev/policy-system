@@ -1,31 +1,33 @@
 """`trigger_reingestion` -- the UC-4 re-entry point (AC-004..AC-009).
 
-Given a base-act `identifier`, its `short_name`, and the `new_version` to
-record, re-ingest the instrument's structure into its `{short_name}_native`
-graph and record the `SUPERSEDED_BY` succession from the prior active
-version to the new one.
+Given a base-act `identifier`, its `short_name`, and the `new_version` to record, run the
+full re-ingestion cycle for the new version -- Ingestion -> Domain Mapper -> Company Merge --
+and only then record the `SUPERSEDED_BY` succession from the prior active version to the new
+one. Succession is the LAST write: an amendment is never marked superseded while its
+Obligations and Capabilities are unmapped.
 
-Decomposition (PLAN_REVIEWED.md §1.4, flaw 9): `_preflight` is a pure,
-read-only classification returning a small `_Preflight` result object;
-`trigger_reingestion`'s body is a flat orchestration over that object with
-no nested conditionals (complexity <= 8).
+The stages are not called from here. `change_monitor` must not import `ps_service.api`, so the
+shared stage sequence (the catalog pipeline's `_execute_catalog_stages`) is handed in as an
+injected `PipelineRunner`; this module decides WHICH stages still need to run, from durable
+graph facts, and writes the bookkeeping around them.
 
-`_preflight` classifies all three states (`fresh` / `resume` /
-`already_processed`); the body is a flat orchestration over them.
+Decomposition: `classify_reingestion` is a pure, read-only classification of the
+`{short_name}_native` graph (see its docstring for the states and the stages each one still
+needs); `trigger_reingestion`'s body is a flat orchestration over that result with no nested
+conditionals (complexity <= 8).
 
-The `national_transposition` guard (AC-010, `_guard_national_transposition`)
-runs only on the `fresh` path, once preflight has ruled out `resume` and
-`already_processed`, and before the ingest and any write.
-
-`fresh` ordering (AC-006/007): `_preflight` -> guard ->
-`ingest_regulatory_instrument` -> `set_new_version_property` -> the single
-fused `link_and_supersede` -> emit one `link_superseded_by` entry. No
-try/except around the ingest call -- a failure propagates unchanged with
-nothing written (AC-007), mirroring `ingestion.pipeline`.
+Ordering: classify -> (`already_processed`: return) -> `national_transposition` guard (before
+any stage or write) -> run the missing stages, writing a `ReingestProgress` marker after each
+one returns (and `new.version` right after ingestion) -> the native fused `link_and_supersede` ->
+the `policy_system` write -> clear the marker -> emit one `link_superseded_by` entry. No
+try/except around the runner: a stage failure propagates unchanged, the completed-stage markers
+stay, no link is written and the prior stays `active`, so the next call resumes at the first
+missing stage. Concurrent sweeps are not atomic; one sweep per caller is the accepted model.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -33,26 +35,32 @@ from ps_service.change_monitor.errors import (
     ChangeMonitorStateError,
     NationalTranspositionNotSupportedError,
 )
-from ps_service.change_monitor.models import ReingestionOutcome
+from ps_service.change_monitor.models import LINKED, PIPELINE_STAGES, ReingestionOutcome
 from ps_service.change_monitor.succession import (
+    clear_marker,
     find_prior_instrument,
-    is_succession_complete,
     link_and_supersede,
-    new_node_exists,
+    mark_stage_complete,
+    read_reingestion_facts,
     set_new_version_property,
+    supersede_in_single_tenant,
 )
 from ps_service.ingestion.adapters.base import IngestionAdapter
-from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import emit_log_entry
 
 if TYPE_CHECKING:
     from ps_service.change_monitor.falkordb_client import GraphHandle
+    from ps_service.change_monitor.models import PipelineRunner
+    from ps_service.change_monitor.succession import ReingestionFacts
     from ps_service.ingestion.models import RegulatoryInstrumentMetadata
     from ps_service.logging import LogEmitter
 
 _COMPONENT = "change_monitor"
 _LINK_ACTION = "link_superseded_by"
 _LINK_OUTCOME = "superseded"
+_CLASSIFY_ACTION = "classify_reingestion"
+_STAGE_ACTION = "run_pipeline_stage"
+_STAGE_OUTCOME = "succeeded"
 
 # The one instrument type `trigger_reingestion` refuses (AC-010). It is an
 # instrument-type token, not a regulation name or CELEX, so it is free of the
@@ -78,189 +86,245 @@ class MetadataFetchingAdapter(IngestionAdapter, Protocol):
 class _Preflight:
     """The read-only classification of the graph state before any write.
 
-    `prior_id` is the prior active instrument's id for `fresh` / `resume`,
-    and the completed-edge prior's id for `already_processed`.
-    `prior_instrument_type` is carried for Increment 10a's AC-010 guard and
-    is `None` on the `already_processed` path (read off the completed edge,
-    no prior lookup performed).
+    `prior_id` is the prior instrument's id: the single active prior for `fresh` /
+    `resume`, the edge's prior for `repair` / `finalize` / `already_processed`.
+    `prior_instrument_type` feeds the AC-010 guard. `stages_to_run` are the pipeline
+    stages still missing for the new version (empty when only the link is outstanding).
     """
 
-    state: Literal["fresh", "resume", "already_processed"]
+    state: Literal["fresh", "resume", "repair", "already_processed", "finalize"]
     prior_id: str | None
     prior_instrument_type: str | None
+    stages_to_run: tuple[str, ...] = ()
 
 
-def _preflight(graph: GraphHandle, new_id: str) -> _Preflight:
-    """Classify the graph state for `new_id` without mutating anything.
+def _stages_after(marker_stage: str | None) -> tuple[str, ...]:
+    """The pipeline stages still to run after `marker_stage` completed (none marked: all four).
 
-    `already_processed` when the completed-succession probe finds a
-    `superseded` prior already linked into `new_id`; otherwise `resume` when
-    the `new_id` node exists (a crash between ingest and succession) and
-    `fresh` when it does not. `fresh` / `resume` both require exactly one
-    active prior -- `find_prior_instrument` raises `ChangeMonitorStateError`
-    otherwise.
-
-    (PLAN_REVIEWED.md §1.4 names this `_preflight(graph, short_name, new_id)`;
-    `short_name` is dropped here -- no probe in the decision table uses it,
-    and `find_prior_instrument`'s §2 signature takes `new_id` only, so a
-    `short_name` parameter would be unused.)
+    `linked` and `merge` both leave nothing to run. An unknown marker value is an
+    inconsistent graph, never silently treated as "start over".
     """
-    completed_prior = is_succession_complete(graph, new_id)
-    if completed_prior is not None:
-        return _Preflight(
-            state="already_processed", prior_id=completed_prior, prior_instrument_type=None
-        )
-    status = new_node_exists(graph, new_id)
+    if marker_stage is None:
+        return PIPELINE_STAGES
+    if marker_stage == LINKED:
+        return ()
+    if marker_stage not in PIPELINE_STAGES:
+        raise ChangeMonitorStateError(f"unknown ReingestProgress stage {marker_stage!r}")
+    return PIPELINE_STAGES[PIPELINE_STAGES.index(marker_stage) + 1 :]
+
+
+def classify_reingestion(
+    graph: GraphHandle, new_id: str, *, emitter: LogEmitter | None = None
+) -> _Preflight:
+    """Classify the graph state for `new_id` from durable facts only (read-only).
+
+    One facts query (node / incoming `SUPERSEDED_BY` edge / `ReingestProgress`
+    marker) plus `find_prior_instrument` only when no edge names the prior. States:
+
+    - `fresh`: the new node is absent -> all four stages.
+    - `resume`: node present, no edge -> the stages after the marker's stage (all
+      four with no marker: a partial ingest also leaves the node behind).
+    - `already_processed`: edge with `absorbed=true`, no marker -> nothing to do.
+    - `finalize`: edge with `absorbed=true` and a `linked` marker -> only the
+      `policy_system` write and marker delete are outstanding (stages none).
+    - `repair`: edge with `absorbed` unset, an earlier ingestion-only link -> the
+      stages after the marker's (extraction onward with no marker).
+
+    Raises `ChangeMonitorStateError` for an edge whose prior is not `superseded`,
+    an unknown marker value, or (fresh / resume) no single active prior.
+    """
+    pre = _classify(graph, new_id)
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_CLASSIFY_ACTION,
+        entity_id=new_id,
+        outcome=pre.state,
+        extra={"stages_to_run": list(pre.stages_to_run), "prior_id": pre.prior_id},
+        emitter=emitter,
+    )
+    return pre
+
+
+def _classify(graph: GraphHandle, new_id: str) -> _Preflight:
+    """The read-only classification behind :func:`classify_reingestion`, without the log entry."""
+    facts = read_reingestion_facts(graph, new_id)
+    if facts.prior_id is not None:
+        return _classify_edge(facts)
+    stages = _stages_after(facts.marker_stage) if facts.node_exists else PIPELINE_STAGES
     prior = find_prior_instrument(graph, new_id)
-    state: Literal["fresh", "resume"] = "resume" if status is not None else "fresh"
-    return _Preflight(state=state, prior_id=prior.id, prior_instrument_type=prior.instrument_type)
+    return _Preflight(
+        state="resume" if facts.node_exists else "fresh",
+        prior_id=prior.id,
+        prior_instrument_type=prior.instrument_type,
+        stages_to_run=stages,
+    )
+
+
+def _classify_edge(facts: ReingestionFacts) -> _Preflight:
+    """Classify a new version that already has a `SUPERSEDED_BY` edge into it."""
+    if facts.prior_status != "superseded":
+        raise ChangeMonitorStateError(
+            f"{facts.prior_id!r} has a SUPERSEDED_BY edge but status {facts.prior_status!r}"
+        )
+    if facts.absorbed:
+        state = "finalize" if facts.marker_stage == LINKED else "already_processed"
+        return _Preflight(state, facts.prior_id, facts.prior_instrument_type)
+    # Legacy ingestion-only link: ingest already finished (the old code wrote the edge
+    # only after it), so a missing marker starts at extraction, not at ingestion.
+    stages = _stages_after(facts.marker_stage or PIPELINE_STAGES[0])
+    return _Preflight("repair", facts.prior_id, facts.prior_instrument_type, stages)
 
 
 def _guard_national_transposition(
     preflight: _Preflight, *, adapter: MetadataFetchingAdapter, identifier: str
 ) -> None:
-    """Reject a `national_transposition` instrument before any ingest or write (AC-010).
+    """Reject a `national_transposition` instrument before any stage or write (AC-010, AC-BI-005).
 
     Two limbs (PLAN_REVIEWED.md §1.4, flaws 10 + 11):
 
-    1. The prior node's `instrument_type`, carried through `_preflight`. This
-       is the *only* limb that can actually fire for `CellarEliAdapter`
-       today -- the real AC-010 guard.
-    2. Forward-looking defence: one `fetch_regulatory_instrument_metadata` call
+    1. The prior node's `instrument_type`, carried through the classification. Checked for
+       EVERY state that still has stages to run (`fresh`, `resume`, `repair`), so Domain Mapper
+       and Company Merge can never write for a `national_transposition` prior. This is the
+       *only* limb that can actually fire for `CellarEliAdapter` today.
+    2. Forward-looking defence, `fresh` only: one `fetch_regulatory_instrument_metadata` call
        (metadata only, no structural parse), rejecting the fetched metadata's
-       `instrument_type`. This limb is *untested-by-construction for
-       `CellarEliAdapter`* -- its type-code map is
-       `{R: regulation, L: directive}` and it raises `CellarParseError`
-       for anything else, so a `national_transposition` structure can never
-       come back. Only the structural parse is avoided: the metadata fetch
-       still issues `extract_metadata` HTTP, which the ingest repeats on
-       `fresh`, so that request is made twice.
+       `instrument_type`. *Untested-by-construction for `CellarEliAdapter`* -- its type-code
+       map is `{R: regulation, L: directive}` and it raises `CellarParseError` for anything
+       else. A resumable state implies the original ingest, gated by this guard, already
+       passed it, which keeps `resume` / `repair` free of HTTP.
 
-    The guard runs on the `fresh` path only. A resumable state (the new node
-    already exists) implies the ingest, which is gated by this guard, already
-    passed it for the same prior/new pair, so `resume` needs no guard.
-
-    Only the `== national_transposition` comparison is made here -- there is
-    deliberately no `regulation` vs `directive` branch (AC-010/AC-011): the
-    two framework types take the identical path.
+    Only the `== national_transposition` comparison is made here -- there is deliberately no
+    `regulation` vs `directive` branch (AC-010/AC-011): the two framework types take the
+    identical path.
     """
     if preflight.prior_instrument_type == _NATIONAL_TRANSPOSITION:
         raise NationalTranspositionNotSupportedError
+    if preflight.state != "fresh":
+        return
     metadata = adapter.fetch_regulatory_instrument_metadata(identifier)
     if metadata.instrument_type == _NATIONAL_TRANSPOSITION:
         raise NationalTranspositionNotSupportedError
 
 
 def will_reingest(graph: GraphHandle, short_name: str, new_version: str) -> bool:
-    """Whether `trigger_reingestion` would run a real re-ingest (read-only probe, issue #195).
+    """Whether `trigger_reingestion` would run at least one pipeline stage (read-only probe, #195).
 
-    True only for the `fresh` state. `resume` (only the idempotent succession write) and
-    `already_processed` (a no-op) ingest nothing, so the sweep writes no audit pair for them.
-    Raises the same `ChangeMonitorStateError` as `trigger_reingestion` when the graph has no
-    single active prior. The probe and the later call are not atomic; a single sweep per caller
-    is the accepted model.
+    True for `fresh`, a `resume` or `repair` with stages left, and false for `already_processed`
+    and a link-only call (nothing to run, so the sweep writes no audit pair for it). Raises the
+    same `ChangeMonitorStateError` as `trigger_reingestion` when the graph is inconsistent. The
+    probe and the later call are not atomic; a single sweep per caller is the accepted model.
     """
-    return _preflight(graph, f"{short_name}-{new_version}").state == "fresh"
+    return bool(_classify(graph, f"{short_name}-{new_version}").stages_to_run)
 
 
-def trigger_reingestion(
+def trigger_reingestion(  # noqa: PLR0913 -- one re-ingest's collaborators; no natural grouping
     identifier: str,
     short_name: str,
     new_version: str,
     *,
     adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
+    single_tenant: GraphHandle,
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
+    run_pipeline: PipelineRunner | None = None,
 ) -> ReingestionOutcome:
-    """Re-ingest `identifier` as `new_version` and record its succession.
+    """Re-ingest `identifier` as `new_version` through the full pipeline and record its succession.
 
-    `graph` is the `{short_name}_native` handle -- where the re-ingest and
-    every succession write land; `trigger_reingestion` never touches
-    `policy_system`. `identifier` is whatever the injected `adapter` expects
-    (a base-act CELEX for `CellarEliAdapter`).
+    `graph` is the `{short_name}_native` handle: the `ReingestProgress` markers, `new.version`
+    and the native succession write land there. `single_tenant` is the merged `policy_system`
+    handle: the succession is mirrored there so the tracked set and `ps-list-ingested` see the
+    prior as `superseded`. `identifier` is whatever the injected `adapter`
+    expects (a base-act CELEX for `CellarEliAdapter`). `run_pipeline` runs a subset of the
+    stages (Ingestion, Domain Mapper extract, derive, Company Merge) for the new version; it is
+    needed only when stages are outstanding and its absence then raises
+    `ChangeMonitorStateError` before any write.
 
-    `fresh` path: guard against `national_transposition`, re-ingest, write
-    `new_version` onto the new node, fuse the `SUPERSEDED_BY` edge with
-    `prior.status='superseded'`, emit one `link_superseded_by` log entry
-    carrying the re-ingest's `run_id`, and return `outcome="superseded"`.
+    States (see :func:`classify_reingestion`): `fresh` runs all four stages; `resume` and
+    `repair` run only the stages after the last `ReingestProgress` marker (a `repair` is an
+    earlier ingestion-only link whose new version was never mapped); with every stage done
+    only the link is (re)written; `already_processed` is a no-op that emits nothing.
 
-    `resume` (a crash between ingest and succession): skip the re-ingest,
-    make no adapter call and run no guard, run only the idempotent fused
-    write, emit one entry with `run_id=None`, return `outcome="superseded"`.
+    The succession is written last, after the merge stage returned, in three idempotent steps:
+    the native fused write (`SUPERSEDED_BY` edge + `absorbed` + `prior.status='superseded'` +
+    marker `linked`), the `policy_system` write (edge + status), then the marker is cleared. A
+    crash between steps leaves the `linked` marker, which classifies as `finalize` and resumes
+    at step 2 on the next call. Then one
+    `link_superseded_by` entry is emitted carrying the pipeline's `run_id`. `run_id` (issue
+    #195) lets a caller that audits the run know its id up front; `None` mints one. The
+    returned `run_id` is `None` when no stage ran.
 
-    `already_processed`: a no-op returning `run_id=None` and emitting nothing
-    (a repeat call is not a new supersession event).
-
-    `run_id` (issue #195) is forwarded to the re-ingest so a caller that audits it can
-    know the run id before the ingest starts; `None` keeps minting a fresh one.
-
-    Raises `NationalTranspositionNotSupportedError` (AC-010, before any
-    write) or `ChangeMonitorStateError` when the graph has no single active
-    prior.
+    Raises `NationalTranspositionNotSupportedError` (AC-010, before any write),
+    `ChangeMonitorStateError` (inconsistent graph, or no runner for outstanding stages), or
+    whatever the runner raises (a stage failure; nothing is written for the link).
     """
     new_id = f"{short_name}-{new_version}"
-    preflight = _preflight(graph, new_id)
+    pre = classify_reingestion(graph, new_id, emitter=emitter)
+    prior_id = pre.prior_id
+    if prior_id is None:  # unreachable: every classification carries a prior id
+        raise ChangeMonitorStateError(f"classification of {new_id!r} carried no prior id")
 
-    if preflight.state == "already_processed":
-        return ReingestionOutcome(
-            prior_regulatory_instrument_id=preflight.prior_id or "",
-            new_regulatory_instrument_id=new_id,
-            run_id=None,
-            outcome="already_processed",
-            ingest_counts=None,
-        )
+    if pre.state == "already_processed":
+        return ReingestionOutcome(prior_id, new_id, None, "already_processed", pre.state)
 
-    prior_id = preflight.prior_id
-    if prior_id is None:  # unreachable: _preflight sets prior_id for fresh / resume
-        raise ChangeMonitorStateError(
-            f"preflight state {preflight.state!r} carried no prior id for {new_id!r}"
-        )
+    stage_summaries = ()
+    pipeline_run_id: str | None = None
+    if pre.stages_to_run:
+        _guard_national_transposition(pre, adapter=adapter, identifier=identifier)
+        if run_pipeline is None:
+            raise ChangeMonitorStateError(
+                f"{new_id!r} has stages to run {pre.stages_to_run} but no pipeline runner was given"
+            )
+        pipeline_run_id = run_id or str(uuid.uuid4())
+        stage_summaries = run_pipeline(
+            stages=pre.stages_to_run,
+            run_id=pipeline_run_id,
+            on_stage_complete=lambda stage: _record_stage(
+                graph, new_id, new_version, stage, emitter
+            ),
+        ).stages
 
-    if preflight.state == "resume":
-        link_and_supersede(graph, prior_id, new_id)
-        _emit_link(prior_id, new_id, run_id=None, emitter=emitter)
-        return ReingestionOutcome(
-            prior_regulatory_instrument_id=prior_id,
-            new_regulatory_instrument_id=new_id,
-            run_id=None,
-            outcome="superseded",
-            ingest_counts=None,
-        )
-
-    _guard_national_transposition(preflight, adapter=adapter, identifier=identifier)
-
-    result = ingest_regulatory_instrument(
-        identifier,
-        short_name,
-        version=new_version,
-        adapter=adapter,
-        graph=graph,
-        emitter=emitter,
-        run_id=run_id,
-    )
-    set_new_version_property(graph, new_id, new_version)
     link_and_supersede(graph, prior_id, new_id)
-    _emit_link(prior_id, new_id, run_id=result.run_id, emitter=emitter)
+    supersede_in_single_tenant(single_tenant, prior_id, new_id)
+    clear_marker(graph, new_id)
+    _emit_link(prior_id, new_id, run_id=pipeline_run_id, emitter=emitter)
     return ReingestionOutcome(
-        prior_regulatory_instrument_id=prior_id,
-        new_regulatory_instrument_id=new_id,
-        run_id=result.run_id,
-        outcome="superseded",
-        ingest_counts=result.counts,
+        prior_id, new_id, pipeline_run_id, "superseded", pre.state, stage_summaries
+    )
+
+
+def _record_stage(
+    graph: GraphHandle, new_id: str, new_version: str, stage: str, emitter: LogEmitter | None
+) -> None:
+    """Persist that `stage` returned: the version after ingestion, then the progress marker.
+
+    Runs only after the stage returned, so a marker is a durable "this stage is done" fact in
+    the store the succession lives in. `new.version` is written right after ingestion, before
+    extract copies the node's properties into the baseline graph.
+    """
+    if stage == PIPELINE_STAGES[0]:
+        set_new_version_property(graph, new_id, new_version)
+    mark_stage_complete(graph, new_id, stage)
+    emit_log_entry(
+        component=_COMPONENT,
+        action=_STAGE_ACTION,
+        entity_id=new_id,
+        outcome=_STAGE_OUTCOME,
+        extra={"stage": stage},
+        emitter=emitter,
     )
 
 
 def _emit_link(
     prior_id: str, new_id: str, *, run_id: str | None, emitter: LogEmitter | None
 ) -> None:
-    """Emit the single `link_superseded_by` entry after the fused write succeeds.
+    """Emit the single `link_superseded_by` entry after the succession write succeeds.
 
     `entity_id` is the `(prior_id, new_id)` tuple -- `LogEntry.to_json_line`
     serialises it as a 2-element JSON array, the carrier for AC-009's "old +
-    new regulatory_instrument_id on one entry". `run_id` is passed
-    explicitly on the `fresh` path (the ingest's `bind_run_context` has
-    already exited) and is `None` on `resume`.
+    new regulatory_instrument_id on one entry". `run_id` is passed explicitly
+    (the pipeline's own run context has already exited) and is `None` when
+    only the link was written.
     """
     emit_log_entry(
         component=_COMPONENT,

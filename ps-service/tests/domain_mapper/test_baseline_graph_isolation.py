@@ -154,7 +154,9 @@ class _FakeAdapter:
     def __init__(self, units: tuple[ExtractionUnit, ...]) -> None:
         self._units = units
 
-    def read_native_units(self, graph: GraphHandle) -> tuple[ExtractionUnit, ...]:
+    def read_native_units(
+        self, graph: GraphHandle, regulatory_instrument_id: str
+    ) -> tuple[ExtractionUnit, ...]:
         return self._units
 
 

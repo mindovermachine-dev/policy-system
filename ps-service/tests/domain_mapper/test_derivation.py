@@ -964,6 +964,27 @@ class _FakeBaselineGraph:
         return _FakeQueryResult([[0]])
 
 
+class _VersionedBaselineGraph(_FakeBaselineGraph):
+    """A baseline graph holding two instrument versions' Requirements side by side.
+
+    A requirement read naming `{id: $rid}` answers with that version's rows only; an unscoped
+    read answers with every version's rows -- the leak the scoping closes.
+    """
+
+    def __init__(self, rows_by_instrument: dict[str, list[list[object]]]) -> None:
+        super().__init__([row for rows in rows_by_instrument.values() for row in rows])
+        self._rows_by_instrument = rows_by_instrument
+        self.read_params: list[dict[str, object] | None] = []
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
+        if "OPTIONAL MATCH (rl:Role" in q:
+            self.read_params.append(params)
+            if "{id: $rid}" in q:
+                assert params is not None
+                return _FakeQueryResult([*self._rows_by_instrument[str(params["rid"])]])
+        return super().query(q, params)
+
+
 def _find_edge_calls(graph: _FakeBaselineGraph, relationship_type: str) -> list[_RecordedCall]:
     return [call for call in graph.calls if f"[:{relationship_type}]" in call.query]
 
@@ -1058,6 +1079,46 @@ def test_derive_obligations_and_capabilities_ac003_full_flow(make_emitter: MakeE
             if call.params and call.params["source_id"] == obligation_node_id
         ]
         assert len(requires_sources) >= 1
+
+
+def test_derive_reads_only_the_requested_instruments_requirements(
+    make_emitter: MakeEmitter,
+) -> None:
+    """A re-ingested amendment shares `{short}_baseline` with its prior version (#201): deriving
+    the new version must not re-derive (or LLM-process) the prior version's Requirements.
+    """
+    emitter, _log_path = make_emitter()
+    baseline_graph = _VersionedBaselineGraph(
+        {
+            "CRA-1.0": [
+                ["CRA-1.0_req_1", "Prior duty one.", _ROLE_MANUFACTURER, _ROLE_MANUFACTURER, "M"],
+                ["CRA-1.0_req_2", "Prior duty two.", _ROLE_MANUFACTURER, _ROLE_MANUFACTURER, "M"],
+            ],
+            "CRA-2.0": [
+                ["CRA-2.0_req_1", "New duty.", _ROLE_MANUFACTURER, _ROLE_MANUFACTURER, "M"],
+            ],
+        }
+    )
+    call_completion = _scripted_sequential_call_completion(
+        [_mint_response("Conduct New Duty"), _capability_mint_response("New Duty Tooling")]
+    )
+
+    result = derive_obligations_and_capabilities(
+        "CRA-2.0",
+        baseline_graph=baseline_graph,
+        model="fake-model",
+        call_completion=call_completion,
+        emitter=emitter,
+    )
+
+    assert baseline_graph.read_params == [{"rid": "CRA-2.0"}]
+    assert len(result.obligation_node_ids) == 1
+    satisfied = {
+        call.params["source_id"]
+        for call in _find_edge_calls(baseline_graph, "SATISFIED_BY")
+        if call.params
+    }
+    assert satisfied == {"CRA-2.0_req_1"}
 
 
 def test_derive_obligations_and_capabilities_ac004_unmatched_requirement_surfaced(
