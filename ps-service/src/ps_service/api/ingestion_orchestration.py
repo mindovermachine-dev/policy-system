@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ps_service.audit.emit import AuditContext
+    from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
@@ -1635,7 +1636,7 @@ def _open_single_tenant_graph(config: ServiceConfig) -> GraphHandle:
     return select_graph(connect_from_config(config), single_tenant_graph_name())
 
 
-def _default_ingestion_adapter() -> IngestionAdapter:
+def _default_ingestion_adapter() -> MetadataFetchingAdapter:
     """Build the default (Cellar/ELI) Ingestion Adapter."""
     from ps_service.ingestion.adapters.cellar_eli.adapter import (  # noqa: PLC0415 -- M6: function-local
         CellarEliAdapter,

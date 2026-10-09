@@ -27,7 +27,10 @@ from typing import Protocol
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
 from ps_service.ingestion.adapters.cellar_eli.metadata import extract_metadata
 from ps_service.ingestion.adapters.cellar_eli.structure import parse_structure
-from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
+from ps_service.ingestion.models import (
+    FetchedRegulatoryInstrumentStructure,
+    RegulatoryInstrumentMetadata,
+)
 
 
 class _FetchCallable(Protocol):
@@ -77,3 +80,15 @@ class CellarEliAdapter:
         metadata = extract_metadata(xhtml, rdf, identifier)
         nodes, edges = parse_structure(xhtml, identifier)
         return FetchedRegulatoryInstrumentStructure(metadata=metadata, nodes=nodes, edges=edges)
+
+    def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
+        """Fetch one regulation's metadata by CELEX `identifier`, without parsing its structure.
+
+        Same `fetch`/`fetch_rdf`/`extract_metadata` calls as
+        `fetch_regulatory_instrument_structure`, but never calls
+        `parse_structure`. `CellarFetchError` and `CellarParseError`
+        propagate unchanged.
+        """
+        xhtml = self._fetch(identifier)
+        rdf = self._fetch_rdf(identifier)
+        return extract_metadata(xhtml, rdf, identifier)

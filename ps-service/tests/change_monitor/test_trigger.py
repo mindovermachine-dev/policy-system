@@ -9,6 +9,8 @@ carrying the re-ingest's `run_id`.
 
 Increment 10a (§3 test 15): the `national_transposition` guard (AC-010) --
 both limbs raise `NationalTranspositionNotSupportedError` before any write.
+The guard runs on the `fresh` path only; `resume` and `already_processed`
+are covered offline (no adapter call at all).
 
 Increment 10b (§3 tests 16, 17, 18): atomicity + idempotency + crash
 recovery (AC-007/008) -- a failed re-ingest writes nothing, an
@@ -62,29 +64,30 @@ _REACHABILITY_LABELS = (
 )
 
 
-class _FailingAfterGuardAdapter:
-    """`IngestionAdapter` stand-in that fetches successfully once, then fails.
+class _FailingIngestFetchAdapter:
+    """`MetadataFetchingAdapter` stand-in whose guard fetch succeeds and ingest fetch fails.
 
-    Drives AC-007's "a failed re-ingest writes nothing": `trigger_reingestion`'s
-    `_guard_national_transposition` always makes one belt-and-braces fetch
-    (limb 2) before the real `ingest_regulatory_instrument` is ever called --
-    that first fetch must succeed for the guard to pass, so this double
-    returns the canned structure on call 1 and raises on every call after,
-    making the *real ingest's own* fetch (its first line) the one that
-    fails, distinct from the guard failing.
+    Drives AC-007's "a failed re-ingest writes nothing":
+    `fetch_regulatory_instrument_metadata` (the guard's metadata-only fetch)
+    returns the canned structure's metadata, so the guard passes;
+    `fetch_regulatory_instrument_structure` (the real ingest's own first
+    line) raises, so the failure is distinct from the guard failing.
     """
 
     def __init__(self, structure: FetchedRegulatoryInstrumentStructure, error: Exception) -> None:
         self._structure = structure
         self._error = error
-        self.calls: list[str] = []
+        self.structure_calls: list[str] = []
+        self.metadata_calls: list[str] = []
+
+    def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
+        self.metadata_calls.append(identifier)
+        return self._structure.metadata
 
     def fetch_regulatory_instrument_structure(
         self, identifier: str
     ) -> FetchedRegulatoryInstrumentStructure:
-        self.calls.append(identifier)
-        if len(self.calls) == 1:
-            return self._structure
+        self.structure_calls.append(identifier)
         raise self._error
 
 
@@ -191,6 +194,26 @@ def test_fresh_succession_happy_path(
     assert outcome.new_regulatory_instrument_id == _NEW_ID
 
 
+def test_fresh_guard_uses_metadata_fetch_not_structure_fetch(make_emitter: MakeEmitter) -> None:
+    """AC-BI-004/011: the guard fetches metadata only; just the ingest fetches structure."""
+    emitter, _ = make_emitter()
+    adapter = FakeAdapter({_IDENTIFIER: _structure("regulation")})
+
+    outcome = trigger_reingestion(
+        _IDENTIFIER,
+        "CRA",
+        "2.0",
+        adapter=adapter,
+        graph=_fresh_graph("regulation"),
+        emitter=emitter,
+    )
+    emitter.flush()
+
+    assert outcome.outcome == "superseded"
+    assert adapter.metadata_calls == [_IDENTIFIER]  # the guard
+    assert adapter.structure_calls == [_IDENTIFIER]  # the ingest's own fetch only
+
+
 @pytest.mark.parametrize("prior_instrument_type", ["regulation", "directive"])
 def test_fresh_path_call_order(
     prior_instrument_type: str,
@@ -271,7 +294,10 @@ def test_national_transposition_prior_node_rejected(
 
     assert "#41" in str(excinfo.value)
     assert "#46" in str(excinfo.value)
-    assert adapter.calls == []  # limb 1 fires before the belt-and-braces fetch
+    # limb 1 fires before the guard's metadata fetch
+    assert adapter.calls == []
+    assert adapter.metadata_calls == []
+    assert adapter.structure_calls == []
     assert graph.writes == []
     assert read_lines(log_path) == []
 
@@ -280,7 +306,7 @@ def test_national_transposition_fetched_metadata_rejected(
     make_emitter: MakeEmitter,
     read_lines: ReadLines,
 ) -> None:
-    """Limb 2 (belt-and-braces): fetched metadata typed `national_transposition` is rejected."""
+    """Limb 2: metadata (metadata-only guard fetch) typed `national_transposition` is rejected."""
     emitter, log_path = make_emitter()
     graph = _fresh_graph("regulation")  # prior looks fine -> limb 1 passes
     adapter = FakeAdapter({_IDENTIFIER: _structure("national_transposition")})
@@ -293,7 +319,8 @@ def test_national_transposition_fetched_metadata_rejected(
 
     assert "#41" in str(excinfo.value)
     assert "#46" in str(excinfo.value)
-    assert adapter.calls == [_IDENTIFIER]  # the single guard fetch; ingest never reached
+    assert adapter.metadata_calls == [_IDENTIFIER]  # the guard's metadata fetch
+    assert adapter.structure_calls == []  # ingest never reached
     assert graph.writes == []
     assert read_lines(log_path) == []
 
@@ -308,7 +335,7 @@ def test_reingest_failure_writes_nothing(
     """§3 test 16 (AC-007): a failing re-ingest propagates; no bookkeeping write happens."""
     emitter, log_path = make_emitter()
     graph = _fresh_graph("regulation")
-    adapter = _FailingAfterGuardAdapter(_structure(), CellarFetchError("CELLAR unreachable"))
+    adapter = _FailingIngestFetchAdapter(_structure(), CellarFetchError("CELLAR unreachable"))
 
     with pytest.raises(CellarFetchError):
         trigger_reingestion(
@@ -316,9 +343,10 @@ def test_reingest_failure_writes_nothing(
         )
     emitter.flush()
 
-    # call 1: the guard's belt-and-braces fetch, which succeeds (limb 2
-    # passes); call 2: the real ingest's own first line, which fails
-    assert adapter.calls == [_IDENTIFIER, _IDENTIFIER]
+    # the guard's metadata fetch succeeds (limb 2 passes); the real ingest's
+    # own structure fetch (its first line) then fails
+    assert adapter.metadata_calls == [_IDENTIFIER]
+    assert adapter.structure_calls == [_IDENTIFIER]
     assert graph.writes == []  # no SET n.version, no SUPERSEDED_BY -- prior stays active
     assert read_lines(log_path) == []
 
@@ -342,7 +370,10 @@ def test_idempotent_retrigger_is_noop(
     assert outcome.ingest_counts is None
     assert outcome.prior_regulatory_instrument_id == _PRIOR_ID
     assert outcome.new_regulatory_instrument_id == _NEW_ID
-    assert adapter.calls == []  # guard is not reached on the no-op path
+    # characterization (AC-BI-007): the guard is not reached on the no-op path
+    assert adapter.calls == []
+    assert adapter.metadata_calls == []
+    assert adapter.structure_calls == []
     assert graph.writes == []
     assert len(graph.calls) == 1  # only the completed-succession probe
     assert read_lines(log_path) == []
@@ -365,9 +396,8 @@ def test_crash_between_ingest_and_succession_is_resumable(
     assert outcome.outcome == "superseded"
     assert outcome.run_id is None  # no IngestResult on the resume path
     assert outcome.ingest_counts is None
-    # the guard's belt-and-braces fetch still runs on `resume` -- only the
-    # re-ingest itself is skipped (the node is already there)
-    assert adapter.calls == [_IDENTIFIER]
+    # `resume` neither re-ingests nor consults the guard: no adapter fetch at all
+    assert adapter.calls == []
     assert len(graph.writes) == 1  # exactly the one fused MERGE...SET
     assert "MERGE (prior)-[:SUPERSEDED_BY]->(new)" in graph.writes[0].query
     assert graph.writes[0].params == {"prior_id": _PRIOR_ID, "new_id": _NEW_ID}
@@ -386,6 +416,35 @@ def test_crash_between_ingest_and_succession_is_resumable(
     )
     assert outcome_again.outcome == "already_processed"
     assert graph_complete.writes == []
+    assert adapter.calls == []  # still no fetch of either kind across both calls
+    assert adapter.metadata_calls == []
+    assert adapter.structure_calls == []
+
+
+def test_resume_does_not_consult_guard_even_when_prior_is_national_transposition(
+    make_emitter: MakeEmitter,
+    read_lines: ReadLines,
+) -> None:
+    """AC-BI-006/010: `resume` skips the guard, even for a `national_transposition` prior."""
+    emitter, log_path = make_emitter()
+    adapter = FakeAdapter({_IDENTIFIER: _structure()})
+    graph = _resume_graph("national_transposition")
+
+    outcome = trigger_reingestion(
+        _IDENTIFIER, "CRA", "2.0", adapter=adapter, graph=graph, emitter=emitter
+    )
+    emitter.flush()
+
+    assert outcome.outcome == "superseded"
+    assert outcome.run_id is None
+    assert adapter.calls == []
+    assert adapter.metadata_calls == []
+    assert adapter.structure_calls == []
+    assert len(graph.writes) == 1
+    assert "MERGE (prior)-[:SUPERSEDED_BY]->(new)" in graph.writes[0].query
+    lines = read_lines(log_path)
+    assert len(lines) == 1
+    assert lines[0]["action"] == "link_superseded_by"
 
 
 # --- Issue #195: run id pass-through and the read-only `will_reingest` probe ---

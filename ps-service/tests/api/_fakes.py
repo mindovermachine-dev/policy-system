@@ -65,12 +65,16 @@ if TYPE_CHECKING:
     from ps_service.api.change_check_orchestration import TriggerReingestionCall
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.change_monitor.models import TrackedInstrumentNode
+    from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.config import ServiceConfig
     from ps_service.curated_source.http_fetch import CuratedSourceTransport
     from ps_service.domain_mapper.models import ExtractionUnit
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
-    from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
+    from ps_service.ingestion.models import (
+        FetchedRegulatoryInstrumentStructure,
+        RegulatoryInstrumentMetadata,
+    )
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
     from ps_service.logging.emitter import TextSink
@@ -409,7 +413,7 @@ class FakeInternalSeedAdapter:
 
 
 class FakeIngestionAdapter:
-    """Satisfies ``ps_service.ingestion.adapters.base.IngestionAdapter`` structurally.
+    """Satisfies ``ps_service.change_monitor.trigger.MetadataFetchingAdapter`` structurally.
 
     Never invoked — the faked ingest stage ignores its adapter.
     """
@@ -419,6 +423,11 @@ class FakeIngestionAdapter:
     ) -> FetchedRegulatoryInstrumentStructure:
         """Fail loudly if the faked pipeline ever actually calls the adapter."""
         message = f"the faked ingest stage must not fetch {identifier!r}"
+        raise AssertionError(message)
+
+    def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
+        """Fail loudly if the faked sweep ever actually calls the adapter."""
+        message = f"the faked sweep must not fetch metadata for {identifier!r}"
         raise AssertionError(message)
 
 
@@ -685,7 +694,7 @@ def _never_trigger_reingestion(
     raise AssertionError(message)
 
 
-def _never_default_adapter() -> IngestionAdapter:
+def _never_default_adapter() -> MetadataFetchingAdapter:
     """Fail loudly if a Slice 2 test's faked sweep ever builds the default adapter."""
     raise AssertionError("default_adapter must not be called in this test")
 
@@ -737,7 +746,7 @@ def build_fake_change_check_dependencies(
     reingestion_result: ReingestionOutcome | None = None,
     reingestion_results: Sequence[ReingestionOutcome | BaseException] | None = None,
     native_graph: FakeGraphHandle | None = None,
-    ingestion_adapter: IngestionAdapter | None = None,
+    ingestion_adapter: MetadataFetchingAdapter | None = None,
     will_reingest_error: BaseException | None = None,
 ) -> FakeChangeCheckDependencies:
     """Assemble a :class:`FakeChangeCheckDependencies` around scripted tracked/poll results.
@@ -843,7 +852,7 @@ def build_fake_change_check_dependencies(
         find_catalog_entry = _find_catalog_entry
 
     open_native: Callable[[ServiceConfig, str], GraphHandle]
-    default_adapter: Callable[[], IngestionAdapter]
+    default_adapter: Callable[[], MetadataFetchingAdapter]
     trigger_reingestion: TriggerReingestionCall
     fixed_result = reingestion_result
     scripted: deque[ReingestionOutcome | BaseException] | None = (
@@ -864,7 +873,7 @@ def build_fake_change_check_dependencies(
             open_native_short_names.append(short_name)
             return resolved_native_graph
 
-        def _default_adapter() -> IngestionAdapter:
+        def _default_adapter() -> MetadataFetchingAdapter:
             return resolved_ingestion_adapter
 
         def _trigger_reingestion(

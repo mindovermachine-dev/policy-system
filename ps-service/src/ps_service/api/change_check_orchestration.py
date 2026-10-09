@@ -94,8 +94,8 @@ if TYPE_CHECKING:
         ReingestionOutcome,
         TrackedInstrumentNode,
     )
+    from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.config import ServiceConfig
-    from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.logging import LogEmitter
 
 # D8: mirrors ingestion_orchestration.py's own `_COMPONENT`/action-constant shape.
@@ -196,7 +196,7 @@ class TriggerReingestionCall(Protocol):
         short_name: str,
         new_version: str,
         *,
-        adapter: IngestionAdapter,
+        adapter: MetadataFetchingAdapter,
         graph: GraphHandle,
         emitter: LogEmitter | None = None,
         run_id: str | None = None,
@@ -230,7 +230,7 @@ class ChangeCheckDependencies:
     read_tracked_instruments: ReadTrackedInstrumentsCall
     poll_for_amendments: PollForAmendmentsCall
     trigger_reingestion: TriggerReingestionCall
-    default_adapter: Callable[[], IngestionAdapter]
+    default_adapter: Callable[[], MetadataFetchingAdapter]
     find_catalog_entry: Callable[[str], CatalogEntry | None]
     will_reingest: WillReingestCall
 
@@ -555,7 +555,7 @@ def _audited_reingest(  # noqa: PLR0913 -- one re-ingest's collaborators; no nat
     entry: CatalogEntry,
     new_version: str,
     *,
-    adapter: IngestionAdapter,
+    adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
     dependencies: ChangeCheckDependencies,
     audit: AuditContext,

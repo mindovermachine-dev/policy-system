@@ -22,7 +22,10 @@ import redis.exceptions
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ps_service.ingestion.models import FetchedRegulatoryInstrumentStructure
+    from ps_service.ingestion.models import (
+        FetchedRegulatoryInstrumentStructure,
+        RegulatoryInstrumentMetadata,
+    )
     from ps_service.logging import LogEmitter
     from ps_service.logging.emitter import TextSink
 
@@ -124,13 +127,15 @@ class RaisingGraph:
 
 
 class FakeAdapter:
-    """Satisfies `ps_service.ingestion.adapters.base.IngestionAdapter` structurally.
+    """Satisfies `MetadataFetchingAdapter` (and so `IngestionAdapter`) structurally.
 
-    One canned `FetchedRegulatoryInstrumentStructure` per identifier;
-    records every `fetch_regulatory_instrument_structure` call. In the
-    Increment 9 trigger tests `ingest_regulatory_instrument` is replaced by
-    a spy, so this adapter is only ever passed through, never invoked --
-    Increment 10a's `national_transposition` guard is its first real caller.
+    One canned `FetchedRegulatoryInstrumentStructure` per identifier. Each
+    method records into its own per-method log (`structure_calls`,
+    `metadata_calls`) and both append to `calls`, the single chronological
+    log across both methods; an empty `calls` proves no Cellar access at all.
+    `fetch_regulatory_instrument_metadata` returns the canned structure's
+    `metadata` without exposing its nodes, as the real adapter's
+    metadata-only fetch does.
     """
 
     def __init__(
@@ -139,10 +144,19 @@ class FakeAdapter:
         """Prime the canned structures keyed by identifier."""
         self._structures_by_identifier = structures_by_identifier
         self.calls: list[str] = []
+        self.structure_calls: list[str] = []
+        self.metadata_calls: list[str] = []
 
     def fetch_regulatory_instrument_structure(
         self, identifier: str
     ) -> FetchedRegulatoryInstrumentStructure:
         """Record `identifier` and return its canned structure."""
         self.calls.append(identifier)
+        self.structure_calls.append(identifier)
         return self._structures_by_identifier[identifier]
+
+    def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
+        """Record `identifier` and return its canned structure's metadata."""
+        self.calls.append(identifier)
+        self.metadata_calls.append(identifier)
+        return self._structures_by_identifier[identifier].metadata

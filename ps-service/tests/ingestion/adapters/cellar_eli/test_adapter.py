@@ -22,6 +22,7 @@ from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_xhtml
 from ps_service.ingestion.adapters.errors import CellarFetchError, CellarParseError
 
 if TYPE_CHECKING:
+    from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.ingestion.adapters.base import IngestionAdapter
 
 # Fixture A: a Regulation-shaped document (Entry-into-force wording, no
@@ -244,3 +245,95 @@ def test_fetch_regulatory_instrument_structure_calls_both_fetch_and_fetch_rdf_ex
 
     assert fetch_calls == ["32020R1111"]
     assert fetch_rdf_calls == ["32020R1111"]
+
+
+# --- fetch_regulatory_instrument_metadata (issue #49): metadata only, no structure parse ---
+
+# Valid metadata inputs (title div + RDF) but no `eli-container`, so
+# `parse_structure` raises `CellarParseError` -- a document only the
+# metadata-only fetch can read.
+_XHTML_METADATA_ONLY = b"""
+<html xmlns="http://www.w3.org/1999/xhtml">
+<body>
+<div class="eli-main-title">Regulation (EU) 1111/1111 Fixture A</div>
+</body>
+</html>
+"""
+
+
+def test_fetch_regulatory_instrument_metadata_returns_metadata_without_structure_parse() -> None:
+    adapter = CellarEliAdapter(fetch=_dispatching_fetch, fetch_rdf=_dispatching_fetch_rdf)
+    expected = adapter.fetch_regulatory_instrument_structure("32020R1111").metadata
+
+    assert adapter.fetch_regulatory_instrument_metadata("32020R1111") == expected
+
+    # A document whose structure cannot be parsed still yields its metadata:
+    # the metadata-only fetch never calls `parse_structure`.
+    unparseable = CellarEliAdapter(
+        fetch=lambda identifier: _XHTML_METADATA_ONLY,
+        fetch_rdf=_dispatching_fetch_rdf,
+    )
+    with pytest.raises(CellarParseError):
+        unparseable.fetch_regulatory_instrument_structure("32020R1111")
+    metadata = unparseable.fetch_regulatory_instrument_metadata("32020R1111")
+    assert metadata.title == "Regulation (EU) 1111/1111 Fixture A"
+    assert metadata.instrument_type == "regulation"
+
+
+def test_fetch_regulatory_instrument_metadata_calls_fetch_and_fetch_rdf_exactly_once() -> None:
+    fetch_calls: list[str] = []
+    fetch_rdf_calls: list[str] = []
+
+    def _fetch(identifier: str) -> bytes:
+        fetch_calls.append(identifier)
+        return _dispatching_fetch(identifier)
+
+    def _fetch_rdf(identifier: str) -> bytes:
+        fetch_rdf_calls.append(identifier)
+        return _dispatching_fetch_rdf(identifier)
+
+    adapter = CellarEliAdapter(fetch=_fetch, fetch_rdf=_fetch_rdf)
+
+    adapter.fetch_regulatory_instrument_metadata("32020R1111")
+
+    assert fetch_calls == ["32020R1111"]
+    assert fetch_rdf_calls == ["32020R1111"]
+
+
+def test_fetch_regulatory_instrument_metadata_propagates_cellar_fetch_error_unchanged() -> None:
+    def _failing_fetch(identifier: str) -> bytes:
+        raise CellarFetchError(f"could not fetch {identifier}")
+
+    adapter = CellarEliAdapter(fetch=_failing_fetch)
+
+    with pytest.raises(CellarFetchError):
+        adapter.fetch_regulatory_instrument_metadata("32020R1111")
+
+
+@pytest.mark.parametrize(
+    ("identifier", "rdf"),
+    [
+        pytest.param("32020R1111", _RDF_EMPTY_FIXTURE, id="unresolvable-effective-date"),
+        pytest.param("32020X1111", _RDF_FIXTURE_REGULATION_A, id="unsupported-celex-type-code"),
+    ],
+)
+def test_fetch_regulatory_instrument_metadata_propagates_cellar_parse_error_unchanged(
+    identifier: str, rdf: bytes
+) -> None:
+    adapter = CellarEliAdapter(
+        fetch=lambda _identifier: _FIXTURE_REGULATION_A,
+        fetch_rdf=lambda _identifier: rdf,
+    )
+
+    with pytest.raises(CellarParseError):
+        adapter.fetch_regulatory_instrument_metadata(identifier)
+
+
+def test_satisfies_metadata_fetching_adapter_protocol() -> None:
+    adapter: MetadataFetchingAdapter = CellarEliAdapter(
+        fetch=_dispatching_fetch, fetch_rdf=_dispatching_fetch_rdf
+    )
+
+    metadata = adapter.fetch_regulatory_instrument_metadata("32020R1111")
+
+    assert metadata.title == "Regulation (EU) 1111/1111 Fixture A"

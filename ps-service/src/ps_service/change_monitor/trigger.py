@@ -14,7 +14,8 @@ no nested conditionals (complexity <= 8).
 `already_processed`); the body is a flat orchestration over them.
 
 The `national_transposition` guard (AC-010, `_guard_national_transposition`)
-runs after the `already_processed` short-circuit and before any write.
+runs only on the `fresh` path, once preflight has ruled out `resume` and
+`already_processed`, and before the ingest and any write.
 
 `fresh` ordering (AC-006/007): `_preflight` -> guard ->
 `ingest_regulatory_instrument` -> `set_new_version_property` -> the single
@@ -26,7 +27,7 @@ nothing written (AC-007), mirroring `ingestion.pipeline`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from ps_service.change_monitor.errors import (
     ChangeMonitorStateError,
@@ -40,12 +41,13 @@ from ps_service.change_monitor.succession import (
     new_node_exists,
     set_new_version_property,
 )
+from ps_service.ingestion.adapters.base import IngestionAdapter
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import emit_log_entry
 
 if TYPE_CHECKING:
     from ps_service.change_monitor.falkordb_client import GraphHandle
-    from ps_service.ingestion.adapters.base import IngestionAdapter
+    from ps_service.ingestion.models import RegulatoryInstrumentMetadata
     from ps_service.logging import LogEmitter
 
 _COMPONENT = "change_monitor"
@@ -56,6 +58,20 @@ _LINK_OUTCOME = "superseded"
 # instrument-type token, not a regulation name or CELEX, so it is free of the
 # AC-011 "no regulation literal in a conditional" constraint.
 _NATIONAL_TRANSPOSITION = "national_transposition"
+
+
+class MetadataFetchingAdapter(IngestionAdapter, Protocol):
+    """An `IngestionAdapter` that can also fetch an instrument's metadata alone.
+
+    Scoped to `change_monitor` rather than added to the shared
+    `IngestionAdapter`, which maps 1:1 to the CA doc's single
+    `FetchRegulatoryInstrumentStructure` action: the guard only needs
+    `instrument_type`, and no other caller needs the capability.
+    """
+
+    def fetch_regulatory_instrument_metadata(self, identifier: str) -> RegulatoryInstrumentMetadata:
+        """Fetch `identifier`'s metadata alone, without parsing its structure."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +117,7 @@ def _preflight(graph: GraphHandle, new_id: str) -> _Preflight:
 
 
 def _guard_national_transposition(
-    preflight: _Preflight, *, adapter: IngestionAdapter, identifier: str
+    preflight: _Preflight, *, adapter: MetadataFetchingAdapter, identifier: str
 ) -> None:
     """Reject a `national_transposition` instrument before any ingest or write (AC-010).
 
@@ -110,13 +126,19 @@ def _guard_national_transposition(
     1. The prior node's `instrument_type`, carried through `_preflight`. This
        is the *only* limb that can actually fire for `CellarEliAdapter`
        today -- the real AC-010 guard.
-    2. Belt-and-braces: one `fetch_regulatory_instrument_structure` call,
-       rejecting the fetched metadata's `instrument_type`. This limb is
-       *untested-by-construction for `CellarEliAdapter`* -- its type-code map
-       is `{R: regulation, L: directive}` and it raises `CellarParseError`
+    2. Forward-looking defence: one `fetch_regulatory_instrument_metadata` call
+       (metadata only, no structural parse), rejecting the fetched metadata's
+       `instrument_type`. This limb is *untested-by-construction for
+       `CellarEliAdapter`* -- its type-code map is
+       `{R: regulation, L: directive}` and it raises `CellarParseError`
        for anything else, so a `national_transposition` structure can never
-       come back. Kept as a forward-looking defence at the cost of one extra
-       fetch+parse (the pipeline fetches again -- Follow-on B removes it).
+       come back. Only the structural parse is avoided: the metadata fetch
+       still issues `extract_metadata` HTTP, which the ingest repeats on
+       `fresh`, so that request is made twice.
+
+    The guard runs on the `fresh` path only. A resumable state (the new node
+    already exists) implies the ingest, which is gated by this guard, already
+    passed it for the same prior/new pair, so `resume` needs no guard.
 
     Only the `== national_transposition` comparison is made here -- there is
     deliberately no `regulation` vs `directive` branch (AC-010/AC-011): the
@@ -124,8 +146,8 @@ def _guard_national_transposition(
     """
     if preflight.prior_instrument_type == _NATIONAL_TRANSPOSITION:
         raise NationalTranspositionNotSupportedError
-    structure = adapter.fetch_regulatory_instrument_structure(identifier)
-    if structure.metadata.instrument_type == _NATIONAL_TRANSPOSITION:
+    metadata = adapter.fetch_regulatory_instrument_metadata(identifier)
+    if metadata.instrument_type == _NATIONAL_TRANSPOSITION:
         raise NationalTranspositionNotSupportedError
 
 
@@ -146,7 +168,7 @@ def trigger_reingestion(
     short_name: str,
     new_version: str,
     *,
-    adapter: IngestionAdapter,
+    adapter: MetadataFetchingAdapter,
     graph: GraphHandle,
     emitter: LogEmitter | None = None,
     run_id: str | None = None,
@@ -164,8 +186,8 @@ def trigger_reingestion(
     carrying the re-ingest's `run_id`, and return `outcome="superseded"`.
 
     `resume` (a crash between ingest and succession): skip the re-ingest,
-    run only the idempotent fused write, emit one entry with `run_id=None`,
-    return `outcome="superseded"`.
+    make no adapter call and run no guard, run only the idempotent fused
+    write, emit one entry with `run_id=None`, return `outcome="superseded"`.
 
     `already_processed`: a no-op returning `run_id=None` and emitting nothing
     (a repeat call is not a new supersession event).
@@ -189,8 +211,6 @@ def trigger_reingestion(
             ingest_counts=None,
         )
 
-    _guard_national_transposition(preflight, adapter=adapter, identifier=identifier)
-
     prior_id = preflight.prior_id
     if prior_id is None:  # unreachable: _preflight sets prior_id for fresh / resume
         raise ChangeMonitorStateError(
@@ -207,6 +227,8 @@ def trigger_reingestion(
             outcome="superseded",
             ingest_counts=None,
         )
+
+    _guard_national_transposition(preflight, adapter=adapter, identifier=identifier)
 
     result = ingest_regulatory_instrument(
         identifier,
