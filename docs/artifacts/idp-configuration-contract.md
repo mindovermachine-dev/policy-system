@@ -156,7 +156,8 @@ invitation-stage API itself, using its own `PS_AUTHENTIK_API_TOKEN`/
 gated to callers holding `SystemAdmin` or above (`SystemOwner` counts). The
 tool returns the created invite's `itoken` and redemption `invite_url`;
 delivering that URL to the invitee is still the admin's own responsibility — no
-email is sent by PS Service or the skill.
+email is sent by PS Service or the skill. An unredeemed invite link expires 30
+minutes after it is created.
 
 The API token is the same random value the chart generates once and hands to
 Authentik as its `AUTHENTIK_BOOTSTRAP_TOKEN` (Secret
@@ -241,6 +242,7 @@ configuration beyond the four values above was involved.
   request that resolves it, including a stray `curl`/prefetch, not only a
   completed enrollment — see `docs/architecture/customer-azure-deployment.md`'s
   Open Risks for the full note on distribution-channel link-prefetching.
+  The link also expires 30 minutes after creation if not redeemed; create a new invite.
 
 ## Optional: federate to an upstream IdP
 

@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, Self
 
 from ps_service.invitations.errors import AuthentikInvitationError
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from ps_service.config import ServiceConfig
 
 _TIMEOUT_SECONDS = 30.0
+_INVITATION_TTL = timedelta(minutes=30)
 _INVITATION_PATH = "/api/v3/stages/invitation/invitations/"
 _ENROLLMENT_FLOW_PATH = "/if/flow/ps-invite-enrollment/"
 
@@ -84,9 +86,13 @@ def create_invitation(
     using `config.authentik_api_token` as the bearer credential -- PS
     Service's own configured service credential, never a caller-supplied
     token. The request body is `{"name": "ps-invite-<random>", "single_use":
-    true, "fixed_data": {"email": email}}`: `name` carries a random suffix,
-    not the raw email, because Authentik requires `name` unique and a repeat
-    invite to the same address must not collide with a still-pending one.
+    true, "fixed_data": {"email": email}, "expires": <now + 30 minutes,
+    timezone-aware ISO-8601>}`: `name` carries a random suffix, not the raw
+    email, because Authentik requires `name` unique and a repeat invite to
+    the same address must not collide with a still-pending one. Invites lapse
+    30 minutes after creation (fixed, not configurable) because an unredeemed
+    invite URL would otherwise stay redeemable indefinitely; `expires` is
+    computed per call.
 
     The invitee-facing link is built from `config.authentik_public_url` when
     set (issue #165: the API base may be an in-cluster URL the invitee cannot
@@ -118,6 +124,7 @@ def create_invitation(
             "name": f"ps-invite-{uuid.uuid4().hex[:12]}",
             "single_use": True,
             "fixed_data": {"email": email},
+            "expires": (datetime.now(UTC) + _INVITATION_TTL).isoformat(),
         }
     ).encode()
     request = urllib.request.Request(  # noqa: S310 -- `config.authentik_base_url` is an operator-configured service credential's own base URL, not caller-supplied input

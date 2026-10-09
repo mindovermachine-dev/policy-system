@@ -63,12 +63,11 @@ artifact would add nothing a copy affordance doesn't.)
 - **Invite URL in a persisted transcript — decided: accept it.** The audit trail
   deliberately records the invitee email but never the token or URL, yet PSC-6 persists
   both inside the server-held conversation. The URL stays in the transcript: the invite is
-  single-use and bound to one email. Residual risk: until issue #220 (30-minute invite
-  expiry) is delivered, an unredeemed invite never expires, so its URL stays redeemable
-  for as long as the transcript exists. This is the first concrete instance of Q-11's
-  retention question.
+  single-use, bound to one email, and expires 30 minutes after creation, so an unredeemed
+  URL in a persisted transcript is dead after 30 minutes and a redeemed invite is already
+  dead. This is the first concrete instance of Q-11's retention question.
 - **Outstanding-invite visibility — decided: v1 builds no list or revoke.** The IdP's own
   admin UI is the only place to see or revoke previously issued invites, and ps-client
-  points there. Once issue #220 lands, an unredeemed invite lapses after 30 minutes, so a
+  points there. An unredeemed invite lapses after 30 minutes, so a
   forgotten invite needs no cleanup; a wrong-address invite can be revoked in the IdP UI
   or left to lapse.

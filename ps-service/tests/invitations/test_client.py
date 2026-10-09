@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import email.message
 import json
+import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from typing import NoReturn, Self
 
 import pytest
@@ -87,7 +89,7 @@ class _FailingTransport:
 
 def test_create_invitation_sends_exact_request_body_and_headers() -> None:
     """CHANGES.md Appendix C: assert exact JSON body equality (bar the random
-    `name` suffix), the `Authorization` header, and the HTTP method.
+    `name` suffix and the time-derived `expires`), the `Authorization` header, and the HTTP method.
     """
     transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
 
@@ -101,10 +103,70 @@ def test_create_invitation_sends_exact_request_body_and_headers() -> None:
     name = body.pop("name")
     assert isinstance(name, str)
     assert name.startswith("ps-invite-")
+    assert isinstance(body.pop("expires"), str)
     assert body == {"single_use": True, "fixed_data": {"email": _EMAIL}}
     assert request.get_header("Authorization") == f"Bearer {_TOKEN}"
     assert request.get_method() == "POST"
     assert request.full_url == f"{_BASE_URL}/api/v3/stages/invitation/invitations/"
+
+
+def _body_of(request: urllib.request.Request) -> dict[str, object]:
+    request_data = request.data
+    assert isinstance(request_data, bytes)
+    body = json.loads(request_data)
+    assert isinstance(body, dict)
+    return body  # pyright: ignore[reportUnknownVariableType]
+
+
+def _expires_of(request: urllib.request.Request) -> datetime:
+    raw = _body_of(request)["expires"]
+    assert isinstance(raw, str)
+    expires = datetime.fromisoformat(raw)
+    assert expires.tzinfo is not None
+    return expires
+
+
+_TOLERANCE = timedelta(seconds=5)
+_TTL = timedelta(minutes=30)
+
+
+def test_create_invitation_body_expires_is_tz_aware_iso_within_5s_of_now_plus_30_minutes() -> None:
+    transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
+
+    before = datetime.now(UTC)
+    create_invitation(_config(), _EMAIL, transport=transport)
+    after = datetime.now(UTC)
+
+    expires = _expires_of(transport.requests[0])
+    assert before + _TTL - _TOLERANCE <= expires <= after + _TTL + _TOLERANCE
+    body = _body_of(transport.requests[0])
+    assert body["single_use"] is True
+    assert body["fixed_data"] == {"email": _EMAIL}
+    name = body["name"]
+    assert isinstance(name, str)
+    assert name.startswith("ps-invite-")
+
+
+def test_create_invitation_computes_expires_per_call_not_shared_across_invites() -> None:
+    transport = _RecordingTransport(json.dumps({"pk": "abc123"}).encode())
+
+    before_1 = datetime.now(UTC)
+    create_invitation(_config(), _EMAIL, transport=transport)
+    after_1 = datetime.now(UTC)
+    time.sleep(0.05)
+    before_2 = datetime.now(UTC)
+    create_invitation(_config(), _EMAIL, transport=transport)
+    after_2 = datetime.now(UTC)
+
+    expires_1 = _expires_of(transport.requests[0])
+    expires_2 = _expires_of(transport.requests[1])
+    assert before_1 + _TTL <= expires_1 <= after_1 + _TTL
+    assert before_2 + _TTL <= expires_2 <= after_2 + _TTL
+    assert expires_2 > expires_1
+
+
+def test_create_invitation_docstring_lists_expires_in_request_body() -> None:
+    assert "expires" in (create_invitation.__doc__ or "")
 
 
 def test_create_invitation_returns_itoken_and_invite_url_from_response_pk() -> None:

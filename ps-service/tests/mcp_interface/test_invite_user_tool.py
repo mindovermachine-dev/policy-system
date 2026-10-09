@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -110,6 +111,11 @@ def test_system_admin_caller_succeeds_and_returns_itoken_and_url(
         "invite_url": "https://authentik.example.com/if/flow/ps-invite-enrollment/?itoken=tok-abc",
     }
     assert len(transport.requests) == 1
+    sent = transport.requests[0].data
+    assert isinstance(sent, bytes)
+    expires = json.loads(sent)["expires"]
+    assert isinstance(expires, str)
+    assert datetime.fromisoformat(expires).tzinfo is not None
 
 
 @pytest.mark.parametrize("bad_email", ["not-an-email", "", "missing-domain@"])
