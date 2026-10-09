@@ -2,7 +2,7 @@
   "name": "ps-plugin",
   "displayName": "Policy System Plugin",
   "description": "Ask compliance questions, ingest and check EU regulations, review near-miss dedup candidates, find duplicate capabilities for Compliance Officer graph cleanup, list ingested instruments, and list and restore curated instruments against the Policy System knowledge graph via PS Service's remote MCP connector.",
-  "version": "3.19.1",
+  "version": "3.19.2",
   "author": { "name": "Mind Over Machine" },
   "repository": "https://github.com/mindovermachine-dev/policy-system",
   "homepage": "https://github.com/mindovermachine-dev/policy-system/blob/main/docs/artifacts/user-guide.md#using-claude-desktop---code",
