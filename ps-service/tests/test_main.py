@@ -2358,6 +2358,9 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
     assert entry["principal"] == mcp_server.LOCAL_TEST_PRINCIPAL_ID
 
 
+_REPLAY_START_TIMEOUT_SECONDS = 5.0
+
+
 class _FakeStartupGateway:
     """A startup-replayable gateway that records how it was driven (no Postgres, no FalkorDB)."""
 
@@ -2369,6 +2372,7 @@ class _FakeStartupGateway:
         self.calls: list[str] = []
         self.replay_threads: list[int] = []
         self.stop_timeouts: list[float] = []
+        self.replay_started = threading.Event()
 
     def hold_for_startup_replay(self) -> None:
         self.calls.append("hold")
@@ -2376,6 +2380,7 @@ class _FakeStartupGateway:
     def run_startup_replay(self) -> StartupReplayReport:
         self.calls.append("replay")
         self.replay_threads.append(threading.get_ident())
+        self.replay_started.set()
         if self.failure is not None:
             raise self.failure
         return self.result
@@ -2520,8 +2525,12 @@ def test_lifespan_replays_the_graph_log_in_the_background_and_stops_it_before_th
         assert app.state.graph_write_gateway is fake
         assert fake.calls[0] == "hold"
         assert fake.stop_timeouts == []
+        # The replay runs on a worker thread; leave the client only once it has started so the
+        # recorded order is deterministic on a slow runner.
+        assert fake.replay_started.wait(timeout=_REPLAY_START_TIMEOUT_SECONDS), (
+            "the startup replay never started"
+        )
 
-    assert "replay" in fake.calls
     assert fake.calls[-2:] == ["stop_replay", "stop_reconciler"]
     assert fake.stop_timeouts == [5.0]
 
