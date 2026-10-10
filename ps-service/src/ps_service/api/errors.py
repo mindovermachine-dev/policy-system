@@ -46,6 +46,16 @@ class IngestionConfigIncompleteError(ApiError):
     """
 
 
+class GraphWriteUnavailableError(ApiError):
+    """No Graph Write Gateway exists, so the request would have to write to a graph directly.
+
+    Raised by an ingestion pipeline before any graph is opened when the service has no gateway
+    (the PS state Postgres that holds the graph log is not configured, or the gateway could not
+    be built at startup). Fail-closed by design (issue #208): a graph write never falls back to
+    a direct FalkorDB write. Handled as HTTP 503; ``str(exc)`` is surfaced verbatim.
+    """
+
+
 class RestoreArtifactRejectedError(ApiError):
     """A ``POST /restorations`` artifact failed integrity/schema-version verification.
 

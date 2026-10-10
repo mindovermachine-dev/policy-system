@@ -19,6 +19,7 @@ from ps_service.graph_gateway.models import (
     GraphLogEntryDraft,
     MergeProperty,
     RemoveProperty,
+    StampEdgeIdentity,
     UpsertEdge,
     UpsertNode,
 )
@@ -64,7 +65,7 @@ def encode_primitive(primitive: Primitive) -> GraphLogEntryDraft:
             return GraphLogEntryDraft(
                 name=primitive.label, identity=primitive.id, content={"op": primitive.op}
             )
-        case DeleteEdge():
+        case DeleteEdge() | StampEdgeIdentity():
             return GraphLogEntryDraft(
                 name=primitive.type,
                 identity=primitive.identity,
@@ -98,6 +99,8 @@ def decode_entry(entry: GraphLogEntry) -> Primitive:
                 return UpsertEdge.model_validate(_edge_fields(entry, with_properties=True))
             case "delete_edge":
                 return DeleteEdge.model_validate(_edge_fields(entry, with_properties=False))
+            case "stamp_edge_identity":
+                return StampEdgeIdentity.model_validate(_edge_fields(entry, with_properties=False))
             case "merge_property" | "remove_property" | "delete_node":
                 return _node_primitive(entry)
             case _:

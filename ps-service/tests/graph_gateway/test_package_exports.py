@@ -19,6 +19,8 @@ _GATEWAY_SURFACE = (
     "RemoveProperty",
     "DeleteNode",
     "DeleteEdge",
+    "StampEdgeIdentity",
+    "backfill_edge_identity",
     "NodeRef",
     "ExpectedPosition",
     "GraphWriteRejectedError",
@@ -47,5 +49,6 @@ def test_front_door_docstring_describes_the_gateway_not_only_the_store() -> None
 
     assert "separate sub-issue" not in doc
     assert "currently holds the store half" not in doc
-    for needle in ("#206", "log-first", "no writer", "provision"):
+    for needle in ("#206", "log-first", "#208", "provision"):
         assert needle in doc, needle
+    assert "no writer is wired" not in doc

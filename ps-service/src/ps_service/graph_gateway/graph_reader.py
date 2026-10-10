@@ -15,6 +15,8 @@ from ps_service.graph_gateway.cypher import (
     node_exists_query,
     node_state_query,
     node_state_rows,
+    unidentified_edge_state_query,
+    unidentified_edge_state_rows,
 )
 from ps_service.graph_gateway.errors import UnexpectedGraphReplyError
 from ps_service.graph_gateway.exact_floats import PROPERTY_COLUMN_COUNT, restore_properties
@@ -30,6 +32,9 @@ type NodeKey = tuple[str, str]
 type EdgeKey = tuple[str, str, str, str, str, str]
 """`(type, source label, source id, target label, target id, identity)` of an edge."""
 
+UNIDENTIFIED = ""
+"""The identity slot of an edge key for an edge that has none (a real identity is never blank)."""
+
 STATE_READ_CHUNK_ROWS = 100
 """Most rows one node state read asks for: a state row can carry a 3,072-double embedding."""
 
@@ -37,6 +42,8 @@ _REPLY_MESSAGE = "the graph answered a state read with an unexpected shape"
 
 _NODE_WIDTH = 5
 """A node state row: id and the four property columns."""
+_UNIDENTIFIED_EDGE_WIDTH = 6
+"""An identity-less edge state row: source id, target id and the four property columns."""
 _EDGE_WIDTH = 7
 """An edge state row: source id, target id, identity and the four property columns."""
 
@@ -109,6 +116,38 @@ def read_edges(
                     _text(row[2]),
                 )
                 found[key] = _properties(row[3:], drop=_IDENTITY)
+    return found
+
+
+def read_unidentified_edges(
+    graph: GraphHandle, edges: Iterable[EdgeKey], batch_size: int
+) -> dict[EdgeKey, dict[str, object]]:
+    """Return the properties of each of `edges` (identity ignored) that the graph holds without one.
+
+    Keys come back with an empty identity. Several identity-less edges between the same two nodes
+    read as one (the last), which is all a stamp needs: it gives every one of them the identity.
+    """
+    by_shape: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+    for relationship_type, source_label, source_id, target_label, target_id, _ in sorted(
+        set(edges)
+    ):
+        shape = (relationship_type, source_label, target_label)
+        by_shape.setdefault(shape, []).append((source_id, target_id))
+    found: dict[EdgeKey, dict[str, object]] = {}
+    for (relationship_type, source_label, target_label), members in by_shape.items():
+        query = unidentified_edge_state_query(relationship_type, source_label, target_label)
+        for chunk in _chunks(members, batch_size):
+            result = graph.query(query, {"rows": unidentified_edge_state_rows(chunk)})
+            for row in (_row(item, _UNIDENTIFIED_EDGE_WIDTH) for item in result.result_set):
+                key = (
+                    relationship_type,
+                    source_label,
+                    _text(row[0]),
+                    target_label,
+                    _text(row[1]),
+                    UNIDENTIFIED,
+                )
+                found[key] = _properties(row[2:], drop=_IDENTITY)
     return found
 
 

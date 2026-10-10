@@ -18,6 +18,10 @@ import redis.exceptions
 from ps_service.dependency_health import FALKORDB, mark_healthy
 from ps_service.graph_gateway.applier import apply_entries
 from ps_service.graph_gateway.digest import canonical_digest
+from ps_service.graph_gateway.edge_identity_backfill import (
+    EdgeIdentityBackfillOutcome,
+    backfill_edge_identity,
+)
 from ps_service.graph_gateway.entry_codec import encode_primitive
 from ps_service.graph_gateway.errors import (
     GraphApplyBlockedError,
@@ -172,6 +176,35 @@ class GraphWriteGateway:
         self._gate.require_open(group.graph)
         with self._locks.lock_for(group.graph), self._failure_logged(group.graph):
             return self._submit_locked(group)
+
+    def stamp_legacy_edge_identity(
+        self, graph: str, audit_event_id: str
+    ) -> EdgeIdentityBackfillOutcome:
+        """Give the identity-less edges of `graph` their identity before a writer's first group.
+
+        A graph written before the gateway holds edges with no `identity`; the gateway merges
+        edges on it, so a write onto such a graph would add parallel edges (issue #208, F1). The
+        graph is first caught up with its log (the scan must see what the log wrote), then
+        scanned read-only; only if an identity-less edge exists one `StampEdgeIdentity` group is
+        logged under `audit_event_id`. A graph with none (a fresh graph, a stamped one) costs one
+        read and logs nothing. Idempotent.
+
+        Raises:
+            GraphUnavailableError: FalkorDB could not be reached for the scan.
+            GraphWriteRejectedError, GraphApplyError, GraphLogPersistenceError,
+                GraphLogUnavailableError: as `submit_group`, `catch_up` and `is_caught_up`.
+            UnexpectedGraphReplyError: the scan reply has an unrecognised shape.
+        """
+        self._gate.require_open(graph)
+        if not self.is_caught_up(graph):
+            self.catch_up(graph)
+        try:
+            reader = self._graph_opener(graph)
+            return backfill_edge_identity(
+                self, graph, audit_event_id, reader=reader, emitter=self._emitter
+            )
+        except redis.exceptions.RedisError as exc:
+            raise GraphUnavailableError from exc
 
     def submit_group_in_transaction(
         self, cur: psycopg.Cursor[TupleRow], group: MutationGroup

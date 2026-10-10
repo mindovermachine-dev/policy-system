@@ -1,30 +1,27 @@
-"""FalkorDB persistence for the RegulatoryInstrument node and native structural graph.
+"""The native structural graph of one external ingestion: what is written, and how it is checked.
 
-Implements PLAN_REVIEWED.md §7 Increments 8-10:
+Since issue #208 nothing here writes to FalkorDB. The module builds the primitives the Graph Write
+Gateway applies (`pipeline.py` submits them) and reads the graph to check the result:
 
-- `register_regulatory_instrument_version` — parameterized MERGE of the RegulatoryInstrument
-  node. `"RegulatoryInstrument"` is a fixed-literal label (never externally sourced),
-  so no allow-list check applies to it — contrast `_upsert_node` below,
-  whose label comes from adapter-supplied `element_type` and must be
-  allow-listed before every write.
-- `persist_native_structural_graph` — THE B1 FIX. `_validate_element_types`
-  validates every node's/edge's `element_type` against
-  `_KNOWN_ELEMENT_TYPES` in a whole-collection first pass, raising
-  `IngestionPersistenceError` on the first violation found, before
-  `persist_native_structural_graph` issues a single `graph.query()` call
-  for any element (PLAN_REVIEWED.md §4.2). Only after validation passes
-  completely does this function loop and write every node/edge — this is
-  what makes the CA doc's `PersistNativeStructuralGraph` post-condition
-  ("Abort with no partial write if structure can't be fully persisted")
-  actually hold for a real 200-800+ node regulation, instead of the
-  original per-element-interleaved design that let earlier nodes get
-  written before a later invalid element was ever seen.
-- `verify_structural_graph_reachable` — AC-004's reachability check: for
-  every structural label, no node may be an orphan — unreachable from
-  *every* RegulatoryInstrument node via `HAS` (any depth). Version-agnostic
-  (a `{short}_native` graph can hold several coexisting versions' subtrees
-  after a Change-Monitor re-ingest). Raises `IngestionPersistenceError` —
-  not a silent warning — on any orphan.
+- `build_native_writes` — validates and builds the RegulatoryInstrument node, the structural nodes
+  and the `HAS` edges. `_validate_element_types` is THE B1 FIX: it validates every node's/edge's
+  `element_type` against `_KNOWN_ELEMENT_TYPES` in a whole-collection first pass, raising
+  `IngestionPersistenceError` on the first violation found, before a single primitive exists
+  (PLAN_REVIEWED.md §4.2), so the CA doc's `PersistNativeStructuralGraph` post-condition
+  ("Abort with no partial write if structure can't be fully persisted") holds for a real
+  200-800+ node regulation: the whole graph is one group, which the gateway commits or rejects
+  as a whole.
+- `read_existing_nodes` / `build_native_group` — an edge whose endpoint is neither in the group
+  nor already in the graph is dropped, silently (AC-BI-004). The legacy `MATCH ... MERGE` matched
+  zero rows for it; the gateway would reject the whole group. One batched read per label, issued
+  once, immediately before the submit (a node deleted in between makes the gateway reject the
+  group: the pre-flight/write race that was always accepted, mapped to the persistence error).
+- `verify_structural_graph_reachable` — AC-004's reachability check: for every structural label,
+  no node may be an orphan — unreachable from *every* RegulatoryInstrument node via `HAS` (any
+  depth). Version-agnostic (a `{short}_native` graph can hold several coexisting versions'
+  subtrees after a Change-Monitor re-ingest). Raises `IngestionPersistenceError` — not a silent
+  warning — on any orphan. It reads the live graph, so the caller runs it only once the graph
+  holds everything committed (`graph_submission.require_caught_up`).
 
 Structural node/edge ids are used exactly as produced by the Cellar/ELI
 adapter (CELEX-prefixed, e.g. `"32024R2847#art_1"`) — never rewritten or
@@ -34,58 +31,41 @@ node id prefixing" section): graph-per-regulation scoping (one FalkorDB
 graph per regulation, `falkordb_client.native_graph_name`, PLAN_REVIEWED.md
 §4.1) already makes CELEX-prefixed ids globally unique within their graph
 and deterministic across re-ingest, so AC-004's reachability/count checks
-below are traversal- and count-based, not id-string-based.
+are traversal- and count-based, not id-string-based.
 
 **Increment 13 fix — RegulatoryInstrument-anchored edge endpoint substitution.** The
 adapter never sees the final `{SHORT}-{VERSION}` regulation id (only the
 raw CELEX `identifier` it was called with — see the id-prefixing decision
 above), so every `StructuralEdge` it produces with `parent_element_type ==
 "RegulatoryInstrument"` carries that CELEX identifier as a *placeholder*
-`parent_id`, not the real RegulatoryInstrument node's id. The real RegulatoryInstrument node is
-registered separately by `register_regulatory_instrument_version`, keyed by the
-caller-supplied `regulatory_instrument_id` (`pipeline.py`'s `f"{short_name}-{version}"`).
-Left unsubstituted, `_upsert_edge`'s `MATCH (a:RegulatoryInstrument {id: $parent_id})`
-matches zero rows for every top-level structural edge (the CELEX string
-never equals any real RegulatoryInstrument node's id), so the `MERGE` silently never
-fires — every Chapter/Recital/Annex that anchors directly to RegulatoryInstrument
-would end up completely unreachable, breaking AC-004 for the entire
-graph, not just those top-level nodes (anything nested under them becomes
-unreachable transitively too). `persist_native_structural_graph`'s
-`regulatory_instrument_id` parameter — previously unused, see IMPL_8_10.md's flagged
-deviation #1 — is exactly what closes this gap: `_upsert_edge` now
-substitutes it for `edge.parent_id` whenever `edge.parent_element_type ==
-"RegulatoryInstrument"`, and uses `edge.parent_id` unchanged for every other edge.
-This is not a rewrite of the structural id space (`StructuralNode.id`/
-non-RegulatoryInstrument `StructuralEdge` endpoints are untouched) — only the one
-endpoint the adapter cannot know by design. Found and fixed via
-Increment 13's live 3-regulation run (CRA's ANNEX nodes: 8 persisted, 0
-reachable, before this fix) — the existing fake-graph unit tests below
-never caught this because their own `_edge(...)` fixtures already set
-`parent_id` equal to `regulatory_instrument_id` by construction, never modeling the
-real CELEX-vs-final-id mismatch the live adapter->pipeline handoff
-produces.
+`parent_id`, not the real RegulatoryInstrument node's id. `_has_edge` substitutes the
+caller-supplied `regulatory_instrument_id` for it, and uses `edge.parent_id` unchanged for every
+other edge. Left unsubstituted, every top-level structural edge would name a node that does not
+exist, and every Chapter/Recital/Annex that anchors directly to the RegulatoryInstrument (and
+everything nested under them) would end up unreachable, breaking AC-004 for the whole graph.
 
-Query Safety (L2): `element_type` becomes a FalkorDB node/edge-endpoint
-label via f-string interpolation in `_upsert_node`/`_upsert_edge` — Cypher
-cannot parameterize a label. This is safe *only* because
-`_validate_element_types` already checked every element_type against the
-allow-list before any query executes; the allow-list check IS the safety
-boundary, not anything inside the f-string itself.
-`_upsert_node`/`_upsert_edge` never re-check — they only ever issue the
-write. `verify_structural_graph_reachable` interpolates a label the same
-way, but its labels come from iterating `_KNOWN_ELEMENT_TYPES` /
-`_REGULATORY_INSTRUMENT_LABEL` directly (this module's own fixed constants), not from
-any externally-sourced value, so no separate allow-list check is needed
-there either.
+Gateway delta (issue #208): every edge carries an `identity`, `HAS:<parent>-><child>` (the gateway's
+merge key; the legacy edges had none), and a node property the gateway reserves (`id`,
+`embedding`) or cannot store (a non-finite number) is rejected instead of silently rewriting the
+node id.
+
+Query Safety (L2): `element_type` becomes a FalkorDB label via f-string interpolation in
+`read_existing_nodes` and the reachability reads — Cypher cannot parameterize a label. This is
+safe because `_validate_element_types` already checked every element_type against the allow-list
+before any query executes (`read_existing_nodes` only takes labels from the built, validated
+edges); the reachability reads iterate this module's own fixed constants.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import redis.exceptions
+from pydantic import ValidationError
 
 from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.models import MutationGroup, NodeRef, UpsertEdge, UpsertNode
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.models import (
     ReachabilityCount,
@@ -112,10 +92,10 @@ _KNOWN_ELEMENT_TYPES = frozenset(
 )
 
 
-def _execute_query(
+def _read_query(
     graph: GraphHandle, query: str, params: dict[str, object] | None = None
 ) -> GraphQueryResult:
-    """The one call site every `graph.query()` write/read in this module goes through.
+    """The one call site every `graph.query()` read in this module goes through.
 
     FalkorDB connectivity failures get recorded in
     `ps_service.dependency_health` for `/ready`'s live signal, self-healing
@@ -139,56 +119,19 @@ def _execute_query(
     return result
 
 
-def register_regulatory_instrument_version(
-    graph: GraphHandle, regulatory_instrument_id: str, metadata: RegulatoryInstrumentMetadata
-) -> None:
-    """MERGE the RegulatoryInstrument node, keyed by `regulatory_instrument_id`.
-
-    The id is `{SHORT}-{VERSION}`, computed by the caller — see
-    `pipeline.py`, never by this function or an adapter.
-
-    All bibliographic fields flow through `params` only, never
-    interpolated into the query string (L2 Query Safety's parameterization
-    rule) — the query string itself contains no metadata value, only
-    `RegulatoryInstrument` (a fixed literal, not user/adapter-sourced) and the `$id`/
-    `$properties` placeholder names. `effective_date` is serialized via
-    `.isoformat()` since FalkorDB query params don't accept a raw
-    `datetime.date` object.
-    """
-    properties: dict[str, object] = {
-        "title": metadata.title,
-        "jurisdiction": metadata.jurisdiction,
-        "effective_date": metadata.effective_date.isoformat(),
-        "version": metadata.version,
-        "status": metadata.status,
-        "source_type": metadata.source_type,
-    }
-    if metadata.instrument_type is not None:
-        properties["instrument_type"] = metadata.instrument_type
-    if metadata.celex is not None:
-        properties["celex"] = metadata.celex
-    _execute_query(
-        graph,
-        "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
-        params={"id": regulatory_instrument_id, "properties": properties},
-    )
-
-
 def _validate_element_types(
     nodes: tuple[StructuralNode, ...],
     edges: tuple[StructuralEdge, ...],
 ) -> None:
     """B1 FIX: a whole-collection validation pass.
 
-    Called once, before `persist_native_structural_graph` issues a single
-    `graph.query` call for ANY element — not interleaved
-    validate-then-write per element. Checks every node's `element_type` and
+    Called once, before `build_native_writes` builds a single primitive for ANY element — not
+    interleaved validate-then-build per element. Checks every node's `element_type` and
     every edge's parent/child `element_type` (`"RegulatoryInstrument"` is
     the one allowed non-`element_type` parent label, for edges anchoring a
     top-level structural node directly to the RegulatoryInstrument node)
     against the allow-list. Raises `IngestionPersistenceError` on the first
-    violation found, with zero `graph.query` calls having been made by the
-    time this raises.
+    violation found, with nothing built by the time this raises.
     """
     for node in nodes:
         if node.element_type not in _KNOWN_ELEMENT_TYPES:
@@ -211,65 +154,176 @@ def _validate_element_types(
             )
 
 
-def persist_native_structural_graph(
-    graph: GraphHandle,
-    regulatory_instrument_id: str,
-    nodes: tuple[StructuralNode, ...],
-    edges: tuple[StructuralEdge, ...],
-) -> None:
-    """Persist the whole structural graph, or nothing at all.
+# --- Graph Write Gateway builders (issue #208) ---
 
-    CA doc post-condition: "Abort with no partial write if structure can't
-    be fully persisted." Validation of the whole collection
-    (`_validate_element_types`) happens entirely before any write (B1 fix)
-    — if this function raises, the graph has recorded zero `query()` calls.
-    Only once validation passes completely does this loop and call
-    `_upsert_node`/`_upsert_edge` for every element.
 
-    `regulatory_instrument_id` is threaded into `_upsert_edge` (Increment 13 fix, see
-    module docstring): every edge whose `parent_element_type == "RegulatoryInstrument"`
-    has its `parent_id` substituted with this real, caller-supplied id at
-    write time, since the adapter that produced `edges` could only ever
-    stamp a CELEX-based placeholder there.
+@dataclass(frozen=True, slots=True)
+class NativeWrites:
+    """The primitives of one external ingestion's native graph, validated and not yet submitted.
+
+    `instrument` is the RegulatoryInstrument node, `nodes` the structural nodes in adapter
+    order, `edges` every `HAS` edge in adapter order (before the endpoints that exist nowhere
+    are dropped, which needs a read of the graph: `read_existing_nodes`).
     """
-    _validate_element_types(nodes, edges)
-    for node in nodes:
-        _upsert_node(graph, node)
-    for edge in edges:
-        _upsert_edge(graph, regulatory_instrument_id, edge)
+
+    instrument: UpsertNode
+    nodes: tuple[UpsertNode, ...]
+    edges: tuple[UpsertEdge, ...]
 
 
-def _upsert_node(graph: GraphHandle, node: StructuralNode) -> None:
-    # element_type already validated by _validate_element_types above —
-    # this function only ever issues the write, never the check.
-    _execute_query(
-        graph,
-        f"MERGE (n:{node.element_type} {{id: $id}}) SET n += $properties",
-        params={"id": node.id, "properties": node.properties},
+type NodeKey = tuple[str, str]
+"""A node by `(label, id)`."""
+
+type ExistingNodes = frozenset[NodeKey]
+"""The nodes a `read_existing_nodes` read found in the graph."""
+
+
+def _unstorable(what: str) -> IngestionPersistenceError:
+    return IngestionPersistenceError(
+        f"{what} has a property the graph cannot store "
+        "(a reserved key, or a value that is not finite or is out of range)"
     )
 
 
-def _upsert_edge(graph: GraphHandle, regulatory_instrument_id: str, edge: StructuralEdge) -> None:
-    # parent/child element_type already validated by _validate_element_types
-    # above — this function only ever issues the write, never the check.
-    #
-    # Increment 13 fix: `edge.parent_id` is a CELEX-based placeholder
-    # whenever `edge.parent_element_type == "RegulatoryInstrument"` (the adapter
-    # cannot know the real, caller-supplied `regulatory_instrument_id` — see this
-    # module's docstring). Substitute the real id for that one case only;
-    # every other edge's `parent_id` (a StructuralNode's own id) is used
-    # unchanged.
+def _instrument_properties(metadata: RegulatoryInstrumentMetadata) -> dict[str, object]:
+    """The bibliographic properties of the RegulatoryInstrument node (`effective_date` as ISO)."""
+    properties: dict[str, object] = {
+        "title": metadata.title,
+        "jurisdiction": metadata.jurisdiction,
+        "effective_date": metadata.effective_date.isoformat(),
+        "version": metadata.version,
+        "status": metadata.status,
+        "source_type": metadata.source_type,
+    }
+    if metadata.instrument_type is not None:
+        properties["instrument_type"] = metadata.instrument_type
+    if metadata.celex is not None:
+        properties["celex"] = metadata.celex
+    return properties
+
+
+def _structural_node(node: StructuralNode) -> UpsertNode:
+    try:
+        return UpsertNode(label=node.element_type, id=node.id, properties=dict(node.properties))
+    except ValidationError as exc:
+        raise _unstorable(f"{node.element_type} node {node.id!r}") from exc
+
+
+def _has_edge(regulatory_instrument_id: str, edge: StructuralEdge) -> UpsertEdge:
+    """One `HAS` edge; the adapter's placeholder RegulatoryInstrument parent id is replaced.
+
+    The adapter only knows the CELEX, so every edge anchored to the RegulatoryInstrument carries
+    it as `parent_id` (Increment 13); the real node id is the caller-supplied one. Same-type
+    edges between the same two nodes share an identity, as `MERGE (a)-[:HAS]->(b)` collapsed them.
+    """
     parent_id = (
         regulatory_instrument_id
         if edge.parent_element_type == _REGULATORY_INSTRUMENT_LABEL
         else edge.parent_id
     )
-    _execute_query(
-        graph,
-        f"MATCH (a:{edge.parent_element_type} {{id: $parent_id}}), "
-        f"(b:{edge.child_element_type} {{id: $child_id}}) "
-        "MERGE (a)-[:HAS]->(b)",
-        params={"parent_id": parent_id, "child_id": edge.child_id},
+    try:
+        return UpsertEdge(
+            type="HAS",
+            identity=f"HAS:{parent_id}->{edge.child_id}",
+            source=NodeRef(label=edge.parent_element_type, id=parent_id),
+            target=NodeRef(label=edge.child_element_type, id=edge.child_id),
+        )
+    except ValidationError as exc:
+        raise _unstorable(f"HAS edge {parent_id!r} -> {edge.child_id!r}") from exc
+
+
+def build_native_writes(
+    regulatory_instrument_id: str,
+    metadata: RegulatoryInstrumentMetadata,
+    nodes: tuple[StructuralNode, ...],
+    edges: tuple[StructuralEdge, ...],
+) -> NativeWrites:
+    """Build every primitive of one external ingestion's native graph, or raise before any exist.
+
+    Pure: nothing is read or submitted. The whole collection is validated first
+    (`_validate_element_types`, the B1 fix), so an invalid element anywhere means no primitive
+    reaches the caller.
+
+    Raises:
+        IngestionPersistenceError: an element type is outside the allow-list, or a node carries
+            a property the gateway cannot store (a reserved key such as `id`, a non-finite
+            number); the latter was silently accepted by the legacy `SET n += $properties`.
+    """
+    _validate_element_types(nodes, edges)
+    try:
+        instrument = UpsertNode(
+            label=_REGULATORY_INSTRUMENT_LABEL,
+            id=regulatory_instrument_id,
+            properties=_instrument_properties(metadata),
+        )
+    except ValidationError as exc:
+        raise _unstorable(f"RegulatoryInstrument {regulatory_instrument_id!r}") from exc
+    return NativeWrites(
+        instrument=instrument,
+        nodes=tuple(_structural_node(node) for node in nodes),
+        edges=tuple(_has_edge(regulatory_instrument_id, edge) for edge in edges),
+    )
+
+
+def _outside_endpoints(writes: NativeWrites) -> frozenset[NodeKey]:
+    """The edge endpoints that are not nodes of this group (they must already be in the graph)."""
+    in_group = {(writes.instrument.label, writes.instrument.id)} | {
+        (node.label, node.id) for node in writes.nodes
+    }
+    endpoints = {(ref.label, ref.id) for edge in writes.edges for ref in (edge.source, edge.target)}
+    return frozenset(endpoints - in_group)
+
+
+def read_existing_nodes(graph: GraphHandle, writes: NativeWrites) -> ExistingNodes:
+    """Read which of the edge endpoints outside `writes` already exist in the graph.
+
+    One batched read per label, issued once and immediately before the group is submitted; no
+    read at all when every endpoint is in the group. A read, so the write handle stays out of it.
+    The labels come from the validated edges, the ids are parameters (Query Safety).
+
+    Raises:
+        IngestionPersistenceError: FalkorDB could not be reached.
+    """
+    ids_by_label: dict[str, list[str]] = {}
+    for label, node_id in sorted(_outside_endpoints(writes)):
+        ids_by_label.setdefault(label, []).append(node_id)
+    found: set[NodeKey] = set()
+    for label, ids in ids_by_label.items():
+        result = _read_query(
+            graph, f"MATCH (n:{label}) WHERE n.id IN $ids RETURN n.id", params={"ids": ids}
+        )
+        rows = cast("list[list[object]]", result.result_set)
+        found.update((label, cast("str", row[0])) for row in rows)
+    return frozenset(found)
+
+
+def build_native_group(
+    writes: NativeWrites,
+    *,
+    existing: ExistingNodes,
+    graph_name: str,
+    audit_event_id: str,
+) -> MutationGroup:
+    """Assemble the one native group: the instrument, the structural nodes, then the edges.
+
+    An edge whose endpoint is neither in the group nor in `existing` is dropped, silently
+    (AC-BI-004): `MATCH ... MERGE` matched zero rows for it before, and the gateway would reject
+    the whole group for it. Dropped edges are never submitted, so nothing is logged for them.
+    """
+    present = {(writes.instrument.label, writes.instrument.id)} | {
+        (node.label, node.id) for node in writes.nodes
+    }
+    present |= existing
+    edges = tuple(
+        edge
+        for edge in writes.edges
+        if (edge.source.label, edge.source.id) in present
+        and (edge.target.label, edge.target.id) in present
+    )
+    return MutationGroup(
+        graph=graph_name,
+        audit_event_id=audit_event_id,
+        primitives=(writes.instrument, *writes.nodes, *edges),
     )
 
 
@@ -289,7 +343,7 @@ def _scalar_count(result: GraphQueryResult) -> int:
 
 
 def _count_nodes(graph: GraphHandle, label: str) -> int:
-    return _scalar_count(_execute_query(graph, f"MATCH (n:{label}) RETURN count(n)"))
+    return _scalar_count(_read_query(graph, f"MATCH (n:{label}) RETURN count(n)"))
 
 
 def _count_orphans(graph: GraphHandle, label: str) -> int:
@@ -305,7 +359,7 @@ def _count_orphans(graph: GraphHandle, label: str) -> int:
     RegulatoryInstrument is counted.
     """
     return _scalar_count(
-        _execute_query(
+        _read_query(
             graph,
             f"MATCH (n:{label}) WHERE NOT (:RegulatoryInstrument)-[:HAS*1..]->(n) RETURN count(n)",
         )

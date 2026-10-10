@@ -49,6 +49,7 @@ from ps_service.api.change_check_orchestration import (
     build_default_change_check_dependencies,
     run_change_check_sweep,
 )
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     build_default_pipeline_dependencies,
@@ -69,6 +70,7 @@ from ps_service.domain_mapper.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     OBLIGATION_DERIVATION_SYSTEM_PROMPT,
 )
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
     RegulatoryInstrumentMetadata,
@@ -313,6 +315,9 @@ class _World:
         amend: bool = True,
     ) -> ChangeCheckResult:
         """One REAL sweep. `force_tracked` overrides only the tracked read (a lagging poll)."""
+        # The re-ingest writes through the REAL Graph Write Gateway (issue #208): the real log
+        # store (PS state Postgres) and FalkorDB, in place of the fast suite's rig.
+        install_graph_write_gateway(build_default_graph_write_gateway(self.config))
         real = build_default_change_check_dependencies()
         prior_read = real.read_tracked_instruments
 

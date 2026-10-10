@@ -16,17 +16,20 @@ from typing import TYPE_CHECKING, cast
 
 from ps_service.graph_gateway.errors import MissingTargetError
 from ps_service.graph_gateway.graph_reader import (
+    UNIDENTIFIED,
     EdgeKey,
     NodeKey,
     read_edges,
     read_existing_nodes,
     read_nodes,
+    read_unidentified_edges,
 )
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
     MergeProperty,
     RemoveProperty,
+    StampEdgeIdentity,
     UpsertEdge,
     UpsertNode,
 )
@@ -56,7 +59,9 @@ def select_effective_primitives(
     nodes.update(
         {key: {} for key in read_existing_nodes(graph, endpoints, batch_size)}
     )  # an endpoint nothing else in the group touches: its existence is all that is used
-    overlay = _Overlay(nodes, read_edges(graph, _named_edges(group), batch_size))
+    edges = read_edges(graph, _named_edges(group), batch_size)
+    edges.update(read_unidentified_edges(graph, _stamped_edges(group), batch_size))
+    overlay = _Overlay(nodes, edges)
     return tuple(
         primitive
         for index, primitive in enumerate(group.primitives)
@@ -64,7 +69,7 @@ def select_effective_primitives(
     )
 
 
-def _edge_key(edge: UpsertEdge | DeleteEdge) -> EdgeKey:
+def _edge_key(edge: UpsertEdge | DeleteEdge | StampEdgeIdentity) -> EdgeKey:
     return (
         edge.type,
         edge.source.label,
@@ -75,10 +80,22 @@ def _edge_key(edge: UpsertEdge | DeleteEdge) -> EdgeKey:
     )
 
 
+def _unidentified_key(stamp: StampEdgeIdentity) -> EdgeKey:
+    """Return the key of the identity-less edge a stamp targets."""
+    return (
+        stamp.type,
+        stamp.source.label,
+        stamp.source.id,
+        stamp.target.label,
+        stamp.target.id,
+        UNIDENTIFIED,
+    )
+
+
 def _acted_on_nodes(group: MutationGroup) -> Iterator[NodeKey]:
     """Yield every node a node primitive of `group` acts on: their state decides the no-ops."""
     for primitive in group.primitives:
-        if not isinstance(primitive, UpsertEdge | DeleteEdge):
+        if not isinstance(primitive, UpsertEdge | DeleteEdge | StampEdgeIdentity):
             yield (primitive.label, primitive.id)
 
 
@@ -95,6 +112,13 @@ def _named_edges(group: MutationGroup) -> Iterator[EdgeKey]:
     for primitive in group.primitives:
         if isinstance(primitive, UpsertEdge | DeleteEdge):
             yield _edge_key(primitive)
+
+
+def _stamped_edges(group: MutationGroup) -> Iterator[EdgeKey]:
+    """Yield the identity-less key of every edge a stamp of `group` targets."""
+    for primitive in group.primitives:
+        if isinstance(primitive, StampEdgeIdentity):
+            yield _unidentified_key(primitive)
 
 
 def _same_value(left: object, right: object) -> bool:
@@ -139,14 +163,14 @@ class _Overlay:
                 return self._upsert_node(primitive)
             case MergeProperty():
                 return self._merge_property(index, primitive)
-            case RemoveProperty():
-                return self._remove_property(primitive)
-            case DeleteNode():
-                return self._delete_node(primitive)
+            case RemoveProperty() | DeleteNode():
+                return self._remove_or_delete(primitive)
             case UpsertEdge():
                 return self._upsert_edge(index, primitive)
             case DeleteEdge():
                 return self._edges.pop(_edge_key(primitive), None) is not None
+            case StampEdgeIdentity():
+                return self._stamp(primitive)
 
     def _upsert_node(self, node: UpsertNode) -> bool:
         wanted = dict(node.properties)
@@ -166,6 +190,11 @@ class _Overlay:
             return False
         current.update(merge.properties)
         return True
+
+    def _remove_or_delete(self, primitive: RemoveProperty | DeleteNode) -> bool:
+        if isinstance(primitive, RemoveProperty):
+            return self._remove_property(primitive)
+        return self._delete_node(primitive)
 
     def _remove_property(self, removal: RemoveProperty) -> bool:
         current = self._nodes.get((removal.label, removal.id))
@@ -195,6 +224,13 @@ class _Overlay:
         if current is not None and _already_holds(current, edge.properties):
             return False
         self._edges[key] = {**(current or {}), **edge.properties}
+        return True
+
+    def _stamp(self, stamp: StampEdgeIdentity) -> bool:
+        legacy = self._edges.pop(_unidentified_key(stamp), None)
+        if legacy is None:
+            return False
+        self._edges.setdefault(_edge_key(stamp), legacy)
         return True
 
     def _require_node(self, index: int, key: NodeKey) -> dict[str, object]:

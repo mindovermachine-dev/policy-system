@@ -19,6 +19,7 @@ from ps_service.graph_gateway.models import (
     DeleteNode,
     MergeProperty,
     RemoveProperty,
+    StampEdgeIdentity,
     UpsertEdge,
     UpsertNode,
 )
@@ -54,11 +55,11 @@ def node_labels(primitive: Primitive) -> Iterator[str]:
     match primitive:
         case UpsertNode() | MergeProperty() | RemoveProperty() | DeleteNode():
             yield primitive.label
-        case UpsertEdge() | DeleteEdge():
+        case UpsertEdge() | DeleteEdge() | StampEdgeIdentity():
             yield primitive.source.label
             yield primitive.target.label
 
 
 def _relationship_types(primitive: Primitive) -> Iterator[str]:
-    if isinstance(primitive, UpsertEdge | DeleteEdge):
+    if isinstance(primitive, UpsertEdge | DeleteEdge | StampEdgeIdentity):
         yield primitive.type

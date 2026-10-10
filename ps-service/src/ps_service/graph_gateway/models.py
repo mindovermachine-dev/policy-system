@@ -215,6 +215,18 @@ class DeleteEdge(_EdgeBase):
     op: Literal["delete_edge"] = "delete_edge"
 
 
+class StampEdgeIdentity(_EdgeBase):
+    """Give the identity-less edge `(source)-[type]->(target)` the `identity`, in place.
+
+    For a graph written before the gateway, whose edges carry no `identity`: the stamped edge
+    keeps its properties and its place, so a later `UpsertEdge` with this identity merges into it
+    instead of creating a parallel edge. A missing or already identified edge is a no-op. Every
+    identity-less edge of the type between the two nodes receives the identity.
+    """
+
+    op: Literal["stamp_edge_identity"] = "stamp_edge_identity"
+
+
 class MergeProperty(BaseModel):
     """Merge `properties` into the existing node `(label, id)`; the node must exist."""
 
@@ -265,7 +277,13 @@ class DeleteNode(BaseModel):
 
 
 Primitive = Annotated[
-    UpsertNode | UpsertEdge | MergeProperty | RemoveProperty | DeleteNode | DeleteEdge,
+    UpsertNode
+    | UpsertEdge
+    | MergeProperty
+    | RemoveProperty
+    | DeleteNode
+    | DeleteEdge
+    | StampEdgeIdentity,
     Field(discriminator="op"),
 ]
 """One graph mutation a caller may submit (tagged union on `op`; grows add-only)."""

@@ -26,6 +26,7 @@ from ps_service.api.error_handlers import (
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
     CelexAlreadyIngestedError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PendingReviewNotFoundError,
@@ -278,6 +279,18 @@ def test_ingest_identity_rejections_map_to_409_with_their_own_code_and_verbatim_
 
     assert response.status_code == expected_status
     assert response.json()["error"]["code"] == expected_code
+    assert response.json()["error"]["message"] == str(exc)
+
+
+def test_graph_write_unavailable_maps_to_503_with_its_own_code_and_verbatim_message() -> None:
+    """Issue #208: no graph write gateway is a fail-closed 503, never a direct-write fallback."""
+    exc = GraphWriteUnavailableError("graph writes are unavailable: no gateway")
+    client = TestClient(_build_app_that_raises(exc), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "graph_write_unavailable"
     assert response.json()["error"]["message"] == str(exc)
 
 

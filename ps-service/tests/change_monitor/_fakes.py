@@ -584,11 +584,13 @@ class StatefulStages:
         version: str,
         adapter: object = None,
         graph: object = None,
+        submitter: object = None,
+        audit_event_id: str = "",
         run_id: str | None = None,
         emitter: object = None,
     ) -> IngestResult:
         """Write the version's `RegulatoryInstrument` and an article into native."""
-        _ = (identifier, adapter, graph, emitter)
+        _ = (identifier, adapter, graph, submitter, audit_event_id, emitter)
         rid = f"{short_name}-{version}"
         native = self._graphs.native
         self._apply(
@@ -767,9 +769,12 @@ class StatefulStages:
         self,
         seed: object,
         *,
-        baseline_graph: object = None,
-        native_graph: object = None,
+        submitter: object = None,
+        native_graph_name: object = None,
+        baseline_graph_name: object = None,
+        audit_event_id: object = None,
         emitter: object = None,
     ) -> NoReturn:
-        _ = (seed, baseline_graph, native_graph, emitter)
+        _ = (seed, submitter, native_graph_name, baseline_graph_name, audit_event_id)
+        _ = emitter
         raise AssertionError("the internal-seed pipeline is not part of an amendment re-ingest")

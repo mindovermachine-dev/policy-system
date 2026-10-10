@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         DeleteNode,
         MergeProperty,
         RemoveProperty,
+        StampEdgeIdentity,
         UpsertEdge,
         UpsertNode,
     )
@@ -56,6 +57,16 @@ DELETE_EDGE_TEMPLATE = (
 )
 """Delete the edges of one type that carry the given identities."""
 
+STAMP_EDGE_IDENTITY_TEMPLATE = (
+    "UNWIND $rows AS row MATCH (s:{SL} {id: row.source_id})"
+    "-[r:{T}]->(t:{TL} {id: row.target_id}) WHERE r.identity IS NULL SET r.identity = row.identity"
+)
+"""Give the identity-less edges of one type between the given nodes their identity, in place.
+
+Nothing is created: an edge that already has an identity is not matched, so a second run changes
+nothing. Every identity-less edge between the same two nodes receives the row's identity.
+"""
+
 NODE_STATE_TEMPLATE = (
     "UNWIND $rows AS row MATCH (n:{L} {id: row.id}) WITH n, properties(n) AS p "
     f"RETURN n.id, {PROPERTY_COLUMNS}"
@@ -83,6 +94,21 @@ EDGE_STATE_TEMPLATE = (
 
 The last two columns carry every non-zero float exactly, as in `NODE_STATE_TEMPLATE`.
 """
+
+UNIDENTIFIED_EDGE_STATE_TEMPLATE = (
+    "UNWIND $rows AS row MATCH (s:{SL} {id: row.source_id})"
+    "-[r:{T}]->(t:{TL} {id: row.target_id}) WHERE r.identity IS NULL "
+    "WITH row, properties(r) AS p "
+    f"RETURN row.source_id, row.target_id, {PROPERTY_COLUMNS}"
+)
+"""Read the properties of the identity-less edges of one type between the given nodes."""
+
+UNIDENTIFIED_EDGE_SCAN = (
+    "MATCH (s)-[r]->(t) WHERE r.identity IS NULL AND id(r) > $after "
+    "WITH s, r, t ORDER BY id(r) LIMIT $limit "
+    "RETURN id(r), type(r), labels(s), s.id, labels(t), t.id"
+)
+"""One chunk of the edges that carry no identity (read-only); `$after` is the internal-id cursor."""
 
 REPLAY_STATE_LABEL = "GraphReplayState"
 """Label of the replay-progress sentinel node (#207): bookkeeping, never part of a digest."""
@@ -196,6 +222,20 @@ def edge_state_query(relationship_type: str, source_label: str, target_label: st
     return _edge_text(EDGE_STATE_TEMPLATE, relationship_type, source_label, target_label)
 
 
+def unidentified_edge_state_query(
+    relationship_type: str, source_label: str, target_label: str
+) -> str:
+    """Build the read that returns the identity-less edges of one type between two labels."""
+    return _edge_text(
+        UNIDENTIFIED_EDGE_STATE_TEMPLATE, relationship_type, source_label, target_label
+    )
+
+
+def stamp_edge_identity_query(stamp: StampEdgeIdentity) -> str:
+    """Build the stamp-identity query for the type and endpoint labels of `stamp`."""
+    return _edge_query(STAMP_EDGE_IDENTITY_TEMPLATE, stamp)
+
+
 def upsert_edge_query(edge: UpsertEdge | DeleteEdge) -> str:
     """Build the upsert-edge query for the type and endpoint labels of `edge`."""
     return _edge_query(UPSERT_EDGE_TEMPLATE, edge)
@@ -206,7 +246,7 @@ def delete_edge_query(edge: UpsertEdge | DeleteEdge) -> str:
     return _edge_query(DELETE_EDGE_TEMPLATE, edge)
 
 
-def _edge_query(template: str, edge: UpsertEdge | DeleteEdge) -> str:
+def _edge_query(template: str, edge: UpsertEdge | DeleteEdge | StampEdgeIdentity) -> str:
     return _edge_text(template, edge.type, edge.source.label, edge.target.label)
 
 
@@ -244,8 +284,8 @@ def upsert_edge_rows(edges: Sequence[UpsertEdge]) -> list[dict[str, object]]:
     ]
 
 
-def delete_edge_rows(edges: Sequence[DeleteEdge]) -> list[dict[str, object]]:
-    """Build the `$rows` parameter for deleting `edges`."""
+def delete_edge_rows(edges: Sequence[DeleteEdge | StampEdgeIdentity]) -> list[dict[str, object]]:
+    """Build the `$rows` parameter for deleting, or stamping the identity of, `edges`."""
     return [
         {"source_id": edge.source.id, "target_id": edge.target.id, "identity": edge.identity}
         for edge in edges
@@ -265,6 +305,11 @@ def node_id_rows(nodes: Sequence[RemoveProperty | DeleteNode]) -> list[dict[str,
 def node_state_rows(ids: Sequence[str]) -> list[dict[str, object]]:
     """Build the `$rows` parameter of a node state read."""
     return [{"id": node_id} for node_id in ids]
+
+
+def unidentified_edge_state_rows(edges: Sequence[tuple[str, str]]) -> list[dict[str, object]]:
+    """Build the `$rows` parameter of an identity-less edge read from `(source id, target id)`."""
+    return [{"source_id": source_id, "target_id": target_id} for source_id, target_id in edges]
 
 
 def edge_state_rows(edges: Sequence[tuple[str, str, str]]) -> list[dict[str, object]]:

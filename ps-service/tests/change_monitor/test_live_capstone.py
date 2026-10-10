@@ -51,6 +51,8 @@ from ps_service.change_monitor.falkordb_client import (
 from ps_service.change_monitor.models import PipelineRunResult, StageSummary
 from ps_service.change_monitor.trigger import trigger_reingestion
 from ps_service.config import load_config
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
 from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import EmitterConfig, LogEmitter
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
 
     from ps_service.change_monitor.falkordb_client import GraphHandle
     from ps_service.change_monitor.models import PipelineRunner
+    from ps_service.ingestion.graph_submission import GroupSubmitter
 
 pytestmark = [pytest.mark.cellar_live, pytest.mark.falkordb_live]
 
@@ -77,8 +80,18 @@ _SEED_ID = f"{_CAPSTONE_SHORT}-{_SEED_VERSION}"
 _NEW_ID = f"{_CAPSTONE_SHORT}-{_NEW_VERSION}"
 
 
+def _audit_event_id(resource_id: str) -> str:
+    """A real system audit row (PS state Postgres) to anchor a live gateway write to."""
+    return build_system_audit_recorder(load_config())(
+        action="ingestion_run.submit",
+        resource_type="ingestion_run",
+        resource_id=resource_id,
+        details={"status": "started", "trigger": "amendment_check"},
+    )
+
+
 def _ingestion_only_runner(
-    adapter: CellarEliAdapter, graph: GraphHandle, emitter: LogEmitter
+    adapter: CellarEliAdapter, graph: GraphHandle, emitter: LogEmitter, gateway: GroupSubmitter
 ) -> PipelineRunner:
     """A `PipelineRunner` that runs the REAL Ingestion stage and no-ops the later stages.
 
@@ -100,6 +113,8 @@ def _ingestion_only_runner(
                     version=_NEW_VERSION,
                     adapter=adapter,
                     graph=graph,
+                    submitter=gateway,
+                    audit_event_id=_audit_event_id(run_id),
                     emitter=emitter,
                     run_id=run_id,
                 )
@@ -196,6 +211,7 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
       `run_id is None`, node + edge totals unchanged).
     """
     config = load_config()
+    gateway = build_default_graph_write_gateway(config)
     db = connect_from_config(config)
     check_connectivity(db, host=config.falkordb_host, port=config.falkordb_port)
 
@@ -216,6 +232,8 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             version=_SEED_VERSION,
             adapter=adapter,
             graph=graph,
+            submitter=gateway,
+            audit_event_id=_audit_event_id("capstone-seed"),
             emitter=emitter,
         )
         assert _status_of(graph, _SEED_ID) == "active"
@@ -233,7 +251,7 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             graph=graph,
             single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
             emitter=emitter,
-            run_pipeline=_ingestion_only_runner(adapter, graph, emitter),
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
         )
 
         assert outcome.outcome == "superseded"
@@ -289,7 +307,7 @@ def test_consolidated_reingestion_end_to_end(tmp_path_factory: pytest.TempPathFa
             graph=graph,
             single_tenant=graph,  # the same RI nodes; policy_system is not part of this capstone
             emitter=emitter,
-            run_pipeline=_ingestion_only_runner(adapter, graph, emitter),
+            run_pipeline=_ingestion_only_runner(adapter, graph, emitter, gateway),
         )
 
         assert rerun.outcome == "already_processed"

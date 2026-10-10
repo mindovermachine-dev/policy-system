@@ -56,6 +56,10 @@ from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,
     build_default_curated_catalog_dependencies,
 )
+from ps_service.graph_gateway.system_audit import (
+    SystemAuditRecorder,
+    build_system_audit_recorder,
+)
 from ps_service.logging import bind_run_context
 from ps_service.passkey_signing.store import PendingApprovalStore, PsycopgPendingApprovalStore
 
@@ -63,6 +67,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
 
     from ps_service.authz.models import AccessRole
+    from ps_service.ingestion.graph_submission import GroupSubmitter
 
 # PLAN.md §2.4: the fixed message `AccessDeniedError` always carries -- mirrors
 # `ps_service.authz.service`'s own private `_ACCESS_DENIED_MESSAGE` constant
@@ -191,6 +196,39 @@ def provide_pipeline_dependencies() -> PipelineDependencies:
         The production :class:`PipelineDependencies` bundle.
     """
     return build_default_pipeline_dependencies()
+
+
+def provide_graph_write_gateway(request: Request) -> GroupSubmitter | None:
+    """Return the Graph Write Gateway ``create_app``'s lifespan built, or ``None`` if it has none.
+
+    The gateway exists only when the PS state Postgres (which holds the graph log) is configured
+    and the gateway could be built at startup. ``None`` is returned as such, never replaced by a
+    stand-in: a pipeline that needs to write a graph fails closed on it (issue #208).
+
+    Args:
+        request: The incoming request (FastAPI injects it).
+
+    Returns:
+        The gateway, or ``None``.
+    """
+    return getattr(request.app.state, "graph_write_gateway", None)
+
+
+def provide_system_audit_recorder(
+    config: Annotated[ServiceConfig, Depends(get_service_config)],
+) -> SystemAuditRecorder:
+    """Return the recorder of system audit rows, bound to the PS state Postgres of ``config``.
+
+    For a pipeline that is ungated, so has no principal to attribute its audit row to (the
+    internal-seed ingestion route). Nothing is connected until the recorder is called.
+
+    Args:
+        config: The resolved service configuration.
+
+    Returns:
+        A recorder that inserts one system-actor ``audit_events`` row and returns its id.
+    """
+    return build_system_audit_recorder(config)
 
 
 def provide_restore_dependencies() -> RestoreDependencies:

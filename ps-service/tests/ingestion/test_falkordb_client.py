@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from graph_gateway.live_endpoints import falkordb_endpoint
 
 from ps_service import config as config_module
 from ps_service.config import load_config
@@ -173,9 +174,8 @@ def test_check_connectivity_from_config_marks_healthy_on_success(
 
 @pytest.mark.falkordb_live
 def test_check_connectivity_succeeds_against_real_falkordb_instance() -> None:
-    """Real connect to 127.0.0.1:6379 — requires a reachable FalkorDB
-    instance (confirmed running via podman for this session).
-    """
-    db = connect(host="127.0.0.1", port=6379)
+    """Real connect to the live FalkorDB (`PS_TEST_FALKORDB_*` override the default)."""
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
 
-    check_connectivity(db, host="127.0.0.1", port=6379)
+    check_connectivity(db, host=host, port=port)

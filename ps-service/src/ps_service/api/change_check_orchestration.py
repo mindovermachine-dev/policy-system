@@ -67,6 +67,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.errors import PipelineStageError
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
     PipelineDependencies,
     _default_ingestion_adapter,  # pyright: ignore[reportPrivateUsage]  -- shared graph/adapter factory; reused per PLAN.md §0.4/D9's main.py:22-25 precedent
@@ -560,9 +561,11 @@ def _build_pipeline_runner(
     handed to it as this callable. The runner checks the pipeline config FIRST, before the
     baseline graph is opened or any stage runs (AC-BI-006), runs exactly the requested
     stage subset for `new_version`'s instrument id, reports each completed stage to
-    `on_stage_complete`, and always clears the `run_status` entry. Nothing is caught:
-    a `PipelineStageError` or `IngestionConfigIncompleteError` propagates to the sweep's
-    per-instrument boundary.
+    `on_stage_complete`, and always clears the `run_status` entry. When the ingestion stage is
+    among the requested ones the process's Graph Write Gateway is resolved up front (issue #208):
+    without one the run fails closed, before the baseline graph is opened. Nothing is caught:
+    a `PipelineStageError`, `IngestionConfigIncompleteError`, `GraphWriteUnavailableError` or
+    `AuditTrailUnavailableError` propagates to the sweep's per-instrument boundary.
     """
     from ps_service.change_monitor.models import (  # noqa: PLC0415 -- M6: keeps ps_service.main off Regulatory Change Monitor at import
         PipelineRunResult,
@@ -573,6 +576,7 @@ def _build_pipeline_runner(
         *, stages: tuple[str, ...], run_id: str, on_stage_complete: Callable[[str], None]
     ) -> PipelineRunResult:
         resolved = _require_ingestion_config(config)
+        graph_writes = graph_write_access(config) if "ingestion" in stages else None
         graphs = _OpenGraphs(
             native=native,
             baseline=dependencies.pipeline.graphs.baseline(config, entry.short_name),
@@ -590,6 +594,8 @@ def _build_pipeline_runner(
                 ingestion_adapter=adapter,
                 stages_to_run=stages,
                 on_stage_complete=on_stage_complete,
+                graph_writes=graph_writes,
+                trigger="amendment_check",
             )
         finally:
             clear_stage(run_id)

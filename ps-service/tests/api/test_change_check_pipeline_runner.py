@@ -26,12 +26,18 @@ from ps_service.api.change_check_orchestration import (
     _build_pipeline_runner,  # pyright: ignore[reportPrivateUsage]  -- unit under test
     build_default_change_check_dependencies,
 )
-from ps_service.api.errors import IngestionConfigIncompleteError, PipelineStageError
+from ps_service.api.errors import (
+    GraphWriteUnavailableError,
+    IngestionConfigIncompleteError,
+    PipelineStageError,
+)
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import build_default_pipeline_dependencies
 from ps_service.config import ServiceConfig
 
 if TYPE_CHECKING:
     from api._fakes import FakePipeline, MakeEmitter
+    from api._gateway_fakes import ProcessGateway
     from ps_service.api.ingestion_orchestration import GraphHandle
     from ps_service.change_monitor.models import PipelineRunner
     from ps_service.logging import LogEmitter
@@ -163,3 +169,47 @@ def test_runner_clears_the_run_status_entry_on_success_and_on_failure(
         )
     assert run_status.get_stage("bad-run") is None
     assert completed == ["ingestion", "extraction"]
+
+
+def test_runner_hands_the_ingest_stage_the_gateway_and_an_amendment_check_audit_row(
+    process_gateway: ProcessGateway,
+) -> None:
+    pipeline = build_fake_pipeline_dependencies(rid="CRA-2.0")
+
+    _runner(pipeline, _config())(stages=_ALL, run_id=_RUN_ID, on_stage_complete=lambda _s: None)
+
+    kwargs = pipeline.recorder.calls[0].kwargs
+    assert kwargs["submitter"] is process_gateway.rig.gateway
+    assert process_gateway.system_audit.ids == [kwargs["audit_event_id"]]
+    row = process_gateway.system_audit.rows[0]
+    assert row["resource_id"] == _RUN_ID
+    assert row["details"] == {
+        "status": "started",
+        "trigger": "amendment_check",
+        "celex": _ENTRY.celex,
+        "short_name": _ENTRY.short_name,
+    }
+
+
+def test_runner_without_a_gateway_fails_closed_before_any_stage_when_it_must_ingest(
+    process_gateway: ProcessGateway,
+) -> None:
+    install_graph_write_gateway(None)
+    pipeline = build_fake_pipeline_dependencies()
+
+    with pytest.raises(GraphWriteUnavailableError):
+        _runner(pipeline, _config())(stages=_ALL, run_id=_RUN_ID, on_stage_complete=lambda _s: None)
+
+    assert pipeline.recorder.order == []
+    assert process_gateway.system_audit.rows == []
+
+
+def test_runner_resuming_after_ingestion_needs_no_gateway() -> None:
+    install_graph_write_gateway(None)
+    pipeline = build_fake_pipeline_dependencies()
+
+    _runner(pipeline, _config())(
+        stages=("derivation", "merge"), run_id=_RUN_ID, on_stage_complete=lambda _s: None
+    )
+
+    assert pipeline.recorder.order == ["derivation", "merge"]

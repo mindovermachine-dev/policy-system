@@ -7,10 +7,9 @@ stage (`PLAN.md` S2): given an already-parsed `InternalRegulationSeed`
 1. validates the whole document's referential integrity and cardinality
    rules -- every edge endpoint must be declared, every `Obligation` has
    exactly one bearing `Role`, every `Requirement` has exactly one
-   `EXPRESSES` source -- entirely before any `graph.query()` call (AC-BI-011,
-   mirroring `ingestion/graph_writer.py`'s own B1-fix validate-then-write
-   shape: this function raises with zero writes recorded, or writes
-   everything);
+   `EXPRESSES` source -- entirely before any write (AC-BI-011, mirroring
+   `ingestion/graph_writer.py`'s own B1-fix validate-then-write shape: this
+   function raises with zero writes recorded, or writes everything);
 2. mints every non-`RegulatoryInstrument` node's canonical id using the
    same identity formulas the external path's `domain_mapper.identity`
    module already exports (`role_id`/`obligation_id`/`capability_id` --
@@ -25,6 +24,13 @@ stage (`PLAN.md` S2): given an already-parsed `InternalRegulationSeed`
    `{short}_native` (B5) and the minted, remapped spine to `{short}_baseline`,
    both add/merge-only (AC-BI-012).
 
+Both writes go through the Graph Write Gateway (issue #208): each graph is one mutation group
+(`build_native_primitives`, `build_baseline_primitives`), nodes before edges, the native group
+submitted first. Every group is built, and so validated, before either is submitted: a property
+the gateway cannot store raises `InternalSeedError` with nothing written. An edge whose endpoint
+is not among the group's nodes is dropped without a trace (AC-BI-004); this module opens no
+graph connection of its own.
+
 D6: `Requirement.properties["role_id"]` is synthesized here by resolving the
 `SATISFIED_BY -> Obligation <- HAS -> Role` chain; when it resolves to more
 than one distinct Role (or none), the property key is omitted entirely --
@@ -35,14 +41,26 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
-import redis.exceptions
+from pydantic import ValidationError
 
-from ps_service.dependency_health import FALKORDB, mark_healthy, mark_unhealthy
+from ps_service.graph_gateway.models import (
+    MutationGroup,
+    NodeRef,
+    UpsertEdge,
+    UpsertNode,
+)
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
+from ps_service.ingestion.graph_submission import (
+    stamp_legacy_edges_before_first_write,
+    submit_or_raise,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ps_service.graph_gateway.models import Primitive
     from ps_service.ingestion.adapters.internal_seed.models import (
         EdgeType,
         InternalRegulationSeed,
@@ -51,6 +69,7 @@ if TYPE_CHECKING:
         SeedNode,
         SeedRef,
     )
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
 
 _DEFAULT_CONFIDENCE = 1.0
@@ -69,23 +88,6 @@ _EDGE_ENDPOINT_LABELS: dict[EdgeType, tuple[NodeLabel, NodeLabel]] = {
     "OWNS": ("PracticeArea", "Policy"),
     "MITIGATED_BY": ("RiskPath", "Capability"),
 }
-
-
-class GraphQueryResult(Protocol):
-    """The one property this module reads off a Cypher result (none, today -- write-only)."""
-
-    @property
-    def result_set(self) -> list[object]:
-        """The rows returned by the query."""
-        ...
-
-
-class GraphHandle(Protocol):
-    """Structural stand-in for a FalkorDB graph handle."""
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
-        """Run Cypher `q` (optionally parameterized via `params`) and return the result."""
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -768,56 +770,110 @@ def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]
     return properties
 
 
-# --- FalkorDB write boundary ---
+# --- Graph Write Gateway boundary ---
 
 
-def _execute_query(
-    graph: GraphHandle, query: str, params: dict[str, object] | None = None
-) -> GraphQueryResult:
-    """The one call site every write in this module goes through.
+def _edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
+    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
 
-    Mirrors `ingestion/graph_writer.py::_execute_query` exactly: records
-    FalkorDB connectivity failures in `dependency_health` for `/ready`'s
-    live signal, self-healing on the next successful call.
+    Same-type edges between the same two nodes share an identity, which reproduces the
+    `MERGE (a)-[:T]->(b)` collapse the legacy writer had (the later `SET +=` wins).
+    """
+    return f"{edge_type}:{source_id}->{target_id}"
+
+
+def _unstorable(what: str) -> InternalSeedError:
+    return InternalSeedError(
+        f"{what} has a property the graph cannot store "
+        "(a reserved key, or a value that is not finite or is out of range)"
+    )
+
+
+def _upsert_node(label: str, node_id: str, properties: dict[str, object]) -> UpsertNode:
+    """Build one node primitive, or raise `InternalSeedError` if the gateway cannot store it.
+
+    The gateway reserves the property keys `id` and `embedding` and rejects non-finite floats;
+    the legacy `SET n += $properties` accepted them (a property named `id` silently rewrote the
+    node id), so they are rejected here, before anything is submitted (issue #208, G5).
     """
     try:
-        result = graph.query(query, params=params)
-    except redis.exceptions.RedisError as exc:
-        mark_unhealthy(FALKORDB, error=exc)
-        raise InternalSeedError(f"FalkorDB write failed: {exc}") from exc
-    mark_healthy(FALKORDB)
-    return result
+        return UpsertNode(label=label, id=node_id, properties=properties)
+    except ValidationError as exc:
+        raise _unstorable(f"{label} {node_id!r}") from exc
 
 
-def _persist_native(graph: GraphHandle, seed: InternalRegulationSeed) -> None:
-    """Write the customer's raw, pre-minting, local-id submission verbatim (B5).
+def _upsert_edge(
+    edge_type: str,
+    source: tuple[str, str],
+    target: tuple[str, str],
+    properties: dict[str, object],
+) -> UpsertEdge:
+    """Build one edge primitive, or raise `InternalSeedError` if the gateway cannot store it."""
+    try:
+        return UpsertEdge(
+            type=edge_type,
+            identity=_edge_identity(edge_type, source[1], target[1]),
+            source=NodeRef(label=source[0], id=source[1]),
+            target=NodeRef(label=target[0], id=target[1]),
+            properties=properties,
+        )
+    except ValidationError as exc:
+        raise _unstorable(f"{edge_type} edge {source[1]!r} -> {target[1]!r}") from exc
 
-    No remapping, no minting -- exactly the labels/ids/properties submitted.
-    Labels/edge types interpolated below are already constrained to the
-    internal-seed intake vocabulary (`NodeLabel`/`EdgeType`) by
-    `SeedNode.label`/`SeedEdge.type`'s own `Literal` type (enforced at
-    `adapter.read_seed`'s Pydantic-parse boundary) -- this function only
-    ever issues the write, matching `ingestion/graph_writer.py`'s own
-    "validated upstream, write here" split.
+
+def _without_dangling_edges(
+    nodes: tuple[UpsertNode, ...], edges: tuple[UpsertEdge, ...]
+) -> tuple[UpsertEdge, ...]:
+    """Keep only the edges whose two endpoints are among `nodes` (AC-BI-004, silently).
+
+    The gateway rejects a group holding an edge to a node that exists nowhere, where the legacy
+    `MATCH ... MERGE` matched zero rows and wrote nothing. Dropped edges are not submitted, so
+    nothing is logged or raised for them. A seed validated by `_validate_and_index` declares every
+    endpoint, so the nodes of the document are exactly the nodes an edge may point at.
     """
-    for node in seed.nodes:
-        _execute_query(
-            graph,
-            f"MERGE (n:{node.label} {{id: $id}}) SET n += $properties",
-            params={"id": node.id, "properties": dict(node.properties)},
+    present = {(node.label, node.id) for node in nodes}
+    return tuple(
+        edge
+        for edge in edges
+        if (edge.source.label, edge.source.id) in present
+        and (edge.target.label, edge.target.id) in present
+    )
+
+
+def build_native_primitives(seed: InternalRegulationSeed) -> tuple[Primitive, ...]:
+    """The native graph's mutations: the raw submission verbatim (B5), nodes before edges.
+
+    No remapping, no minting -- exactly the labels, ids and properties submitted, in document
+    order. Labels and edge types are already constrained to the intake vocabulary by the seed
+    model's `Literal` types.
+
+    Raises:
+        InternalSeedError: a node or edge carries a property the gateway cannot store.
+    """
+    nodes = tuple(_upsert_node(node.label, node.id, dict(node.properties)) for node in seed.nodes)
+    edges = tuple(
+        _upsert_edge(
+            edge.type,
+            (edge.from_.label, edge.from_.id),
+            (edge.to.label, edge.to.id),
+            dict(edge.properties),
         )
-    for edge in seed.edges:
-        _execute_query(
-            graph,
-            f"MATCH (a:{edge.from_.label} {{id: $from_id}}), "
-            f"(b:{edge.to.label} {{id: $to_id}}) "
-            f"MERGE (a)-[r:{edge.type}]->(b) SET r += $properties",
-            params={
-                "from_id": edge.from_.id,
-                "to_id": edge.to.id,
-                "properties": dict(edge.properties),
-            },
-        )
+        for edge in seed.edges
+    )
+    return (*nodes, *_without_dangling_edges(nodes, edges))
+
+
+def _submit_group(
+    submitter: GroupSubmitter,
+    *,
+    graph_name: str,
+    audit_event_id: str,
+    primitives: tuple[Primitive, ...],
+) -> None:
+    """Submit `primitives` as one group on `graph_name`; raise `InternalSeedError` on failure."""
+    group = MutationGroup(graph=graph_name, audit_event_id=audit_event_id, primitives=primitives)
+    stamp_legacy_edges_before_first_write(submitter, graph_name, audit_event_id, InternalSeedError)
+    submit_or_raise(submitter, group, InternalSeedError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -860,180 +916,175 @@ class _CanonicalIds:
         return by_label[ref.label][ref.id]
 
 
-def _persist_baseline_reference_nodes(
-    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
-) -> None:
-    """Write RegulatoryInstrument/Role/Capability/Policy/Standard/Control.
+@dataclass(frozen=True, slots=True)
+class _BaselineContext:
+    """What turning a seed node into a minted baseline node needs, resolved once per document."""
 
-    Split out of `_persist_baseline_nodes` to keep cyclomatic complexity
-    <=8 (L1/L2 coding standards) -- the same `_index_*`-style splitting
-    already used elsewhere in this module. These are the labels other
-    nodes/edges reference (`GOVERNED_BY`/`SUPPORTED_BY`/`IMPLEMENTED_BY`
-    point at Policy/Standard/Control), so they must exist before anything
-    that could point at them -- the same ordering rule
-    `_persist_baseline_dependent_nodes` documents for Obligation/Requirement
-    below. Control is written last in this group (after Standard) since an
-    `IMPLEMENTED_BY` edge points Standard -> Control.
-    """
-    _execute_query(
-        graph,
-        "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
-        params={
-            "id": canonical.regulatory_instrument_id,
-            "properties": _regulatory_instrument_properties(index.regulatory_instrument),
-        },
+    index: _SeedIndex
+    canonical: _CanonicalIds
+    policy_status: dict[str, str]
+    """Policy local id -> its `status`; a Standard/Control mirrors its root Policy's (GH #134)."""
+
+
+type _NodeContent = tuple[str, dict[str, object]]
+"""A baseline node's canonical id and its property map."""
+
+
+def _role_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.role[node.id], _role_properties(node)
+
+
+def _capability_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.capability[node.id], _capability_properties(node)
+
+
+def _policy_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.policy[node.id], _policy_properties(node)
+
+
+def _standard_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    supporting_policy = context.index.standard_supporter[node.id]
+    properties = _standard_properties(node, context.policy_status[supporting_policy])
+    return context.canonical.standard[node.id], properties
+
+
+def _control_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    implemented_standard = context.index.control_implementer[node.id]
+    supporting_policy = context.index.standard_supporter[implemented_standard]
+    properties = _control_properties(node, context.policy_status[supporting_policy])
+    return context.canonical.control[node.id], properties
+
+
+_REFERENCE_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeContent]] = {
+    "Role": _role_content,
+    "Capability": _capability_content,
+    "Policy": _policy_content,
+    "Standard": _standard_content,
+    "Control": _control_content,
+}
+"""The labels other nodes and edges point at, which must exist before anything points at them."""
+
+
+def _obligation_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.obligation[node.id], _obligation_properties(node)
+
+
+def _requirement_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    """D6: `role_id` is resolved through the bearing Role and omitted, never null, if ambiguous."""
+    role_id_value = _resolve_requirement_role_id(node.id, context.index, context.canonical.role)
+    return context.canonical.requirement[node.id], _requirement_properties(node, role_id_value)
+
+
+def _practice_area_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.practice_area[node.id], _practice_area_properties(node)
+
+
+def _risk_path_content(node: SeedNode, context: _BaselineContext) -> _NodeContent:
+    return context.canonical.risk_path[node.id], _risk_path_properties(node)
+
+
+_DEPENDENT_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeContent]] = {
+    "Obligation": _obligation_content,
+    "Requirement": _requirement_content,
+}
+"""Nodes whose properties depend on the reference nodes (D6's `role_id` needs Role's id)."""
+
+_CLASSIFICATION_CONTENT: dict[str, Callable[[SeedNode, _BaselineContext], _NodeContent]] = {
+    "PracticeArea": _practice_area_content,
+    "RiskPath": _risk_path_content,
+}
+"""Nodes that need no edge to exist (GH #93), so need no ordering among the others."""
+
+
+def _content_nodes(
+    seed: InternalRegulationSeed,
+    context: _BaselineContext,
+    content: dict[str, Callable[[SeedNode, _BaselineContext], _NodeContent]],
+) -> tuple[UpsertNode, ...]:
+    """Upsert every seed node whose label is in `content`, in document order."""
+    return tuple(
+        _upsert_node(node.label, node_id, properties)
+        for node in seed.nodes
+        if node.label in content
+        for node_id, properties in (content[node.label](node, context),)
     )
-    policy_status_by_local_id = _policy_status_by_local_id(seed)
-    for node in seed.nodes:
-        if node.label == "Role":
-            _execute_query(
-                graph,
-                "MERGE (n:Role {id: $id}) SET n += $properties",
-                params={"id": canonical.role[node.id], "properties": _role_properties(node)},
-            )
-        elif node.label == "Capability":
-            _execute_query(
-                graph,
-                "MERGE (n:Capability {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.capability[node.id],
-                    "properties": _capability_properties(node),
-                },
-            )
-        elif node.label == "Policy":
-            _execute_query(
-                graph,
-                "MERGE (n:Policy {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.policy[node.id],
-                    "properties": _policy_properties(node),
-                },
-            )
-        elif node.label == "Standard":
-            supporting_policy_local_id = index.standard_supporter[node.id]
-            _execute_query(
-                graph,
-                "MERGE (n:Standard {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.standard[node.id],
-                    "properties": _standard_properties(
-                        node, policy_status_by_local_id[supporting_policy_local_id]
-                    ),
-                },
-            )
-        elif node.label == "Control":
-            implemented_standard_local_id = index.control_implementer[node.id]
-            supporting_policy_local_id = index.standard_supporter[implemented_standard_local_id]
-            _execute_query(
-                graph,
-                "MERGE (n:Control {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.control[node.id],
-                    "properties": _control_properties(
-                        node, policy_status_by_local_id[supporting_policy_local_id]
-                    ),
-                },
-            )
 
 
-def _persist_baseline_dependent_nodes(
-    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
-) -> None:
-    """Write Obligation/Requirement nodes.
+def _baseline_nodes(
+    seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
+) -> tuple[UpsertNode, ...]:
+    """The baseline graph's nodes, with canonical (minted) ids, in a fixed order.
 
-    Their properties depend on the reference nodes
-    `_persist_baseline_reference_nodes` already wrote (D6's `role_id`
-    resolution needs Role's canonical id).
+    The RegulatoryInstrument first, then Role, Capability, Policy, Standard and Control in
+    document order (the labels other nodes and edges point at), then Obligation and Requirement,
+    then PracticeArea and RiskPath.
+
+    Raises:
+        InternalSeedError: a node carries a property the gateway cannot store.
     """
-    for node in seed.nodes:
-        if node.label == "Obligation":
-            _execute_query(
-                graph,
-                "MERGE (n:Obligation {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.obligation[node.id],
-                    "properties": _obligation_properties(node),
-                },
-            )
-        elif node.label == "Requirement":
-            role_id_value = _resolve_requirement_role_id(node.id, index, canonical.role)
-            _execute_query(
-                graph,
-                "MERGE (n:Requirement {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.requirement[node.id],
-                    "properties": _requirement_properties(node, role_id_value),
-                },
-            )
+    context = _BaselineContext(
+        index=index, canonical=canonical, policy_status=_policy_status_by_local_id(seed)
+    )
+    instrument = _upsert_node(
+        "RegulatoryInstrument",
+        canonical.regulatory_instrument_id,
+        _regulatory_instrument_properties(index.regulatory_instrument),
+    )
+    return (
+        instrument,
+        *_content_nodes(seed, context, _REFERENCE_CONTENT),
+        *_content_nodes(seed, context, _DEPENDENT_CONTENT),
+        *_content_nodes(seed, context, _CLASSIFICATION_CONTENT),
+    )
 
 
-def _persist_baseline_classification_nodes(
-    graph: GraphHandle, seed: InternalRegulationSeed, canonical: _CanonicalIds
-) -> None:
-    """Write PracticeArea/RiskPath nodes (GH #93 Slices 1-2).
-
-    Split out of `_persist_baseline_nodes` (mirroring
-    `_persist_baseline_reference_nodes`'s own split, §0.6) -- these labels
-    carry no required edge to exist, unlike Policy/Standard/Control, so they
-    need no ordering relative to the other node-writing helpers.
-    """
-    for node in seed.nodes:
-        if node.label == "PracticeArea":
-            _execute_query(
-                graph,
-                "MERGE (n:PracticeArea {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.practice_area[node.id],
-                    "properties": _practice_area_properties(node),
-                },
-            )
-        elif node.label == "RiskPath":
-            _execute_query(
-                graph,
-                "MERGE (n:RiskPath {id: $id}) SET n += $properties",
-                params={
-                    "id": canonical.risk_path[node.id],
-                    "properties": _risk_path_properties(node),
-                },
-            )
-
-
-def _persist_baseline_nodes(
-    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
-) -> None:
-    _persist_baseline_reference_nodes(graph, seed, index, canonical)
-    _persist_baseline_dependent_nodes(graph, seed, index, canonical)
-    _persist_baseline_classification_nodes(graph, seed, canonical)
-
-
-def _persist_baseline_edges(
-    graph: GraphHandle, seed: InternalRegulationSeed, canonical: _CanonicalIds
-) -> None:
-    for edge in seed.edges:
-        edge_properties = (
+def _baseline_edges(
+    seed: InternalRegulationSeed, canonical: _CanonicalIds
+) -> tuple[UpsertEdge, ...]:
+    """The baseline edges between canonical ids; only DEFINES and EXPRESSES keep `source_ref`."""
+    return tuple(
+        _upsert_edge(
+            edge.type,
+            (edge.from_.label, canonical.resolve(edge.from_)),
+            (edge.to.label, canonical.resolve(edge.to)),
             {"source_ref": edge.properties["source_ref"]}
             if edge.type in ("DEFINES", "EXPRESSES")
-            else {}
+            else {},
         )
-        _execute_query(
-            graph,
-            f"MATCH (a:{edge.from_.label} {{id: $from_id}}), "
-            f"(b:{edge.to.label} {{id: $to_id}}) "
-            f"MERGE (a)-[r:{edge.type}]->(b) SET r += $properties",
-            params={
-                "from_id": canonical.resolve(edge.from_),
-                "to_id": canonical.resolve(edge.to),
-                "properties": edge_properties,
-            },
-        )
+        for edge in seed.edges
+    )
 
 
-def _persist_baseline(
-    graph: GraphHandle, seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
-) -> None:
-    """Write the minted, remapped spine: canonical ids, add/merge-only (AC-BI-012)."""
-    _persist_baseline_nodes(graph, seed, index, canonical)
-    _persist_baseline_edges(graph, seed, canonical)
+def build_baseline_primitives(
+    seed: InternalRegulationSeed, index: _SeedIndex, canonical: _CanonicalIds
+) -> tuple[Primitive, ...]:
+    """The baseline graph's mutations: the minted spine, every node before every edge.
+
+    Raises:
+        InternalSeedError: a node or edge carries a property the gateway cannot store.
+    """
+    nodes = _baseline_nodes(seed, index, canonical)
+    return (*nodes, *_without_dangling_edges(nodes, _baseline_edges(seed, canonical)))
+
+
+def _mint_canonical_ids(seed: InternalRegulationSeed, index: _SeedIndex) -> _CanonicalIds:
+    """Mint every node's canonical id, label by label, in dependency order."""
+    regulatory_instrument_id = index.regulatory_instrument.id
+    role = _mint_role_ids(seed, regulatory_instrument_id)
+    policy = _mint_policy_ids(seed)
+    standard = _mint_standard_ids(seed, index, policy)
+    return _CanonicalIds(
+        regulatory_instrument_id=regulatory_instrument_id,
+        role=role,
+        requirement=_mint_requirement_ids(seed, regulatory_instrument_id, index),
+        obligation=_mint_obligation_ids(seed, index, role),
+        capability=_mint_capability_ids(seed),
+        policy=policy,
+        standard=standard,
+        control=_mint_control_ids(seed, index, standard),
+        practice_area=_mint_practice_area_ids(seed),
+        risk_path=_mint_risk_path_ids(seed),
+    )
 
 
 # --- entry point ---
@@ -1042,18 +1093,22 @@ def _persist_baseline(
 def ingest_internal_regulatory_instrument(
     seed: InternalRegulationSeed,
     *,
-    baseline_graph: GraphHandle,
-    native_graph: GraphHandle,
+    submitter: GroupSubmitter,
+    native_graph_name: str,
+    baseline_graph_name: str,
+    audit_event_id: str,
     emitter: LogEmitter | None = None,
 ) -> InternalIngestResult:
     """Validate, mint, and persist one internal-regulation seed (S2's one pipeline stage).
 
     Args:
         seed: The already-parsed submission (`adapter.read_seed`'s output).
-        baseline_graph: The `{short}_baseline` graph handle to write the
-            minted spine to.
-        native_graph: The `{short}_native` graph handle to write the raw
-            submission to, verbatim (B5).
+        submitter: The Graph Write Gateway; the raw submission (B5) is submitted as one native
+            mutation group on it, nodes then edges (issue #208).
+        native_graph_name: The name of the `{short}_native` graph, the native group's target.
+        baseline_graph_name: The name of the `{short}_baseline` graph, the baseline group's target.
+        audit_event_id: The id of the audit event of the command that caused this run; the
+            group is logged under it.
         emitter: Reserved for future per-node audit logging; unused today.
 
     Returns:
@@ -1063,47 +1118,39 @@ def ingest_internal_regulatory_instrument(
     Raises:
         InternalSeedError: The document fails referential integrity or
             cardinality validation (AC-BI-011) -- raised with zero
-            `graph.query()` calls made on either graph -- or a FalkorDB
-            write itself fails.
+            writes made to either graph -- or the instrument carries a
+            node or edge property the gateway cannot store (a reserved key,
+            a non-finite number), or a graph write fails
+            (message `FalkorDB write failed: ...`).
     """
     _ = emitter
     index = _validate_and_index(seed)
-    regulatory_instrument_id = index.regulatory_instrument.id
+    canonical = _mint_canonical_ids(seed, index)
 
-    role_canonical_ids = _mint_role_ids(seed, regulatory_instrument_id)
-    capability_canonical_ids = _mint_capability_ids(seed)
-    policy_canonical_ids = _mint_policy_ids(seed)
-    standard_canonical_ids = _mint_standard_ids(seed, index, policy_canonical_ids)
-    control_canonical_ids = _mint_control_ids(seed, index, standard_canonical_ids)
-    obligation_canonical_ids = _mint_obligation_ids(seed, index, role_canonical_ids)
-    requirement_canonical_ids = _mint_requirement_ids(seed, regulatory_instrument_id, index)
-    practice_area_canonical_ids = _mint_practice_area_ids(seed)
-    risk_path_canonical_ids = _mint_risk_path_ids(seed)
-    canonical = _CanonicalIds(
-        regulatory_instrument_id=regulatory_instrument_id,
-        role=role_canonical_ids,
-        requirement=requirement_canonical_ids,
-        obligation=obligation_canonical_ids,
-        capability=capability_canonical_ids,
-        policy=policy_canonical_ids,
-        standard=standard_canonical_ids,
-        control=control_canonical_ids,
-        practice_area=practice_area_canonical_ids,
-        risk_path=risk_path_canonical_ids,
+    native_primitives = build_native_primitives(seed)
+    baseline_primitives = build_baseline_primitives(seed, index, canonical)
+    _submit_group(
+        submitter,
+        graph_name=native_graph_name,
+        audit_event_id=audit_event_id,
+        primitives=native_primitives,
+    )
+    _submit_group(
+        submitter,
+        graph_name=baseline_graph_name,
+        audit_event_id=audit_event_id,
+        primitives=baseline_primitives,
     )
 
-    _persist_native(native_graph, seed)
-    _persist_baseline(baseline_graph, seed, index, canonical)
-
     return InternalIngestResult(
-        regulatory_instrument_id=regulatory_instrument_id,
-        role_count=len(role_canonical_ids),
-        requirement_count=len(requirement_canonical_ids),
-        obligation_count=len(obligation_canonical_ids),
-        capability_count=len(capability_canonical_ids),
-        policy_count=len(policy_canonical_ids),
-        standard_count=len(standard_canonical_ids),
-        control_count=len(control_canonical_ids),
-        practice_area_count=len(practice_area_canonical_ids),
-        risk_path_count=len(risk_path_canonical_ids),
+        regulatory_instrument_id=canonical.regulatory_instrument_id,
+        role_count=len(canonical.role),
+        requirement_count=len(canonical.requirement),
+        obligation_count=len(canonical.obligation),
+        capability_count=len(canonical.capability),
+        policy_count=len(canonical.policy),
+        standard_count=len(canonical.standard),
+        control_count=len(canonical.control),
+        practice_area_count=len(canonical.practice_area),
+        risk_path_count=len(canonical.risk_path),
     )

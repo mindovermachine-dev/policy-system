@@ -37,6 +37,7 @@ from ps_service.api.errors import (
     PipelineStageError,
     ShortNameCollisionError,
 )
+from ps_service.api.graph_write_access import graph_write_access
 from ps_service.api.ingestion_orchestration import (
     _STAGE_ORDER,  # pyright: ignore[reportPrivateUsage] — internal constant under test
     StageReport,
@@ -1012,11 +1013,13 @@ class _StageOrderIngest:
         version: str,
         adapter: object,
         graph: GraphHandle,
+        submitter: object,
+        audit_event_id: str,
         run_id: str | None = None,
         emitter: LogEmitter | None = None,
     ) -> IngestResult:
         """Assert `get_stage` already reads "ingestion", then return a canned result."""
-        _ = (identifier, short_name, version, adapter, graph, emitter)
+        _ = (identifier, short_name, version, adapter, graph, submitter, audit_event_id, emitter)
         assert get_stage(self._run_id) == "ingestion"
         return IngestResult(
             regulatory_instrument_id=self._rid, run_id=run_id or "fake-run", counts={}
@@ -1171,6 +1174,7 @@ def test_execute_catalog_stages_default_runs_all_four_in_order(
         ),
         dependencies=fake.dependencies,
         emitter=emitter,
+        graph_writes=graph_write_access(_complete_config()),
     )
 
     expected_order = ["ingestion", "extraction", "derivation", "merge"]
@@ -1204,6 +1208,7 @@ def _run_selected(
         emitter=emitter,
         stages_to_run=stages_to_run,
         on_stage_complete=completed.append if completed is not None else None,
+        graph_writes=graph_write_access(_complete_config()),
     )
 
 

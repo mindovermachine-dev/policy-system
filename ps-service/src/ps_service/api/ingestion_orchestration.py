@@ -46,13 +46,16 @@ from ps_service.api.error_handlers import (
 from ps_service.api.errors import (
     CatalogIdentifierNotFoundError,
     CelexAlreadyIngestedError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     PipelineStageError,
     ShortNameCollisionError,
 )
+from ps_service.api.graph_write_access import GRAPH_WRITE_UNAVAILABLE_MESSAGE, graph_write_access
 from ps_service.api.run_status import clear_stage, set_stage
 from ps_service.audit.emit import AuditTarget, record_follow_up_row, record_opening_row
+from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.config import missing_ingestion_config_fields
 from ps_service.ingestion.adapters.cellar_eli.adapter import CellarEliAdapter
 from ps_service.ingestion.adapters.cellar_eli.fetch import fetch_rdf, fetch_xhtml
@@ -76,15 +79,18 @@ from ps_service.logging.run_context import bind_run_context
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
 
+    from ps_service.api.graph_write_access import GraphWriteAccess
     from ps_service.audit.emit import AuditContext
     from ps_service.change_monitor.trigger import MetadataFetchingAdapter
     from ps_service.company_merge.models import MergeResult
     from ps_service.config import ServiceConfig
     from ps_service.domain_mapper.adapters.base import DomainMappingAdapter
     from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
+    from ps_service.graph_gateway.system_audit import SystemAuditRecorder
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
     from ps_service.ingestion.adapters.internal_seed.persist import InternalIngestResult
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.ingestion.models import IngestResult
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_service.logging import LogEmitter
@@ -104,6 +110,7 @@ _COMPONENT = "api"
 _RUN_ACTION = "ingestion_run"
 _STAGE_REASON_MAX_LEN = 300
 _INTERNAL_INGESTION_SOURCE_IDENTIFIER = "internal-document"
+_INTERNAL_RUN_AUDIT_TRIGGER = "internal_seed"
 """Fixed ``source_identifier`` for every internal-ingestion ``_emit_run`` call
 (D7, issue #91) -- there is no filesystem path any more to use as this value,
 and the parsed document's own id is not known until after parsing (the
@@ -141,7 +148,7 @@ class GraphHandle(Protocol):
 class IngestStage(Protocol):
     """Call shape of ``ps_service.ingestion.ingest_regulatory_instrument``."""
 
-    def __call__(
+    def __call__(  # noqa: PLR0913 -- mirrors ingest_regulatory_instrument's call shape exactly
         self,
         identifier: str,
         short_name: str,
@@ -149,6 +156,8 @@ class IngestStage(Protocol):
         version: str,
         adapter: IngestionAdapter,
         graph: GraphHandle,
+        submitter: GroupSubmitter,
+        audit_event_id: str,
         run_id: str | None = None,
         emitter: LogEmitter | None = None,
     ) -> IngestResult:
@@ -205,8 +214,10 @@ class IngestInternalStage(Protocol):
         self,
         seed: InternalRegulationSeed,
         *,
-        baseline_graph: GraphHandle,
-        native_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        native_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         emitter: LogEmitter | None = None,
     ) -> InternalIngestResult:
         """Validate, mint, and persist one internal-regulation seed."""
@@ -418,6 +429,7 @@ _REASON_BY_EXCEPTION_NAME: dict[str, IngestionReasonCode] = {
     "PipelineStageError": "pipeline_stage_failed",
     "ChangeMonitorStateError": "inconsistent_graph_state",
     "SuccessionPersistenceError": "graph_unavailable",
+    "GraphWriteUnavailableError": "graph_unavailable",
 }
 """Failure class name -> the enumerated audit `reason_code` (issue #195, AC-BI-010).
 
@@ -986,6 +998,45 @@ class _OpenGraphs:
     single_tenant: GraphHandle
 
 
+def _require_graph_writes(graph_writes: GraphWriteAccess | None) -> GraphWriteAccess:
+    """Return ``graph_writes``, or raise: an ingest stage never writes a graph without a gateway."""
+    if graph_writes is None:
+        raise GraphWriteUnavailableError(GRAPH_WRITE_UNAVAILABLE_MESSAGE)
+    return graph_writes
+
+
+def _record_catalog_run_audit(
+    system_audit: SystemAuditRecorder,
+    *,
+    run_id: str,
+    entry: CatalogEntry,
+    trigger: IngestionTrigger | None,
+) -> str:
+    """Record the system audit row of one catalog run's graph write and return its id.
+
+    The id anchors the native group in the graph log (issue #208). Every external path uses this
+    one helper, so the rows the entry points already write (the sync opening row, the run
+    store's rows) are untouched; ``resource_id`` is the run id, which joins them.
+
+    Raises:
+        AuditTrailUnavailableError: The row could not be written (HTTP 503); the ingest stage
+            has not run and nothing was written to any graph.
+    """
+    details: dict[str, object] = {
+        "status": "started",
+        "celex": entry.celex,
+        "short_name": entry.short_name,
+    }
+    if trigger is not None:
+        details["trigger"] = trigger
+    return system_audit(
+        action=INGESTION_RUN_SUBMIT_ACTION,
+        resource_type=INGESTION_RUN_RESOURCE_TYPE,
+        resource_id=run_id,
+        details=details,
+    )
+
+
 def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus the stage subset/callback; no natural grouping
     entry: CatalogEntry,
     *,
@@ -997,6 +1048,8 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
     ingestion_adapter: IngestionAdapter | None = None,
     stages_to_run: Collection[str] | None = None,
     on_stage_complete: Callable[[str], None] | None = None,
+    graph_writes: GraphWriteAccess | None = None,
+    trigger: IngestionTrigger | None = None,
 ) -> tuple[str, tuple[StageReport, ...]]:
     """Run ingest -> extract -> derive -> merge, aborting at the first failure.
 
@@ -1027,10 +1080,19 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
             ``<short_name>-<version>``, the id the ingest stage would return.
         on_stage_complete: Called with the stage name after each run stage
             returns (never for a stage that raised), before the next stage starts.
+        graph_writes: The Graph Write Gateway and system audit recorder the ingest stage writes
+            its native graph through (issue #208); required when ``ingestion`` runs.
+        trigger: The audited entry point that started the run, recorded on the system audit row
+            the ingest stage's group is logged under; ``None`` leaves it off the row.
 
     Returns:
         The ``regulatory_instrument_id`` and the :class:`StageReport` tuple of
         the stages that ran, in pipeline order.
+
+    Raises:
+        GraphWriteUnavailableError: ``ingestion`` runs and ``graph_writes`` is ``None``.
+        AuditTrailUnavailableError: The system audit row of the ingest stage's group could not
+            be written; nothing was written to any graph.
     """
     selected = frozenset(_STAGE_ORDER if stages_to_run is None else stages_to_run)
     stages = dependencies.stages
@@ -1048,6 +1110,10 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
             dependencies.adapters.ingestion() if ingestion_adapter is None else ingestion_adapter
         )
         set_stage(run_id, "ingestion")
+        writes = _require_graph_writes(graph_writes)
+        audit_event_id = _record_catalog_run_audit(
+            writes.system_audit, run_id=run_id, entry=entry, trigger=trigger
+        )
         ingest_result = _run_stage(
             "ingestion",
             lambda: stages.ingest(
@@ -1056,6 +1122,8 @@ def _execute_catalog_stages(  # noqa: PLR0913 -- one run's collaborators plus th
                 version=entry.version,
                 adapter=ingest_adapter,
                 graph=graphs.native,
+                submitter=writes.gateway,
+                audit_event_id=audit_event_id,
                 run_id=run_id,
             ),
             emitter=emitter,
@@ -1208,6 +1276,7 @@ def run_catalog_ingestion_pipeline(
             stages=(),
             outcome="already_ingested",
         )
+    graph_writes = graph_write_access(config)
     graphs = _OpenGraphs(
         native=dependencies.graphs.native(config, entry.short_name),
         baseline=dependencies.graphs.baseline(config, entry.short_name),
@@ -1231,8 +1300,10 @@ def run_catalog_ingestion_pipeline(
                 dependencies=dependencies,
                 emitter=emitter,
                 ingestion_adapter=ingestion_adapter,
+                graph_writes=graph_writes,
+                trigger=trigger,
             )
-        except PipelineStageError as exc:
+        except (PipelineStageError, AuditTrailUnavailableError) as exc:
             _emit_run(
                 outcome="failed",
                 run_id=run_id,
@@ -1240,7 +1311,7 @@ def run_catalog_ingestion_pipeline(
                 caller=caller,
                 emitter=emitter,
                 duration_ms=_elapsed_ms(started),
-                failing_stage=exc.stage,
+                failing_stage=exc.stage if isinstance(exc, PipelineStageError) else "system_audit",
             )
             raise
     finally:
@@ -1498,6 +1569,59 @@ def _read_internal_seed_and_short_name(
     return seed, short_name
 
 
+def _require_graph_write_gateway(gateway: GroupSubmitter | None) -> GroupSubmitter:
+    """Return ``gateway``, or raise if the service has none (issue #208, fail closed).
+
+    Called before any graph is opened. There is deliberately no fallback to a direct FalkorDB
+    write: a deployment without a gateway (no PS state Postgres) does not ingest.
+
+    Raises:
+        GraphWriteUnavailableError: ``gateway`` is ``None``.
+    """
+    if gateway is None:
+        raise GraphWriteUnavailableError(GRAPH_WRITE_UNAVAILABLE_MESSAGE)
+    return gateway
+
+
+def _record_internal_run_audit(
+    system_audit: SystemAuditRecorder, *, run_id: str, short_name: str
+) -> str:
+    """Record the system audit row of one internal run and return its id (the groups' anchor).
+
+    Raises:
+        AuditTrailUnavailableError: The row could not be written; nothing has been written to
+            any graph (the caller does not run the ingest stage).
+    """
+    return system_audit(
+        action=INGESTION_RUN_SUBMIT_ACTION,
+        resource_type=INGESTION_RUN_RESOURCE_TYPE,
+        resource_id=run_id,
+        details={
+            "status": "started",
+            "trigger": _INTERNAL_RUN_AUDIT_TRIGGER,
+            "short_name": short_name,
+        },
+    )
+
+
+def _native_graph_name(short_name: str) -> str:
+    """The ``{short}_native`` graph name, the target of the seed's native graph group."""
+    from ps_service.ingestion.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off the pipeline at import
+        native_graph_name,
+    )
+
+    return native_graph_name(short_name)
+
+
+def _baseline_graph_name(short_name: str) -> str:
+    """The ``{short}_baseline`` graph name, the target of the seed's baseline graph group."""
+    from ps_service.domain_mapper.falkordb_client import (  # noqa: PLC0415 -- M6: function-local keeps ps_service.main off Domain Mapper at import
+        baseline_graph_name,
+    )
+
+    return baseline_graph_name(short_name)
+
+
 def run_internal_ingestion_pipeline(
     document: dict[str, object],
     *,
@@ -1505,6 +1629,8 @@ def run_internal_ingestion_pipeline(
     run_id: str,
     caller: str,
     dependencies: PipelineDependencies,
+    gateway: GroupSubmitter | None,
+    system_audit: SystemAuditRecorder,
     emitter: LogEmitter | None = None,
 ) -> IngestionOutcome:
     """Run the internal-seed ingestion pipeline for one already-parsed document.
@@ -1541,6 +1667,11 @@ def run_internal_ingestion_pipeline(
         dependencies: The injected graph openers, stage functions, and
             adapter factories (``build_default_pipeline_dependencies`` in
             production; a fake in fast tests).
+        gateway: The Graph Write Gateway the seed's graph writes are submitted through, or
+            ``None`` if the service has none -- then the run fails closed, never writing a
+            graph directly (issue #208).
+        system_audit: Records the system audit row (actor ``system:ingestion``) the run's graph
+            groups are logged under; the internal path has no principal of its own (issue #208).
         emitter: Optional explicit log emitter; otherwise the process default.
 
     Returns:
@@ -1550,6 +1681,9 @@ def run_internal_ingestion_pipeline(
     Raises:
         IngestionConfigIncompleteError: If the configuration is missing an
             LLM model / embed model / similarity threshold (HTTP 503).
+        GraphWriteUnavailableError: ``gateway`` is ``None`` (HTTP 503); nothing ran.
+        AuditTrailUnavailableError: The system audit row could not be written (HTTP 503);
+            nothing was written to any graph.
         InternalSeedValidationError: The seed document fails structural or
             shape validation (422), or its ``RegulatoryInstrument.id`` is
             not in the expected ``{SHORT}-{VERSION}`` shape.
@@ -1559,6 +1693,7 @@ def run_internal_ingestion_pipeline(
             (502).
     """
     resolved = _require_ingestion_config(config)
+    submitter = _require_graph_write_gateway(gateway)
     adapter = dependencies.adapters.internal_seed()
     started = time.perf_counter()
     _emit_run(
@@ -1571,16 +1706,20 @@ def run_internal_ingestion_pipeline(
     try:
         try:
             seed, short_name = _read_internal_seed_and_short_name(adapter, document)
-            native_graph = dependencies.graphs.native(config, short_name)
             baseline_graph = dependencies.graphs.baseline(config, short_name)
             single_tenant_graph = dependencies.graphs.single_tenant(config)
+            audit_event_id = _record_internal_run_audit(
+                system_audit, run_id=run_id, short_name=short_name
+            )
             set_stage(run_id, "internal_ingestion")
             ingest_result = _run_stage(
                 "internal_ingestion",
                 lambda: dependencies.stages.ingest_internal(
                     seed,
-                    baseline_graph=baseline_graph,
-                    native_graph=native_graph,
+                    submitter=submitter,
+                    native_graph_name=_native_graph_name(short_name),
+                    baseline_graph_name=_baseline_graph_name(short_name),
+                    audit_event_id=audit_event_id,
                     emitter=emitter,
                 ),
                 emitter=emitter,
@@ -1598,7 +1737,7 @@ def run_internal_ingestion_pipeline(
                 ),
                 emitter=emitter,
             )
-        except PipelineStageError as exc:
+        except (PipelineStageError, AuditTrailUnavailableError) as exc:
             _emit_run(
                 outcome="failed",
                 run_id=run_id,
@@ -1606,7 +1745,7 @@ def run_internal_ingestion_pipeline(
                 caller=caller,
                 emitter=emitter,
                 duration_ms=_elapsed_ms(started),
-                failing_stage=exc.stage,
+                failing_stage=exc.stage if isinstance(exc, PipelineStageError) else "system_audit",
             )
             raise
     finally:

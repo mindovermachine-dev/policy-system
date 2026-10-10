@@ -67,6 +67,7 @@ from api._fakes import (
     build_fake_pipeline_dependencies,
     install_compliance_officer_grant,
 )
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (  # pyright: ignore[reportPrivateUsage]  -- issue #145: same cross-package import `test_catalog_source_authz_gate.py` already establishes, reused here so this file's own two real-token tests can grant the caller `ComplianceOfficer` on the new gate
     FakeAccessRoleStore,
 )
@@ -78,6 +79,7 @@ from starlette.applications import Starlette
 from ps_service import dependency_health
 from ps_service.api.catalog import CatalogEntry, find_by_celex
 from ps_service.api.dependencies import provide_audit_store, provide_pipeline_dependencies
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.ingestion_orchestration import (
     _CELEX_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key (issue #193), mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
     _MERGED_INSTRUMENT_EXISTS_QUERY,  # pyright: ignore[reportPrivateUsage]  -- query-text dispatch key, mirrors tests/api/_fakes.py's own precedent for cross-module private reuse
@@ -102,6 +104,7 @@ from ps_service.domain_mapper.prompts import (
     OBLIGATION_DERIVATION_SYSTEM_PROMPT,
 )
 from ps_service.ingestion.adapters.errors import CellarNotFoundError
+from ps_service.ingestion.falkordb_client import native_graph_name
 from ps_service.ingestion.models import (
     FetchedRegulatoryInstrumentStructure,
     IngestResult,
@@ -128,6 +131,7 @@ if TYPE_CHECKING:
 
     from ps_service.company_merge.models import MergeResult
     from ps_service.domain_mapper.models import DerivationResult, ExtractionResult
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.llm_interface.client import CompletionCaller, EmbeddingCaller
     from ps_test_support.mock_oidc_provider import MockOidcProvider
 
@@ -539,6 +543,27 @@ _FIXTURE_UNIT = ExtractionUnit(
 )
 
 
+def _project_native_graph(short_name: str, *, into: _MiniGraph) -> None:
+    """Copy what the gateway wrote to ``{short}_native`` into the generic native graph fake.
+
+    The ingest stage writes through the Graph Write Gateway (issue #208) while the later stages
+    read the native graph through ``_MiniGraph``; this is the test-side bridge between the two
+    boundary fakes, expressed in the Cypher shapes ``_MiniGraph`` already interprets.
+    """
+    written = installed_process_gateway().rig.graphs.open(native_graph_name(short_name))
+    for (label, node_id), properties in written.nodes.items():
+        into.query(
+            f"MERGE (n:{label} {{id: $id}}) SET n += $properties",
+            {"id": node_id, "properties": dict(properties)},
+        )
+    for edge_type, source_label, source_id, target_label, target_id, _identity in written.edges:
+        into.query(
+            f"MATCH (a:{source_label} {{id: $parent_id}}), (b:{target_label} {{id: $child_id}}) "
+            f"MERGE (a)-[:{edge_type}]->(b)",
+            {"parent_id": source_id, "child_id": target_id},
+        )
+
+
 def _structural_fixture(identifier: str) -> FetchedRegulatoryInstrumentStructure:
     """A minimal, real, two-node structural tree: one Chapter, one Article.
 
@@ -778,20 +803,26 @@ def _use_real_pipeline_stages(
         version: str,
         adapter: object,
         graph: object,
+        submitter: GroupSubmitter,
+        audit_event_id: str,
         run_id: str | None = None,
         emitter: object = None,
     ) -> IngestResult:
         # The resolver now supplies a CellarEliAdapter; keep the recording fake at the boundary.
         _ = adapter
-        return ingest_regulatory_instrument(
+        result = ingest_regulatory_instrument(
             identifier,
             short_name,
             version=version,
             adapter=_RecordingIngestionAdapter(stage_order),
             graph=graph,  # pyright: ignore[reportArgumentType] -- structural GraphHandle
+            submitter=submitter,
+            audit_event_id=audit_event_id,
             run_id=run_id,
             emitter=emitter,  # pyright: ignore[reportArgumentType]
         )
+        _project_native_graph(short_name, into=cast("_MiniGraph", graph))
+        return result
 
     def _extract(
         regulatory_instrument_id: str,
@@ -1040,6 +1071,42 @@ def test_curated_celex_happy_path_returns_ingestion_accepted_response_shape(
     }
     for stage in body["stages"]:
         assert set(stage.keys()) == {"stage", "status", "summary"}
+
+
+def test_the_ingest_stage_commits_its_native_graph_as_one_group_under_a_system_audit_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #208: the sync tool's real ingest stage writes through the Graph Write Gateway."""
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    _use_real_pipeline_stages(monkeypatch)
+    gateway = installed_process_gateway()
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert result.is_error is False
+    [group] = gateway.rig.store.groups
+    assert group.graph == "cra_native"
+    assert group.audit_event_id == gateway.system_audit.ids[0]
+    row = gateway.system_audit.rows[0]
+    assert cast("dict[str, object]", row["details"])["trigger"] == "sync_ingest"
+    assert ("RegulatoryInstrument", _RID) in gateway.rig.graphs.open("cra_native").nodes
+
+
+def test_without_a_gateway_the_tool_fails_closed_before_any_stage_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_complete_llm_env(monkeypatch)
+    monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
+    configure()
+    _use_real_pipeline_stages(monkeypatch)
+    install_graph_write_gateway(None)
+
+    result = _call_ingest_regulation(_CELEX, _SHORT_NAME)
+
+    assert "graph writes are unavailable" in _text(result)
+    assert installed_process_gateway().rig.store.groups == []
 
 
 def test_curated_celex_happy_path_reports_each_completed_stage_with_a_nonempty_summary(

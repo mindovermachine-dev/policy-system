@@ -1,4 +1,4 @@
-"""ps_service.graph_gateway -- the Graph Write Gateway and its mutation log (issues #205, #206).
+"""ps_service.graph_gateway -- the Graph Write Gateway and its mutation log (issues #205-#208).
 
 Domain path: `ps.service.graphgateway`
 (`docs/architecture/ps-solution-architecture.md`). Two halves live here:
@@ -11,8 +11,9 @@ Domain path: `ps.service.graphgateway`
   commit point, log-first), applies the logged entries to FalkorDB with a last-applied marker,
   and reports a `GroupOutcome`. It also catches a graph up (`catch_up`, `is_caught_up`), recovers
   every lagging graph at startup (`recover`) and runs a background reconciler.
-  `build_default_graph_write_gateway` composes it for the service; no writer is wired to it yet
-  (the writers move onto it in #208-#214, replay and digest verification are #207).
+  `build_default_graph_write_gateway` composes it for the service. Replay and digest verification
+  are #207; the ingestion pipelines (external and internal-seed) write only through it since
+  #208, and the other writers move onto it in #209-#214.
 
 Owns its migration directory (`MIGRATIONS_DIR`). Unlike every other component's migrations,
 these are NOT applied by the ordinary startup runner (that would make the `ps_state` role their
@@ -39,6 +40,10 @@ GRAPH_LOG_TABLES = (
 # Imported after `MIGRATIONS_DIR` is defined: the provisioning CLI imports it from this package.
 from ps_service.graph_gateway.default_gateway import (  # noqa: E402
     build_default_graph_write_gateway,
+)
+from ps_service.graph_gateway.edge_identity_backfill import (  # noqa: E402
+    EdgeIdentityBackfillOutcome,
+    backfill_edge_identity,
 )
 from ps_service.graph_gateway.errors import (  # noqa: E402
     GraphApplyBlockedError,
@@ -79,6 +84,7 @@ from ps_service.graph_gateway.models import (  # noqa: E402
     RecoveryResult,
     RemoveProperty,
     ReplayReport,
+    StampEdgeIdentity,
     StartupReplayReport,
     UpsertEdge,
     UpsertNode,
@@ -95,6 +101,7 @@ __all__ = [
     "DeleteEdge",
     "DeleteNode",
     "DigestCheckpoint",
+    "EdgeIdentityBackfillOutcome",
     "ExpectedPosition",
     "GatewaySettings",
     "GraphApplyBlockedError",
@@ -128,9 +135,11 @@ __all__ = [
     "ReplayReport",
     "StagedSubmission",
     "StaleGraphStateError",
+    "StampEdgeIdentity",
     "StartupReplayReport",
     "UnlistedNameError",
     "UpsertEdge",
     "UpsertNode",
+    "backfill_edge_identity",
     "build_default_graph_write_gateway",
 ]

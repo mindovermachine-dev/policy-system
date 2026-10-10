@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from ps_service.config import load_config
+from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
+from ps_service.graph_gateway.system_audit import build_system_audit_recorder
 from ps_service.ingestion.adapters.cellar_eli import CellarEliAdapter
 from ps_service.ingestion.falkordb_client import (
     GraphHandle,
@@ -125,6 +127,11 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
     # Real, default `fetch_xhtml` transport — genuinely live, no mocking.
     adapter = CellarEliAdapter()
 
+    # The native graph is written through the Graph Write Gateway (issue #208): the real log store
+    # (PS state Postgres) and the real FalkorDB opener, one system audit row per run.
+    gateway = build_default_graph_write_gateway(config)
+    record_audit = build_system_audit_recorder(config)
+
     runs: dict[str, _LiveRun] = {}
     for short_name, spec in _GROUND_TRUTH.items():
         graph = select_graph(db, native_graph_name(short_name))
@@ -144,6 +151,13 @@ def live_runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, _LiveRun]:
             version=_VERSION,
             adapter=adapter,
             graph=graph,
+            submitter=gateway,
+            audit_event_id=record_audit(
+                action="ingestion_run.submit",
+                resource_type="ingestion_run",
+                resource_id=f"live-{short_name}",
+                details={"status": "started", "short_name": short_name},
+            ),
             emitter=emitter,
         )
         runs[short_name] = _LiveRun(

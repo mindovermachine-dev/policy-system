@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import importlib
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @pytest.fixture(autouse=True)
@@ -45,3 +49,21 @@ def ingest_audit_store(monkeypatch: pytest.MonkeyPatch) -> object:
     store = fakes.InMemoryAuditStore()
     monkeypatch.setattr(mcp_server, "PsycopgAuditStore", fakes.audit_store_factory(store))
     return store
+
+
+@pytest.fixture(autouse=True)
+def _process_gateway() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Install a rig gateway as the process's for one test (issue #208).
+
+    The ingestion tools obtain their Graph Write Gateway from the process, as the app lifespan
+    installs it in production. The import is lazy for the importlib cross-package reason of
+    `_default_cellar_stub`: a directory-only run cannot resolve `api._gateway_fakes`, and the
+    tests that need a gateway cannot be collected without it either.
+    """
+    try:
+        fakes = importlib.import_module("api._gateway_fakes")
+    except ModuleNotFoundError:
+        yield
+        return
+    with fakes.process_gateway_installed():
+        yield

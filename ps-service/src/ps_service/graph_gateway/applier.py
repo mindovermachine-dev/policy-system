@@ -20,6 +20,7 @@ from ps_service.graph_gateway.cypher import (
     merge_property_rows,
     node_id_rows,
     remove_property_query,
+    stamp_edge_identity_query,
     upsert_edge_query,
     upsert_edge_rows,
     upsert_node_query,
@@ -32,6 +33,7 @@ from ps_service.graph_gateway.models import (
     DeleteNode,
     MergeProperty,
     RemoveProperty,
+    StampEdgeIdentity,
     UpsertEdge,
     UpsertNode,
 )
@@ -150,7 +152,7 @@ def _run_key(primitive: Primitive) -> tuple[str, ...]:
             return (primitive.op, primitive.label)
         case RemoveProperty():
             return (primitive.op, primitive.label, *primitive.keys)
-        case UpsertEdge() | DeleteEdge():
+        case UpsertEdge() | DeleteEdge() | StampEdgeIdentity():
             return (primitive.op, primitive.type, primitive.source.label, primitive.target.label)
 
 
@@ -181,3 +183,6 @@ def _apply_chunk(graph: GraphHandle, chunk: Sequence[Primitive]) -> None:
         case DeleteEdge():
             rows = delete_edge_rows(_only(chunk, DeleteEdge))
             graph.query(delete_edge_query(first), {"rows": rows})
+        case StampEdgeIdentity():
+            rows = delete_edge_rows(_only(chunk, StampEdgeIdentity))
+            graph.query(stamp_edge_identity_query(first), {"rows": rows})

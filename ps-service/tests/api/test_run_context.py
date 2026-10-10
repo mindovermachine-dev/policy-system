@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
+from graph_gateway._fakes import GatewayRig, close_all_rigs
 
 from api._audit_fakes import InMemoryAuditStore
 from api._fakes import (
@@ -32,6 +33,7 @@ from api._fakes import (
     build_fake_pipeline_dependencies,
     install_compliance_officer_grant,
 )
+from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import (
     provide_audit_store,
     provide_curated_catalog_dependencies,
@@ -43,6 +45,8 @@ from ps_service.logging import facade
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from api._fakes import ReadLines
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
@@ -81,7 +85,16 @@ def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
     audit_store = InMemoryAuditStore()  # catalog ingestion writes `ingestion_run.*` rows (#195)
     app.dependency_overrides[provide_audit_store] = lambda: audit_store
+    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
+    override_gateway(app, rig, RecordingSystemAudit(rig))
     return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Stop the reconciler thread of every gateway rig a test built."""
+    yield
+    close_all_rigs()
 
 
 @pytest.fixture(autouse=True)

@@ -29,6 +29,7 @@ from ps_service.api.errors import (
     ExportConfigIncompleteError,
     ExportInstrumentNotFoundError,
     ExportStageFailedError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     InternalSeedValidationError,
     InvalidAccessRoleError,
@@ -106,6 +107,7 @@ _SAFE_VERBATIM: tuple[type[Exception], ...] = (
     CatalogIdentifierNotFoundError,
     CatalogSourceOverrideUnavailableError,
     InternalSeedValidationError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     RequestBodyTooLargeError,
     RestoreArtifactRejectedError,
@@ -230,6 +232,11 @@ _API_ERROR_SPECS: tuple[tuple[type[Exception], str, int], ...] = (
     (
         IngestionConfigIncompleteError,
         "ingestion_config_incomplete",
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ),
+    (
+        GraphWriteUnavailableError,
+        "graph_write_unavailable",
         status.HTTP_503_SERVICE_UNAVAILABLE,
     ),
     (
@@ -426,7 +433,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     ``AuditTrailUnavailableError`` 503 (issue #195: the opening audit row could not be written),
     ``CatalogIdentifierNotFoundError`` 404, ``CatalogSourceOverrideUnavailableError`` 503,
     ``InternalSeedValidationError`` 422,
-    ``IngestionConfigIncompleteError`` 503,
+    ``IngestionConfigIncompleteError`` 503, ``GraphWriteUnavailableError`` 503 (issue #208: no
+    graph write gateway, so the write fails closed),
     ``RestoreArtifactRejectedError`` 422, ``RequestBodyTooLargeError`` 413,
     ``PendingReviewNotFoundError`` 404, ``ExportInstrumentNotFoundError`` 404,
     ``ExportConfigIncompleteError`` 503, ``CuratedSourceUnavailableError`` 502,

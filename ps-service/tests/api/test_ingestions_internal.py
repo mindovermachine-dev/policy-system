@@ -17,14 +17,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 from fastapi.testclient import TestClient
+from graph_gateway._fakes import GatewayRig, close_all_rigs
 
 from api._fakes import build_fake_pipeline_dependencies
+from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import provide_pipeline_dependencies
 from ps_service.config import ServiceConfig
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
 from ps_service.main import create_app
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from ps_service.api.ingestion_orchestration import PipelineDependencies
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -82,10 +86,19 @@ def _app_config() -> ServiceConfig:
     )
 
 
+@pytest.fixture(autouse=True)
+def _close_gateway_rigs() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]  # autouse
+    """Stop the reconciler thread of every gateway rig a test built."""
+    yield
+    close_all_rigs()
+
+
 def _client_with_fake(fake_deps: PipelineDependencies) -> TestClient:
-    """A ``TestClient`` whose ``provide_pipeline_dependencies`` yields ``fake_deps``."""
+    """A ``TestClient`` whose pipeline dependencies are ``fake_deps``, over a gateway rig."""
+    rig = GatewayRig()  # the internal route fails closed without a gateway (issue #208)
     app = create_app(_app_config())
     app.dependency_overrides[provide_pipeline_dependencies] = lambda: fake_deps
+    override_gateway(app, rig, RecordingSystemAudit(rig))
     return TestClient(app, raise_server_exceptions=False)
 
 

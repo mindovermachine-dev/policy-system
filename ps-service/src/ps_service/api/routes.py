@@ -24,12 +24,14 @@ from ps_service.api.dependencies import (
     provide_change_check_dependencies,
     provide_curated_catalog_dependencies,
     provide_export_dependencies,
+    provide_graph_write_gateway,
     provide_near_miss_review_dependencies,
     provide_pending_approval_store,
     provide_pipeline_dependencies,
     provide_restore_dependencies,
     provide_restore_from_catalog_dependencies,
     provide_run_id,
+    provide_system_audit_recorder,
     require_access_role,
 )
 from ps_service.api.errors import (
@@ -89,6 +91,12 @@ from ps_service.curated_source.catalog_client import (
     CuratedCatalogDependencies,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
 )
 from ps_service.curated_source.errors import CuratedSourceFetchError
+from ps_service.graph_gateway.system_audit import (
+    SystemAuditRecorder,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
+)
+from ps_service.ingestion.graph_submission import (
+    GroupSubmitter,  # noqa: TC001 -- FastAPI resolves `create_ingestion`'s annotations at runtime
+)
 from ps_service.passkey_signing.service import check_pending_approval, create_merge_pending_approval
 from ps_service.passkey_signing.store import (
     PendingApprovalStore,  # noqa: TC001 -- FastAPI resolves the endpoint annotation at runtime
@@ -121,6 +129,8 @@ async def create_ingestion(
     config: Annotated[ServiceConfig, Depends(get_service_config)],
     dependencies: Annotated[PipelineDependencies, Depends(provide_pipeline_dependencies)],
     audit: Annotated[AuditContext, Depends(provide_audit_context)],
+    gateway: Annotated[GroupSubmitter | None, Depends(provide_graph_write_gateway)],
+    system_audit: Annotated[SystemAuditRecorder, Depends(provide_system_audit_recorder)],
 ) -> IngestionAcceptedResponse:
     """Trigger the in-process ingestion pipeline for one ``POST /ingestions`` request.
 
@@ -168,6 +178,10 @@ async def create_ingestion(
         dependencies: The pipeline dependency bundle (injected; overridden in tests).
         audit: Who is acting and where the ``ingestion_run`` audit rows go (injected;
             catalog path only).
+        gateway: The Graph Write Gateway, or ``None`` when the service has none (injected;
+            internal path only).
+        system_audit: Records the system audit row the internal path's graph groups are logged
+            under (injected; internal path only).
 
     Returns:
         An :class:`IngestionAcceptedResponse` with the run id and per-stage outcomes.
@@ -182,7 +196,9 @@ async def create_ingestion(
             structural or shape validation (422).
         PipelineStageError: A pipeline stage raised (502).
         AuditTrailUnavailableError: The ``ingestion_run.submit`` row could not be written; nothing
-            ran (503; issue #195, catalog path only).
+            ran (503; issue #195, catalog path; issue #208, internal path's system row).
+        GraphWriteUnavailableError: The internal path found no Graph Write Gateway; nothing ran
+            (503; issue #208).
     """
     caller = http_request.client.host if http_request.client else "unknown"
     if request_body.source == "internal":
@@ -193,6 +209,8 @@ async def create_ingestion(
             run_id=run_id,
             caller=caller,
             dependencies=dependencies,
+            gateway=gateway,
+            system_audit=system_audit,
         )
         return _to_accepted_response(run_id, outcome)
     await run_in_threadpool(require_access_role(AccessRole.COMPLIANCE_OFFICER), http_request)

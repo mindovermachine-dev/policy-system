@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from ps_service.domain_mapper.models import ExtractionUnit
     from ps_service.ingestion.adapters.base import IngestionAdapter
     from ps_service.ingestion.adapters.internal_seed.models import InternalRegulationSeed
+    from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.ingestion.models import (
         FetchedRegulatoryInstrumentStructure,
         RegulatoryInstrumentMetadata,
@@ -248,6 +249,8 @@ class FakeIngestStage:
         version: str,
         adapter: object,
         graph: GraphHandle,
+        submitter: GroupSubmitter,
+        audit_event_id: str,
         run_id: str | None = None,
         emitter: LogEmitter | None = None,
     ) -> IngestResult:
@@ -263,6 +266,8 @@ class FakeIngestStage:
                     "version": version,
                     "run_id": run_id,
                     "adapter": adapter,
+                    "submitter": submitter,
+                    "audit_event_id": audit_event_id,
                 },
             )
         )
@@ -466,12 +471,21 @@ class FakeIngestInternalStage:
         self,
         seed: InternalRegulationSeed,
         *,
-        baseline_graph: GraphHandle,
-        native_graph: GraphHandle,
+        submitter: GroupSubmitter,
+        native_graph_name: str,
+        baseline_graph_name: str,
+        audit_event_id: str,
         emitter: LogEmitter | None = None,
     ) -> InternalIngestResult:
         """Record the call and return (or raise) a canned :class:`InternalIngestResult`."""
-        _ = (seed, baseline_graph, native_graph, emitter)
+        _ = (
+            seed,
+            submitter,
+            native_graph_name,
+            baseline_graph_name,
+            audit_event_id,
+        )
+        _ = emitter
         self._recorder.calls.append(StageCall("internal_ingestion", None, {}))
         if self._error is not None:
             raise self._error

@@ -8,14 +8,14 @@ from __future__ import annotations
 
 
 class IngestionPersistenceError(Exception):
-    """A FalkorDB write for the structural graph or RegulatoryInstrument node failed.
+    """The structural graph or RegulatoryInstrument node could not be persisted or verified.
 
-    Raised by `graph_writer.register_regulatory_instrument_version` when required
-    metadata is missing (CA doc: "Reject with a clear error if required
-    properties are missing... no partial node") and by
-    `graph_writer.persist_native_structural_graph`/
-    `verify_structural_graph_reachable` when the structure can't be fully
-    persisted or verified (CA doc: "Abort with no partial write").
+    Raised by `graph_writer.build_native_writes` when the structure can't be fully built (an
+    unknown element type, or a property the gateway cannot store; CA doc: "Abort with no partial
+    write"), by `graph_submission.submit_or_raise` when the Graph Write Gateway refuses the group,
+    cannot reach its stores, or commits it without being able to apply it yet, and by
+    `graph_writer.verify_structural_graph_reachable` when the persisted structure can't be
+    verified.
     """
 
 

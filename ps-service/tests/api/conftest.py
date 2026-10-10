@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api._fakes import install_default_cellar_stub_unless_live
+from api._gateway_fakes import ProcessGateway, process_gateway_installed
 from ps_service.config import ServiceConfig
 from ps_service.logging import facade
 from ps_service.main import create_app
@@ -109,3 +110,15 @@ def _default_cellar_stub(  # pyright: ignore[reportUnusedFunction]  # pytest aut
     Skipped for tests carrying a live marker; a per-test patch overrides it.
     """
     install_default_cellar_stub_unless_live(request, monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def process_gateway() -> Iterator[ProcessGateway]:
+    """Install a rig gateway as the process's for one test (issue #208).
+
+    The catalog pipeline obtains its Graph Write Gateway and system audit recorder from the
+    process, as the MCP tools and the amendment sweep do. A test of the fail-closed case
+    uninstalls it with ``install_graph_write_gateway(None)``.
+    """
+    with process_gateway_installed() as installed:
+        yield installed

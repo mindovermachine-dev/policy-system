@@ -31,9 +31,10 @@ rather than implicit.
 from __future__ import annotations
 
 import ast
+import uuid
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from change_monitor._regulation_independence import (
     find_forbidden_literals,
@@ -51,6 +52,8 @@ from ps_service.ingestion.pipeline import ingest_regulatory_instrument
 from ps_service.logging import bind_run_context
 
 if TYPE_CHECKING:
+    from graph_gateway._fakes import GatewayRig
+
     from ps_service.logging import LogEmitter
     from ps_service.logging.emitter import TextSink
 
@@ -114,6 +117,13 @@ class _FakeAdapter:
         return self._structures_by_identifier[identifier]
 
 
+def _gateway_kwargs(rig: GatewayRig) -> dict[str, Any]:
+    """The gateway seam every ingestion needs: the rig's gateway and an audit event it accepts."""
+    audit_event_id = str(uuid.uuid4())
+    rig.store.audit_rows.add(audit_event_id)
+    return {"submitter": rig.gateway, "audit_event_id": audit_event_id}
+
+
 def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
     metadata = RegulatoryInstrumentMetadata(
         title=title,
@@ -137,7 +147,7 @@ def _structure(title: str) -> FetchedRegulatoryInstrumentStructure:
 
 
 def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
-    make_emitter: _MakeEmitter, read_lines: _ReadLines
+    make_emitter: _MakeEmitter, read_lines: _ReadLines, rig: GatewayRig
 ) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter(
@@ -153,6 +163,7 @@ def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
         version="1.0",
         adapter=adapter,
         graph=_FakeGraph(),
+        **_gateway_kwargs(rig),
         emitter=emitter,
     )
     result_two = ingest_regulatory_instrument(
@@ -161,6 +172,7 @@ def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
         version="1.0",
         adapter=adapter,
         graph=_FakeGraph(),
+        **_gateway_kwargs(rig),
         emitter=emitter,
     )
     emitter.flush()
@@ -176,13 +188,19 @@ def test_ingest_regulatory_instrument_two_calls_emit_two_distinct_run_ids(
 
 
 def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(
-    make_emitter: _MakeEmitter, read_lines: _ReadLines
+    make_emitter: _MakeEmitter, read_lines: _ReadLines, rig: GatewayRig
 ) -> None:
     emitter, log_path = make_emitter()
     adapter = _FakeAdapter({"IDENTIFIER": _structure("Fixture")})
 
     ingest_regulatory_instrument(
-        "IDENTIFIER", "SHORT", version="1.0", adapter=adapter, graph=_FakeGraph(), emitter=emitter
+        "IDENTIFIER",
+        "SHORT",
+        version="1.0",
+        adapter=adapter,
+        graph=_FakeGraph(),
+        **_gateway_kwargs(rig),
+        emitter=emitter,
     )
     emitter.flush()
 
@@ -198,20 +216,26 @@ def test_ingest_regulatory_instrument_emits_one_log_entry_per_stage(
 
 
 def test_ingest_computes_regulatory_instrument_id_from_short_name_and_version(
-    make_emitter: _MakeEmitter,
+    make_emitter: _MakeEmitter, rig: GatewayRig
 ) -> None:
     emitter, _ = make_emitter()
     adapter = _FakeAdapter({"ANY_IDENTIFIER": _structure("Fixture")})
 
     result = ingest_regulatory_instrument(
-        "ANY_IDENTIFIER", "XYZ", version="2.3", adapter=adapter, graph=_FakeGraph(), emitter=emitter
+        "ANY_IDENTIFIER",
+        "XYZ",
+        version="2.3",
+        adapter=adapter,
+        graph=_FakeGraph(),
+        **_gateway_kwargs(rig),
+        emitter=emitter,
     )
 
     assert result.regulatory_instrument_id == "XYZ-2.3"
 
 
 def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in_an_outer_context(
-    make_emitter: _MakeEmitter, read_lines: _ReadLines
+    make_emitter: _MakeEmitter, read_lines: _ReadLines, rig: GatewayRig
 ) -> None:
     """`bind_run_context()`'s own nested-scope restore semantics (run_context.py)
     mean `ingest_regulatory_instrument()`'s inner `run_id` is still what gets baked into
@@ -229,6 +253,7 @@ def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in
             version="1.0",
             adapter=adapter,
             graph=_FakeGraph(),
+            **_gateway_kwargs(rig),
             emitter=emitter,
         )
     emitter.flush()
@@ -240,7 +265,7 @@ def test_ingest_regulatory_instrument_uses_currently_bound_run_id_when_nested_in
 
 
 def test_ingest_regulatory_instrument_binds_caller_supplied_run_id_across_every_stage_entry(
-    make_emitter: _MakeEmitter, read_lines: _ReadLines
+    make_emitter: _MakeEmitter, read_lines: _ReadLines, rig: GatewayRig
 ) -> None:
     """A caller (the REST API, per issue #51 T2) may pass a request-scoped
     `run_id` so ingestion-stage log lines correlate with the rest of the
@@ -256,6 +281,7 @@ def test_ingest_regulatory_instrument_binds_caller_supplied_run_id_across_every_
         version="1.0",
         adapter=adapter,
         graph=_FakeGraph(),
+        **_gateway_kwargs(rig),
         run_id="req-abc",
         emitter=emitter,
     )

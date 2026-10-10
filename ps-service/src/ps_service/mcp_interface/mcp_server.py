@@ -47,6 +47,7 @@ from ps_service.api.errors import (
     CatalogSourceOverrideUnavailableError,
     CelexAlreadyIngestedError,
     CuratedSourceUnavailableError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     InvalidAccessRoleError,
     InvalidAuditQueryFilterError,
@@ -874,6 +875,7 @@ class _PreparedCatalogIngestion:
 _CATALOG_INGESTION_ERRORS = (
     CatalogIdentifierNotFoundError,
     CelexAlreadyIngestedError,
+    GraphWriteUnavailableError,
     IngestionConfigIncompleteError,
     PipelineStageError,
     ShortNameCollisionError,
@@ -951,7 +953,7 @@ def _run_prepared_catalog_ingestion(
             ingestion_adapter=prepared.ingestion_adapter,
             trigger=trigger,
         )
-    except _CATALOG_INGESTION_ERRORS as exc:
+    except (*_CATALOG_INGESTION_ERRORS, AuditTrailUnavailableError) as exc:
         if capture is not None:
             capture.reason_code = classify_ingestion_failure(exc)
         return f"error: {exc}"
@@ -2096,7 +2098,7 @@ def restore_instrument(
 
 # D2 (issue #139): `celex` is a plain node PROPERTY on `RegulatoryInstrument`,
 # never its node id (`{SHORT}-{VERSION}`) -- confirmed against
-# `ingestion/graph_writer.py`'s `register_regulatory_instrument_version`.
+# `ingestion/graph_writer.py`'s `build_native_writes` (the RegulatoryInstrument node's properties).
 # Fixed, code-owned, never string-interpolated -- `celex_ids` always flows in
 # via `params` (L2 Query Safety).
 _INGESTION_STATUS_QUERY = (

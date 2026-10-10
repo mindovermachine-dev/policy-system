@@ -687,7 +687,7 @@ These structured fields pair with `ps-skills/ps-plugin/rubrics/control-rubric.md
 
 ## Graph Write Gateway and Mutation Log
 
-Target design (not yet implemented; delivered by #205-#214): the entities below are defined before their implementation.
+Implemented by #205-#207 for the gateway, its log, replay and digest; Ingestion writes through it since #208. The other writers (Domain Mapper, Company Merge, Restore, Policy Lifecycle, Graph Cleanup, Regulatory Change Monitor) move onto it in #209-#214, until then their direct writes are not in the log.
 
 The entities in this section are **not graph nodes**. They are not part of the compliance-graph vocabulary, are not defined in `ps_service.domain_schema`, and so have no generated Properties or Relationships tables. They describe how every write to the compliance graph is recorded, so that the graph can be rebuilt and checked from that record.
 
@@ -728,6 +728,10 @@ How it is encoded (format version 1, `sha256:` followed by the hex digest): each
 ### Graph Write Gateway
 
 The actor, not a graph node, through which writers submit graph writes. It records each transaction group in the mutation log before the group is applied to the graph, applies it to FalkorDB, replays the log to rebuild a graph, and verifies a rebuilt graph against a Digest checkpoint. It accepts a write only if every node label and relationship type the write names is permitted by the label allow-list; anything else is rejected before anything is logged. If the log cannot accept a group, nothing is logged and nothing is applied.
+
+**Relationship identity.** Every relationship written through the gateway carries an `identity` property, which is what the gateway merges relationships on. Ingestion's identity is `{type}:{source id}->{target id}`, so two edges of one type between the same two nodes are one edge. A graph built through the gateway therefore equals the graph the pre-gateway writers built only modulo this property. A graph written before the gateway has relationships without it; the gateway stamps them in place, as one logged group, before Ingestion's first write to that graph, so a re-ingest merges into them instead of adding a parallel relationship.
+
+**System audit row.** A writer with no principal of its own (the ingestion entry points) records one Audit event for its run, with the fixed system actor `system:ingestion` (issuer `system`) and the action `ingestion_run.submit`, and submits its groups under that event's identifier. If the Audit event cannot be recorded, the run does not start and nothing is written.
 
 ## Directives and National Transposition
 

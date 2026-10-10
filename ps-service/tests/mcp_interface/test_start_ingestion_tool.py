@@ -17,6 +17,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from api._gateway_fakes import installed_process_gateway
 from authz._fakes import (
     FakeAccessRoleStore,  # pyright: ignore[reportPrivateUsage]  -- `tests/authz/` is an importable package; mirrors `test_ingestion_run_tools_authz_gate.py`
 )
@@ -45,6 +46,7 @@ from mcp_interface.test_ingest_regulation_tool import (
 )
 from ps_service.api import run_status
 from ps_service.api.catalog import REGULATION_CATALOG
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.authz.models import AccessRole
 from ps_service.config import LOCAL_TEST_PRINCIPAL_ID
 from ps_service.ingestion_runs import dispatch
@@ -117,6 +119,42 @@ def test_happy_path_returns_a_run_id_at_once_and_polls_to_the_ingestion_result(
         "merge",
     ]
     assert all(stage["status"] == "succeeded" for stage in stages)
+
+
+def test_the_background_run_writes_its_native_graph_under_its_own_system_audit_row(
+    monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
+) -> None:
+    """Issue #208: the async path anchors the real ingest stage's group to a system audit row."""
+    _ = store
+    _use_real_pipeline_stages(monkeypatch)
+    gateway = installed_process_gateway()
+
+    run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
+    wait_for_run(run_id)
+
+    assert _status(run_id)["status"] == "succeeded"
+    row = gateway.system_audit.rows[0]
+    assert (row["action"], row["resource_id"]) == ("ingestion_run.submit", run_id)
+    assert cast("dict[str, object]", row["details"])["trigger"] == "async_ingest"
+    [group] = gateway.rig.store.groups
+    assert group.graph == "cra_native"
+    assert group.audit_event_id == gateway.system_audit.ids[0]
+
+
+def test_without_a_gateway_the_background_run_fails_closed_with_a_graph_unavailable_reason(
+    monkeypatch: pytest.MonkeyPatch, store: InMemoryIngestionRunStore
+) -> None:
+    _ = store
+    _use_real_pipeline_stages(monkeypatch)
+    install_graph_write_gateway(None)
+
+    run_id = str(body(call_start_ingestion(_CELEX, _SHORT_NAME))["run_id"])
+    wait_for_run(run_id)
+
+    polled = _status(run_id)
+    assert polled["status"] == "failed"
+    assert "graph writes are unavailable" in str(polled["error"])
+    assert installed_process_gateway().rig.store.groups == []
 
 
 def test_polled_result_equals_the_blocking_tools_response_apart_from_run_id(

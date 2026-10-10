@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, NamedTuple, cast
 import pytest
 
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
-from ps_service.ingestion.graph_writer import register_regulatory_instrument_version
+from ps_service.ingestion.graph_writer import build_native_writes
 from ps_service.ingestion.models import RegulatoryInstrumentMetadata
 from ps_service.mcp_interface.mcp_server import handle_mcp_tool_call
 from ps_service.query_engine import falkordb_client as query_engine_client
@@ -89,6 +89,21 @@ def graph() -> Iterator[_Graphs]:
     _delete(db)
 
 
+def _register_instrument(
+    graph: GraphHandle, ident: str, metadata: RegulatoryInstrumentMetadata
+) -> None:
+    """Seed one RegulatoryInstrument node (test-side setup; ingestion writes through the gateway).
+
+    The properties are the ones the ingestion writer builds for the instrument, so the seeded
+    node has the production shape.
+    """
+    properties = build_native_writes(ident, metadata, (), ()).instrument.properties
+    graph.query(
+        "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties",
+        {"id": ident, "properties": properties},
+    )
+
+
 def _seed(
     graph: GraphHandle,
     ident: str,
@@ -100,7 +115,7 @@ def _seed(
     jurisdiction: str = "EU",
     celex: str | None = None,
 ) -> None:
-    register_regulatory_instrument_version(
+    _register_instrument(
         graph,
         ident,
         RegulatoryInstrumentMetadata.model_validate(
@@ -187,7 +202,7 @@ def test_skill_query_returns_one_row_per_node_when_no_superseded_by_edge_exists(
 def test_skill_query_returns_one_ten_column_row_for_a_seeded_instrument(
     graph: _Graphs,
 ) -> None:
-    register_regulatory_instrument_version(
+    _register_instrument(
         graph.seed,
         "CRA-1.0",
         RegulatoryInstrumentMetadata(

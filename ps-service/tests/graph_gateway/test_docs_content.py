@@ -335,7 +335,8 @@ def test_architecture_gateway_intro_says_what_is_built_and_what_is_not() -> None
 
     assert "#205" in intro
     assert "#206" in intro
-    assert "no writer" in intro.lower()
+    assert "no writer" not in intro.lower()
+    assert "ingestion is its first writer" in intro.lower()
     assert "#207" in intro
     assert "#208" in intro
     assert "the contracts below describe the intended behavior" not in intro
@@ -545,3 +546,87 @@ def test_operations_guide_documents_startup_replay_and_the_gated_graph_remedy() 
     ):
         assert needle in section, needle
     assert "(#graph-replay-at-startup-and-a-gated-graph)" in ops
+
+
+# --- issue #208: ingestion writes through the gateway --------------------------------------------
+
+
+def _ingestion_section() -> str:
+    return _section(_read(_CA), "### Ingestion")
+
+
+def test_architecture_ingestion_section_says_its_writes_go_through_the_gateway() -> None:
+    ingestion = _ingestion_section()
+    guidance = ingestion.split("#### Implementation Registration")[0]
+
+    assert "Target design (not yet implemented" not in guidance
+    for needle in (
+        "Implemented (#208)",
+        "ONE native group",
+        "test_no_graph_write_path.py",
+        "graph_submission.py",
+        "system:ingestion",
+        "ingestion_run.submit",
+        "503",
+        "never falls back to a direct FalkorDB write",
+        "StampEdgeIdentity",
+        "modulo that property",
+        "AC-BI-002",
+        "AC-BI-004",
+    ):
+        assert needle in ingestion, needle
+    assert "persist_native_structural_graph" not in ingestion
+
+
+def test_architecture_diagram_and_rows_show_ingestion_as_a_gateway_writer() -> None:
+    ca = _read(_CA)
+
+    assert "Ingestion edge is implemented (#208)" in ca
+    assert "Ingestion->>Gateway: SubmitGroup" in ca
+    assert "Ingestion->>DB: PersistNativeStructuralGraph" not in ca
+    assert "#208" in _ca_row("| Graph Write Gateway | `ps.")
+    assert "with no writer wired yet" not in ca
+    assert "no writer is wired" not in ca
+
+
+def test_architecture_gateway_section_documents_the_stamp_primitive_and_the_system_audit_row() -> (
+    None
+):
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+
+    for needle in (
+        "StampEdgeIdentity",
+        "stamp_legacy_edge_identity",
+        "edge_identity_backfill.py",
+        "system_audit.py",
+        "system:ingestion",
+        "AuditTrailUnavailableError",
+    ):
+        assert needle in gateway, needle
+
+
+def test_domain_concepts_state_the_relationship_identity_and_the_system_audit_row() -> None:
+    section = _section(_read(_DOMAIN_CONCEPTS), "## Graph Write Gateway and Mutation Log")
+
+    for needle in (
+        "Relationship identity",
+        "modulo this property",
+        "System audit row",
+        "system:ingestion",
+    ):
+        assert needle in section, needle
+    assert "Target design (not yet implemented" not in section
+
+
+def test_the_mcp_copy_of_the_domain_concepts_is_the_documented_one() -> None:
+    copy = _REPO / "ps-service" / "src" / "ps_service" / "mcp_interface" / "ps-domain-concepts.md"
+
+    assert _read(copy) == _read(_DOMAIN_CONCEPTS)
+
+
+def test_operations_guide_documents_the_503_when_the_gateway_is_not_running() -> None:
+    ops = _read(_OPS)
+    troubleshooting = _section(ops, "## Troubleshooting / FAQ")
+
+    assert "graph writes are unavailable" in troubleshooting
+    assert "Ingestion never writes to FalkorDB directly" in troubleshooting

@@ -223,9 +223,8 @@ _DYNAMIC_SITES: dict[str, int] = {
     "domain_mapper/graph_writer.py": 6,
     "export/embeddings.py": 3,
     "export/serialize.py": 2,
-    "graph_gateway/cypher.py": 4,
-    "ingestion/adapters/internal_seed/persist.py": 7,
-    "ingestion/graph_writer.py": 5,
+    "graph_gateway/cypher.py": 5,
+    "ingestion/graph_writer.py": 3,
     "policy_lifecycle/graph_writer.py": 3,
     "restore/populate.py": 4,
 }

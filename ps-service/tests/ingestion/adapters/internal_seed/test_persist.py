@@ -12,9 +12,9 @@ boundaries" and mirroring `tests/ingestion/test_graph_writer.py`'s own style.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import uuid
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -29,8 +29,13 @@ from ps_service.ingestion.adapters.internal_seed.models import (
     SeedNode,
 )
 from ps_service.ingestion.adapters.internal_seed.persist import (
+    InternalIngestResult,
+    find_regulatory_instrument,
     ingest_internal_regulatory_instrument,
 )
+
+if TYPE_CHECKING:
+    from graph_gateway._fakes import GatewayRig
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _DANGLING_EDGE_FIXTURE = (
@@ -46,29 +51,23 @@ _DANGLING_EDGE_DOCUMENT: dict[str, object] = json.loads(
 )
 
 
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+def _ingest(seed: InternalRegulationSeed, rig: GatewayRig) -> InternalIngestResult:
+    """Run the ingestion over a gateway rig; both graphs are written through it."""
+    audit_event_id = str(uuid.uuid4())
+    rig.store.audit_rows.add(audit_event_id)
+    short_name = find_regulatory_instrument(seed).id.rpartition("-")[0]
+    return ingest_internal_regulatory_instrument(
+        seed,
+        submitter=rig.gateway,
+        native_graph_name=f"{short_name.lower()}_native",
+        baseline_graph_name=f"{short_name.lower()}_baseline",
+        audit_event_id=audit_event_id,
+    )
 
 
-class _FakeQueryResult:
-    """Satisfies `GraphQueryResult` structurally."""
-
-    @property
-    def result_set(self) -> list[object]:
-        return []
-
-
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query, params)` call."""
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult()
+def _native_node_ids(rig: GatewayRig) -> set[str]:
+    """The id of every node the native graph of `TESTREG-1.0` holds."""
+    return {node_id for (_, node_id) in rig.graphs.open("testreg_native").nodes}
 
 
 def _ri(instrument_id: str = "TESTREG-1.0") -> SeedNode:
@@ -172,27 +171,26 @@ def _build_seed(instrument_id: str = "TESTREG-1.0") -> InternalRegulationSeed:
     return InternalRegulationSeed(nodes=nodes, edges=edges)
 
 
-def _written_node_ids(graph: _FakeGraph, *, label_prefix: str = "MERGE (n:") -> set[str]:
-    """The `id` param of every `MERGE (n:...)` node write recorded on `graph`."""
+def _baseline_node_properties(rig: GatewayRig, *, label: str = "") -> dict[str, dict[str, object]]:
+    """`{id: properties}` of the baseline nodes whose label starts with `label` (all if empty)."""
     return {
-        cast("str", call.params["id"])
-        for call in graph.calls
-        if call.params is not None and label_prefix in call.query
+        node_id: dict(properties)
+        for (node_label, node_id), properties in rig.graphs.open("testreg_baseline").nodes.items()
+        if node_label.startswith(label)
     }
 
 
-def _written_node_properties(
-    graph: _FakeGraph, *, label_prefix: str
-) -> dict[str, dict[str, object]]:
-    """`{written id: written properties}` for every `MERGE (n:{label_prefix}...)` write."""
-    return {
-        cast("str", call.params["id"]): cast("dict[str, object]", call.params["properties"])
-        for call in graph.calls
-        if call.params is not None and label_prefix in call.query
-    }
+def _baseline_node_ids(rig: GatewayRig, *, label: str = "") -> set[str]:
+    """The id of every baseline node whose label starts with `label` (all if empty)."""
+    return set(_baseline_node_properties(rig, label=label))
 
 
-def test_dangling_requires_edge_fails_closed_no_partial_write() -> None:
+def _baseline_edges(rig: GatewayRig, edge_type: str) -> list[tuple[str, str, str, str, str, str]]:
+    """The keys of the baseline edges of `edge_type` (type, endpoints, identity)."""
+    return [key for key in rig.graphs.open("testreg_baseline").edges if key[0] == edge_type]
+
+
+def test_dangling_requires_edge_fails_closed_no_partial_write(rig: GatewayRig) -> None:
     """AC-BI-011: a dangling REQUIRES edge raises `InternalSeedError` with zero writes.
 
     Uses the dedicated `engineering-practices-dangling-edge.json` fixture
@@ -200,29 +198,20 @@ def test_dangling_requires_edge_fails_closed_no_partial_write() -> None:
     (its one REQUIRES edge targets a Capability id never declared as a node).
     """
     seed = InternalSeedIngestionAdapter().parse_seed(_DANGLING_EDGE_DOCUMENT)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_persists_native_verbatim_and_baseline_minted() -> None:
+def test_persists_native_verbatim_and_baseline_minted(rig: GatewayRig) -> None:
     """B5: `{short}_native` gets the raw local-id submission; `{short}_baseline` gets
     the minted canonical spine -- independently asserted node counts/shapes.
     """
     seed = _build_seed()
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.regulatory_instrument_id == "TESTREG-1.0"
     assert result.role_count == 2
@@ -230,8 +219,8 @@ def test_persists_native_verbatim_and_baseline_minted() -> None:
     assert result.obligation_count == 2
     assert result.capability_count == 1
 
-    # Native: local ids, verbatim, no minting.
-    native_node_ids = _written_node_ids(native_graph)
+    # Native: local ids, verbatim, no minting; written through the gateway (#208).
+    native_node_ids = _native_node_ids(rig)
     assert native_node_ids == {
         "TESTREG-1.0",
         "role-a",
@@ -250,7 +239,7 @@ def test_persists_native_verbatim_and_baseline_minted() -> None:
     expected_obligation_a = obligation_id(expected_role_a, "Do A")
     expected_obligation_b = obligation_id(expected_role_b, "Do B")
 
-    baseline_node_ids = _written_node_ids(baseline_graph)
+    baseline_node_ids = _baseline_node_ids(rig)
     requirement_ids = {node_id for node_id in baseline_node_ids if "_req_" in node_id}
     assert len(requirement_ids) == 2
     assert all(node_id.startswith("TESTREG-1.0_req_") for node_id in requirement_ids)
@@ -302,7 +291,7 @@ def _practice_area(local_id: str, name: str, *, status: str = "active") -> SeedN
     return SeedNode(label="PracticeArea", id=local_id, properties={"name": name, "status": status})
 
 
-def test_persists_authored_practice_area_node_verbatim() -> None:
+def test_persists_authored_practice_area_node_verbatim(rig: GatewayRig) -> None:
     """GH #93 AC-BI-004 (PracticeArea portion): a submitted PracticeArea persists
     verbatim, and `InternalIngestResult.practice_area_count == 1`. PracticeArea has
     no required edge to exist (unlike Policy's GOVERNED_BY).
@@ -310,41 +299,31 @@ def test_persists_authored_practice_area_node_verbatim() -> None:
     seed = _build_seed()
     nodes = (*seed.nodes, _practice_area("pa-1", "Secure SDLC"))
     seed = InternalRegulationSeed(nodes=nodes, edges=seed.edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 1
     from ps_service.domain_mapper.identity import practice_area_id
 
     expected_practice_area_id = practice_area_id("Secure SDLC")
-    practice_area_writes = _written_node_properties(
-        baseline_graph, label_prefix="MERGE (n:PracticeArea"
-    )
+    practice_area_writes = _baseline_node_properties(rig, label="PracticeArea")
     assert practice_area_writes == {
         expected_practice_area_id: {"name": "Secure SDLC", "status": "active"}
     }
 
 
-def test_seed_with_no_practice_area_nodes_still_succeeds_with_zero_practice_area_count() -> None:
+def test_seed_with_no_practice_area_nodes_still_succeeds_with_zero_practice_area_count(
+    rig: GatewayRig,
+) -> None:
     """AC-BI-005: omitting PracticeArea entirely still succeeds, persisting only the
     regulatory spine, with zero PracticeArea nodes invented in their place.
     """
     seed = _build_seed()
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 0
-    practice_area_writes = _written_node_properties(
-        baseline_graph, label_prefix="MERGE (n:PracticeArea"
-    )
+    practice_area_writes = _baseline_node_properties(rig, label="PracticeArea")
     assert practice_area_writes == {}
 
 
@@ -352,7 +331,7 @@ def _risk_path(local_id: str, name: str, *, status: str = "active") -> SeedNode:
     return SeedNode(label="RiskPath", id=local_id, properties={"name": name, "status": status})
 
 
-def test_persists_authored_risk_path_node_verbatim() -> None:
+def test_persists_authored_risk_path_node_verbatim(rig: GatewayRig) -> None:
     """GH #93 AC-BI-004 (RiskPath portion): a submitted RiskPath persists
     verbatim, and `InternalIngestResult.risk_path_count == 1`. RiskPath has
     no required edge to exist (unlike Policy's GOVERNED_BY).
@@ -360,41 +339,35 @@ def test_persists_authored_risk_path_node_verbatim() -> None:
     seed = _build_seed()
     nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
     seed = InternalRegulationSeed(nodes=nodes, edges=seed.edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 1
     from ps_service.domain_mapper.identity import risk_path_id
 
     expected_risk_path_id = risk_path_id("Secure Build and Release")
-    risk_path_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:RiskPath")
+    risk_path_writes = _baseline_node_properties(rig, label="RiskPath")
     assert risk_path_writes == {
         expected_risk_path_id: {"name": "Secure Build and Release", "status": "active"}
     }
 
 
-def test_seed_with_no_risk_path_nodes_still_succeeds_with_zero_risk_path_count() -> None:
+def test_seed_with_no_risk_path_nodes_still_succeeds_with_zero_risk_path_count(
+    rig: GatewayRig,
+) -> None:
     """AC-BI-005: omitting RiskPath entirely still succeeds, persisting only the
     regulatory spine, with zero RiskPath nodes invented in their place.
     """
     seed = _build_seed()
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 0
-    risk_path_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:RiskPath")
+    risk_path_writes = _baseline_node_properties(rig, label="RiskPath")
     assert risk_path_writes == {}
 
 
-def test_persists_mitigated_by_edge_risk_path_to_capability() -> None:
+def test_persists_mitigated_by_edge_risk_path_to_capability(rig: GatewayRig) -> None:
     """GH #93 (MITIGATED_BY portion): a submitted RiskPath + MITIGATED_BY edge to a
     Capability persists both the node and the edge (mirrors
     `test_persists_covers_edge_practice_area_to_capability`).
@@ -406,21 +379,15 @@ def test_persists_mitigated_by_edge_risk_path_to_capability() -> None:
         _edge("MITIGATED_BY", "RiskPath", "rp-1", "Capability", "cap-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 1
-    mitigated_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:MITIGATED_BY]->(b)" in call.query
-    ]
+    mitigated_by_calls = _baseline_edges(rig, "MITIGATED_BY")
     assert len(mitigated_by_calls) == 1
 
 
-def test_capability_mitigated_by_two_risk_paths_succeeds() -> None:
+def test_capability_mitigated_by_two_risk_paths_succeeds(rig: GatewayRig) -> None:
     """Directly proves AC-BI-011's no-cap clause for MITIGATED_BY -- the AC's explicit
     "mitigated by more than one RiskPath" clause: two RiskPath nodes both
     `MITIGATED_BY` the same Capability succeeds. Mirrors
@@ -440,21 +407,15 @@ def test_capability_mitigated_by_two_risk_paths_succeeds() -> None:
         _edge("MITIGATED_BY", "RiskPath", "rp-2", "Capability", "cap-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 2
-    mitigated_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:MITIGATED_BY]->(b)" in call.query
-    ]
+    mitigated_by_calls = _baseline_edges(rig, "MITIGATED_BY")
     assert len(mitigated_by_calls) == 2
 
 
-def test_dangling_mitigated_by_edge_fails_closed() -> None:
+def test_dangling_mitigated_by_edge_fails_closed(rig: GatewayRig) -> None:
     """A MITIGATED_BY edge referencing an undeclared Capability id raises, zero
     writes on either graph (mirrors `test_dangling_covers_edge_fails_closed`).
     """
@@ -465,19 +426,14 @@ def test_dangling_mitigated_by_edge_fails_closed() -> None:
         _edge("MITIGATED_BY", "RiskPath", "rp-1", "Capability", "cap-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_persists_covers_edge_practice_area_to_capability() -> None:
+def test_persists_covers_edge_practice_area_to_capability(rig: GatewayRig) -> None:
     """GH #93 (COVERS portion): a submitted PracticeArea + COVERS edge to a
     Capability persists both the node and the edge (mirrors
     `test_persists_authored_policy_node_and_governed_by_edge_verbatim`).
@@ -489,21 +445,15 @@ def test_persists_covers_edge_practice_area_to_capability() -> None:
         _edge("COVERS", "PracticeArea", "pa-1", "Capability", "cap-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 1
-    covers_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:COVERS]->(b)" in call.query
-    ]
+    covers_calls = _baseline_edges(rig, "COVERS")
     assert len(covers_calls) == 1
 
 
-def test_capability_covered_by_two_practice_areas_succeeds() -> None:
+def test_capability_covered_by_two_practice_areas_succeeds(rig: GatewayRig) -> None:
     """Directly proves AC-BI-011's no-cap clause for COVERS: two PracticeArea
     nodes both `COVERS` the same Capability. This is the negative-space
     counterpart of `test_capability_with_two_governed_by_edges_fails_closed_no_partial_write`
@@ -524,21 +474,15 @@ def test_capability_covered_by_two_practice_areas_succeeds() -> None:
         _edge("COVERS", "PracticeArea", "pa-2", "Capability", "cap-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 2
-    covers_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:COVERS]->(b)" in call.query
-    ]
+    covers_calls = _baseline_edges(rig, "COVERS")
     assert len(covers_calls) == 2
 
 
-def test_dangling_covers_edge_fails_closed() -> None:
+def test_dangling_covers_edge_fails_closed(rig: GatewayRig) -> None:
     """A COVERS edge referencing an undeclared Capability id raises, zero writes
     on either graph (mirrors `test_dangling_governed_by_edge_fails_closed`).
     """
@@ -549,19 +493,14 @@ def test_dangling_covers_edge_fails_closed() -> None:
         _edge("COVERS", "PracticeArea", "pa-1", "Capability", "cap-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_persists_owns_edge_practice_area_to_policy() -> None:
+def test_persists_owns_edge_practice_area_to_policy(rig: GatewayRig) -> None:
     """GH #93 (OWNS portion, Slice 4): a submitted PracticeArea + OWNS edge to a
     Policy persists both the node and the edge (mirrors
     `test_persists_covers_edge_practice_area_to_capability`).
@@ -577,19 +516,15 @@ def test_persists_owns_edge_practice_area_to_policy() -> None:
         _edge("OWNS", "PracticeArea", "pa-1", "Policy", "pol-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 1
-    owns_calls = [call for call in baseline_graph.calls if "MERGE (a)-[r:OWNS]->(b)" in call.query]
+    owns_calls = _baseline_edges(rig, "OWNS")
     assert len(owns_calls) == 1
 
 
-def test_policy_owned_by_two_practice_areas_succeeds() -> None:
+def test_policy_owned_by_two_practice_areas_succeeds(rig: GatewayRig) -> None:
     """Directly proves AC-BI-011's no-cap clause for OWNS: two PracticeArea nodes
     both `OWNS` the same Policy. This is the one edge in this issue where the
     no-cap decision explicitly contradicts a pre-existing doc line:
@@ -619,19 +554,15 @@ def test_policy_owned_by_two_practice_areas_succeeds() -> None:
         _edge("OWNS", "PracticeArea", "pa-2", "Policy", "pol-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.practice_area_count == 2
-    owns_calls = [call for call in baseline_graph.calls if "MERGE (a)-[r:OWNS]->(b)" in call.query]
+    owns_calls = _baseline_edges(rig, "OWNS")
     assert len(owns_calls) == 2
 
 
-def test_dangling_owns_edge_fails_closed() -> None:
+def test_dangling_owns_edge_fails_closed(rig: GatewayRig) -> None:
     """An OWNS edge referencing an undeclared Policy id raises, zero writes on
     either graph (mirrors `test_dangling_covers_edge_fails_closed`).
     """
@@ -642,19 +573,14 @@ def test_dangling_owns_edge_fails_closed() -> None:
         _edge("OWNS", "PracticeArea", "pa-1", "Policy", "pol-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_persists_authored_policy_node_and_governed_by_edge_verbatim() -> None:
+def test_persists_authored_policy_node_and_governed_by_edge_verbatim(rig: GatewayRig) -> None:
     """GH #76 AC-BI-004 (Policy portion): a submitted Policy + GOVERNED_BY edge
     from a Capability persists verbatim, and `InternalIngestResult.policy_count == 1`.
     """
@@ -665,41 +591,35 @@ def test_persists_authored_policy_node_and_governed_by_edge_verbatim() -> None:
         _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.policy_count == 1
     from ps_service.domain_mapper.identity import policy_id
 
     expected_policy_id = policy_id("Access Control Policy")
-    policy_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Policy")
+    policy_writes = _baseline_node_properties(rig, label="Policy")
     assert policy_writes == {
         expected_policy_id: {"title": "Access Control Policy", "status": "draft"}
     }
 
 
-def test_seed_with_no_policy_nodes_still_succeeds_with_zero_policy_count() -> None:
+def test_seed_with_no_policy_nodes_still_succeeds_with_zero_policy_count(rig: GatewayRig) -> None:
     """AC-BI-005: omitting Policy/GOVERNED_BY entirely still succeeds, persisting
     only the regulatory spine, with zero governance nodes invented in their place.
     """
     seed = _build_seed()
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.policy_count == 0
-    policy_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Policy")
+    policy_writes = _baseline_node_properties(rig, label="Policy")
     assert policy_writes == {}
 
 
-def test_capability_with_two_governed_by_edges_fails_closed_no_partial_write() -> None:
+def test_capability_with_two_governed_by_edges_fails_closed_no_partial_write(
+    rig: GatewayRig,
+) -> None:
     """AC-BI-008/009 for GOVERNED_BY: a Capability with two outbound GOVERNED_BY
     edges raises `InternalSeedError` naming the Capability, zero writes.
     """
@@ -715,19 +635,14 @@ def test_capability_with_two_governed_by_edges_fails_closed_no_partial_write() -
         _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-2"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError, match="cap-1"):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_dangling_governed_by_edge_fails_closed() -> None:
+def test_dangling_governed_by_edge_fails_closed(rig: GatewayRig) -> None:
     """A GOVERNED_BY edge referencing an undeclared Policy id raises, zero writes."""
     seed = _build_seed()
     edges = (
@@ -735,19 +650,14 @@ def test_dangling_governed_by_edge_fails_closed() -> None:
         _edge("GOVERNED_BY", "Capability", "cap-1", "Policy", "pol-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=seed.nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_persists_authored_standard_node_and_supported_by_edge_verbatim() -> None:
+def test_persists_authored_standard_node_and_supported_by_edge_verbatim(rig: GatewayRig) -> None:
     """GH #76 AC-BI-004 (Standard portion): a submitted Standard + SUPPORTED_BY edge
     from a Policy persists verbatim, and `InternalIngestResult.standard_count == 1`.
     """
@@ -763,19 +673,15 @@ def test_persists_authored_standard_node_and_supported_by_edge_verbatim() -> Non
         _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.standard_count == 1
     from ps_service.domain_mapper.identity import policy_id, standard_id
 
     expected_policy_id = policy_id("Access Control Policy")
     expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
-    standard_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Standard")
+    standard_writes = _baseline_node_properties(rig, label="Standard")
     assert standard_writes == {
         expected_standard_id: {
             "title": "Access Control Standard",
@@ -787,7 +693,7 @@ def test_persists_authored_standard_node_and_supported_by_edge_verbatim() -> Non
 
 @pytest.mark.parametrize("supported_by_count", [0, 2])
 def test_standard_with_zero_or_two_supported_by_edges_fails_closed_no_partial_write(
-    supported_by_count: int,
+    supported_by_count: int, rig: GatewayRig
 ) -> None:
     """AC-BI-008/009 for SUPPORTED_BY: a Standard with zero or two-or-more inbound
     SUPPORTED_BY edges raises `InternalSeedError` naming the Standard, zero writes.
@@ -809,19 +715,14 @@ def test_standard_with_zero_or_two_supported_by_edges_fails_closed_no_partial_wr
         *supporting_edges,
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError, match="std-1"):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_dangling_supported_by_edge_fails_closed() -> None:
+def test_dangling_supported_by_edge_fails_closed(rig: GatewayRig) -> None:
     """A SUPPORTED_BY edge referencing an undeclared Standard id raises, zero writes."""
     seed = _build_seed()
     nodes = (*seed.nodes, _policy("pol-1", "Policy One"))
@@ -831,19 +732,16 @@ def test_dangling_supported_by_edge_fails_closed() -> None:
         _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_policy_with_two_supported_by_edges_persists_two_distinct_standards() -> None:
+def test_policy_with_two_supported_by_edges_persists_two_distinct_standards(
+    rig: GatewayRig,
+) -> None:
     """AC-BI-006's literal proof: one Policy, two SUPPORTED_BY edges to two
     differently-titled Standards -- both persist as distinct nodes with distinct ids.
     """
@@ -861,12 +759,8 @@ def test_policy_with_two_supported_by_edges_persists_two_distinct_standards() ->
         _edge("SUPPORTED_BY", "Policy", "pol-1", "Standard", "std-2"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.standard_count == 2
     from ps_service.domain_mapper.identity import policy_id, standard_id
@@ -876,11 +770,11 @@ def test_policy_with_two_supported_by_edges_persists_two_distinct_standards() ->
     expected_b = standard_id(expected_policy_id, "Standard B")
     assert expected_a != expected_b
 
-    standard_ids = _written_node_ids(baseline_graph, label_prefix="MERGE (n:Standard")
+    standard_ids = _baseline_node_ids(rig, label="Standard")
     assert standard_ids == {expected_a, expected_b}
 
 
-def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> None:
+def test_persists_authored_control_node_and_implemented_by_edge_verbatim(rig: GatewayRig) -> None:
     """GH #76 AC-BI-004 (Control portion): a submitted Control + IMPLEMENTED_BY edge
     from a Standard persists verbatim (including optional operational fields), and
     `InternalIngestResult.control_count == 1`.
@@ -910,12 +804,8 @@ def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> No
         _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.control_count == 1
     from ps_service.domain_mapper.identity import control_id, policy_id, standard_id
@@ -923,7 +813,7 @@ def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> No
     expected_policy_id = policy_id("Access Control Policy")
     expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
     expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
-    control_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Control")
+    control_writes = _baseline_node_properties(rig, label="Control")
     assert control_writes == {
         expected_control_id: {
             "type": "automated",
@@ -939,7 +829,9 @@ def test_persists_authored_control_node_and_implemented_by_edge_verbatim() -> No
     }
 
 
-def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time() -> None:
+def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time(
+    rig: GatewayRig,
+) -> None:
     """GH #134 S7: a minted Standard/Control's `status` mirrors its root Policy's
     `status` -- not hardcoded to `"draft"` -- proven with a Policy whose own
     `status` is `"approved"`. The Control reaches its root Policy transitively
@@ -959,22 +851,18 @@ def test_standard_and_control_status_mirrors_root_policy_status_at_mint_time() -
         _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    _ingest(seed, rig)
 
-    standard_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Standard")
-    control_writes = _written_node_properties(baseline_graph, label_prefix="MERGE (n:Control")
+    standard_writes = _baseline_node_properties(rig, label="Standard")
+    control_writes = _baseline_node_properties(rig, label="Control")
     assert all(properties["status"] == "approved" for properties in standard_writes.values())
     assert all(properties["status"] == "approved" for properties in control_writes.values())
 
 
 @pytest.mark.parametrize("implemented_by_count", [0, 2])
 def test_control_with_zero_or_two_implemented_by_edges_fails_closed_no_partial_write(
-    implemented_by_count: int,
+    implemented_by_count: int, rig: GatewayRig
 ) -> None:
     """AC-BI-008/009 for IMPLEMENTED_BY: a Control with zero or two-or-more inbound
     IMPLEMENTED_BY edges raises `InternalSeedError` naming the Control, zero writes.
@@ -999,19 +887,14 @@ def test_control_with_zero_or_two_implemented_by_edges_fails_closed_no_partial_w
         *implementing_edges,
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError, match="ctrl-1"):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_dangling_implemented_by_edge_fails_closed() -> None:
+def test_dangling_implemented_by_edge_fails_closed(rig: GatewayRig) -> None:
     """An IMPLEMENTED_BY edge referencing an undeclared Control id raises, zero writes."""
     seed = _build_seed()
     nodes = (*seed.nodes, _policy("pol-1", "Policy One"), _standard("std-1", "Standard One"))
@@ -1022,19 +905,16 @@ def test_dangling_implemented_by_edge_fails_closed() -> None:
         _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_controls() -> None:
+def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_controls(
+    rig: GatewayRig,
+) -> None:
     """AC-BI-007's literal proof: one Standard, two IMPLEMENTED_BY edges to two Controls
     both `type: "automated"` but differently titled -- both persist as distinct nodes
     with distinct ids.
@@ -1063,12 +943,8 @@ def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_
         _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-2"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.control_count == 2
     from ps_service.domain_mapper.identity import control_id, policy_id, standard_id
@@ -1079,11 +955,13 @@ def test_standard_with_two_implemented_by_edges_same_type_persists_two_distinct_
     expected_b = control_id(expected_standard_id, "Control B")
     assert expected_a != expected_b
 
-    control_ids = _written_node_ids(baseline_graph, label_prefix="MERGE (n:Control")
+    control_ids = _baseline_node_ids(rig, label="Control")
     assert control_ids == {expected_a, expected_b}
 
 
-def test_full_capability_policy_standard_control_chain_persists_every_node_and_edge() -> None:
+def test_full_capability_policy_standard_control_chain_persists_every_node_and_edge(
+    rig: GatewayRig,
+) -> None:
     """End-to-end: one document submitting the complete Capability -> Policy ->
     Standard -> Control chain -- every node and edge persists, and
     `policy_count == standard_count == control_count == 1` (mirrors
@@ -1103,12 +981,8 @@ def test_full_capability_policy_standard_control_chain_persists_every_node_and_e
         _edge("IMPLEMENTED_BY", "Standard", "std-1", "Control", "ctrl-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.policy_count == 1
     assert result.standard_count == 1
@@ -1120,27 +994,21 @@ def test_full_capability_policy_standard_control_chain_persists_every_node_and_e
     expected_standard_id = standard_id(expected_policy_id, "Access Control Standard")
     expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
 
-    baseline_node_ids = _written_node_ids(baseline_graph)
+    baseline_node_ids = _baseline_node_ids(rig)
     assert {expected_policy_id, expected_standard_id, expected_control_id} <= baseline_node_ids
 
-    governed_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:GOVERNED_BY]->(b)" in call.query
-    ]
-    supported_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:SUPPORTED_BY]->(b)" in call.query
-    ]
-    implemented_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:IMPLEMENTED_BY]->(b)" in call.query
-    ]
+    governed_by_calls = _baseline_edges(rig, "GOVERNED_BY")
+    supported_by_calls = _baseline_edges(rig, "SUPPORTED_BY")
+    implemented_by_calls = _baseline_edges(rig, "IMPLEMENTED_BY")
     assert len(governed_by_calls) == 1
     assert len(supported_by_calls) == 1
     assert len(implemented_by_calls) == 1
 
-    native_node_ids = _written_node_ids(native_graph)
+    native_node_ids = _native_node_ids(rig)
     assert {"pol-1", "std-1", "ctrl-1"} <= native_node_ids
 
 
-def test_persists_verified_by_edge_risk_path_to_control() -> None:
+def test_persists_verified_by_edge_risk_path_to_control(rig: GatewayRig) -> None:
     """GH #93 (Slice 6): a `VERIFIED_BY` edge from a `RiskPath` to a `Control`
     persists on the baseline graph, keyed on Control's weak-entity identity --
     a full Capability -> Policy -> Standard -> Control chain (GH #76) must exist
@@ -1162,12 +1030,8 @@ def test_persists_verified_by_edge_risk_path_to_control() -> None:
         _edge("VERIFIED_BY", "RiskPath", "rp-1", "Control", "ctrl-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 1
     assert result.control_count == 1
@@ -1179,18 +1043,16 @@ def test_persists_verified_by_edge_risk_path_to_control() -> None:
     expected_control_id = control_id(expected_standard_id, "Automated Access Review Check")
     expected_risk_path_id = risk_path_id("Secure Build and Release")
 
-    verified_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:VERIFIED_BY]->(b)" in call.query
-    ]
+    verified_by_calls = _baseline_edges(rig, "VERIFIED_BY")
     assert len(verified_by_calls) == 1
-    assert verified_by_calls[0].params == {
-        "from_id": expected_risk_path_id,
-        "to_id": expected_control_id,
-        "properties": {},
-    }
+    assert verified_by_calls[0][2] == expected_risk_path_id  # source id
+    assert verified_by_calls[0][4] == expected_control_id  # target id
+    assert rig.graphs.open("testreg_baseline").edges[verified_by_calls[0]] == {
+        "identity": f"VERIFIED_BY:{expected_risk_path_id}->{expected_control_id}"
+    }  # no properties besides the gateway identity
 
 
-def test_control_verified_by_two_risk_paths_succeeds() -> None:
+def test_control_verified_by_two_risk_paths_succeeds(rig: GatewayRig) -> None:
     """No-cap regression (mirrors Slice 4/5): a Control `VERIFIED_BY` two distinct
     RiskPaths succeeds -- VERIFIED_BY's inbound side carries no artificial cap.
     """
@@ -1212,23 +1074,17 @@ def test_control_verified_by_two_risk_paths_succeeds() -> None:
         _edge("VERIFIED_BY", "RiskPath", "rp-2", "Control", "ctrl-1"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    result = ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    result = _ingest(seed, rig)
 
     assert result.risk_path_count == 2
     assert result.control_count == 1
 
-    verified_by_calls = [
-        call for call in baseline_graph.calls if "MERGE (a)-[r:VERIFIED_BY]->(b)" in call.query
-    ]
+    verified_by_calls = _baseline_edges(rig, "VERIFIED_BY")
     assert len(verified_by_calls) == 2
 
 
-def test_dangling_verified_by_edge_fails_closed() -> None:
+def test_dangling_verified_by_edge_fails_closed(rig: GatewayRig) -> None:
     """A `VERIFIED_BY` edge referencing an undeclared Control id raises, zero writes."""
     seed = _build_seed()
     nodes = (*seed.nodes, _risk_path("rp-1", "Secure Build and Release"))
@@ -1237,34 +1093,23 @@ def test_dangling_verified_by_edge_fails_closed() -> None:
         _edge("VERIFIED_BY", "RiskPath", "rp-1", "Control", "ctrl-does-not-exist"),
     )
     seed = InternalRegulationSeed(nodes=nodes, edges=edges)
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
     with pytest.raises(InternalSeedError):
-        ingest_internal_regulatory_instrument(
-            seed, baseline_graph=baseline_graph, native_graph=native_graph
-        )
+        _ingest(seed, rig)
 
-    assert baseline_graph.calls == []
-    assert native_graph.calls == []
+    assert rig.store.groups == []
 
 
-def test_role_id_omitted_when_ambiguous_never_null() -> None:
+def test_role_id_omitted_when_ambiguous_never_null(rig: GatewayRig) -> None:
     """D6: `req-1` (satisfied by one Role's Obligation) gets `role_id` set;
     `req-2` (satisfied by two different Roles' Obligations) omits it entirely --
     never writes a literal `None`/`null`.
     """
     seed = _build_seed()
-    baseline_graph = _FakeGraph()
-    native_graph = _FakeGraph()
 
-    ingest_internal_regulatory_instrument(
-        seed, baseline_graph=baseline_graph, native_graph=native_graph
-    )
+    _ingest(seed, rig)
 
-    requirement_writes = _written_node_properties(
-        baseline_graph, label_prefix="MERGE (n:Requirement"
-    )
+    requirement_writes = _baseline_node_properties(rig, label="Requirement")
     assert len(requirement_writes) == 2
 
     resolvable_properties = next(

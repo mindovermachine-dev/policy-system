@@ -9,19 +9,23 @@ library, matching L2 Testing Patterns' "mock at component boundaries."
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import date
-from typing import cast
+from typing import TYPE_CHECKING
 
 import pytest
 import redis.exceptions
+from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_postgres import committed_audit_event
 
 from ps_service.dependency_health import FALKORDB, is_healthy
+from ps_service.graph_gateway.gateway import GraphWriteGateway
+from ps_service.graph_gateway.store import PsycopgGraphLogStore
 from ps_service.ingestion.errors import IngestionPersistenceError
 from ps_service.ingestion.falkordb_client import FalkorDB, connect, select_graph
 from ps_service.ingestion.graph_writer import (
-    persist_native_structural_graph,
-    register_regulatory_instrument_version,
+    build_native_group,
+    build_native_writes,
+    read_existing_nodes,
     verify_structural_graph_reachable,
 )
 from ps_service.ingestion.models import (
@@ -34,11 +38,8 @@ from ps_service.ingestion.models import (
     StructuralNode,
 )
 
-
-@dataclass
-class _RecordedCall:
-    query: str
-    params: dict[str, object] | None
+if TYPE_CHECKING:
+    from persistence.provisioned_postgres import Provisioned
 
 
 class _FakeQueryResult:
@@ -50,21 +51,6 @@ class _FakeQueryResult:
     @property
     def result_set(self) -> list[object]:
         return self._result_set
-
-
-class _FakeGraph:
-    """Satisfies `GraphHandle` structurally, capturing every `(query,
-    params)` call for assertion — this is what lets the B1 regression tests
-    below assert `graph.calls == []` (zero writes) rather than merely
-    "raised eventually".
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[_RecordedCall] = []
-
-    def query(self, q: str, params: dict[str, object] | None = None) -> _FakeQueryResult:
-        self.calls.append(_RecordedCall(q, params))
-        return _FakeQueryResult([[0]])
 
 
 _LABEL_RE = re.compile(r"n:(\w+)\)")
@@ -119,275 +105,10 @@ def _metadata(
     )
 
 
-def _properties(call: _RecordedCall) -> dict[str, object]:
-    """The nested ``properties`` dict a `graph_writer` MERGE call carries."""
-    assert call.params is not None
-    return cast("dict[str, object]", call.params["properties"])
-
-
 def _node(element_type: str, node_id: str) -> StructuralNode:
     return StructuralNode(
         element_type, node_id, {"text": "text", "citation_ref": "Art. 1", "order": 1}
     )
-
-
-def _edge(
-    parent_element_type: str, parent_id: str, child_element_type: str, child_id: str
-) -> StructuralEdge:
-    return StructuralEdge(parent_element_type, parent_id, child_element_type, child_id)
-
-
-# --- Increment 8: register_regulatory_instrument_version --------------------------
-
-
-def test_register_regulatory_instrument_version_merges_regulation_node_with_metadata() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
-
-    assert len(graph.calls) == 1
-    call = graph.calls[0]
-    assert call.query == "MERGE (n:RegulatoryInstrument {id: $id}) SET n += $properties"
-    assert call.params == {
-        "id": "CRA-1.0",
-        "properties": {
-            "title": "Cyber Resilience Act",
-            "jurisdiction": "EU",
-            "effective_date": "2027-12-11",
-            "version": "1.0",
-            "status": "active",
-            "source_type": "external",
-            "instrument_type": "regulation",
-        },
-    }
-
-
-def test_register_regulatory_instrument_version_never_interpolates_metadata_into_query_string() -> (
-    None
-):
-    """The injection-safety property: every metadata value (and the
-    regulation id) flows through `params` only — none of them ever appear
-    as a substring of the query string itself.
-    """
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
-
-    query = graph.calls[0].query
-    for value in (
-        "Cyber Resilience Act",
-        "EU",
-        "2027-12-11",
-        "1.0",
-        "active",
-        "external",
-        "regulation",
-        "CRA-1.0",
-    ):
-        assert value not in query
-
-
-def test_register_regulatory_instrument_version_writes_instrument_type_when_present() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(
-        graph, "NIS2-1.0", _metadata(instrument_type="directive")
-    )
-
-    assert _properties(graph.calls[0])["instrument_type"] == "directive"
-
-
-def test_register_regulatory_instrument_version_omits_instrument_type_key_for_internal_source() -> (
-    None
-):
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(
-        graph, "ENGPRAC-3.0", _metadata(source_type="internal", instrument_type=None)
-    )
-
-    assert "instrument_type" not in _properties(graph.calls[0])
-
-
-def test_register_regulatory_instrument_version_is_idempotent_on_instrument_type() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(
-        graph, "NIS2-1.0", _metadata(instrument_type="directive")
-    )
-    register_regulatory_instrument_version(
-        graph, "NIS2-1.0", _metadata(instrument_type="directive")
-    )
-
-    assert graph.calls[0].params == graph.calls[1].params
-    assert _properties(graph.calls[0])["instrument_type"] == "directive"
-    assert _properties(graph.calls[1])["instrument_type"] == "directive"
-
-
-def test_register_regulatory_instrument_version_writes_celex_when_present() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata(celex="32024R2847"))
-
-    assert _properties(graph.calls[0])["celex"] == "32024R2847"
-
-
-def test_register_regulatory_instrument_version_omits_celex_key_when_absent() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
-
-    assert "celex" not in _properties(graph.calls[0])
-
-
-# --- Increment 9: persist_native_structural_graph (THE B1 FIX) ----------
-
-
-def test_persist_native_structural_graph_writes_every_valid_node_and_edge() -> None:
-    graph = _FakeGraph()
-    nodes = (
-        _node("ARTICLE", "CRA#art_1"),
-        _node("PARAGRAPH", "CRA#art_1.001"),
-    )
-    edges = (
-        _edge("RegulatoryInstrument", "CRA-1.0", "ARTICLE", "CRA#art_1"),
-        _edge("ARTICLE", "CRA#art_1", "PARAGRAPH", "CRA#art_1.001"),
-    )
-
-    persist_native_structural_graph(graph, "CRA-1.0", nodes, edges)
-
-    assert len(graph.calls) == 4
-    first_node_call, second_node_call, first_edge_call, second_edge_call = graph.calls
-
-    assert first_node_call.query == "MERGE (n:ARTICLE {id: $id}) SET n += $properties"
-    assert first_node_call.params == {"id": "CRA#art_1", "properties": nodes[0].properties}
-    assert second_node_call.query == "MERGE (n:PARAGRAPH {id: $id}) SET n += $properties"
-    assert second_node_call.params == {
-        "id": "CRA#art_1.001",
-        "properties": nodes[1].properties,
-    }
-
-    assert first_edge_call.query == (
-        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ARTICLE {id: $child_id}) "
-        "MERGE (a)-[:HAS]->(b)"
-    )
-    assert first_edge_call.params == {"parent_id": "CRA-1.0", "child_id": "CRA#art_1"}
-    assert second_edge_call.query == (
-        "MATCH (a:ARTICLE {id: $parent_id}), (b:PARAGRAPH {id: $child_id}) MERGE (a)-[:HAS]->(b)"
-    )
-    assert second_edge_call.params == {
-        "parent_id": "CRA#art_1",
-        "child_id": "CRA#art_1.001",
-    }
-
-
-def test_persist_native_structural_graph_raises_before_any_write_when_first_node_invalid() -> None:
-    graph = _FakeGraph()
-    nodes = (_node("BOGUS", "CRA#bogus_1"),)
-
-    with pytest.raises(IngestionPersistenceError):
-        persist_native_structural_graph(graph, "CRA-1.0", nodes, ())
-
-    assert graph.calls == []
-
-
-def test_persist_raises_with_zero_writes_when_invalid_node_follows_valid_one() -> None:
-    """The critical B1 regression test.
-
-    Against the ORIGINAL per-element-interleaved design (allow-list check
-    performed inside `_upsert_node`, called from a loop that interleaves
-    validate-then-write per node), the first (valid) node here would have
-    already been written via a real `graph.query` MERGE call *before* the
-    loop ever reached the second (invalid) node — so at the point of the
-    raise, the fake graph's `calls` list would contain 1 entry, not 0.
-    `assert graph.calls == []` below is exactly the assertion that design
-    would have failed: it checks zero calls total, not merely "some calls
-    happened before the raise."
-
-    The B1 fix (`_validate_element_types` as a whole-collection first
-    pass, run to completion before any `_upsert_node`/`_upsert_edge` call)
-    makes this pass, because both nodes are validated before either one is
-    written.
-    """
-    graph = _FakeGraph()
-    nodes = (
-        _node("ARTICLE", "CRA#art_1"),  # valid, listed first
-        _node("BOGUS", "CRA#bogus_1"),  # invalid, listed second
-    )
-
-    with pytest.raises(IngestionPersistenceError):
-        persist_native_structural_graph(graph, "CRA-1.0", nodes, ())
-
-    assert graph.calls == []
-
-
-def test_persist_raises_with_zero_writes_when_invalid_edge_follows_valid_ones() -> None:
-    """Edge half of the B1 regression proof (mirrors the node case above).
-
-    One valid node and one valid edge are listed first, followed by a
-    second edge with an invalid `child_element_type`. Under the original
-    interleaved design, the valid node and the valid first edge would both
-    already be written (2 calls) before the loop reached the invalid
-    second edge. `assert graph.calls == []` is the same zero-calls-total
-    proof as the node case.
-    """
-    graph = _FakeGraph()
-    nodes = (_node("ARTICLE", "CRA#art_1"),)
-    edges = (
-        _edge("RegulatoryInstrument", "CRA-1.0", "ARTICLE", "CRA#art_1"),  # valid, listed first
-        _edge("ARTICLE", "CRA#art_1", "BOGUS", "CRA#bogus_1"),  # invalid, listed second
-    )
-
-    with pytest.raises(IngestionPersistenceError):
-        persist_native_structural_graph(graph, "CRA-1.0", nodes, edges)
-
-    assert graph.calls == []
-
-
-def test_persist_substitutes_real_instrument_id_for_celex_placeholder_parent_id() -> None:
-    """Increment 13 regression test — the bug this increment found and
-    fixed (see `graph_writer.py`'s module docstring, "Increment 13 fix").
-
-    The real Cellar/ELI adapter never sees the final `{SHORT}-{VERSION}`
-    regulation id — `parse_structure` stamps every Regulation-anchored
-    edge's `parent_id` with the raw CELEX identifier it was given instead
-    (e.g. `"32024R2847"`), a placeholder. Every other test in this file
-    accidentally masks this: their own `_edge("RegulatoryInstrument", ...)` fixtures
-    set `parent_id` equal to the `regulatory_instrument_id` passed to
-    `persist_native_structural_graph` by construction, which never happens
-    for real adapter output. This test deliberately uses a *different*
-    `parent_id` (mimicking the real CELEX-vs-final-id mismatch) and asserts
-    the write still targets the real `regulatory_instrument_id` — not the
-    placeholder — which is what makes the Regulation node's `MATCH`
-    actually find a row and the `MERGE` actually fire.
-    """
-    graph = _FakeGraph()
-    nodes = (_node("ANNEX", "32024R2847#anx_I"),)
-    edges = (_edge("RegulatoryInstrument", "32024R2847", "ANNEX", "32024R2847#anx_I"),)
-
-    persist_native_structural_graph(graph, "CRA-1.0", nodes, edges)
-
-    edge_call = graph.calls[-1]
-    assert edge_call.query == (
-        "MATCH (a:RegulatoryInstrument {id: $parent_id}), (b:ANNEX {id: $child_id}) "
-        "MERGE (a)-[:HAS]->(b)"
-    )
-    assert edge_call.params == {"parent_id": "CRA-1.0", "child_id": "32024R2847#anx_I"}
-
-
-def test_persist_native_structural_graph_raises_on_invalid_parent_element_type() -> None:
-    """Bonus coverage: the parent-side allow-list check (the one branch of
-    `_validate_element_types` not otherwise exercised above — every other
-    test's valid edges use `"RegulatoryInstrument"` as `parent_element_type`).
-    """
-    graph = _FakeGraph()
-    nodes = (_node("ARTICLE", "CRA#art_1"),)
-    edges = (_edge("BOGUS", "CRA#bogus_1", "ARTICLE", "CRA#art_1"),)
-
-    with pytest.raises(IngestionPersistenceError):
-        persist_native_structural_graph(graph, "CRA-1.0", nodes, edges)
-
-    assert graph.calls == []
 
 
 # --- Increment 10: verify_structural_graph_reachable ---------------------
@@ -465,46 +186,39 @@ class _FakeGraphThatRaisesConnectionError:
         raise redis.exceptions.ConnectionError("Error 111 connecting to 127.0.0.1:6379")
 
 
-def test_register_regulatory_instrument_version_marks_falkordb_unhealthy_on_connection_error() -> (
-    None
-):
+def test_a_connection_error_on_a_read_marks_falkordb_unhealthy() -> None:
     graph = _FakeGraphThatRaisesConnectionError()
 
     with pytest.raises(IngestionPersistenceError):
-        register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
+        verify_structural_graph_reachable(graph, "CRA-1.0")
 
     assert is_healthy(FALKORDB) is False
 
 
-def test_register_regulatory_instrument_version_marks_falkordb_healthy_on_success() -> None:
-    graph = _FakeGraph()
-
-    register_regulatory_instrument_version(graph, "CRA-1.0", _metadata())
+def test_a_successful_read_marks_falkordb_healthy() -> None:
+    verify_structural_graph_reachable(_ScriptedReachabilityGraph(_ALL_LABELS_NO_GAP), "CRA-1.0")
 
     assert is_healthy(FALKORDB) is True
 
 
-def test_falkordb_self_heals_after_a_later_successful_write() -> None:
-    failing_graph = _FakeGraphThatRaisesConnectionError()
+def test_falkordb_self_heals_after_a_later_successful_read() -> None:
     with pytest.raises(IngestionPersistenceError):
-        register_regulatory_instrument_version(failing_graph, "CRA-1.0", _metadata())
+        verify_structural_graph_reachable(_FakeGraphThatRaisesConnectionError(), "CRA-1.0")
     assert is_healthy(FALKORDB) is False
 
-    healthy_graph = _FakeGraph()
-    register_regulatory_instrument_version(healthy_graph, "CRA-1.0", _metadata())
+    verify_structural_graph_reachable(_ScriptedReachabilityGraph(_ALL_LABELS_NO_GAP), "CRA-1.0")
 
     assert is_healthy(FALKORDB) is True
 
 
 def test_data_validation_error_does_not_mark_falkordb_unhealthy() -> None:
-    """A B1-style validation failure (bad `element_type`) never reaches
-    `graph.query()` at all — it must not be mistaken for a FalkorDB outage.
+    """A B1-style validation failure (bad `element_type`) never reaches the graph at all —
+    it must not be mistaken for a FalkorDB outage.
     """
-    graph = _FakeGraph()
     nodes = (_node("NOT_A_REAL_TYPE", "CRA#bad"),)
 
     with pytest.raises(IngestionPersistenceError, match="element_type"):
-        persist_native_structural_graph(graph, "CRA-1.0", nodes, ())
+        build_native_writes("CRA-1.0", _metadata(), nodes, ())
 
     assert is_healthy(FALKORDB) is True
 
@@ -520,28 +234,42 @@ def _delete_graph_if_exists(db: FalkorDB, name: str) -> None:
 
 
 @pytest.mark.falkordb_live
-def test_graph_writer_functions_work_against_real_falkordb() -> None:
-    """Live wiring proof, real FalkorDB at 127.0.0.1:6379.
+@pytest.mark.postgres_live
+def test_graph_writer_functions_work_against_real_falkordb(
+    provisioned_graph_log: Provisioned,
+) -> None:
+    """Live wiring proof: the native graph written through the real gateway, read by the writer.
 
-    The fakes above prove `_validate_element_types`'s B1 fix and the exact
-    Cypher shape at the unit level, but only a real round-trip confirms the
-    actual query syntax is valid Cypher and behaves as those unit tests
-    assume: `MERGE ... SET n += $properties` with a nested dict param,
-    `MERGE`/`MATCH` label interpolation for both nodes and edges, and the
-    `-[:HAS*1..]->` variable-length traversal `verify_structural_graph_
-    reachable` depends on. Uses a dedicated, test-only graph name, deleted
-    before and after so the run is idempotent and leaves no residue.
+    The fakes above prove `_validate_element_types`'s B1 fix and the primitives at the unit level,
+    but only a real round-trip confirms that the group the writer builds is accepted by the
+    gateway's Cypher on real FalkorDB, and that `verify_structural_graph_reachable`'s
+    `-[:HAS*1..]->` traversal sees what the gateway wrote. Needs FalkorDB (host/port from
+    `PS_TEST_FALKORDB_HOST`/`PS_TEST_FALKORDB_PORT`, default 127.0.0.1:6379) and a scratch
+    Postgres for the log. Uses a dedicated, test-only graph name, deleted before and after.
     """
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     _delete_graph_if_exists(db, _LIVE_TEST_GRAPH_NAME)
     graph = select_graph(db, _LIVE_TEST_GRAPH_NAME)
 
     try:
-        register_regulatory_instrument_version(graph, "GWTEST-1.0", _metadata())
-
+        # The graph is written through the Graph Write Gateway (issue #208): the real log store
+        # and the real FalkorDB opener, in place of the writer's former direct MERGE calls.
+        gateway = GraphWriteGateway(
+            log_store=PsycopgGraphLogStore(provisioned_graph_log.state_config()),
+            graph_opener=lambda name: select_graph(db, name),
+        )
         nodes = (_node("ARTICLE", "GWTEST#art_1"),)
-        edges = (_edge("RegulatoryInstrument", "GWTEST-1.0", "ARTICLE", "GWTEST#art_1"),)
-        persist_native_structural_graph(graph, "GWTEST-1.0", nodes, edges)
+        edges = (StructuralEdge("RegulatoryInstrument", "GWTEST-1.0", "ARTICLE", "GWTEST#art_1"),)
+        writes = build_native_writes("GWTEST-1.0", _metadata(), nodes, edges)
+        gateway.submit_group(
+            build_native_group(
+                writes,
+                existing=read_existing_nodes(graph, writes),
+                graph_name=_LIVE_TEST_GRAPH_NAME,
+                audit_event_id=committed_audit_event(provisioned_graph_log),
+            )
+        )
 
         counts = verify_structural_graph_reachable(graph, "GWTEST-1.0")
 

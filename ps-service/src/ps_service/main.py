@@ -28,6 +28,7 @@ from ps_service.api.error_handlers import (
     register_exception_handlers,
 )
 from ps_service.api.errors import RequestBodyTooLargeError
+from ps_service.api.graph_write_access import install_graph_write_gateway
 from ps_service.api.routes import build_api_router
 from ps_service.auth.middleware import RestAuthMiddleware
 from ps_service.auth.protected_resource import protected_resource_metadata
@@ -96,6 +97,7 @@ if TYPE_CHECKING:
 
     from ps_service.auth.models import AuthContext
     from ps_service.graph_gateway.models import StartupReplayReport
+    from ps_service.ingestion.graph_submission import GroupSubmitter
 
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
 # in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
@@ -409,7 +411,7 @@ async def _start_graph_replay_at_startup(
     to writes (`hold_for_startup_replay`), the `graph_replay` dependency is marked unhealthy, which
     holds `/ready` at `not_ready`, and the replay is started as a task whose completion marks it
     healthy again. The replay is blocking, so it runs on a worker thread; startup does not wait
-    for it. No writer is wired to the gateway yet.
+    for it. The ingestion pipelines write through it (issue #208).
     """
     if config.state_postgres_host is None:
         return None, None
@@ -419,6 +421,9 @@ async def _start_graph_replay_at_startup(
         _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
         return None, None
     gateway.hold_for_startup_replay()
+    # The pipelines that run outside a request (MCP tools, the amendment sweep) reach the one
+    # gateway of the process through this handle (issue #208).
+    install_graph_write_gateway(cast("GroupSubmitter", gateway))
     mark_unhealthy(
         GRAPH_REPLAY, error=RuntimeError("the startup replay of the graph log is running")
     )
@@ -478,6 +483,7 @@ async def _shutdown_graph_gateway(
     gateway: _StartupGateway | None, replay_task: asyncio.Task[None] | None
 ) -> None:
     """Stop the startup replay first (it holds the graphs), then the background reconciler."""
+    install_graph_write_gateway(None)
     await _stop_graph_replay(gateway, replay_task)
     await _stop_graph_gateway_reconciler(gateway)
 

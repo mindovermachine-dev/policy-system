@@ -55,6 +55,8 @@ _READ_TEMPLATES = frozenset(
         "node_state",
         "node_exists",
         "edge_state",
+        "unidentified_edge_state",
+        "unidentified_edge_scan",
         "digest_node_scan",
         "digest_edge_scan",
         "graph_holds_a_node",
@@ -528,6 +530,11 @@ class InMemoryGraph:
             "delete_node": _compile(cypher.DELETE_NODE_TEMPLATE, ("L",)),
             "upsert_edge": _compile(cypher.UPSERT_EDGE_TEMPLATE, ("SL", "TL", "T")),
             "delete_edge": _compile(cypher.DELETE_EDGE_TEMPLATE, ("SL", "TL", "T")),
+            "stamp_edge_identity": _compile(cypher.STAMP_EDGE_IDENTITY_TEMPLATE, ("SL", "TL", "T")),
+            "unidentified_edge_state": _compile(
+                cypher.UNIDENTIFIED_EDGE_STATE_TEMPLATE, ("SL", "TL", "T")
+            ),
+            "unidentified_edge_scan": _compile(cypher.UNIDENTIFIED_EDGE_SCAN, ()),
             "node_state": _compile(cypher.NODE_STATE_TEMPLATE, ("L",)),
             "node_exists": _compile(cypher.NODE_EXISTS_TEMPLATE, ("L",)),
             "edge_state": _compile(cypher.EDGE_STATE_TEMPLATE, ("SL", "TL", "T")),
@@ -615,6 +622,10 @@ class InMemoryGraph:
             )
         elif name == "edge_state":
             return FakeQueryResult(self._read_edges(names, rows))
+        elif name == "unidentified_edge_state":
+            return FakeQueryResult(self._read_unidentified_edges(names, rows))
+        elif name == "unidentified_edge_scan":
+            return FakeQueryResult(self._scan_unidentified_edges(params))
         elif name == "graph_holds_a_node":
             return FakeQueryResult(
                 [[0]] if any(label != cypher.REPLAY_STATE_LABEL for label, _ in self.nodes) else []
@@ -631,6 +642,8 @@ class InMemoryGraph:
             self._apply_delete_node(names["L"], rows)
         elif name == "upsert_edge":
             self._apply_upsert_edge(names, rows)
+        elif name == "stamp_edge_identity":
+            self._apply_stamp_edge_identity(names, rows)
         else:
             self._apply_delete_edge(names, rows)
         return FakeQueryResult()
@@ -773,6 +786,72 @@ class InMemoryGraph:
             for row in rows
             if (key := self._edge_key(names, row)) in self.edges
         ]
+
+    def legacy_shaped_copy(self) -> InMemoryGraph:
+        """A copy of this graph as a pre-gateway writer left it: the same nodes, edges without
+        `identity` (kept in order, with their properties).
+        """
+        legacy = InMemoryGraph()
+        for (label, node_id), properties in self.nodes.items():
+            legacy.seed_node(
+                (label, *self._extra_labels.get((label, node_id), ())), node_id, properties
+            )
+        for (*edge, _), properties in self.edges.items():
+            legacy.seed_legacy_edge(
+                (edge[0], edge[1], edge[2], edge[3], edge[4]),
+                {k: v for k, v in properties.items() if k != "identity"},
+            )
+        return legacy
+
+    def seed_legacy_edge(
+        self, key: tuple[str, str, str, str, str], properties: dict[str, object]
+    ) -> None:
+        """Create an edge as a pre-gateway writer left it: no `identity` property.
+
+        `key` is `(type, source label, source id, target label, target id)`. The fake holds one
+        identity-less edge per key (a real graph could hold several; the gateway's stamp treats
+        them alike).
+        """
+        legacy_key = (*key, "")
+        self.edges[legacy_key] = dict(properties)
+        self.edge_internal_id(legacy_key)
+
+    def _scan_unidentified_edges(self, params: dict[str, object]) -> list[object]:
+        """Answer the identity-less edge scan: rows after the `$after` cursor, at most `$limit`."""
+        after, limit = cast("int", params["after"]), cast("int", params["limit"])
+        scanned = [(self.edge_internal_id(key), key) for key in self.edges if key[5] == ""]
+        rows: list[object] = [
+            [internal_id, kind, [source_label], source_id, [target_label], target_id]
+            for internal_id, (kind, source_label, source_id, target_label, target_id, _) in sorted(
+                scanned, key=lambda item: item[0]
+            )
+            if internal_id > after
+        ]
+        return rows[:limit]
+
+    def _read_unidentified_edges(
+        self, names: dict[str, str], rows: list[dict[str, object]]
+    ) -> list[object]:
+        """Answer the identity-less edge read: endpoints, then the property columns."""
+        return [
+            [row["source_id"], row["target_id"], *property_columns(self.edges[key])]
+            for row in rows
+            if (key := self._edge_key(names, {**row, "identity": ""})) in self.edges
+        ]
+
+    def _apply_stamp_edge_identity(
+        self, names: dict[str, str], rows: list[dict[str, object]]
+    ) -> None:
+        for row in rows:
+            legacy_key = self._edge_key(names, {**row, "identity": ""})
+            stamped_key = self._edge_key(names, row)
+            edge = self.edges.pop(legacy_key, None)
+            if edge is None:
+                continue  # MATCH finds no identity-less edge
+            self.edges[stamped_key] = {**edge, "identity": row["identity"]}
+            self._edge_internal_ids[stamped_key] = self._edge_internal_ids.pop(
+                legacy_key, self._next_edge_internal_id
+            )
 
     def _apply_upsert_node(self, label: str, rows: list[dict[str, object]]) -> None:
         for row in rows:
