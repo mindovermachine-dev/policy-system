@@ -37,6 +37,18 @@ OPERATIONAL_LABELS: Mapping[str, str] = MappingProxyType(
     }
 )
 
+REPLAY_SENTINEL_LABELS: Mapping[str, str] = MappingProxyType(
+    {
+        "GraphReplayState": (
+            "graph-gateway replay-progress sentinel (#207): bookkeeping node present only while a "
+            "replay runs, excluded from the canonical digest, not a domain node"
+        ),
+    }
+)
+"""Labels written only by the gateway's own replay machinery. Deliberately NOT part of the gateway's
+label allow-list (D6): a writer forging or deleting the sentinel could fake replay progress or clear
+a failed gate. Only the Cypher vocabulary scan admits them."""
+
 CELLAR_ELI_NATIVE_LABELS: Mapping[str, str] = MappingProxyType(
     dict.fromkeys(
         ("TITLE", "CHAPTER", "SECTION", "ARTICLE", "PARAGRAPH", "ANNEX", "RECITAL"),

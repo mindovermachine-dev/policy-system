@@ -126,8 +126,17 @@ LEFT JOIN graph_log.applied_markers AS marker ON marker.graph = logged.graph
 WHERE logged.last_position > coalesce(marker.applied_position, 0)
 ORDER BY logged.graph
 """
+_SELECT_LOGGED_GRAPHS = """
+SELECT graph FROM graph_log.entries GROUP BY graph ORDER BY graph
+"""
 _SELECT_CHECKPOINT = """
 SELECT canonical_digest FROM graph_log.checkpoints WHERE graph = %s AND position = %s
+"""
+_SELECT_HIGHEST_CHECKPOINT_AT_OR_BELOW = """
+SELECT position, canonical_digest FROM graph_log.checkpoints
+WHERE graph = %s AND position <= %s
+ORDER BY position DESC
+LIMIT 1
 """
 _SELECT_GROUPS_BY_AUDIT_EVENT = """
 SELECT group_id, graph, first_position, last_position
@@ -138,7 +147,9 @@ ORDER BY graph, first_position
 _SELECT_ENTRIES_OF_GROUPS = (
     _ENTRY_SELECT + "WHERE e.group_id = ANY(%s) ORDER BY e.graph, e.position"
 )
-_SELECT_ENTRIES = _ENTRY_SELECT + "WHERE e.graph = %s AND e.position > %s ORDER BY e.position"
+_SELECT_ENTRIES = (
+    _ENTRY_SELECT + "WHERE e.graph = %s AND e.position > %s ORDER BY e.position LIMIT %s"
+)
 
 
 class GraphLogStore(Protocol):
@@ -180,8 +191,13 @@ class GraphLogStore(Protocol):
         """
         ...
 
-    def read_entries(self, graph: str, *, after_position: int = 0) -> tuple[GraphLogEntry, ...]:
+    def read_entries(
+        self, graph: str, *, after_position: int = 0, limit: int | None = None
+    ) -> tuple[GraphLogEntry, ...]:
         """Return the graph's entries with position above `after_position`, in position order.
+
+        `limit` caps the number of entries (None: all of them), so replay can read a long log
+        in pages.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -201,6 +217,16 @@ class GraphLogStore(Protocol):
 
         A graph with no marker counts as applied through position 0. Read-only: it is what
         startup recovery asks to find the graphs it must catch up.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+        """
+        ...
+
+    def logged_graphs(self) -> tuple[str, ...]:
+        """Return, in name order, every graph whose log holds at least one entry.
+
+        Read-only: it is what startup replay asks to find the graphs it must look at.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -259,6 +285,18 @@ class GraphLogStore(Protocol):
 
     def read_digest_checkpoint(self, graph: str, position: int) -> DigestCheckpoint | None:
         """Return the checkpoint recorded for `graph` at `position`, or None when there is none.
+
+        Raises:
+            GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
+        """
+        ...
+
+    def read_highest_checkpoint_at_or_below(
+        self, graph: str, position: int
+    ) -> DigestCheckpoint | None:
+        """Return the checkpoint of `graph` with the highest position <= `position`, or None.
+
+        What replay verifies a rebuilt graph against: the last position the log vouches for.
 
         Raises:
             GraphLogUnavailableError: `ps_state` could not be reached or the read failed.
@@ -390,11 +428,13 @@ class PsycopgGraphLogStore:
         self._emit_append(group, linked_event, outcome="success", appended=appended, writes=writes)
         return appended
 
-    def read_entries(self, graph: str, *, after_position: int = 0) -> tuple[GraphLogEntry, ...]:
+    def read_entries(
+        self, graph: str, *, after_position: int = 0, limit: int | None = None
+    ) -> tuple[GraphLogEntry, ...]:
         """Read the graph's entries after `after_position` (see `GraphLogStore.read_entries`)."""
 
         def select_entries(cur: psycopg.Cursor[TupleRow]) -> tuple[GraphLogEntry, ...]:
-            cur.execute(_SELECT_ENTRIES, (graph, after_position))
+            cur.execute(_SELECT_ENTRIES, (graph, after_position, limit))
             return tuple(_entry_from_record(record) for record in cur.fetchall())
 
         return self._read(select_entries)
@@ -413,6 +453,15 @@ class PsycopgGraphLogStore:
 
         def select_graphs(cur: psycopg.Cursor[TupleRow]) -> tuple[str, ...]:
             cur.execute(_SELECT_GRAPHS_WITH_PENDING_ENTRIES)
+            return tuple(cast("str", record[0]) for record in cur.fetchall())
+
+        return self._read(select_graphs)
+
+    def logged_graphs(self) -> tuple[str, ...]:
+        """Read the graphs that have log entries (see `GraphLogStore.logged_graphs`)."""
+
+        def select_graphs(cur: psycopg.Cursor[TupleRow]) -> tuple[str, ...]:
+            cur.execute(_SELECT_LOGGED_GRAPHS)
             return tuple(cast("str", record[0]) for record in cur.fetchall())
 
         return self._read(select_graphs)
@@ -499,6 +548,22 @@ class PsycopgGraphLogStore:
                 return None
             return DigestCheckpoint(
                 graph=graph, position=position, canonical_digest=cast("str", row[0])
+            )
+
+        return self._read(select_checkpoint)
+
+    def read_highest_checkpoint_at_or_below(
+        self, graph: str, position: int
+    ) -> DigestCheckpoint | None:
+        """Read the highest checkpoint at or below `position` (see `GraphLogStore`)."""
+
+        def select_checkpoint(cur: psycopg.Cursor[TupleRow]) -> DigestCheckpoint | None:
+            cur.execute(_SELECT_HIGHEST_CHECKPOINT_AT_OR_BELOW, (graph, position))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return DigestCheckpoint(
+                graph=graph, position=cast("int", row[0]), canonical_digest=cast("str", row[1])
             )
 
         return self._read(select_checkpoint)

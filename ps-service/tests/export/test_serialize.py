@@ -21,6 +21,7 @@ from ps_service.export.serialize import (
     serialize_graph,
     to_json_bytes,
 )
+from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL
 
 
 def test_checksum_bytes_matches_hashlib_sha256_hexdigest() -> None:
@@ -184,3 +185,19 @@ def test_parse_serialized_graph_json_is_the_inverse_of_to_json_bytes() -> None:
     round_tripped = parse_serialized_graph_json(to_json_bytes(graph))
 
     assert round_tripped == graph
+
+
+def test_serialize_graph_refuses_a_graph_with_an_unfinished_replay_record() -> None:
+    graph = _ScriptedFakeGraphQueryHandle(
+        labels=[["Test"], [REPLAY_STATE_LABEL]],
+        relationship_types=[],
+        node_rows_by_label={
+            "Test": [[["Test"], {"id": "x"}]],
+            REPLAY_STATE_LABEL: [[[REPLAY_STATE_LABEL], {"position": 3, "state": "failed"}]],
+        },
+        edge_rows_by_type={},
+        total_node_count=2,
+    )
+
+    with pytest.raises(ExportSourceGraphError, match="replay"):
+        serialize_graph(graph)

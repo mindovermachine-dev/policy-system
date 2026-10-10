@@ -17,6 +17,7 @@ Import as `from graph_gateway._fakes import ...` (the cross-package idiom of `au
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 import uuid
@@ -49,11 +50,108 @@ if TYPE_CHECKING:
 _EVENT_LOG_APPEND = "log_append"
 _EVENT_GRAPH_WRITE = "graph_write"
 _EVENT_GRAPH_READ = "graph_read"
-_READ_TEMPLATES = frozenset({"node_state", "edge_state"})
+_READ_TEMPLATES = frozenset(
+    {
+        "node_state",
+        "node_exists",
+        "edge_state",
+        "digest_node_scan",
+        "digest_edge_scan",
+        "graph_holds_a_node",
+    }
+)
 _INDEX_TEMPLATES = frozenset({"list_indexes", "create_index"})
+_STATE_TEMPLATES = frozenset({"replay_state_read", "replay_state_write", "replay_state_delete"})
 _NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 _IDENTIFIER = r"(?P<{name}>" + _NAME + ")"
 _KEY_LIST = rf"(?P<KEYS>n\.{_NAME}(?:, n\.{_NAME})*)"
+
+
+def _encode_exact_float(value: float) -> list[object]:
+    """Mirror of the Cypher in `exact_floats`: `[s, digits of value * 2**s]`, value non-zero."""
+    scale = 54 - math.frexp(value)[1]
+    return [scale, f"{math.ldexp(value, scale):.6f}"]
+
+
+def lossy_float(value: float) -> float:
+    """A double as FalkorDB's reply carries it: printed with 15 significant digits, then parsed."""
+    return float(f"{value:.15g}")
+
+
+def lossy_reply(value: object) -> object:
+    """A property value as FalkorDB's reply carries it (floats at 15 significant digits)."""
+    if isinstance(value, float):
+        return lossy_float(value)
+    if isinstance(value, list):
+        return [lossy_reply(item) for item in cast("list[object]", value)]
+    return value
+
+
+def property_columns(properties: dict[str, object]) -> list[object]:
+    """The `pairs, scalars, float lists, mixed lists` columns of a row, as FalkorDB answers.
+
+    Mirror of `exact_floats.PROPERTY_COLUMNS`: a list of floats travels only as exact integers;
+    every other property travels as a lossy `[key, value]` pair.
+    """
+    pairs = [
+        [key, lossy_reply(value)] for key, value in properties.items() if not _is_float_list(value)
+    ]
+    scalars = [
+        [key, _encode_exact_float(cast("float", value))]
+        for key, value in properties.items()
+        if _is_nonzero_float(value)
+    ]
+    float_lists = [
+        _list_column(key, cast("list[object]", value))
+        for key, value in properties.items()
+        if _is_float_list(value)
+    ]
+    mixed_lists = [
+        _list_column(key, cast("list[object]", value))
+        for key, value in properties.items()
+        if isinstance(value, list)
+        and not _is_float_list(cast("list[object]", value))
+        and any(_is_nonzero_float(item) for item in cast("list[object]", value))
+    ]
+    return [pairs, scalars, float_lists, mixed_lists]
+
+
+def _list_column(key: str, items: list[object]) -> list[object]:
+    """One `[key, scales, integers]` entry of a list column."""
+    scales, integers = _aligned_integers(items)
+    return [key, scales, integers]
+
+
+def _is_float_list(value: object) -> bool:
+    """A non-empty list whose items are all floats (zero and negative zero included)."""
+    if not isinstance(value, list):
+        return False
+    items = cast("list[object]", value)
+    return bool(items) and all(isinstance(item, float) for item in items)
+
+
+def _is_nonzero_float(value: object) -> bool:
+    return isinstance(value, float) and value != 0.0
+
+
+def _aligned_integers(items: list[object]) -> tuple[list[int], list[int]]:
+    """Mirror of the list fragments for one list: scales and integers aligned with the items.
+
+    A position that holds no non-zero float is `0` in the integers; a negative zero is `1` in
+    the scales (a positive zero and anything else is `0`).
+    """
+    scales: list[int] = []
+    integers: list[int] = []
+    for item in items:
+        if _is_nonzero_float(item):
+            scale = 54 - math.frexp(cast("float", item))[1]
+            scales.append(scale)
+            integers.append(int(math.ldexp(cast("float", item), scale)))
+        else:
+            negative_zero = isinstance(item, float) and math.copysign(1.0, item) < 0
+            scales.append(1 if negative_zero else 0)
+            integers.append(0)
+    return scales, integers
 
 
 @dataclass
@@ -89,10 +187,20 @@ class InMemoryGraphLogStore:
     """Called with the graph name when a standalone append starts (a test's thread barrier)."""
     read_fault: Fault | None = None
     append_fault: Fault | None = None
+    checkpoint_fault: Fault | None = None
+    """Raised by `record_digest_checkpoint` (the real store's write failing)."""
     append_attempts: int = 0
     """Standalone appends tried, failed ones included."""
     marker_advanced: threading.Event = field(default_factory=threading.Event)
     """Set whenever the applied marker moves (lets a test wait for the reconciler)."""
+    report_head_extra: int = 0
+    """Makes `last_position` claim this many entries more than the log holds (a torn read)."""
+    page_sizes: list[int] = field(default_factory=list)
+    """Entries each paged `read_entries(limit=...)` call returned."""
+    page_reads: list[tuple[int, int]] = field(default_factory=list)
+    """`(first, last)` position of each non-empty paged read."""
+    on_paged_read: Callable[[], None] | None = None
+    """Called after each paged `read_entries` (a test's way to act while a replay is mid-flight)."""
     marker_history: list[tuple[str, int]] = field(default_factory=list)
     """`(graph, position)` of every `advance_applied_position` call, in call order."""
 
@@ -153,15 +261,36 @@ class InMemoryGraphLogStore:
         transaction.commit()
         return appended
 
-    def read_entries(self, graph: str, *, after_position: int = 0) -> tuple[GraphLogEntry, ...]:
+    def read_entries(
+        self, graph: str, *, after_position: int = 0, limit: int | None = None
+    ) -> tuple[GraphLogEntry, ...]:
         if self.read_fault is not None:
             self.read_fault.trigger()
-        return tuple(e for e in self.entries.get(graph, []) if e.position > after_position)
+        found = tuple(e for e in self.entries.get(graph, []) if e.position > after_position)
+        found = found if limit is None else found[:limit]
+        if limit is not None:
+            self.page_sizes.append(len(found))
+            if found:
+                self.page_reads.append((found[0].position, found[-1].position))
+            if self.on_paged_read is not None:
+                self.on_paged_read()
+        return found
+
+    def tamper_gap(self, graph: str, position: int) -> None:
+        """Remove the entry at `position` without renumbering (the real database forbids this)."""
+        self.entries[graph] = [e for e in self.entries[graph] if e.position != position]
+
+    def tamper_corrupt(self, graph: str, position: int) -> None:
+        """Replace the entry at `position` by one that names an operation nobody knows."""
+        self.entries[graph] = [
+            e.model_copy(update={"content": {"op": "bogus"}}) if e.position == position else e
+            for e in self.entries[graph]
+        ]
 
     def last_position(self, graph: str) -> int:
         if self.read_fault is not None:
             self.read_fault.trigger()
-        return self.logged_count(graph)
+        return self.logged_count(graph) + self.report_head_extra
 
     def graphs_with_pending_entries(self) -> tuple[str, ...]:
         if self.read_fault is not None:
@@ -173,6 +302,11 @@ class InMemoryGraphLogStore:
                 if self.logged_count(graph) > self.markers.get(graph, 0)
             )
         )
+
+    def logged_graphs(self) -> tuple[str, ...]:
+        if self.read_fault is not None:
+            self.read_fault.trigger()
+        return tuple(sorted(graph for graph, entries in self.entries.items() if entries))
 
     def read_groups_by_audit_event(self, audit_event_id: str) -> tuple[GraphLogGroup, ...]:
         uuid.UUID(audit_event_id)
@@ -195,14 +329,31 @@ class InMemoryGraphLogStore:
     def record_digest_checkpoint(
         self, graph: str, position: int, canonical_digest: str
     ) -> DigestCheckpoint:
+        if self.checkpoint_fault is not None:
+            self.checkpoint_fault.trigger()
         checkpoint = DigestCheckpoint(
             graph=graph, position=position, canonical_digest=canonical_digest
         )
+        if (graph, position) in self.checkpoints:  # insert-only, as the primary key makes it
+            message = "failed to record the digest checkpoint"
+            raise GraphLogPersistenceError(message)
         self.checkpoints[(graph, position)] = checkpoint
         return checkpoint
 
     def read_digest_checkpoint(self, graph: str, position: int) -> DigestCheckpoint | None:
         return self.checkpoints.get((graph, position))
+
+    def read_highest_checkpoint_at_or_below(
+        self, graph: str, position: int
+    ) -> DigestCheckpoint | None:
+        if self.read_fault is not None:
+            self.read_fault.trigger()
+        at_or_below = [
+            checkpoint
+            for (name, at), checkpoint in self.checkpoints.items()
+            if name == graph and at <= position
+        ]
+        return max(at_or_below, key=lambda checkpoint: checkpoint.position, default=None)
 
 
 @dataclass
@@ -323,6 +474,8 @@ def _compile(template: str, placeholders: tuple[str, ...]) -> re.Pattern[str]:
 
 
 def _kind_of(template: str) -> str:
+    if template in _STATE_TEMPLATES:
+        return "state"
     if template in _READ_TEMPLATES:
         return "read"
     return "index" if template in _INDEX_TEMPLATES else "write"
@@ -344,6 +497,11 @@ class InMemoryGraph:
         default_factory=dict
     )
     queries: list[RecordedQuery] = field(default_factory=list)
+    _internal_ids: dict[tuple[str, str], int] = field(default_factory=dict)
+    _next_internal_id: int = 0
+    _extra_labels: dict[tuple[str, str], tuple[str, ...]] = field(default_factory=dict)
+    _edge_internal_ids: dict[tuple[str, str, str, str, str, str], int] = field(default_factory=dict)
+    _next_edge_internal_id: int = 0
     upsert_order: list[tuple[str, str]] = field(default_factory=list)
     """`(label, id)` of every node upsert row, in the order the graph received them."""
     indexes: set[str] = field(default_factory=set)
@@ -353,6 +511,12 @@ class InMemoryGraph:
     read_fault: Fault | None = None
     write_fault: Fault | None = None
     index_fault: Fault | None = None
+    replay_state: tuple[int, str, str, int] | None = None
+    """The replay-progress sentinel as `(position, state, kind, verified)`; wiped with the graph.
+
+    Its queries are of kind `state`: bookkeeping that is neither a data write (no write fault, no
+    event, not counted in a statement budget) nor a data read.
+    """
     writes_before_failure: int | None = None
     """When set, this many more writes succeed and every later write raises `write_error`."""
     write_error: Exception | None = None
@@ -365,7 +529,14 @@ class InMemoryGraph:
             "upsert_edge": _compile(cypher.UPSERT_EDGE_TEMPLATE, ("SL", "TL", "T")),
             "delete_edge": _compile(cypher.DELETE_EDGE_TEMPLATE, ("SL", "TL", "T")),
             "node_state": _compile(cypher.NODE_STATE_TEMPLATE, ("L",)),
+            "node_exists": _compile(cypher.NODE_EXISTS_TEMPLATE, ("L",)),
             "edge_state": _compile(cypher.EDGE_STATE_TEMPLATE, ("SL", "TL", "T")),
+            "digest_node_scan": _compile(cypher.DIGEST_NODE_SCAN, ()),
+            "digest_edge_scan": _compile(cypher.DIGEST_EDGE_SCAN, ()),
+            "replay_state_read": _compile(cypher.REPLAY_STATE_READ, ()),
+            "replay_state_write": _compile(cypher.REPLAY_STATE_WRITE, ()),
+            "replay_state_delete": _compile(cypher.REPLAY_STATE_DELETE, ()),
+            "graph_holds_a_node": _compile(cypher.GRAPH_HOLDS_A_NODE, ()),
             "list_indexes": _compile(cypher.LIST_INDEXES, ()),
             "create_index": _compile(cypher.CREATE_INDEX_TEMPLATE, ("L",)),
         }
@@ -428,6 +599,8 @@ class InMemoryGraph:
         if kind == "write":
             self._raise_if_write_fails()
         self.queries.append(RecordedQuery(kind, text, params, name, tuple(names.values())))
+        if kind == "state":
+            return self._run_replay_state(name, params)
         if kind != "index":  # index housekeeping is not part of the log-then-graph story
             self.events.append(_EVENT_GRAPH_READ if kind == "read" else _EVENT_GRAPH_WRITE)
         if kind == "index":
@@ -436,8 +609,20 @@ class InMemoryGraph:
             self._apply_upsert_node(names["L"], rows)
         elif name == "node_state":
             return FakeQueryResult(self._read_nodes(names["L"], rows))
+        elif name == "node_exists":
+            return FakeQueryResult(
+                [[row["id"]] for row in rows if (names["L"], str(row["id"])) in self.nodes]
+            )
         elif name == "edge_state":
             return FakeQueryResult(self._read_edges(names, rows))
+        elif name == "graph_holds_a_node":
+            return FakeQueryResult(
+                [[0]] if any(label != cypher.REPLAY_STATE_LABEL for label, _ in self.nodes) else []
+            )
+        elif name == "digest_node_scan":
+            return FakeQueryResult(self._scan_nodes(params))
+        elif name == "digest_edge_scan":
+            return FakeQueryResult(self._scan_edges(params))
         elif name == "merge_property":
             self._apply_merge_property(names["L"], rows)
         elif name == "remove_property":
@@ -448,6 +633,21 @@ class InMemoryGraph:
             self._apply_upsert_edge(names, rows)
         else:
             self._apply_delete_edge(names, rows)
+        return FakeQueryResult()
+
+    def _run_replay_state(self, name: str, params: dict[str, object]) -> FakeQueryResult:
+        """Read, write or delete the replay-progress sentinel."""
+        if name == "replay_state_read":
+            return FakeQueryResult([] if self.replay_state is None else [list(self.replay_state)])
+        if name == "replay_state_delete":
+            self.replay_state = None
+            return FakeQueryResult()
+        self.replay_state = (
+            cast("int", params["position"]),
+            cast("str", params["state"]),
+            cast("str", params["kind"]),
+            cast("int", params["verified"]),
+        )
         return FakeQueryResult()
 
     def _run_index(self, name: str, names: dict[str, str]) -> FakeQueryResult:
@@ -474,19 +674,102 @@ class InMemoryGraph:
         self.nodes.clear()
         self.edges.clear()
         self.indexes.clear()
+        self.replay_state = None
+        self._internal_ids.clear()
+        self._edge_internal_ids.clear()
 
     def _read_nodes(self, label: str, rows: list[dict[str, object]]) -> list[object]:
-        """Answer `RETURN n.id, properties(n)`: `properties` carries `id`, as FalkorDB's does."""
-        return [
-            [row["id"], {"id": row["id"], **self.nodes[(label, str(row["id"]))]}]
-            for row in rows
-            if (label, str(row["id"])) in self.nodes
-        ]
+        """Answer the node state read: id, lossy `properties(n)` (with `id`) and exact columns."""
+        answers: list[object] = []
+        for row in rows:
+            stored = self.nodes.get((label, str(row["id"])))
+            if stored is not None:
+                answers.append([row["id"], *property_columns({"id": row["id"], **stored})])
+        return answers
+
+    def seed_node(
+        self, labels: tuple[str, ...], node_id: str, properties: dict[str, object]
+    ) -> None:
+        """Create a node that carries several labels (the gateway only ever writes one).
+
+        The first label keys the node in `nodes`; the others are kept in `_extra_labels`, in
+        the order given, as FalkorDB keeps them.
+        """
+        first, *rest = labels
+        self.nodes[(first, node_id)] = dict(properties)
+        self._extra_labels[(first, node_id)] = tuple(rest)
+        self.internal_id(first, node_id)
+
+    def internal_id(self, label: str, node_id: str) -> int:
+        """The node's internal id: assigned once, in creation order, and never reused."""
+        key = (label, node_id)
+        if key not in self._internal_ids:
+            self._internal_ids[key] = self._next_internal_id
+            self._next_internal_id += 1
+        return self._internal_ids[key]
+
+    def _scan_nodes(self, params: dict[str, object]) -> list[object]:
+        """Answer the digest node scan: rows after the `$after` cursor, at most `$limit`."""
+        after, limit = cast("int", params["after"]), cast("int", params["limit"])
+        scanned: list[tuple[int, list[object]]] = []
+        for (label, node_id), stored in self.nodes.items():
+            internal_id = self.internal_id(label, node_id)
+            if internal_id <= after or label == cypher.REPLAY_STATE_LABEL:
+                continue
+            properties: dict[str, object] = {"id": node_id, **stored}
+            scanned.append(
+                (
+                    internal_id,
+                    [
+                        internal_id,
+                        [label, *self._extra_labels.get((label, node_id), ())],
+                        *property_columns(properties),
+                    ],
+                )
+            )
+        return [row for _, row in sorted(scanned, key=lambda item: item[0])[:limit]]
+
+    def _scan_edges(self, params: dict[str, object]) -> list[object]:
+        """Answer the digest relationship scan: rows after the `$after` cursor, at most `$limit`."""
+        after, limit = cast("int", params["after"]), cast("int", params["limit"])
+        scanned: list[tuple[int, list[object]]] = []
+        for key, stored in self.edges.items():
+            kind, source_label, source_id, target_label, target_id, _ = key
+            internal_id = self.edge_internal_id(key)
+            if internal_id <= after:
+                continue
+            scanned.append(
+                (
+                    internal_id,
+                    [
+                        internal_id,
+                        kind,
+                        [source_label],
+                        source_id,
+                        [target_label],
+                        target_id,
+                        *property_columns(stored),
+                    ],
+                )
+            )
+        return [row for _, row in sorted(scanned, key=lambda item: item[0])[:limit]]
+
+    def edge_internal_id(self, key: tuple[str, str, str, str, str, str]) -> int:
+        """The relationship's internal id: assigned once, in creation order, never reused."""
+        if key not in self._edge_internal_ids:
+            self._edge_internal_ids[key] = self._next_edge_internal_id
+            self._next_edge_internal_id += 1
+        return self._edge_internal_ids[key]
 
     def _read_edges(self, names: dict[str, str], rows: list[dict[str, object]]) -> list[object]:
-        """Answer the edge state read: endpoints and identity, then `properties(r)`."""
+        """Answer the edge state read: endpoints and identity, then the property columns."""
         return [
-            [row["source_id"], row["target_id"], row["identity"], dict(self.edges[key])]
+            [
+                row["source_id"],
+                row["target_id"],
+                row["identity"],
+                *property_columns(self.edges[key]),
+            ]
             for row in rows
             if (key := self._edge_key(names, row)) in self.edges
         ]
@@ -494,6 +777,7 @@ class InMemoryGraph:
     def _apply_upsert_node(self, label: str, rows: list[dict[str, object]]) -> None:
         for row in rows:
             self.upsert_order.append((label, str(row["id"])))
+            self.internal_id(label, str(row["id"]))  # a created node takes the next id
             node = self.nodes.setdefault((label, str(row["id"])), {})
             properties = row["properties"]
             assert isinstance(properties, dict)
@@ -524,12 +808,14 @@ class InMemoryGraph:
             node_id = str(row["id"])
             if self.nodes.pop((label, node_id), None) is None:
                 continue
+            self._internal_ids.pop((label, node_id), None)  # the id is gone, never reused
             for key in [
                 key
                 for key in self.edges
                 if (key[1], key[2]) == (label, node_id) or (key[3], key[4]) == (label, node_id)
             ]:
                 del self.edges[key]  # DETACH DELETE
+                self._edge_internal_ids.pop(key, None)
 
     def _edge_key(
         self, names: dict[str, str], row: dict[str, object]
@@ -554,6 +840,7 @@ class InMemoryGraph:
             if not self._both_nodes_exist(names, row):
                 continue  # MATCH finds nothing, so nothing is merged
             edge = self.edges.setdefault(self._edge_key(names, row), {"identity": row["identity"]})
+            self.edge_internal_id(self._edge_key(names, row))
             properties = row["properties"]
             assert isinstance(properties, dict)
             edge.update(properties)  # pyright: ignore[reportUnknownArgumentType]
@@ -561,6 +848,7 @@ class InMemoryGraph:
     def _apply_delete_edge(self, names: dict[str, str], rows: list[dict[str, object]]) -> None:
         for row in rows:
             self.edges.pop(self._edge_key(names, row), None)
+            self._edge_internal_ids.pop(self._edge_key(names, row), None)
 
 
 @dataclass

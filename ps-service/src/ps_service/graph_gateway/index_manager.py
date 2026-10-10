@@ -3,7 +3,7 @@
 Every `MATCH`/`MERGE` the gateway issues looks a node up by `id`, so each label needs an index on
 it before its first load. Nothing is remembered between apply passes: each pass lists the graph's
 indexes once and creates only the missing ones, so a flushed graph or a restore that swapped the
-graph in heals on the next write.
+graph in heals on the next write. A replay holds one `IdIndexes` for all its pages.
 """
 
 from __future__ import annotations
@@ -28,19 +28,38 @@ _ENTITY_COLUMN = 6
 _NODE_ENTITY = "NODE"
 
 
-def ensure_id_indexes(graph: GraphHandle, labels: Iterable[str]) -> None:
-    """Create an index on `id` for each of `labels` that does not have one yet.
+class IdIndexes:
+    """The `id` indexes of one graph as one operation (an apply pass or a whole replay) knows them.
 
-    Does nothing (not even a listing) when `labels` is empty. An index another writer created in
-    the meantime counts as success.
+    The first `ensure` lists the graph's indexes; later calls remember what the listing and the
+    creations established and list nothing again, so a replay of many pages lists once.
     """
-    wanted = sorted(set(labels))
-    if not wanted:
-        return
-    indexed = _labels_indexed_on_id(graph)
-    for label in wanted:
-        if label not in indexed:
-            _create_index(graph, label)
+
+    def __init__(self, graph: GraphHandle) -> None:
+        """Start without a listing; nothing is queried until the first `ensure`."""
+        self._graph = graph
+        self._indexed: set[str] | None = None
+
+    def ensure(self, labels: Iterable[str]) -> None:
+        """Create an index on `id` for each of `labels` that does not have one yet.
+
+        Does nothing (not even a listing) when `labels` is empty or all are already known. An
+        index another writer created in the meantime counts as success.
+        """
+        wanted = sorted(set(labels) - (self._indexed or set()))
+        if not wanted:
+            return
+        if self._indexed is None:
+            self._indexed = _labels_indexed_on_id(self._graph)
+        for label in wanted:
+            if label not in self._indexed:
+                _create_index(self._graph, label)
+                self._indexed.add(label)
+
+
+def ensure_id_indexes(graph: GraphHandle, labels: Iterable[str]) -> None:
+    """Create an index on `id` for each of `labels` that does not have one yet (one pass)."""
+    IdIndexes(graph).ensure(labels)
 
 
 def _labels_indexed_on_id(graph: GraphHandle) -> set[str]:

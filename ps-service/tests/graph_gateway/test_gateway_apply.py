@@ -16,6 +16,7 @@ import redis.exceptions
 
 from graph_gateway._fakes import GatewayRig
 from ps_service.graph_gateway.gateway import GatewaySettings
+from ps_service.graph_gateway.graph_reader import STATE_READ_CHUNK_ROWS
 from ps_service.graph_gateway.models import (
     DeleteNode,
     MergeProperty,
@@ -77,7 +78,8 @@ def test_applying_n_nodes_issues_at_most_ceil_n_over_batch_queries_per_label() -
     for label, count in (("Capability", 601), ("Policy", 600)):
         limit = math.ceil(count / _BATCH)
         assert len(_tagged(graph, "write", "upsert_node", label)) <= limit
-        assert len(_tagged(graph, "read", "node_state", label)) <= limit
+        read_limit = math.ceil(count / min(_BATCH, STATE_READ_CHUNK_ROWS))
+        assert len(_tagged(graph, "read", "node_state", label)) <= read_limit
 
 
 def test_interleaved_labels_A_B_A_issue_one_write_query_per_label() -> None:

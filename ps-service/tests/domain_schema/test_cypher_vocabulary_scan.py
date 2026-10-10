@@ -23,6 +23,7 @@ from ps_service.domain_schema import DOMAIN_SCHEMA
 from ps_service.domain_schema.vocabulary_exceptions import (
     CELLAR_ELI_NATIVE_LABELS,
     OPERATIONAL_LABELS,
+    REPLAY_SENTINEL_LABELS,
     SYSTEM_MINTED_EDGE_TYPES,
 )
 
@@ -114,6 +115,7 @@ def _scan(source: str, filename: str) -> tuple[list[Finding], int]:
 _ALLOWED_LABELS = (
     {node.label for node in DOMAIN_SCHEMA.nodes}
     | set(OPERATIONAL_LABELS)
+    | set(REPLAY_SENTINEL_LABELS)
     | set(CELLAR_ELI_NATIVE_LABELS)
 )
 _ALLOWED_EDGES = {edge.type for edge in DOMAIN_SCHEMA.edges} | set(SYSTEM_MINTED_EDGE_TYPES)
@@ -221,6 +223,7 @@ _DYNAMIC_SITES: dict[str, int] = {
     "domain_mapper/graph_writer.py": 6,
     "export/embeddings.py": 3,
     "export/serialize.py": 2,
+    "graph_gateway/cypher.py": 4,
     "ingestion/adapters/internal_seed/persist.py": 7,
     "ingestion/graph_writer.py": 5,
     "policy_lifecycle/graph_writer.py": 3,

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from ps_service.export.errors import ExportSourceGraphError
 from ps_service.export.models import SerializedEdge, SerializedGraph, SerializedNode
+from ps_service.graph_gateway.cypher import REPLAY_STATE_LABEL
 
 if TYPE_CHECKING:
     from ps_service.export.falkordb_connection import (
@@ -128,6 +129,13 @@ def serialize_graph(graph: _GraphQueryHandle) -> SerializedGraph:
     nodes: list[SerializedNode] = []
     for label in _enumerate_labels(graph):
         nodes.extend(_read_nodes_for_label(graph, label))
+    if any(node.label == REPLAY_STATE_LABEL for node in nodes):
+        # The label stays in the schema after a replay ends; only a node of it means a replay
+        # that is unfinished or failed, whose graph nobody has verified.
+        raise ExportSourceGraphError(
+            "graph carries a replay progress record -- its replay from the mutation log "
+            "is unfinished or failed, so it is not exported"
+        )
 
     total_node_count = cast("int", _rows(graph, _TOTAL_NODE_COUNT_QUERY)[0][0])
     if len(nodes) != total_node_count:

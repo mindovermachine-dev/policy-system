@@ -317,7 +317,7 @@ def test_architecture_registration_lists_the_gateway_entry_points() -> None:
         "is_caught_up",
         "recover",
         "build_default_graph_write_gateway",
-        "_recover_graph_gateway_at_startup",
+        "_start_graph_replay_at_startup",
     ):
         assert f"`{entry_point}" in registration, entry_point
 
@@ -422,7 +422,7 @@ def test_architecture_guidance_lists_exactly_the_permitted_log_fields() -> None:
 def test_architecture_container_diagram_shows_startup_recovery_of_the_gateway() -> None:
     ca = _read(_CA)
 
-    assert re.search(r'ProcessHarness -->\|"[^"]*recover[^"]*"\| GraphWriteGateway', ca)
+    assert re.search(r'ProcessHarness -->\|"[^"]*replay[^"]*"\| GraphWriteGateway', ca)
 
 
 def test_architecture_component_row_and_sequence_state_the_implemented_behaviour() -> None:
@@ -436,3 +436,112 @@ def test_architecture_component_row_and_sequence_state_the_implemented_behaviour
     assert "#206" in sequence
     for needle in ("stale", "blocked"):
         assert needle in sequence, needle
+
+
+# --- issue #207: replay, digest, checkpoints, the startup gate, the harness -----------------------
+
+_DOMAIN_CONCEPTS = _REPO / "docs" / "artifacts" / "ps-domain-concepts.md"
+_PROCESS_HARNESS_HEADING = "### Process Harness"
+
+
+def _ca_row(prefix: str) -> str:
+    return next(line for line in _read(_CA).splitlines() if line.startswith(prefix))
+
+
+def test_architecture_registers_replay_and_digest_as_implemented() -> None:
+    ca = _read(_CA)
+    gateway = _section(ca, "### Graph Write Gateway")
+    intro = gateway.split("#### Domain Concepts")[0]
+    registration = _gateway_section("#### Implementation Registration")
+    actions = _gateway_section("#### Actions")
+
+    for row in (
+        _ca_row("| Graph Write Gateway | `ps."),
+        _ca_row("| Digest checkpoint |"),
+        _ca_row("| Canonical digest |"),
+    ):
+        assert "Target design" not in row, row[:60]
+        assert "target design" not in row.split(":", 1)[0].lower(), row[:60]
+    assert "#207" in _ca_row("| Graph Write Gateway | `ps.")
+    assert "contracts for those stay target design" not in intro
+    assert "registered when #207 lands" not in registration
+    for module in (
+        "digest.py",
+        "replay.py",
+        "replay_gate.py",
+        "replay_state.py",
+        "startup_retry.py",
+        "equivalence_harness.py",
+    ):
+        assert module in registration, module
+    for action in ("Replay", "Verify"):
+        row = next(r for r in actions.splitlines() if r.startswith(f"| {action} |"))
+        assert "Target only" not in row, action
+    assert "not yet wired" not in registration
+    assert "are not drawn" not in ca
+    assert "restore_exact_floats" not in ca
+    assert "restore_properties" in registration
+
+
+def test_architecture_describes_the_replay_gate_the_503_read_gate_and_ready() -> None:
+    ca = _read(_CA)
+    gateway = _section(ca, "### Graph Write Gateway")
+    harness = _section(ca, _PROCESS_HARNESS_HEADING)
+    kind = _gateway_section("#### Kind")
+
+    for needle in (
+        "graph_replay",
+        "GraphReplayState",
+        "startup_replay_max_backoff_seconds",
+        "hiredis",
+        "fail closed",
+    ):
+        assert needle in gateway, needle
+    for needle in ("graph_replay", "gated_graphs", "503", "Retry-After", "/.well-known/"):
+        assert needle in harness, needle
+    for needle in ("pairs", "scalars", "float lists", "mixed lists"):
+        assert needle in kind, needle
+
+
+def test_architecture_describes_deterministic_replay_verification_and_the_equivalence_harness() -> (
+    None
+):
+    gateway = _section(_read(_CA), "### Graph Write Gateway")
+    kind = _gateway_section("#### Kind")
+    invariants = _gateway_section("#### Invariants")
+
+    for needle in (
+        "verified_position",
+        "unverified_entries",
+        "equivalence_harness.py",
+        "AC-RD-009",
+    ):
+        assert needle in gateway, needle
+    assert "digest" in kind and "checkpoint" in kind.lower()
+    assert "sentinel" in invariants.lower() or "bookkeeping" in invariants.lower()
+    assert "excluded from the digest" in gateway or "skipped by the digest" in gateway
+
+
+def test_domain_concepts_define_the_canonical_digest_encoding() -> None:
+    section = _section(_read(_DOMAIN_CONCEPTS), "### Canonical digest")
+
+    for needle in ("labels", "embedding", "bit", "-0.0", "replay-progress", "sha256"):
+        assert needle in section, needle
+    assert "internal" in section.lower()
+
+
+def test_operations_guide_documents_startup_replay_and_the_gated_graph_remedy() -> None:
+    ops = _read(_OPS)
+    section = _section(ops, "### Graph replay at startup and a gated graph")
+
+    for needle in (
+        "graph_replay",
+        "gated_graphs",
+        "503",
+        "redis-cli",
+        "DEL",
+        "restart",
+        "startup_replay",
+    ):
+        assert needle in section, needle
+    assert "(#graph-replay-at-startup-and-a-gated-graph)" in ops

@@ -180,3 +180,29 @@ def test_entry_draft_rejects_an_empty_embedding() -> None:
 
 def test_entry_draft_without_embedding_defaults_to_none() -> None:
     assert GraphLogEntryDraft(name="Capability", identity="c", content={}).embedding is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param({"op": "upsert_node", "properties": {"offset": -0.0}}, id="negative-zero"),
+        pytest.param({"op": "upsert_node", "properties": {"weight": 1.0}}, id="float-one"),
+        pytest.param({"op": "upsert_node", "properties": {"big": 1e22}}, id="beyond-int64"),
+        pytest.param({"op": "upsert_node", "properties": {"series": [0.1, 2]}}, id="in-a-list"),
+    ],
+)
+def test_content_containing_a_float_is_stored_as_a_json_payload(
+    content: dict[str, object],
+) -> None:
+    # `jsonb` is a `numeric`: it has no negative zero, turns 1.0 into 1 and 1e22 into a long
+    # integer. Only the exact UTF-8 text keeps a float what it was (live proof: #207 S14L).
+    payload = json_payload_if_large(content)
+
+    assert payload is not None
+    assert payload.kind == PAYLOAD_KIND_JSON
+
+
+def test_content_without_a_float_stays_inline_when_small() -> None:
+    assert (
+        json_payload_if_large({"op": "upsert_node", "properties": {"n": 2**53, "ok": True}}) is None
+    )

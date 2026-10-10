@@ -15,7 +15,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from ps_service.graph_gateway.errors import MissingTargetError
-from ps_service.graph_gateway.graph_reader import EdgeKey, NodeKey, read_edges, read_nodes
+from ps_service.graph_gateway.graph_reader import (
+    EdgeKey,
+    NodeKey,
+    read_edges,
+    read_existing_nodes,
+    read_nodes,
+)
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
@@ -44,10 +50,13 @@ def select_effective_primitives(
         MissingTargetError: an upserted edge's endpoint or a merge target exists nowhere.
     """
     graph = open_graph()
-    overlay = _Overlay(
-        read_nodes(graph, _named_nodes(group), batch_size),
-        read_edges(graph, _named_edges(group), batch_size),
-    )
+    acted_on = set(_acted_on_nodes(group))
+    endpoints = set(_edge_endpoints(group)) - acted_on
+    nodes = read_nodes(graph, acted_on, batch_size)
+    nodes.update(
+        {key: {} for key in read_existing_nodes(graph, endpoints, batch_size)}
+    )  # an endpoint nothing else in the group touches: its existence is all that is used
+    overlay = _Overlay(nodes, read_edges(graph, _named_edges(group), batch_size))
     return tuple(
         primitive
         for index, primitive in enumerate(group.primitives)
@@ -66,15 +75,19 @@ def _edge_key(edge: UpsertEdge | DeleteEdge) -> EdgeKey:
     )
 
 
-def _named_nodes(group: MutationGroup) -> Iterator[NodeKey]:
-    """Yield every node a primitive of `group` acts on or points an edge at."""
+def _acted_on_nodes(group: MutationGroup) -> Iterator[NodeKey]:
+    """Yield every node a node primitive of `group` acts on: their state decides the no-ops."""
     for primitive in group.primitives:
-        match primitive:
-            case UpsertEdge() | DeleteEdge():
-                yield (primitive.source.label, primitive.source.id)
-                yield (primitive.target.label, primitive.target.id)
-            case _:
-                yield (primitive.label, primitive.id)
+        if not isinstance(primitive, UpsertEdge | DeleteEdge):
+            yield (primitive.label, primitive.id)
+
+
+def _edge_endpoints(group: MutationGroup) -> Iterator[NodeKey]:
+    """Yield both endpoints of every edge primitive of `group`: only their existence matters."""
+    for primitive in group.primitives:
+        if isinstance(primitive, UpsertEdge | DeleteEdge):
+            yield (primitive.source.label, primitive.source.id)
+            yield (primitive.target.label, primitive.target.id)
 
 
 def _named_edges(group: MutationGroup) -> Iterator[EdgeKey]:

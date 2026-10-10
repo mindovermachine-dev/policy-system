@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from graph_gateway._fakes import GatewayRig
 from ps_service.graph_gateway.errors import MissingTargetError
 from ps_service.graph_gateway.gateway import GatewaySettings
+from ps_service.graph_gateway.graph_reader import STATE_READ_CHUNK_ROWS
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
@@ -316,8 +317,9 @@ def test_merge_property_on_an_absent_node_is_still_rejected_not_dropped() -> Non
         _submit(rig, MergeProperty(label="Capability", id="ghost", properties={"a": 1}))
 
 
-def test_reads_are_chunked_at_batch_size_and_a_repeat_issues_no_write() -> None:
+def test_reads_are_chunked_at_the_state_read_bound_and_a_repeat_issues_no_write() -> None:
     batch, total = 500, 1201
+    chunk = min(batch, STATE_READ_CHUNK_ROWS)  # a state row can carry an embedding
     rig = GatewayRig(settings=GatewaySettings(batch_size=batch))
     nodes = [_node(f"cap-{index}", n=index) for index in range(total)]
 
@@ -325,15 +327,15 @@ def test_reads_are_chunked_at_batch_size_and_a_repeat_issues_no_write() -> None:
 
     graph = rig.graphs.open(_GRAPH)
     reads = [q for q in graph.queries if q.kind == "read"]
-    assert len(reads) == math.ceil(total / batch)
-    assert all(len(_row_list(q.params)) <= batch for q in reads)
+    assert len(reads) == math.ceil(total / chunk)
+    assert all(len(_row_list(q.params)) <= chunk for q in reads)
     writes_before = _writes(rig)
 
     repeat = _submit(rig, *nodes)
 
     assert repeat.status == "unchanged"
     assert _writes(rig) == writes_before
-    assert len([q for q in graph.queries if q.kind == "read"]) == 2 * math.ceil(total / batch)
+    assert len([q for q in graph.queries if q.kind == "read"]) == 2 * math.ceil(total / chunk)
 
 
 def _row_list(params: dict[str, object]) -> list[object]:

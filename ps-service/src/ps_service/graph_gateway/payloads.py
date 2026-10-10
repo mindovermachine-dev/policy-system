@@ -6,8 +6,10 @@ Two kinds of value are too large or too exact for an inline column and live in
 - embeddings, always: IEEE-754 binary64 little-endian, one value after another, so a read-back
   is bit-identical (NaN payloads, signed zeros and subnormals included). 32-bit storage would
   change most real values, so it is never used;
-- JSON content whose canonical encoding exceeds `INLINE_CONTENT_LIMIT_BYTES`: stored as
-  canonical UTF-8 bytes, not `jsonb`, because `jsonb` reorders keys and normalises numbers.
+- JSON content whose canonical encoding exceeds `INLINE_CONTENT_LIMIT_BYTES`, and any content
+  that holds a float anywhere: stored as canonical UTF-8 bytes, not `jsonb`, because `jsonb`
+  reorders keys and normalises numbers (it is a `numeric`: no negative zero, `1.0` comes back as
+  `1`, `1e22` as a 23-digit integer), which would change what a replay rebuilds (#207 S14L).
 
 Everything here is pure: the store decides when to write.
 """
@@ -18,7 +20,7 @@ import hashlib
 import json
 import struct
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,11 +97,26 @@ def embedding_payload(values: Sequence[float]) -> StoredPayload:
 
 
 def json_payload_if_large(content: dict[str, object]) -> StoredPayload | None:
-    """Build the payload row for `content`, or None when it is small enough to stay inline."""
+    """Build the payload row for `content`, or None when it may stay inline in `jsonb`.
+
+    Content stays inline only when it is small and holds no float: the `jsonb` column does not
+    keep a float exactly (see the module docstring).
+    """
     body = canonical_json_bytes(content)
-    if len(body) <= INLINE_CONTENT_LIMIT_BYTES:
+    if len(body) <= INLINE_CONTENT_LIMIT_BYTES and not _holds_a_float(content):
         return None
     return StoredPayload(payload_hash(body), PAYLOAD_KIND_JSON, body)
+
+
+def _holds_a_float(value: object) -> bool:
+    """Whether `value` is, or contains at any depth, a float."""
+    if isinstance(value, float):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_a_float(item) for item in cast("dict[str, object]", value).values())
+    if isinstance(value, list | tuple):
+        return any(_holds_a_float(item) for item in cast("list[object]", value))
+    return False
 
 
 def decode_json_content(body: bytes) -> dict[str, object]:

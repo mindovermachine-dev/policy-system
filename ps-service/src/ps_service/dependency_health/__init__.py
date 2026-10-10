@@ -9,6 +9,7 @@ any extra polling cost.
 from ps_service.dependency_health.registry import (
     CELLAR_ELI,
     FALKORDB,
+    GRAPH_REPLAY,
     LLM_INTERFACE,
     PASSKEY_SIGNING_POSTGRES,
     STATE_POSTGRES,
@@ -22,6 +23,7 @@ from ps_service.dependency_health.registry import (
 __all__ = [
     "CELLAR_ELI",
     "FALKORDB",
+    "GRAPH_REPLAY",
     "LLM_INTERFACE",
     "PASSKEY_SIGNING_POSTGRES",
     "STATE_POSTGRES",

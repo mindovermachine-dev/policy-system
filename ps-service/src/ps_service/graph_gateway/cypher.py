@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from ps_service.graph_gateway.exact_floats import PROPERTY_COLUMNS
 from ps_service.graph_gateway.label_allow_list import (
     require_allowed_node_label,
     require_allowed_relationship_type,
@@ -55,15 +56,65 @@ DELETE_EDGE_TEMPLATE = (
 )
 """Delete the edges of one type that carry the given identities."""
 
-NODE_STATE_TEMPLATE = "UNWIND $rows AS row MATCH (n:{L} {id: row.id}) RETURN n.id, properties(n)"
-"""Read the properties (embedding included) of the given ids that exist as nodes of one label."""
+NODE_STATE_TEMPLATE = (
+    "UNWIND $rows AS row MATCH (n:{L} {id: row.id}) WITH n, properties(n) AS p "
+    f"RETURN n.id, {PROPERTY_COLUMNS}"
+)
+"""Read the properties (embedding included) of the given ids that exist as nodes of one label.
+
+The last two columns carry every non-zero float exactly (see `exact_floats`): the reply prints a
+double with 15 significant digits, so `p` alone cannot tell two stored values apart.
+"""
+
+NODE_EXISTS_TEMPLATE = "UNWIND $rows AS row MATCH (n:{L} {id: row.id}) RETURN n.id"
+"""Read only the ids, of the given ids, that exist as nodes of one label (no properties).
+
+For the endpoints of an edge: whether they exist is all a write needs to know, and a node's
+properties can carry a 3,072-double embedding.
+"""
 
 EDGE_STATE_TEMPLATE = (
     "UNWIND $rows AS row MATCH (s:{SL} {id: row.source_id})"
     "-[r:{T} {identity: row.identity}]->(t:{TL} {id: row.target_id}) "
-    "RETURN row.source_id, row.target_id, row.identity, properties(r)"
+    "WITH row, properties(r) AS p "
+    f"RETURN row.source_id, row.target_id, row.identity, {PROPERTY_COLUMNS}"
 )
-"""Read the properties of the given edges that exist, keyed by endpoints and identity."""
+"""Read the properties of the given edges that exist, keyed by endpoints and identity.
+
+The last two columns carry every non-zero float exactly, as in `NODE_STATE_TEMPLATE`.
+"""
+
+REPLAY_STATE_LABEL = "GraphReplayState"
+"""Label of the replay-progress sentinel node (#207): bookkeeping, never part of a digest."""
+
+REPLAY_STATE_READ = f"MATCH (p:{REPLAY_STATE_LABEL}) RETURN p.position, p.state, p.kind, p.verified"
+"""Read the replay-progress sentinel (at most one exists); no row means no replay is in progress."""
+
+REPLAY_STATE_WRITE = (
+    f"MERGE (p:{REPLAY_STATE_LABEL}) "
+    "SET p.position = $position, p.state = $state, p.kind = $kind, p.verified = $verified"
+)
+"""Create or advance the replay-progress sentinel."""
+
+REPLAY_STATE_DELETE = f"MATCH (p:{REPLAY_STATE_LABEL}) DELETE p"
+"""Remove the replay-progress sentinel once the replay completed."""
+
+GRAPH_HOLDS_A_NODE = f"MATCH (n) WHERE NOT n:{REPLAY_STATE_LABEL} RETURN id(n) LIMIT 1"
+"""One row if the graph holds a node besides the replay sentinel; none if empty or missing."""
+
+DIGEST_NODE_SCAN = (
+    "MATCH (n) WHERE id(n) > $after AND NOT n:GraphReplayState "
+    "WITH n ORDER BY id(n) LIMIT $limit WITH n, properties(n) AS p "
+    f"RETURN id(n), labels(n), {PROPERTY_COLUMNS}"
+)
+"""One chunk of the node scan of a digest: `$after` is the internal-id cursor (never hashed)."""
+
+DIGEST_EDGE_SCAN = (
+    "MATCH (s)-[r]->(t) WHERE id(r) > $after "
+    "WITH s, r, t ORDER BY id(r) LIMIT $limit WITH s, r, t, properties(r) AS p "
+    f"RETURN id(r), type(r), labels(s), s.id, labels(t), t.id, {PROPERTY_COLUMNS}"
+)
+"""One chunk of the relationship scan of a digest; `$after` is the internal-id cursor."""
 
 LIST_INDEXES = "CALL db.indexes()"
 """List the indexes of the graph."""
@@ -133,6 +184,11 @@ def _removable_key(key: str) -> str:
 def node_state_query(label: str) -> str:
     """Build the read that returns the state of nodes of `label`."""
     return NODE_STATE_TEMPLATE.replace("{L}", _node_label(label))
+
+
+def node_exists_query(label: str) -> str:
+    """Build the read that returns which of the given ids exist as nodes of `label`."""
+    return NODE_EXISTS_TEMPLATE.replace("{L}", _node_label(label))
 
 
 def edge_state_query(relationship_type: str, source_label: str, target_label: str) -> str:

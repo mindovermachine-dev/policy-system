@@ -13,6 +13,7 @@
 - [Production operations](#production-operations)
   - [Updating to the latest version](#updating-to-the-latest-version-1)
   - [Upgrading to the graph mutation log](#upgrading-to-the-graph-mutation-log)
+  - [Graph replay at startup and a gated graph](#graph-replay-at-startup-and-a-gated-graph)
   - [Owner recovery and the Authentik admin UI](#owner-recovery-and-the-authentik-admin-ui)
   - [Rotate the API key later](#rotate-the-api-key-later)
   - [Start and stop the AKS cluster](#start-and-stop-the-aks-cluster)
@@ -301,6 +302,48 @@ Service refuses to start.
 connection or drop `public` objects; the log tables are protected from alteration by that role,
 not the database containing them. Making `audit_events` insert-only is #151, and moving database
 ownership is outside this change. Do not describe the log as undroppable.
+
+### Graph replay at startup and a gated graph
+
+**Applies to:** every start of PS Service once the graph mutation log is in place.
+
+On every start PS Service looks at each logged graph and, before it takes traffic, rebuilds from
+the log any graph that is empty or half rebuilt (for example a FalkorDB that lost its data, or a
+rebuild that was interrupted), resumes an interrupted rebuild where it stopped, and applies any
+entries a graph is owed. It judges a graph by looking at its content, not by the applied marker,
+which can still say everything is applied after FalkorDB lost the graph. Nothing is configured
+for this. The log entries carry the action `startup_replay` (`replayed`, `resumed`, `caught_up`,
+`untouched`, `gated`, `retry`) and `replay_graph` for each rebuilt graph.
+
+What you see while it runs:
+
+- `/health` stays `200`. `/ready` answers `503` `not_ready` with `graph_replay` in
+  `unhealthy_dependencies`, so the pod is out of the Service rotation. Any other path except
+  `/.well-known/` answers `503` with the same body and `Retry-After: 5`, so no caller reads a
+  graph that is empty or half rebuilt. A rebuild of a graph the size of CRA times ten (about
+  160,000 log entries) took 45 seconds on a laptop; do not restart the pod just because it takes
+  a minute.
+- If Postgres or FalkorDB is down, the replay is tried again with a growing wait, capped at
+  `startup_replay_max_backoff_seconds`, until it can finish; the entries `startup_replay` /
+  `retry` show the attempt and the error class.
+
+**A gated graph.** `/ready` always lists `gated_graphs`. A graph appears there when its rebuild
+failed (the rebuilt graph did not match its recorded digest, the log has a gap or an entry that
+does not decode, or the rebuild went past its checkpoint without being compared) or when
+FalkorDB refuses one of its logged entries. The other graphs are served and `/ready` can be `200`
+while one is gated; writes to the gated graph are refused with an error naming the graph and the
+log position. Nothing repairs it silently. After you have understood the cause (the log entries
+name the graph, the position and the error class, never content), rebuild it from the log:
+
+```bash
+POD=$(kubectl get pod -l app.kubernetes.io/component=falkordb -o jsonpath='{.items[0].metadata.name}')
+kubectl exec "$POD" -c falkordb -- redis-cli DEL <graph>      # the name from gated_graphs
+kubectl rollout restart deploy/<ps-service deployment>        # the empty graph is rebuilt at start
+```
+
+Deleting the key removes the graph and the progress record kept inside it; the log is not
+touched. If the rebuild fails again at the same position, the log itself or a checkpoint is
+wrong: keep the pod as it is and escalate with the logged position.
 
 ### Owner recovery and the Authentik admin UI
 

@@ -702,6 +702,7 @@ def test_ready_returns_503_not_ready_while_the_llm_provider_is_unconfigured(
     assert response.json() == {
         "status": "not_ready",
         "unhealthy_dependencies": [_BARRIER_DEPENDENCY, _STATE_POSTGRES_DEPENDENCY],
+        "gated_graphs": [],
     }
 
 
@@ -1020,6 +1021,7 @@ def test_negative_control_a_falkordb_startup_warning_appears_when_falkordb_is_un
                 _BARRIER_DEPENDENCY,
                 _STATE_POSTGRES_DEPENDENCY,
             ],
+            "gated_graphs": [],
         }
     finally:
         _remove_container(container_cli, name)

@@ -26,7 +26,7 @@ from ps_service.graph_gateway.cypher import (
     upsert_node_rows,
 )
 from ps_service.graph_gateway.entry_codec import decode_entry
-from ps_service.graph_gateway.index_manager import ensure_id_indexes
+from ps_service.graph_gateway.index_manager import IdIndexes
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
@@ -56,8 +56,30 @@ def apply_entries(
     on_run_applied: Callable[[int], None],
 ) -> None:
     """Apply `entries` to `graph`, calling `on_run_applied(last_position)` after each run."""
-    decoded = [(entry.position, decode_entry(entry)) for entry in entries]
-    ensure_id_indexes(graph, (label for _, p in decoded for label in node_labels(p)))
+    apply_decoded(
+        graph,
+        [(entry.position, decode_entry(entry)) for entry in entries],
+        batch_size=batch_size,
+        on_run_applied=on_run_applied,
+    )
+
+
+def apply_decoded(
+    graph: GraphHandle,
+    decoded: Sequence[tuple[int, Primitive]],
+    *,
+    batch_size: int,
+    on_run_applied: Callable[[int], None],
+    indexes: IdIndexes | None = None,
+) -> None:
+    """Apply already decoded `(position, primitive)` pairs, in order (see `apply_entries`).
+
+    `indexes` carries what is known of the graph's `id` indexes across calls (a replay passes one
+    for all its pages); without it this call lists the indexes itself.
+    """
+    (indexes if indexes is not None else IdIndexes(graph)).ensure(
+        label for _, p in decoded for label in node_labels(p)
+    )
     for run in _runs(decoded):
         for chunk in _chunks_of(run, batch_size):
             _apply_chunk(graph, [primitive for _, primitive in chunk])

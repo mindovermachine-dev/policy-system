@@ -15,7 +15,9 @@ import dataclasses
 import inspect
 import json
 import threading
+import time
 import tomllib
+import uuid
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
 from pathlib import Path
@@ -24,15 +26,31 @@ from unittest.mock import Mock
 
 import psycopg
 import pytest
+import redis.exceptions
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from graph_gateway._fakes import GatewayRig
+from graph_gateway.live_endpoints import falkordb_endpoint
+from graph_gateway.live_postgres import committed_audit_event
 from persistence.provisioned_postgres import Provisioned, provision_graph_log
 
 import ps_service.main as main_module
 from ps_service import dependency_health
 from ps_service.config import ServiceConfig, load_config
-from ps_service.graph_gateway.models import RecoveryResult
+from ps_service.graph_gateway.digest import canonical_digest
+from ps_service.graph_gateway.errors import GraphReplayGatedError
+from ps_service.graph_gateway.gateway import GatewaySettings, GraphWriteGateway
+from ps_service.graph_gateway.models import (
+    DigestCheckpoint,
+    MutationGroup,
+    StartupReplayReport,
+    UpsertNode,
+)
+from ps_service.graph_gateway.replay_state import read_replay_state
+from ps_service.graph_gateway.store import PsycopgGraphLogStore
 from ps_service.ingestion.errors import IngestionConfigurationError
+from ps_service.ingestion.falkordb_client import connect as connect_falkordb
+from ps_service.ingestion.falkordb_client import select_graph
 from ps_service.llm_interface import LlmProviderError
 from ps_service.logging.errors import LoggingConfigurationError
 from ps_service.logging.facade import configure, reset_for_tests, resolve_default_log_path
@@ -59,6 +77,7 @@ if TYPE_CHECKING:
 
     from ps_service.auth.models import AuthContext
     from ps_service.auth.verifier import PsTokenVerifier
+    from ps_service.ingestion.falkordb_client import GraphHandle, GraphQueryResult
 
     type ReadLines = Callable[[Path], list[dict[str, object]]]
 
@@ -280,7 +299,11 @@ def test_ready_returns_503_and_not_ready_status_before_lifespan_runs(app: FastAP
     response = TestClient(app).get("/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": [],
+        "gated_graphs": [],
+    }
 
 
 def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> None:
@@ -291,7 +314,7 @@ def test_ready_returns_ready_once_lifespan_startup_completes(app: FastAPI) -> No
         response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
 
 def test_lifespan_calls_configure_before_emit_log_entry(tmp_path: Path, app: FastAPI) -> None:
@@ -393,8 +416,12 @@ def _get_ready_after_lifespan_startup(app: FastAPI) -> httpx.Response:
     ("make_response", "expected_status", "expected_keys"),
     [
         (_get_bare_health, 200, {"status", "version"}),
-        (_get_bare_ready, 503, {"status", "unhealthy_dependencies"}),
-        (_get_ready_after_lifespan_startup, 200, {"status", "unhealthy_dependencies"}),
+        (_get_bare_ready, 503, {"status", "unhealthy_dependencies", "gated_graphs"}),
+        (
+            _get_ready_after_lifespan_startup,
+            200,
+            {"status", "unhealthy_dependencies", "gated_graphs"},
+        ),
     ],
 )
 def test_response_body_contains_only_a_status_key(
@@ -408,8 +435,8 @@ def test_response_body_contains_only_a_status_key(
     Covers every state reached by increments 1-4's tests: bare `/health`
     (200, `{"status"}`), bare `/ready` before `lifespan` runs (503, not
     ready), and `/ready` after `lifespan` startup completes (200, ready) —
-    both `/ready` states carry `{"status", "unhealthy_dependencies"}` (issue
-    #68) — no undocumented key ever leaks into either response.
+    both `/ready` states carry `{"status", "unhealthy_dependencies", "gated_graphs"}`
+    (issues #68 and #207) — no undocumented key ever leaks into either response.
     """
     response = make_response(app)
 
@@ -1160,7 +1187,11 @@ def test_ready_stays_not_ready_after_startup_when_a_dependency_check_fails(
     # a failure anywhere in there now reliably lands FalkorDB in
     # `unhealthy_dependencies`, not just an empty list alongside a correct but
     # unhelpful "not_ready" status.
-    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": ["falkordb"]}
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": ["falkordb"],
+        "gated_graphs": [],
+    }
 
 
 def test_startup_dependency_failure_emits_a_warning_log_entry_naming_the_dependency(
@@ -1276,6 +1307,7 @@ def test_ready_stays_ready_when_only_passkey_signing_postgres_check_fails(
     assert response.json() == {
         "status": "ready",
         "unhealthy_dependencies": ["passkey_signing_postgres"],
+        "gated_graphs": [],
     }
 
 
@@ -1357,6 +1389,41 @@ def test_state_postgres_is_ready_and_gating_dependency() -> None:
     assert dependency_health.STATE_POSTGRES in gating_dependencies
 
 
+def test_graph_replay_is_a_gating_and_ready_dependency() -> None:
+    """The startup replay of the graph log holds `/ready` (issue #207, AC-RD-006): until it ends
+    the pod must not enter Service rotation, so `graph_replay` is a gating dependency like
+    FalkorDB and PS state Postgres, and is named in `unhealthy_dependencies` while it runs.
+    """
+    ready_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_READY_DEPENDENCIES"),  # noqa: B009 - see the passkey twin above
+    )
+    gating_dependencies = cast(
+        "tuple[str, ...]",
+        getattr(main_module, "_GATING_DEPENDENCIES"),  # noqa: B009 - see the passkey twin above
+    )
+
+    assert dependency_health.GRAPH_REPLAY == "graph_replay"
+    assert dependency_health.GRAPH_REPLAY in ready_dependencies
+    assert dependency_health.GRAPH_REPLAY in gating_dependencies
+
+
+def test_graph_replay_probe_is_registered_for_the_retry_loop() -> None:
+    """`_retry_gating_dependencies` looks up a probe for every gating name (a missing key would
+    raise). Replay owns its own state, so the probe records nothing: a poll of `/ready` must
+    neither fail nor flip the dependency healthy while the replay is still running.
+    """
+    probes = dict(main_module._all_dependency_probes(_complete_config()))  # pyright: ignore[reportPrivateUsage]
+    dependency_health.mark_unhealthy(
+        dependency_health.GRAPH_REPLAY, error=RuntimeError("replay running")
+    )
+
+    probes[dependency_health.GRAPH_REPLAY]()
+
+    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY) is False
+    assert main_module._retry_gating_dependencies(_complete_config()) is False  # pyright: ignore[reportPrivateUsage]
+
+
 def test_ready_is_not_ready_when_state_postgres_check_fails(
     monkeypatch: pytest.MonkeyPatch, app: FastAPI
 ) -> None:
@@ -1376,6 +1443,7 @@ def test_ready_is_not_ready_when_state_postgres_check_fails(
     assert response.json() == {
         "status": "not_ready",
         "unhealthy_dependencies": ["state_postgres"],
+        "gated_graphs": [],
     }
 
 
@@ -1421,6 +1489,7 @@ def test_startup_skips_state_migrations_when_host_is_unset_and_ready_reports_not
     assert response.json() == {
         "status": "not_ready",
         "unhealthy_dependencies": ["state_postgres"],
+        "gated_graphs": [],
     }
 
 
@@ -1523,13 +1592,18 @@ def test_ready_flips_to_not_ready_when_a_dependency_is_marked_unhealthy_after_su
     reflected on the next `/ready` poll, without needing a restart.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
         dependency_health.mark_unhealthy(dependency_health.FALKORDB, error=ConnectionError("boom"))
 
         assert client.get("/ready").json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
+            "gated_graphs": [],
         }
 
 
@@ -1539,11 +1613,16 @@ def test_ready_self_heals_once_the_unhealthy_dependency_recovers(app: FastAPI) -
         assert client.get("/ready").json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
+            "gated_graphs": [],
         }
 
         dependency_health.mark_healthy(dependency_health.FALKORDB)
 
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
 
 def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: FastAPI) -> None:
@@ -1551,7 +1630,7 @@ def test_ready_response_has_empty_unhealthy_dependencies_list_when_ready(app: Fa
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
 
 def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: FastAPI) -> None:
@@ -1561,7 +1640,11 @@ def test_ready_response_lists_unhealthy_dependency_names_when_not_ready(app: Fas
 
         response = client.get("/ready")
 
-    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": ["falkordb"]}
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": ["falkordb"],
+        "gated_graphs": [],
+    }
 
 
 def test_ready_response_never_contains_the_raw_mark_unhealthy_error_string(app: FastAPI) -> None:
@@ -1586,7 +1669,11 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
     it in `unhealthy_dependencies` but must not flip `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
         dependency_health.mark_unhealthy(
             dependency_health.LLM_INTERFACE, error=ConnectionError("boom")
@@ -1595,6 +1682,7 @@ def test_ready_stays_ready_when_llm_interface_is_marked_unhealthy_live(app: Fast
         assert client.get("/ready").json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
+            "gated_graphs": [],
         }
 
 
@@ -1604,7 +1692,11 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
     `status` to `not_ready`.
     """
     with TestClient(app) as client:
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
         dependency_health.mark_unhealthy(
             dependency_health.CELLAR_ELI, error=ConnectionError("boom")
@@ -1613,6 +1705,7 @@ def test_ready_stays_ready_when_cellar_eli_is_marked_unhealthy_live(app: FastAPI
         assert client.get("/ready").json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
+            "gated_graphs": [],
         }
 
 
@@ -1631,11 +1724,16 @@ def test_ready_self_heals_llm_interface_name_from_unhealthy_dependencies_without
         assert client.get("/ready").json() == {
             "status": "ready",
             "unhealthy_dependencies": ["llm_interface"],
+            "gated_graphs": [],
         }
 
         dependency_health.mark_healthy(dependency_health.LLM_INTERFACE)
 
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
 
 def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_restart(
@@ -1652,11 +1750,16 @@ def test_ready_self_heals_cellar_eli_name_from_unhealthy_dependencies_without_re
         assert client.get("/ready").json() == {
             "status": "ready",
             "unhealthy_dependencies": ["cellar_eli"],
+            "gated_graphs": [],
         }
 
         dependency_health.mark_healthy(dependency_health.CELLAR_ELI)
 
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
 
 def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_stays_ready(
@@ -1680,6 +1783,7 @@ def test_ready_lists_both_llm_interface_and_cellar_eli_when_both_unhealthy_but_s
     assert response.json() == {
         "status": "ready",
         "unhealthy_dependencies": ["llm_interface", "cellar_eli"],
+        "gated_graphs": [],
     }
 
 
@@ -1702,7 +1806,11 @@ def test_ready_is_ready_when_llm_interface_startup_probe_fails_but_falkordb_succ
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": ["llm_interface"]}
+    assert response.json() == {
+        "status": "ready",
+        "unhealthy_dependencies": ["llm_interface"],
+        "gated_graphs": [],
+    }
 
 
 def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeeds(
@@ -1724,7 +1832,11 @@ def test_ready_is_ready_when_cellar_eli_startup_probe_fails_but_falkordb_succeed
     with TestClient(app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": ["cellar_eli"]}
+    assert response.json() == {
+        "status": "ready",
+        "unhealthy_dependencies": ["cellar_eli"],
+        "gated_graphs": [],
+    }
 
 
 def test_startup_cellar_eli_failure_emits_a_warning_log_entry_naming_the_dependency(
@@ -1786,11 +1898,16 @@ def test_ready_recovers_once_falkordb_becomes_reachable_after_a_failed_startup_p
         assert client.get("/ready").json() == {
             "status": "not_ready",
             "unhealthy_dependencies": ["falkordb"],
+            "gated_graphs": [],
         }
 
         falkordb_reachable = True
 
-        assert client.get("/ready").json() == {"status": "ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
 
 def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_down(
@@ -1815,6 +1932,7 @@ def test_ready_keeps_reporting_not_ready_on_repeated_polls_while_falkordb_stays_
             assert response.json() == {
                 "status": "not_ready",
                 "unhealthy_dependencies": ["falkordb"],
+                "gated_graphs": [],
             }
 
 
@@ -1924,7 +2042,11 @@ def test_ready_stays_not_ready_after_startup_when_ingestion_config_is_incomplete
     with TestClient(incomplete_app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "not_ready", "unhealthy_dependencies": []}
+    assert response.json() == {
+        "status": "not_ready",
+        "unhealthy_dependencies": [],
+        "gated_graphs": [],
+    }
 
 
 def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
@@ -1937,7 +2059,7 @@ def test_ready_returns_ready_when_ingestion_config_is_complete() -> None:
     with TestClient(complete_app) as client:
         response = client.get("/ready")
 
-    assert response.json() == {"status": "ready", "unhealthy_dependencies": []}
+    assert response.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
 
 
 def test_startup_config_incompleteness_emits_a_warning_log_entry_naming_missing_fields(
@@ -1975,8 +2097,16 @@ def test_ready_never_self_heals_missing_config_without_a_restart(app: FastAPI) -
     incomplete_app = create_app(_complete_config(company_merge_similarity_threshold=None))
 
     with TestClient(incomplete_app) as client:
-        assert client.get("/ready").json() == {"status": "not_ready", "unhealthy_dependencies": []}
-        assert client.get("/ready").json() == {"status": "not_ready", "unhealthy_dependencies": []}
+        assert client.get("/ready").json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
+        assert client.get("/ready").json() == {
+            "status": "not_ready",
+            "unhealthy_dependencies": [],
+            "gated_graphs": [],
+        }
 
 
 # --- MCP Streamable HTTP transport mounted at the composition root (issue #39) ---
@@ -2229,23 +2359,35 @@ def test_query_executed_over_mcp_http_transport_with_bypass_active_carries_fixed
 
 
 class _FakeStartupGateway:
-    """A startup-recoverable gateway that records how it was driven (no Postgres, no FalkorDB)."""
+    """A startup-replayable gateway that records how it was driven (no Postgres, no FalkorDB)."""
 
     def __init__(
-        self, result: RecoveryResult | None = None, failure: Exception | None = None
+        self, result: StartupReplayReport | None = None, failure: Exception | None = None
     ) -> None:
-        self.result = result if result is not None else RecoveryResult(recovered=(), gated=())
+        self.result = result if result is not None else StartupReplayReport()
         self.failure = failure
-        self.recover_threads: list[int] = []
+        self.calls: list[str] = []
+        self.replay_threads: list[int] = []
         self.stop_timeouts: list[float] = []
 
-    def recover(self) -> RecoveryResult:
-        self.recover_threads.append(threading.get_ident())
+    def hold_for_startup_replay(self) -> None:
+        self.calls.append("hold")
+
+    def run_startup_replay(self) -> StartupReplayReport:
+        self.calls.append("replay")
+        self.replay_threads.append(threading.get_ident())
         if self.failure is not None:
             raise self.failure
         return self.result
 
+    def gated_graphs(self) -> tuple[str, ...]:
+        return ()
+
+    def stop_replay(self) -> None:
+        self.calls.append("stop_replay")
+
     def stop_reconciler(self, timeout: float) -> bool:
+        self.calls.append("stop_reconciler")
         self.stop_timeouts.append(timeout)
         return True
 
@@ -2254,74 +2396,93 @@ def _state_config(**overrides: object) -> ServiceConfig:
     return _complete_config(state_postgres_host="ps-state.invalid", **overrides)
 
 
-def _startup_recovery_entries(read_lines: ReadLines) -> list[dict[str, object]]:
+def _startup_replay_entries(read_lines: ReadLines) -> list[dict[str, object]]:
     reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
     return [
         line
         for line in read_lines(resolve_default_log_path())
-        if line.get("action") == "graph_gateway_recovery"
+        if line.get("action") == "graph_gateway_startup_replay"
     ]
 
 
-def test_startup_recovery_builds_nothing_when_state_postgres_is_not_configured() -> None:
+async def _start_and_finish_replay(
+    config: ServiceConfig, build: Callable[[ServiceConfig], _FakeStartupGateway]
+) -> tuple[_FakeStartupGateway | None, int]:
+    """Start the replay as the lifespan does, let its task end; return the gateway and thread."""
+    gateway, task = await main_module._start_graph_replay_at_startup(  # pyright: ignore[reportPrivateUsage]
+        config, build=build
+    )
+    if task is not None:
+        await task
+    return cast("_FakeStartupGateway | None", gateway), threading.get_ident()
+
+
+def test_startup_replay_builds_nothing_when_state_postgres_is_not_configured() -> None:
     built: list[ServiceConfig] = []
 
     def build(config: ServiceConfig) -> _FakeStartupGateway:
         built.append(config)
         return _FakeStartupGateway()
 
-    gateway = asyncio.run(
-        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
-            _complete_config(), build=build
-        )
-    )
+    gateway, _ = asyncio.run(_start_and_finish_replay(_complete_config(), build))
 
     assert gateway is None
     assert built == []
+    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
 
 
-def test_startup_recovery_runs_recover_off_the_event_loop_and_logs_the_outcome(
+def test_startup_replay_runs_off_the_event_loop_closes_the_gate_first_and_logs_the_outcome(
     read_lines: ReadLines,
 ) -> None:
     configure(log_path=resolve_default_log_path())
-    fake = _FakeStartupGateway(RecoveryResult(recovered=("a", "b"), gated=("c",)))
+    fake = _FakeStartupGateway(
+        StartupReplayReport(replayed=("a", "b"), resumed=("d",), gated=("c",))
+    )
 
-    async def run() -> tuple[object, int]:
-        gateway = await main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
-            _state_config(), build=lambda _config: fake
-        )
-        return gateway, threading.get_ident()
-
-    gateway, loop_thread = asyncio.run(run())
+    gateway, loop_thread = asyncio.run(_start_and_finish_replay(_state_config(), lambda _c: fake))
 
     assert gateway is fake
-    assert fake.recover_threads
-    assert fake.recover_threads != [loop_thread]
-    (entry,) = _startup_recovery_entries(read_lines)
+    assert fake.calls == ["hold", "replay"]  # the hold comes before the replay starts
+    assert fake.replay_threads != [loop_thread]
+    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+    (entry,) = _startup_replay_entries(read_lines)
     assert entry["outcome"] == "warning"
-    assert (entry["recovered_graphs"], entry["gated_graphs"]) == (2, 1)
+    assert (entry["replayed_graphs"], entry["resumed_graphs"], entry["gated_graphs"]) == (2, 1, 1)
 
 
-def test_startup_recovery_that_fails_does_not_block_startup_and_logs_the_class_only(
+def test_graph_replay_is_unhealthy_from_the_start_until_the_replay_task_ends() -> None:
+    configure(log_path=resolve_default_log_path())
+    fake = _FakeStartupGateway()
+
+    async def run() -> tuple[bool, bool]:
+        _, task = await main_module._start_graph_replay_at_startup(  # pyright: ignore[reportPrivateUsage]
+            _state_config(), build=lambda _c: fake
+        )
+        assert task is not None
+        before = dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+        await task
+        return before, dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+
+    assert asyncio.run(run()) == (False, True)
+
+
+def test_startup_replay_that_fails_keeps_graph_replay_unhealthy_and_logs_the_class_only(
     read_lines: ReadLines,
 ) -> None:
     configure(log_path=resolve_default_log_path())
     fake = _FakeStartupGateway(failure=RuntimeError("secret-host.internal exploded"))
 
-    gateway = asyncio.run(
-        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
-            _state_config(), build=lambda _config: fake
-        )
-    )
+    gateway, _ = asyncio.run(_start_and_finish_replay(_state_config(), lambda _c: fake))
 
     assert gateway is fake  # still the object that gates writes
-    (entry,) = _startup_recovery_entries(read_lines)
+    assert not dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+    (entry,) = _startup_replay_entries(read_lines)
     assert entry["outcome"] == "failure"
     assert entry["reason"] == "RuntimeError"
     assert "secret-host" not in json.dumps(entry)
 
 
-def test_startup_recovery_whose_gateway_cannot_be_built_does_not_block_startup(
+def test_startup_replay_whose_gateway_cannot_be_built_does_not_block_startup(
     read_lines: ReadLines,
 ) -> None:
     configure(log_path=resolve_default_log_path())
@@ -2330,18 +2491,15 @@ def test_startup_recovery_whose_gateway_cannot_be_built_does_not_block_startup(
         message = "secret-host.internal"
         raise OSError(message)
 
-    gateway = asyncio.run(
-        main_module._recover_graph_gateway_at_startup(  # pyright: ignore[reportPrivateUsage]
-            _state_config(), build=build
-        )
-    )
+    gateway, _ = asyncio.run(_start_and_finish_replay(_state_config(), build))
 
     assert gateway is None
-    (entry,) = _startup_recovery_entries(read_lines)
+    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+    (entry,) = _startup_replay_entries(read_lines)
     assert (entry["outcome"], entry["reason"]) == ("failure", "OSError")
 
 
-def test_lifespan_recovers_the_graph_gateway_at_startup_and_stops_its_reconciler_on_teardown(
+def test_lifespan_replays_the_graph_log_in_the_background_and_stops_it_before_the_reconciler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _FakeStartupGateway()
@@ -2352,7 +2510,7 @@ def test_lifespan_recovers_the_graph_gateway_at_startup_and_stops_its_reconciler
     def build_fake(_config: ServiceConfig) -> _FakeStartupGateway:
         return fake
 
-    # detroit-exception: the migration step needs a real Postgres; recovery IS the spec (§1.2)
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
     monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
     # detroit-exception: composition-root builder seam handing the lifespan a fake gateway (§1.2)
     monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build_fake)
@@ -2360,10 +2518,114 @@ def test_lifespan_recovers_the_graph_gateway_at_startup_and_stops_its_reconciler
 
     with TestClient(app):
         assert app.state.graph_write_gateway is fake
-        assert fake.recover_threads
+        assert fake.calls[0] == "hold"
         assert fake.stop_timeouts == []
 
+    assert "replay" in fake.calls
+    assert fake.calls[-2:] == ["stop_replay", "stop_reconciler"]
     assert fake.stop_timeouts == [5.0]
+
+
+class _BlockedReplay:
+    """A real gateway over the approved boundary fakes whose startup replay blocks on an event.
+
+    The log holds one group for a graph FalkorDB has lost, so `startup_replay` must rebuild it;
+    the in-memory log store calls `on_paged_read` while reading the first page, which is where
+    the replay waits (on its worker thread) until the test lets it go.
+    """
+
+    def __init__(self) -> None:
+        self.rig = GatewayRig()
+        self.rig.gateway.submit_group(
+            MutationGroup(
+                graph="compliance",
+                audit_event_id="3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10",
+                primitives=(UpsertNode(label="Capability", id="cap-1", properties={}),),
+            )
+        )
+        self.rig.graphs.open("compliance").flush()
+        self.gateway = self.rig.restart()
+        self.reached = threading.Event()
+        self.release = threading.Event()
+        self.rig.store.on_paged_read = self._block
+
+    def _block(self) -> None:
+        self.reached.set()
+        self.release.wait(timeout=10)
+
+    def build(self, _config: ServiceConfig) -> GraphWriteGateway:
+        return self.gateway
+
+
+def _app_replaying(monkeypatch: pytest.MonkeyPatch, blocked: _BlockedReplay) -> FastAPI:
+    def skip_state_migrations(_config: ServiceConfig) -> None:
+        """Stand-in for the migration step, which needs a real Postgres."""
+
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
+    # detroit-exception: composition-root builder seam handing the lifespan the real gateway
+    # over the approved boundary fakes (§1.2)
+    monkeypatch.setattr(main_module, "build_default_graph_write_gateway", blocked.build)
+    return create_app(_state_config())
+
+
+def _await_ready(client: TestClient) -> int:
+    """Poll `/ready` until it answers 200 (the replay ended) or give up after a few seconds."""
+    code = client.get("/ready").status_code
+    for _ in range(100):
+        if code == 200:
+            break
+        time.sleep(0.05)
+        code = client.get("/ready").status_code
+    return code
+
+
+def test_ready_reports_not_ready_while_startup_replay_runs_then_ready_when_it_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocked = _BlockedReplay()
+    app = _app_replaying(monkeypatch, blocked)
+
+    with TestClient(app) as client:
+        assert blocked.reached.wait(timeout=5), "the startup replay never started"
+        during = client.get("/ready")
+        blocked.release.set()
+        status_after = _await_ready(client)
+        after = client.get("/ready")
+
+    assert during.status_code == 503
+    assert during.json()["status"] == "not_ready"
+    assert dependency_health.GRAPH_REPLAY in during.json()["unhealthy_dependencies"]
+    assert status_after == 200
+    assert after.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+    assert blocked.rig.graphs.open("compliance").nodes  # the lost graph was rebuilt
+
+
+def test_ready_does_not_self_heal_to_ready_while_replay_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FalkorDB and PS state Postgres probe healthy (autouse stubs): only the replay holds `/ready`.
+    blocked = _BlockedReplay()
+    app = _app_replaying(monkeypatch, blocked)
+
+    with TestClient(app) as client:
+        assert blocked.reached.wait(timeout=5)
+        statuses = [client.get("/ready").status_code for _ in range(5)]
+        blocked.release.set()
+        _await_ready(client)
+
+    assert statuses == [503] * 5
+
+
+def test_lifespan_does_not_block_startup_on_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked = _BlockedReplay()
+    app = _app_replaying(monkeypatch, blocked)
+
+    with TestClient(app) as client:  # entering returned although the replay is still blocked
+        assert blocked.reached.wait(timeout=5)
+        assert not blocked.release.is_set()
+        assert client.get("/health").status_code == 200  # liveness never waits for the replay
+        blocked.release.set()
 
 
 def test_lifespan_without_state_postgres_has_no_graph_gateway() -> None:
@@ -2371,3 +2633,430 @@ def test_lifespan_without_state_postgres_has_no_graph_gateway() -> None:
 
     with TestClient(app):
         assert app.state.graph_write_gateway is None
+
+
+class _GatedGraphsReplay:
+    """A real gateway over the boundary fakes with two lost graphs, replayed one after the other.
+
+    `startup_replay` goes through the graphs in name order; the replay of the nth graph waits in
+    its first paged read until `release(n)`, so a test can look at the service between the two.
+    """
+
+    GRAPHS = ("compliance", "policy_system")
+
+    def __init__(
+        self,
+        settings: GatewaySettings | None = None,
+        *,
+        block_first_read_only: bool = False,
+        mismatched_checkpoint_of: str | None = None,
+    ) -> None:
+        self._block_first_read_only = block_first_read_only
+        self.rig = GatewayRig(settings=settings)
+        for graph in self.GRAPHS:
+            self.rig.gateway.submit_group(
+                self.group(graph, "cap-1", checkpoint=graph == mismatched_checkpoint_of)
+            )
+            if graph == mismatched_checkpoint_of:
+                self.rig.store.checkpoints[(graph, 1)] = DigestCheckpoint(
+                    graph=graph, position=1, canonical_digest="sha256:" + "00" * 32
+                )
+            self.rig.graphs.open(graph).flush()
+        self.gateway = self.rig.restart()
+        self._reads = 0
+        self._reached = [threading.Event() for _ in self.GRAPHS]
+        self._released = [threading.Event() for _ in self.GRAPHS]
+        self.rig.store.on_paged_read = self._block
+
+    @staticmethod
+    def group(graph: str, node_id: str, *, checkpoint: bool = False) -> MutationGroup:
+        return MutationGroup(
+            graph=graph,
+            checkpoint_requested=checkpoint,
+            audit_event_id="3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10",
+            primitives=(UpsertNode(label="Capability", id=node_id, properties={}),),
+        )
+
+    def _block(self) -> None:
+        index = min(self._reads, len(self.GRAPHS) - 1)
+        self._reads += 1
+        if self._block_first_read_only and index > 0:
+            return
+        self._reached[index].set()
+        self._released[index].wait(timeout=10)
+
+    def reached(self, index: int) -> bool:
+        return self._reached[index].wait(timeout=5)
+
+    def release(self, index: int) -> None:
+        self._released[index].set()
+
+    def release_all(self) -> None:
+        for index in range(len(self.GRAPHS)):
+            self.release(index)
+
+    def build(self, _config: ServiceConfig) -> GraphWriteGateway:
+        return self.gateway
+
+
+def _app_replaying_graphs(monkeypatch: pytest.MonkeyPatch, replay: _GatedGraphsReplay) -> FastAPI:
+    def skip_state_migrations(_config: ServiceConfig) -> None:
+        """Stand-in for the migration step, which needs a real Postgres."""
+
+    # detroit-exception: the migration step needs a real Postgres; replay IS the spec (§1.2)
+    monkeypatch.setattr(main_module, "_apply_state_migrations_at_startup", skip_state_migrations)
+    # detroit-exception: composition-root builder seam handing the lifespan the real gateway
+    # over the approved boundary fakes (§1.2)
+    monkeypatch.setattr(main_module, "build_default_graph_write_gateway", replay.build)
+    return create_app(_state_config())
+
+
+def test_no_graph_accepts_writes_before_its_replay_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay()
+    app = _app_replaying_graphs(monkeypatch, replay)
+    first, second = _GatedGraphsReplay.GRAPHS
+
+    with TestClient(app) as client:
+        gateway = cast("GraphWriteGateway", app.state.graph_write_gateway)
+        assert replay.reached(0), "the startup replay never started"
+        for graph in (first, second):
+            with pytest.raises(GraphReplayGatedError):
+                gateway.submit_group(replay.group(graph, "cap-2"))
+        replay.release(0)
+        assert replay.reached(1), "the second graph never started its replay"
+        gateway.submit_group(replay.group(first, "cap-2"))  # the first graph is open now
+        with pytest.raises(GraphReplayGatedError):
+            gateway.submit_group(replay.group(second, "cap-2"))  # the second is still closed
+        during = client.get("/ready").status_code
+        replay.release(1)
+        status_after = _await_ready(client)
+
+    assert during == 503
+    assert status_after == 200
+
+
+def test_shutdown_stops_the_replay_between_pages_and_the_reconciler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay(
+        settings=GatewaySettings(replay_page_size=1), block_first_read_only=True
+    )
+    replay.rig.gateway.submit_group(replay.group(_GatedGraphsReplay.GRAPHS[0], "cap-2"))
+    replay.rig.graphs.open(_GatedGraphsReplay.GRAPHS[0]).flush()
+    app = _app_replaying_graphs(monkeypatch, replay)
+    graph = replay.rig.graphs.open(_GatedGraphsReplay.GRAPHS[0])
+    release_when_stopping = threading.Timer(0.3, lambda: replay.release(0))
+
+    with TestClient(app):
+        assert replay.reached(0)
+        release_when_stopping.start()  # the replay is let go once the shutdown asked it to stop
+    release_when_stopping.join()
+
+    state = read_replay_state(graph)
+    assert state is not None  # stopped on a page boundary, the progress record is kept
+    assert state.state == "in_progress"
+    assert state.position < 2  # the second entry of the log was not applied
+    assert not replay.gateway.is_reconciling
+    assert dependency_health.is_healthy(dependency_health.GRAPH_REPLAY) is False
+
+
+_FAST_RETRY = GatewaySettings(
+    initial_backoff_seconds=0.001, startup_replay_max_backoff_seconds=0.01
+)
+_OUTAGE = redis.exceptions.ConnectionError("falkordb is down")
+
+
+def test_infrastructure_error_during_startup_replay_holds_not_ready_and_retries(
+    monkeypatch: pytest.MonkeyPatch, read_lines: ReadLines
+) -> None:
+    replay = _GatedGraphsReplay(settings=_FAST_RETRY)
+    replay.release_all()
+    graph = replay.rig.graphs.open(_GatedGraphsReplay.GRAPHS[0])
+    graph.fail_on_read(_OUTAGE)  # FalkorDB is unreachable at startup, and stays so for a while
+    app = _app_replaying_graphs(monkeypatch, replay)
+
+    with TestClient(app) as client:
+        deadline = time.monotonic() + 5
+        while not _retry_entries(read_lines) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        during = [client.get("/ready") for _ in range(3)]
+        graph.heal()
+        status_after = _await_ready(client)
+
+    assert [response.status_code for response in during] == [503] * 3
+    assert dependency_health.GRAPH_REPLAY in during[0].json()["unhealthy_dependencies"]
+    assert _retry_entries(read_lines)
+    assert status_after == 200
+    assert graph.nodes  # the graph was rebuilt once FalkorDB answered again
+
+
+def _retry_entries(read_lines: ReadLines) -> list[dict[str, object]]:
+    reset_for_tests()  # drain the emitter's queue and join its writer thread before reading
+    configure(log_path=resolve_default_log_path())
+    return [
+        line
+        for line in read_lines(resolve_default_log_path())
+        if line.get("action") == "startup_replay" and line.get("outcome") == "retry"
+    ]
+
+
+def test_unexpected_replay_exception_keeps_not_ready_and_logs_the_class_only(
+    read_lines: ReadLines,
+) -> None:
+    configure(log_path=resolve_default_log_path())
+    fake = _FakeStartupGateway(failure=ValueError("secret-host.internal exploded"))
+
+    asyncio.run(_start_and_finish_replay(_state_config(), lambda _c: fake))
+
+    assert not dependency_health.is_healthy(dependency_health.GRAPH_REPLAY)
+    assert fake.calls.count("replay") == 1  # a bug is not retried
+    (entry,) = _startup_replay_entries(read_lines)
+    assert (entry["outcome"], entry["reason"]) == ("failure", "ValueError")
+    assert "secret-host" not in json.dumps(entry)
+
+
+def test_a_graph_that_fails_replay_stays_gated_while_ready_goes_green_for_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay(mismatched_checkpoint_of=_GatedGraphsReplay.GRAPHS[0])
+    replay.release_all()
+    app = _app_replaying_graphs(monkeypatch, replay)
+    failed, healthy = _GatedGraphsReplay.GRAPHS
+
+    with TestClient(app) as client:
+        status = _await_ready(client)
+        gateway = cast("GraphWriteGateway", app.state.graph_write_gateway)
+        with pytest.raises(GraphReplayGatedError):
+            gateway.submit_group(replay.group(failed, "cap-2"))
+        gateway.submit_group(replay.group(healthy, "cap-2"))  # the other graph is unaffected
+
+    assert status == 200
+
+
+def test_ready_lists_a_graph_that_failed_verification_in_gated_graphs_with_status_200(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay(mismatched_checkpoint_of=_GatedGraphsReplay.GRAPHS[1])
+    replay.release_all()
+    app = _app_replaying_graphs(monkeypatch, replay)
+
+    with TestClient(app) as client:
+        _await_ready(client)
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "unhealthy_dependencies": [],
+        "gated_graphs": [_GatedGraphsReplay.GRAPHS[1]],
+    }
+
+
+def test_ready_gated_graphs_is_empty_when_all_graphs_are_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay()
+    replay.release_all()
+    app = _app_replaying_graphs(monkeypatch, replay)
+
+    with TestClient(app) as client:
+        _await_ready(client)
+        body = client.get("/ready").json()
+
+    assert body["gated_graphs"] == []
+
+
+def test_ready_gated_graphs_is_present_while_replay_is_running_and_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = _GatedGraphsReplay()
+    app = _app_replaying_graphs(monkeypatch, replay)
+
+    with TestClient(app) as client:
+        assert replay.reached(0)
+        body = client.get("/ready").json()
+        replay.release_all()
+        _await_ready(client)
+
+    assert body["gated_graphs"] == []  # waiting for the replay is graph_replay, not a failure
+
+
+def test_ready_gated_graphs_is_empty_without_a_graph_gateway() -> None:
+    app = create_app(_complete_config())
+
+    with TestClient(app) as client:
+        body = client.get("/ready").json()
+
+    assert body["gated_graphs"] == []
+
+
+# The read gate (#207 S17c): while `graph_replay` is unhealthy no request that could read a
+# half-rebuilt graph is served. Only liveness, readiness and the OAuth metadata are exempt.
+
+_REPLAY_GATE_BODY = {"status": "not_ready", "unhealthy_dependencies": ["graph_replay"]}
+
+
+def _hold_replay() -> None:
+    dependency_health.mark_unhealthy(
+        dependency_health.GRAPH_REPLAY, error=RuntimeError("the startup replay is running")
+    )
+
+
+def test_rest_route_returns_503_while_graph_replay_is_unhealthy() -> None:
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        response = client.get("/catalog")
+
+    assert response.status_code == 503
+    assert response.json() == _REPLAY_GATE_BODY
+    assert response.headers["retry-after"] == "5"
+
+
+def test_mcp_path_returns_503_while_graph_replay_is_unhealthy() -> None:
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        response = client.post(f"{MCP_HTTP_MOUNT_PATH}/", json={})
+
+    assert response.status_code == 503
+    assert response.json() == _REPLAY_GATE_BODY
+
+
+def test_health_ready_and_well_known_are_not_gated() -> None:
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        statuses = {
+            path: client.get(path).status_code
+            for path in ("/health", "/ready", "/.well-known/oauth-protected-resource")
+        }
+
+    assert statuses["/health"] == 200
+    assert statuses["/ready"] == 503  # /ready's own answer, with its own body
+    assert statuses["/.well-known/oauth-protected-resource"] != 503
+
+
+def test_requests_reach_the_app_again_when_graph_replay_is_healthy() -> None:
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        gated = client.get("/catalog")
+        dependency_health.mark_healthy(dependency_health.GRAPH_REPLAY)
+        open_again = client.get("/catalog")
+
+    assert gated.json() == _REPLAY_GATE_BODY
+    assert open_again.json() != _REPLAY_GATE_BODY  # auth answers (401), never the gate
+
+
+def test_gate_is_inactive_when_no_replay_was_started() -> None:
+    app = create_app(_complete_config())
+
+    with TestClient(app) as client:
+        response = client.get("/catalog")
+
+    assert response.json() != _REPLAY_GATE_BODY
+
+
+def test_gate_does_not_touch_non_http_scopes() -> None:
+    # A lifespan scope passes through the gate while graph_replay is unhealthy: startup and
+    # shutdown of the app (this `with`) work, and so does a request after it.
+    app = create_app(_complete_config())
+    _hold_replay()
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+
+class _BlockingGraph:
+    """A real FalkorDB graph handle whose first query waits until the test lets it go."""
+
+    def __init__(
+        self, inner: GraphHandle, reached: threading.Event, release: threading.Event
+    ) -> None:
+        self._inner = inner
+        self._reached = reached
+        self._release = release
+
+    def query(self, q: str, params: dict[str, object] | None = None) -> GraphQueryResult:
+        self._reached.set()
+        self._release.wait(timeout=60)
+        return self._inner.query(q, params)
+
+
+@pytest.mark.falkordb_live
+@pytest.mark.postgres_live
+def test_service_ready_flow_against_real_stores(
+    monkeypatch: pytest.MonkeyPatch, provisioned: Provisioned
+) -> None:
+    """A wiped FalkorDB is rebuilt from the real log while `/ready` and the routes say not ready.
+
+    The log is the real `PsycopgGraphLogStore` (provisioned `ps_state` role), the graph a real
+    FalkorDB graph. The group is logged with a checkpoint, the graph is deleted, and the service
+    starts: its startup replay (held on its first graph query) keeps `/ready` and every route
+    other than `/health` at 503 until it ends; the rebuilt graph then matches the checkpoint.
+    """
+    provision_graph_log(provisioned)
+    config = _config_for_cluster(provisioned)
+    host, port = falkordb_endpoint()
+    db = connect_falkordb(host=host, port=port)
+    name = f"ready_flow_{uuid.uuid4().hex[:10]}"
+    store = PsycopgGraphLogStore(config)
+    audit_event_id = committed_audit_event(provisioned)
+    reached, release = threading.Event(), threading.Event()
+
+    def build(_config: ServiceConfig) -> GraphWriteGateway:
+        return GraphWriteGateway(
+            log_store=store,
+            graph_opener=lambda graph: cast(
+                "GraphHandle", _BlockingGraph(select_graph(db, graph), reached, release)
+            ),
+        )
+
+    writer = GraphWriteGateway(log_store=store, graph_opener=lambda g: select_graph(db, g))
+    writer.submit_group(
+        MutationGroup(
+            graph=name,
+            audit_event_id=audit_event_id,
+            primitives=(
+                UpsertNode(label="Capability", id="cap-1", properties={"weight": 0.1}),
+                UpsertNode(label="Capability", id="cap-2", embedding=(0.1, -0.0, 1 / 3)),
+            ),
+            checkpoint_requested=True,
+        )
+    )
+    checkpoint = store.read_digest_checkpoint(name, 2)
+    assert checkpoint is not None
+    db.select_graph(name).delete()  # FalkorDB lost the graph; the applied marker still says 2
+    # detroit-exception: composition-root builder seam handing the lifespan a gateway over the
+    # real stores, held on its first graph query so the test can look at the service meanwhile
+    monkeypatch.setattr(main_module, "build_default_graph_write_gateway", build)
+
+    try:
+        with TestClient(create_app(config)) as client:
+            assert reached.wait(timeout=30), "the startup replay never queried the graph"
+            during = client.get("/ready")
+            gated_route = client.get("/catalog")
+            alive = client.get("/health")
+            release.set()
+            status_after = _await_ready(client)
+            after = client.get("/ready")
+        rebuilt = canonical_digest(select_graph(db, name))
+    finally:
+        release.set()
+        if name in set(db.list_graphs()):
+            db.select_graph(name).delete()
+
+    assert during.status_code == 503
+    assert dependency_health.GRAPH_REPLAY in during.json()["unhealthy_dependencies"]
+    assert gated_route.status_code == 503
+    assert alive.status_code == 200
+    assert status_after == 200
+    assert after.json() == {"status": "ready", "unhealthy_dependencies": [], "gated_graphs": []}
+    assert rebuilt == checkpoint.canonical_digest

@@ -48,8 +48,10 @@ _EXPECTED_PUBLIC_SURFACE = {
     "read_applied_position",
     "advance_applied_position",
     "read_digest_checkpoint",
+    "read_highest_checkpoint_at_or_below",
     "record_digest_checkpoint",
     "graphs_with_pending_entries",
+    "logged_graphs",
 }
 
 

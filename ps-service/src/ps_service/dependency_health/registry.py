@@ -2,10 +2,12 @@
 
 Covers FalkorDB, the LLM Interface, Cellar/ELI, (issue #131) Passkey
 Signing's own Postgres instance, and (issues #130/#133) the PS state
-Postgres instance. Fed by the same call sites that already handle each dependency's
-exceptions for their own purposes (`falkordb_client.check_connectivity`,
-`graph_writer`'s `graph.query()` calls, `llm_interface.completion`/
-`embedding`, `cellar_eli.fetch_xhtml`,
+Postgres instance, and (issue #207) the startup replay of the graph mutation log
+(`GRAPH_REPLAY`, unhealthy from before the first request until the replay ends; unlike the
+others it is set by the replay's own task, not by a call site). Fed by the same call sites
+that already handle each dependency's exceptions for their own purposes
+(`falkordb_client.check_connectivity`, `graph_writer`'s `graph.query()` calls,
+`llm_interface.completion`/`embedding`, `cellar_eli.fetch_xhtml`,
 `passkey_signing.store.check_connectivity_from_config`,
 `persistence.check_connectivity_from_config`) — this module adds no probing
 of its own, it only records outcomes those call sites already observe.
@@ -30,6 +32,7 @@ LLM_INTERFACE = "llm_interface"
 CELLAR_ELI = "cellar_eli"
 PASSKEY_SIGNING_POSTGRES = "passkey_signing_postgres"
 STATE_POSTGRES = "state_postgres"
+GRAPH_REPLAY = "graph_replay"
 
 _lock = threading.Lock()
 _unhealthy: dict[str, str] = {}  # dependency name -> last error message; absent means healthy

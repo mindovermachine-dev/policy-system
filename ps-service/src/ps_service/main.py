@@ -11,9 +11,10 @@ Mapper, Company Merge, Query Engine, or Regulatory Change Monitor.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from importlib.metadata import version as installed_version
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import uvicorn
 from fastapi import FastAPI, status
@@ -37,11 +38,14 @@ from ps_service.config import ServiceConfig, load_config, missing_ingestion_conf
 from ps_service.dependency_health import (
     CELLAR_ELI,
     FALKORDB,
+    GRAPH_REPLAY,
     LLM_INTERFACE,
     PASSKEY_SIGNING_POSTGRES,
     STATE_POSTGRES,
     all_healthy,
     is_healthy,
+    mark_healthy,
+    mark_unhealthy,
 )
 from ps_service.graph_gateway import GRAPH_LOG_TABLES
 from ps_service.graph_gateway.default_gateway import build_default_graph_write_gateway
@@ -90,7 +94,8 @@ if TYPE_CHECKING:
     from psycopg.rows import TupleRow
     from starlette.types import ASGIApp, Receive, Scope, Send
 
-    from ps_service.graph_gateway.models import RecoveryResult
+    from ps_service.auth.models import AuthContext
+    from ps_service.graph_gateway.models import StartupReplayReport
 
 # Matches `_DEFAULT_LOG_FILENAME` in `ps_service/logging/facade.py` and the sink filename documented
 # in `docs/architecture/ps-service-container-architecture.md`. Kept as a local literal (not
@@ -146,6 +151,44 @@ class _MaxBodySizeMiddleware:
         await self._app(scope, receive, send)
 
 
+_REPLAY_GATE_EXEMPT_PATHS = frozenset({"/health", "/ready"})
+_REPLAY_GATE_EXEMPT_PREFIX = "/.well-known/"
+_REPLAY_GATE_RETRY_AFTER_SECONDS = "5"
+
+
+class _ReplayReadGateMiddleware:
+    """Pure ASGI middleware that serves nothing graph-related while the startup replay runs (#207).
+
+    While `graph_replay` is unhealthy a graph may be empty or half rebuilt, so any request that
+    could read it gets `503` with the `/ready` shape. Exempt: `/health`, `/ready` and the
+    `/.well-known/` metadata, the only paths that are unauthenticated and graph-free. It is the
+    outermost layer, so it runs before authentication: a caller who is not authenticated learns
+    nothing beyond "not ready". A dependency that was never recorded
+    counts healthy, so a service without a replay is never gated. Only HTTP scopes are looked at.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap `app`."""
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Answer 503 for a gated path while `graph_replay` is unhealthy; else call `self._app`."""
+        if scope["type"] == "http" and not is_healthy(GRAPH_REPLAY) and _is_gated_path(scope):
+            response = JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers={"Retry-After": _REPLAY_GATE_RETRY_AFTER_SECONDS},
+                content={"status": "not_ready", "unhealthy_dependencies": [GRAPH_REPLAY]},
+            )
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
+def _is_gated_path(scope: Scope) -> bool:
+    path = str(scope["path"])
+    return path not in _REPLAY_GATE_EXEMPT_PATHS and not path.startswith(_REPLAY_GATE_EXEMPT_PREFIX)
+
+
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _READY_DEPENDENCIES = (
@@ -154,6 +197,7 @@ _READY_DEPENDENCIES = (
     CELLAR_ELI,
     PASSKEY_SIGNING_POSTGRES,
     STATE_POSTGRES,
+    GRAPH_REPLAY,
 )
 
 # Which of `_READY_DEPENDENCIES` gate `/ready`'s overall status, as opposed to only
@@ -169,7 +213,10 @@ _READY_DEPENDENCIES = (
 # Passkey Signing Postgres (issue #131) is deliberately NOT added here (PLAN.md §0.8): an outage
 # of this optional, pilot-scope instance must never block `/ready` for the rest of the system --
 # only the one gated merge path degrades.
-_GATING_DEPENDENCIES = (FALKORDB, STATE_POSTGRES)
+# Startup replay of the graph mutation log (issue #207) gates as well: until it ends, graphs may be
+# empty or half rebuilt, so the pod must not take traffic. Its state is owned by the replay task
+# (see `_start_graph_replay_at_startup`), not by a probe.
+_GATING_DEPENDENCIES = (FALKORDB, STATE_POSTGRES, GRAPH_REPLAY)
 
 
 class LocalTestBypassBindRefusedError(Exception):
@@ -246,7 +293,15 @@ def _all_dependency_probes(
             lambda: check_passkey_signing_postgres_connectivity(config),
         ),
         (STATE_POSTGRES, lambda: check_state_postgres_connectivity(config)),
+        (GRAPH_REPLAY, _graph_replay_probe),
     )
+
+
+def _graph_replay_probe() -> None:
+    """The retry loop's entry for `GRAPH_REPLAY`: records nothing, the replay task owns the state.
+
+    A `/ready` poll must neither fail because of the replay nor make it look finished.
+    """
 
 
 def _apply_passkey_signing_migrations_at_startup(config: ServiceConfig) -> None:
@@ -325,52 +380,106 @@ def _verify_graph_gateway_migrations_at_startup(conn: psycopg.Connection[TupleRo
 
 
 class _StartupGateway(Protocol):
-    """What the lifespan needs of the Graph Write Gateway: recover at startup, stop on teardown."""
+    """What the lifespan needs of the Graph Write Gateway: replay at startup, stop on teardown."""
 
-    def recover(self) -> RecoveryResult: ...
+    def hold_for_startup_replay(self) -> None: ...
+
+    def run_startup_replay(self) -> StartupReplayReport: ...
+
+    def gated_graphs(self) -> tuple[str, ...]: ...
+
+    def stop_replay(self) -> None: ...
 
     def stop_reconciler(self, timeout: float) -> bool: ...
 
 
 _RECONCILER_STOP_TIMEOUT_SECONDS = 5.0
+_REPLAY_STOP_TIMEOUT_SECONDS = 5.0
 
 
-async def _recover_graph_gateway_at_startup(
+async def _start_graph_replay_at_startup(
     config: ServiceConfig,
     build: Callable[[ServiceConfig], _StartupGateway] | None = None,
-) -> _StartupGateway | None:
-    """Build the Graph Write Gateway and apply every committed-but-unapplied log entry (#206).
+) -> tuple[_StartupGateway | None, asyncio.Task[None] | None]:
+    """Build the Graph Write Gateway and start replaying the graph log in the background (#207).
 
-    Skipped, returning None, when `config.state_postgres_host` is unset (no log to recover).
-    Never raises: the gateway fails closed per graph on its own (a write to a graph that still
-    owes entries is refused until they are applied), so a Postgres or FalkorDB outage here is
-    logged (exception class only, never its text) and startup goes on. `recover` is blocking, so
-    it runs on a worker thread. No writer is wired to the gateway yet; it is built and recovered
-    only so a lagging graph is caught up before any later writer migration relies on it.
+    Skipped, returning `(None, None)`, when `config.state_postgres_host` is unset (no log to
+    replay) or the gateway cannot be built (logged with the exception class only; startup goes
+    on). Otherwise, before this returns (so before any request is served): every graph is closed
+    to writes (`hold_for_startup_replay`), the `graph_replay` dependency is marked unhealthy, which
+    holds `/ready` at `not_ready`, and the replay is started as a task whose completion marks it
+    healthy again. The replay is blocking, so it runs on a worker thread; startup does not wait
+    for it. No writer is wired to the gateway yet.
     """
     if config.state_postgres_host is None:
-        return None
+        return None, None
     try:
         gateway = (build or build_default_graph_write_gateway)(config)
-    except Exception as exc:  # noqa: BLE001 - recovery must never crash startup (see docstring)
-        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
-        return None
-    try:
-        result = await run_in_threadpool(gateway.recover)
-    except Exception as exc:  # noqa: BLE001 - recovery must never crash startup (see docstring)
-        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
-    else:
-        _log_graph_gateway_recovery(
-            "warning" if result.gated else "success",
-            {"recovered_graphs": len(result.recovered), "gated_graphs": len(result.gated)},
-        )
-    return gateway
-
-
-def _log_graph_gateway_recovery(outcome: str, extra: dict[str, object]) -> None:
-    emit_log_entry(
-        component="entrypoint", action="graph_gateway_recovery", outcome=outcome, extra=extra
+    except Exception as exc:  # noqa: BLE001 - startup replay must never crash startup (see docstring)
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
+        return None, None
+    gateway.hold_for_startup_replay()
+    mark_unhealthy(
+        GRAPH_REPLAY, error=RuntimeError("the startup replay of the graph log is running")
     )
+    return gateway, asyncio.create_task(_run_startup_replay(gateway))
+
+
+async def _run_startup_replay(gateway: _StartupGateway) -> None:
+    """Run the startup replay on a worker thread; mark `graph_replay` healthy once it has ended.
+
+    Ending includes graphs that stay closed because their own replay failed: the others are
+    unaffected and `/ready` goes green (the failure is logged and the graph refuses writes with a
+    typed error). An unexpected exception (infrastructure down, a bug) leaves `graph_replay`
+    unhealthy, so the pod stays out of rotation, and is logged with its class only.
+    """
+    try:
+        report = await run_in_threadpool(gateway.run_startup_replay)
+    except Exception as exc:  # noqa: BLE001 - a replay failure must be logged, never crash the loop
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
+        return
+    mark_healthy(GRAPH_REPLAY)
+    _log_graph_gateway_startup_replay(
+        "warning" if report.gated else "success",
+        {
+            "replayed_graphs": len(report.replayed),
+            "resumed_graphs": len(report.resumed),
+            "caught_up_graphs": len(report.caught_up),
+            "gated_graphs": len(report.gated),
+        },
+    )
+
+
+def _log_graph_gateway_startup_replay(outcome: str, extra: dict[str, object]) -> None:
+    emit_log_entry(
+        component="entrypoint", action="graph_gateway_startup_replay", outcome=outcome, extra=extra
+    )
+
+
+def _gated_graphs(app: FastAPI) -> list[str]:
+    """Names of the graphs that refuse writes until someone acts; empty without a gateway."""
+    gateway = cast("_StartupGateway | None", getattr(app.state, "graph_write_gateway", None))
+    return list(gateway.gated_graphs()) if gateway is not None else []
+
+
+async def _stop_graph_replay(
+    gateway: _StartupGateway | None, task: asyncio.Task[None] | None
+) -> None:
+    """Ask the startup replay to stop at its next page and wait a bounded time for it to end."""
+    if gateway is None or task is None:
+        return
+    gateway.stop_replay()
+    _, still_running = await asyncio.wait({task}, timeout=_REPLAY_STOP_TIMEOUT_SECONDS)
+    if still_running:
+        _log_graph_gateway_startup_replay("warning", {"reason": "replay_not_stopped"})
+
+
+async def _shutdown_graph_gateway(
+    gateway: _StartupGateway | None, replay_task: asyncio.Task[None] | None
+) -> None:
+    """Stop the startup replay first (it holds the graphs), then the background reconciler."""
+    await _stop_graph_replay(gateway, replay_task)
+    await _stop_graph_gateway_reconciler(gateway)
 
 
 async def _stop_graph_gateway_reconciler(gateway: _StartupGateway | None) -> None:
@@ -380,10 +489,10 @@ async def _stop_graph_gateway_reconciler(gateway: _StartupGateway | None) -> Non
     try:
         stopped = await run_in_threadpool(gateway.stop_reconciler, _RECONCILER_STOP_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - shutdown must go on whatever the reconciler does
-        _log_graph_gateway_recovery("failure", {"reason": type(exc).__name__})
+        _log_graph_gateway_startup_replay("failure", {"reason": type(exc).__name__})
         return
     if not stopped:
-        _log_graph_gateway_recovery("warning", {"reason": "reconciler_not_stopped"})
+        _log_graph_gateway_startup_replay("warning", {"reason": "reconciler_not_stopped"})
 
 
 def startup_failure_log_extra(exc: Exception) -> dict[str, object]:
@@ -465,6 +574,26 @@ def _retry_gating_dependencies(config: ServiceConfig) -> bool:
                 extra={"dependency": dependency, "error": str(exc)},
             )
     return all_healthy(_GATING_DEPENDENCIES)
+
+
+def _add_http_middleware(
+    app: FastAPI,
+    verifier: PsTokenVerifier | None,
+    auth_context: AuthContext | None,
+    max_request_body_bytes: int,
+) -> None:
+    """Wire the three HTTP middleware layers; the last one added is the outermost."""
+    # `RestAuthMiddleware` is added *before* `_MaxBodySizeMiddleware` so the latter runs
+    # first of the two (CHANGES.md item 6): `add_middleware`
+    # makes the most-recently-added call the outermost, so an oversized request gets
+    # a cheap 413 on its `Content-Length` header before any JWT/RSA verification work
+    # happens -- there is no data dependency the other way (the size check never reads
+    # `Authorization`), so this ordering costs nothing and avoids wasted verify work.
+    app.add_middleware(RestAuthMiddleware, verifier=verifier, auth_context=auth_context)
+    app.add_middleware(_MaxBodySizeMiddleware, max_bytes=max_request_body_bytes)
+    # Added last, so outermost (CHANGES.md of issue #207, A3): a gated request is answered before
+    # any size check or JWT work, and tells an unauthenticated caller nothing beyond "not ready".
+    app.add_middleware(_ReplayReadGateMiddleware)
 
 
 def create_app(config: ServiceConfig) -> FastAPI:
@@ -645,11 +774,13 @@ def create_app(config: ServiceConfig) -> FastAPI:
         app.state.config_complete = not missing_config
         _apply_passkey_signing_migrations_at_startup(config)
         _apply_state_migrations_at_startup(config)
-        app.state.graph_write_gateway = await _recover_graph_gateway_at_startup(config)
+        # Marks `graph_replay` unhealthy before anything can read readiness, then replays in the
+        # background: the server starts, `/ready` stays `not_ready` until the replay ends.
+        app.state.graph_write_gateway, replay_task = await _start_graph_replay_at_startup(config)
         async with mcp_asgi_app.router.lifespan_context(mcp_asgi_app):
             app.state.ready = _check_dependencies_at_startup(config) and app.state.config_complete
             yield
-            await _stop_graph_gateway_reconciler(app.state.graph_write_gateway)
+            await _shutdown_graph_gateway(app.state.graph_write_gateway, replay_task)
             app.state.ready = False
 
     app = FastAPI(lifespan=lifespan)
@@ -683,14 +814,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
     # `token_verifier=` wiring share, so there is one discovery fetch, one
     # `PyJWKClient`, one JWKS cache per process, never two parallel verifiers.
     verifier = PsTokenVerifier(auth_context) if auth_context is not None else None
-    # `RestAuthMiddleware` is added *before* `_MaxBodySizeMiddleware` so the latter
-    # stays the outermost, first-to-run layer (CHANGES.md item 6): `add_middleware`
-    # makes the most-recently-added call the outermost, so an oversized request gets
-    # a cheap 413 on its `Content-Length` header before any JWT/RSA verification work
-    # happens -- there is no data dependency the other way (the size check never reads
-    # `Authorization`), so this ordering costs nothing and avoids wasted verify work.
-    app.add_middleware(RestAuthMiddleware, verifier=verifier, auth_context=auth_context)
-    app.add_middleware(_MaxBodySizeMiddleware, max_bytes=config.max_request_body_bytes)
+    _add_http_middleware(app, verifier, auth_context, config.max_request_body_bytes)
     register_exception_handlers(app)
     app.include_router(build_api_router())
     app.include_router(build_passkey_signing_router())
@@ -753,6 +877,11 @@ def create_app(config: ServiceConfig) -> FastAPI:
         while `status` stays `"ready"`, when it is LLM Interface or
         Cellar/ELI.
 
+        `gated_graphs` (issue #207) names the graphs that refuse writes until an operator acts: a
+        graph whose replay failed verification, or whose logged entry FalkorDB refuses. Always
+        present, empty when there are none; it never changes the status code, since the other
+        graphs are unaffected.
+
         Returns an actual non-2xx status (`503`) when `status` is
         `"not_ready"` (issue #75) — the response body alone previously left
         an always-200 `/ready` unable to pull the pod from Kubernetes
@@ -770,6 +899,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
             content={
                 "status": "ready" if is_ready else "not_ready",
                 "unhealthy_dependencies": unhealthy_dependencies,
+                "gated_graphs": _gated_graphs(app),
             },
         )
 

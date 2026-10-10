@@ -1,0 +1,102 @@
+"""The digest does not depend on insertion order or FalkorDB internal ids (#207 S2, AC-RD-001)."""
+
+from __future__ import annotations
+
+from typing import cast
+
+from graph_gateway._fakes import GatewayRig
+from ps_service.graph_gateway.cypher import DIGEST_NODE_SCAN
+from ps_service.graph_gateway.digest import (
+    canonical_digest,
+    combine_element_hashes,
+    element_hashes,
+)
+from ps_service.graph_gateway.models import DeleteNode, MutationGroup, Primitive, UpsertNode
+
+_AUDIT_EVENT_ID = "3f2b8c1e-5d4a-4b7e-9a61-0c2d7e8f9a10"
+_GRAPH = "compliance"
+
+
+def _node(node_id: str) -> UpsertNode:
+    return UpsertNode(label="Capability", id=node_id, properties={"name": f"name of {node_id}"})
+
+
+def _submit(rig: GatewayRig, *primitives: Primitive) -> None:
+    rig.gateway.submit_group(
+        MutationGroup(graph=_GRAPH, audit_event_id=_AUDIT_EVENT_ID, primitives=primitives)
+    )
+
+
+def test_same_nodes_inserted_in_different_orders_give_equal_digests() -> None:
+    ids = [f"cap-{i:02d}" for i in range(20)]
+    forward, backward = GatewayRig(), GatewayRig()
+
+    _submit(forward, *(_node(i) for i in ids))
+    for start in range(0, 20, 3):  # a different split into groups, in the opposite order
+        _submit(backward, *(_node(i) for i in reversed(ids[start : start + 3])))
+    for node_id in ids[:3]:
+        _submit(backward, _node(node_id))
+
+    assert canonical_digest(forward.graphs.open(_GRAPH)) == canonical_digest(
+        backward.graphs.open(_GRAPH)
+    )
+
+
+def test_digest_ignores_internal_ids() -> None:
+    plain, shifted = GatewayRig(), GatewayRig()
+    _submit(plain, _node("x"), _node("y"), _node("z"))
+    _submit(shifted, _node("tmp-1"), _node("tmp-2"))
+    _submit(shifted, DeleteNode(label="Capability", id="tmp-1"))
+    _submit(shifted, _node("z"), _node("y"), _node("x"))
+    _submit(shifted, DeleteNode(label="Capability", id="tmp-2"))
+    plain_graph, shifted_graph = plain.graphs.open(_GRAPH), shifted.graphs.open(_GRAPH)
+
+    internal_ids = [
+        [graph.internal_id("Capability", node_id) for node_id in ("x", "y", "z")]
+        for graph in (plain_graph, shifted_graph)
+    ]
+
+    assert internal_ids[0] != internal_ids[1]
+    assert canonical_digest(plain_graph) == canonical_digest(shifted_graph)
+
+
+def test_digest_scan_answers_in_internal_id_order_not_in_insertion_order() -> None:
+    rig = GatewayRig()
+    _submit(rig, _node("b"), _node("a"))
+    _submit(rig, DeleteNode(label="Capability", id="b"))
+    _submit(rig, _node("b"))  # inserted first, but now the node with the highest internal id
+    graph = rig.graphs.open(_GRAPH)
+
+    rows = graph.query(DIGEST_NODE_SCAN, {"after": -1, "limit": 10}).result_set
+
+    pairs = [cast("list[list[object]]", cast("list[object]", row)[2]) for row in rows]
+    assert [next(value for key, value in p if key == "id") for p in pairs] == ["a", "b"]
+    assert [cast("list[int]", row)[0] for row in rows] == sorted(
+        cast("list[int]", r)[0] for r in rows
+    )
+
+
+def test_digest_of_elements_is_independent_of_element_order() -> None:
+    hashes = [bytes([i]) * 32 for i in range(30)]
+    reordered = hashes[7:] + hashes[:7][::-1]
+
+    assert reordered != hashes
+    assert combine_element_hashes(reordered) == combine_element_hashes(hashes)
+
+
+def test_digest_of_elements_counts_a_repeated_element() -> None:
+    once, twice = [bytes([1]) * 32], [bytes([1]) * 32] * 2
+
+    assert combine_element_hashes(once) != combine_element_hashes(twice)
+
+
+def test_element_hashes_per_kind_combine_to_the_canonical_digest() -> None:
+    rig = GatewayRig()
+    _submit(rig, *(_node(f"cap-{i}") for i in range(3)))
+    graph = rig.graphs.open(_GRAPH)
+
+    hashes = element_hashes(graph)
+
+    assert len(hashes.nodes) == 3
+    assert hashes.edges == ()
+    assert combine_element_hashes([*hashes.nodes, *hashes.edges]) == canonical_digest(graph)

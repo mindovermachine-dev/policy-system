@@ -6,7 +6,8 @@ fake (Postgres has its own live file, `test_gateway_live.py`). Each test uses a 
 that is deleted before and after.
 
 Deselected by default -- run with `uv run pytest -m falkordb_live` against a FalkorDB at
-127.0.0.1:6379. Not runnable in the implementation sandbox (the local Redis has no graph module).
+127.0.0.1:6379, or the one named by `PS_TEST_FALKORDB_HOST` and `PS_TEST_FALKORDB_PORT`. Not
+runnable against a plain Redis (no graph module).
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ import pytest
 import redis.exceptions
 
 from graph_gateway._fakes import InMemoryGraphLogStore
+from graph_gateway.live_endpoints import falkordb_endpoint
 from ps_service.graph_gateway.gateway import GraphWriteGateway
+from ps_service.graph_gateway.graph_reader import read_nodes
 from ps_service.graph_gateway.models import (
     DeleteEdge,
     DeleteNode,
@@ -70,7 +73,8 @@ class _Live:
 
 @pytest.fixture
 def live() -> Iterator[_Live]:
-    db = connect(host="127.0.0.1", port=6379)
+    host, port = falkordb_endpoint()
+    db = connect(host=host, port=port)
     name = f"gateway_live_{uuid.uuid4().hex[:8]}"
     yield _Live(db, name)
     if name in db.list_graphs():
@@ -89,12 +93,13 @@ def test_node_primitives_apply_and_read_back_as_the_fake_assumes(live: _Live) ->
     live.submit(MergeProperty(label="Capability", id="cap-1", properties={"status": "active"}))
     live.submit(RemoveProperty(label="Capability", id="cap-1", keys=("tags", "absent")))
 
-    ((properties,),) = live.rows(
-        "MATCH (n:Capability {id: $id}) RETURN properties(n)", {"id": "cap-1"}
-    )
-    assert isinstance(properties, dict)
-    stored = cast("dict[str, object]", properties)
-    assert stored["id"] == "cap-1"
+    # FalkorDB stores the doubles exactly but prints them with 15 digits in every reply, so the
+    # value is proven twice: server-side equality (exact) and the gateway's exact-float read.
+    assert live.rows(
+        "MATCH (n:Capability {id: $id}) RETURN n.embedding = $embedding",
+        {"id": "cap-1", "embedding": list(_EMBEDDING)},
+    ) == [[True]]
+    stored = read_nodes(live.graph, [("Capability", "cap-1")], 500)[("Capability", "cap-1")]
     assert (stored["name"], stored["status"], stored["weight"]) == ("a", "active", 1)
     assert "tags" not in stored
     assert [float(v).hex() for v in cast("list[float]", stored["embedding"])] == [

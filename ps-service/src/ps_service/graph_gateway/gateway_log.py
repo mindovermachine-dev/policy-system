@@ -29,6 +29,10 @@ ALLOWED_LOG_FIELDS = frozenset(
         "error_class",
         "group_id",
         "audit_event_id",
+        "verified_position",
+        "unverified_entries",
+        "pages",
+        "failed_position",
     }
 )
 """The only `extra` keys a gateway log entry may carry."""

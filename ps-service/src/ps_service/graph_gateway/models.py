@@ -295,6 +295,12 @@ class MutationGroup(BaseModel):
     """The mutations, in submission order."""
     preconditions: tuple[Precondition, ...] = ()
     """Conditions the caller needs to hold when the group is logged; none unless the caller asks."""
+    checkpoint_requested: bool = False
+    """Record the graph's canonical digest at this group's last position once it is applied.
+
+    Off unless the caller asks: computing a digest reads the whole live graph, so no group takes
+    one implicitly (issue #207, AC-RD-003).
+    """
 
     @field_validator("audit_event_id")
     @classmethod
@@ -316,6 +322,14 @@ class GroupOutcome(BaseModel):
     unreachable through the retry budget; the entries stay in the log and are applied on recovery
     (not an error). `unchanged`: every mutation was a no-op, nothing logged.
     """
+    checkpoint: Literal["not_requested", "recorded", "not_recorded"] = "not_requested"
+    """`recorded`: the digest was stored at `checkpoint_position`. `not_recorded`: one was asked
+    for but could not be taken or stored (the group itself is committed all the same).
+    """
+    checkpoint_position: int | None = Field(default=None, ge=1)
+    """The log position the recorded digest belongs to (set exactly when `checkpoint` is
+    `recorded`).
+    """
 
     @model_validator(mode="after")
     def _positions_follow_status(self) -> GroupOutcome:
@@ -324,6 +338,14 @@ class GroupOutcome(BaseModel):
         unlogged = self.first_position is None and self.last_position is None
         if (self.status == "unchanged") != unlogged or not (logged or unlogged):
             message = "positions are set exactly when the group was logged"
+            raise ValueError(message)
+        return self
+
+    @model_validator(mode="after")
+    def _checkpoint_position_follows_checkpoint(self) -> GroupOutcome:
+        """A checkpoint position exists exactly when a checkpoint was recorded."""
+        if (self.checkpoint == "recorded") != (self.checkpoint_position is not None):
+            message = "a checkpoint position is set exactly when a checkpoint was recorded"
             raise ValueError(message)
         return self
 
@@ -349,3 +371,38 @@ class RecoveryResult(BaseModel):
     """Graphs whose marker now equals their last logged position, in name order."""
     gated: tuple[str, ...]
     """Graphs still behind their log (FalkorDB down or refusing an entry): writes fail closed."""
+
+
+class ReplayReport(BaseModel):
+    """What a replay of one graph did and how much of it a checkpoint vouches for (issue #207)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    graph: str
+    head: int = Field(ge=0)
+    """The log's last position when the replay started; the graph now holds entries 1..head."""
+    verified_position: int | None = Field(default=None, ge=1)
+    """The position of the checkpoint the rebuilt graph was compared with (None: there is none)."""
+    unverified_entries: int = Field(ge=0)
+    """Entries after `verified_position` (all of them when it is None): applied, not vouched for."""
+    pages: int = Field(default=0, ge=0)
+    """How many reads of the log the replay made."""
+    resumed_from: int = Field(default=0, ge=0)
+    """First position applied by a run that resumed an interrupted replay (0: a fresh replay)."""
+
+
+class StartupReplayReport(BaseModel):
+    """How startup replay dealt with each logged graph (issue #207); every graph is in one list."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    replayed: tuple[str, ...] = ()
+    """Graphs found empty (wiped, lost, never applied) and rebuilt from the log."""
+    resumed: tuple[str, ...] = ()
+    """Graphs whose interrupted replay was found by its progress record and finished."""
+    caught_up: tuple[str, ...] = ()
+    """Non-empty graphs that were behind their log and got the missing entries."""
+    untouched: tuple[str, ...] = ()
+    """Graphs that needed nothing."""
+    gated: tuple[str, ...] = ()
+    """Graphs that stay closed to writes: a failed replay, or an apply refused or still pending."""

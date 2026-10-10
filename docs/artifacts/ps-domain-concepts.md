@@ -721,6 +721,10 @@ A recorded [canonical digest](#canonical-digest) of one graph at a given positio
 
 A fingerprint of one graph's content (its nodes, relationships and their properties) that is independent of storage order and of storage-internal identifiers, so the live graph and a graph rebuilt by replaying the mutation log give the same digest exactly when their content is the same. A Digest checkpoint records a canonical digest at a given position in a graph's sequence.
 
+What it covers: every node (its set of labels, its properties and its embedding), and every relationship (its type, the labels and ids of both ends, its direction and its properties). Two nodes or relationships with the same content count twice. What it ignores: FalkorDB's internal ids, the order the elements were inserted in, and the replay-progress record a graph carries while it is being rebuilt, which is bookkeeping and not content.
+
+How it is encoded (format version 1, `sha256:` followed by the hex digest): each element is written as a type-tagged, length-prefixed byte string, hashed with SHA-256, and the element hashes are sorted and hashed once more under the domain `ps-graph-digest-v1`. A 64-bit float is compared bit for bit, so `0.0` and `-0.0` differ and an embedding that differs by one unit in the last place gives a different digest; a value the gateway could not have written is refused rather than skipped. A change of this encoding must bump the domain, because it invalidates every recorded checkpoint.
+
 ### Graph Write Gateway
 
 The actor, not a graph node, through which writers submit graph writes. It records each transaction group in the mutation log before the group is applied to the graph, applies it to FalkorDB, replays the log to rebuild a graph, and verifies a rebuilt graph against a Digest checkpoint. It accepts a write only if every node label and relationship type the write names is permitted by the label allow-list; anything else is rejected before anything is logged. If the log cannot accept a group, nothing is logged and nothing is applied.
