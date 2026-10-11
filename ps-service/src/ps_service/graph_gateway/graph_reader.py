@@ -7,9 +7,12 @@ an `UnexpectedGraphReplyError` that names nothing the graph returned.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ps_service.graph_gateway.cypher import (
+    DIGEST_EDGE_SCAN,
+    DIGEST_NODE_SCAN,
     edge_state_query,
     edge_state_rows,
     node_exists_query,
@@ -18,11 +21,12 @@ from ps_service.graph_gateway.cypher import (
     unidentified_edge_state_query,
     unidentified_edge_state_rows,
 )
+from ps_service.graph_gateway.digest import DigestSettings
 from ps_service.graph_gateway.errors import UnexpectedGraphReplyError
 from ps_service.graph_gateway.exact_floats import PROPERTY_COLUMN_COUNT, restore_properties
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Sequence
 
     from ps_service.ingestion.falkordb_client import GraphHandle
 
@@ -49,6 +53,102 @@ _EDGE_WIDTH = 7
 
 _ID = "id"
 _IDENTITY = "identity"
+
+_SCAN_NODE_WIDTH = 6
+"""A node scan row: internal id, label list and the four property columns."""
+_SCAN_EDGE_WIDTH = 10
+"""An edge scan row: internal id, type, source labels and id, target labels and id, properties."""
+
+type LegacyEdgeKey = tuple[str, str, str, str, str]
+"""`(type, source label, source id, target label, target id)` of an edge that has no identity."""
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedElements:
+    """What one graph holds, by key only: no property is kept (issue #99).
+
+    The replay sentinel is not an element. An edge is in `edges` when it carries an identity and
+    in `legacy_edges` when a pre-gateway writer left it without one.
+    """
+
+    nodes: frozenset[NodeKey]
+    edges: frozenset[EdgeKey]
+    legacy_edges: frozenset[LegacyEdgeKey]
+    log_position: int
+    """The graph log's last position when the read started (0: nothing logged)."""
+
+
+def read_persisted_elements(
+    graph: GraphHandle, *, log_position: int, settings: DigestSettings | None = None
+) -> PersistedElements:
+    """Enumerate the node keys and edge keys of `graph` with two chunked read-only scans.
+
+    Raises:
+        UnexpectedGraphReplyError: a row has an unexpected shape, or names a node that carries
+            no string `id` or more or fewer than one label (it cannot be classified).
+    """
+    chosen = settings if settings is not None else DigestSettings()
+    nodes = frozenset(_scan(graph, DIGEST_NODE_SCAN, chosen.node_chunk_rows, _node_key))
+    keys = list(_scan(graph, DIGEST_EDGE_SCAN, chosen.edge_chunk_rows, _edge_key))
+    return PersistedElements(
+        nodes=nodes,
+        edges=frozenset(key for key in keys if key[5] != UNIDENTIFIED),
+        legacy_edges=frozenset(_legacy(key) for key in keys if key[5] == UNIDENTIFIED),
+        log_position=log_position,
+    )
+
+
+def _legacy(key: EdgeKey) -> LegacyEdgeKey:
+    return (key[0], key[1], key[2], key[3], key[4])
+
+
+def _scan[T](
+    graph: GraphHandle, query: str, chunk_rows: int, decode: Callable[[object], tuple[int, T]]
+) -> Iterator[T]:
+    """Yield what `decode` makes of each scanned row, chunk by chunk along the id cursor."""
+    after = -1
+    while True:
+        rows = graph.query(query, {"after": after, "limit": chunk_rows}).result_set
+        for row in rows:
+            cursor, element = decode(row)
+            after = max(after, cursor)
+            yield element
+        if len(rows) < chunk_rows:
+            return
+
+
+def _node_key(row: object) -> tuple[int, NodeKey]:
+    cursor, labels, *columns = _row(row, _SCAN_NODE_WIDTH)
+    properties = _properties(columns, drop="")
+    return _cursor(cursor), (_single_label(labels), _text(properties.get(_ID)))
+
+
+def _edge_key(row: object) -> tuple[int, EdgeKey]:
+    cursor, kind, source_labels, source_id, target_labels, target_id, *columns = _row(
+        row, _SCAN_EDGE_WIDTH
+    )
+    identity = _properties(columns, drop="").get(_IDENTITY, UNIDENTIFIED)
+    return _cursor(cursor), (
+        _text(kind),
+        _single_label(source_labels),
+        _text(source_id),
+        _single_label(target_labels),
+        _text(target_id),
+        _text(identity),
+    )
+
+
+def _cursor(value: object) -> int:
+    if not isinstance(value, int):
+        raise UnexpectedGraphReplyError(_REPLY_MESSAGE)
+    return value
+
+
+def _single_label(labels: object) -> str:
+    """Return the one label of a node, or raise: a node with none or several is unclassifiable."""
+    if not isinstance(labels, list) or len(cast("list[object]", labels)) != 1:
+        raise UnexpectedGraphReplyError(_REPLY_MESSAGE)
+    return _text(cast("list[object]", labels)[0])
 
 
 def read_nodes(

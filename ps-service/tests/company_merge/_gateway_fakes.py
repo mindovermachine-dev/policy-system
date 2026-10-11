@@ -25,6 +25,7 @@ from ps_service.company_merge.generated_values import ValueSource
 
 if TYPE_CHECKING:
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import (
         GraphLogEntry,
         GraphLogGroup,
@@ -258,3 +259,39 @@ class UnusedSubmitter:
         self, graph: str, audit_event_id: str
     ) -> EdgeIdentityBackfillOutcome:
         raise AssertionError(f"edges of {graph!r} were stamped where no write was expected")
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        raise AssertionError(f"{graph!r} was enumerated where no write was expected")
+
+
+class RigSubmitter:
+    """A `GroupSubmitter` that delegates every call to the rig's gateway."""
+
+    def __init__(self, rig: MergeRig) -> None:
+        self._rig = rig
+
+    def submit_group(self, group: MutationGroup) -> GroupOutcome:
+        return self._rig.gateway.submit_group(group)
+
+    def is_caught_up(self, graph: str) -> bool:
+        return self._rig.gateway.is_caught_up(graph)
+
+    def stamp_legacy_edge_identity(
+        self, graph: str, audit_event_id: str
+    ) -> EdgeIdentityBackfillOutcome:
+        return self._rig.gateway.stamp_legacy_edge_identity(graph, audit_event_id)
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        return self._rig.gateway.read_persisted_elements(graph)
+
+
+class RejectingSubmitter(RigSubmitter):
+    """The rig's gateway, except every submitted group is refused with `error`."""
+
+    def __init__(self, rig: MergeRig, error: Exception) -> None:
+        super().__init__(rig)
+        self._error = error
+
+    def submit_group(self, group: MutationGroup) -> GroupOutcome:
+        del group
+        raise self._error

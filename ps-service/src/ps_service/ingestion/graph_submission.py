@@ -25,6 +25,7 @@ from ps_service.persistence import StatePostgresConnectionError
 
 if TYPE_CHECKING:
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import GroupOutcome, MutationGroup
 
 _WRITE_FAILED_PREFIX = "FalkorDB write failed: "
@@ -59,6 +60,10 @@ class GroupSubmitter(Protocol):
         self, graph: str, audit_event_id: str
     ) -> EdgeIdentityBackfillOutcome:
         """Give the identity-less edges of `graph` their identity (a no-op read if none)."""
+        ...
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        """Read the node keys, edge keys and log position of `graph` (read-only)."""
         ...
 
 
@@ -108,9 +113,25 @@ def require_caught_up[ErrorT: Exception](
         raise error_type(f"{_WRITE_FAILED_PREFIX}{_COMMITTED_NOT_APPLIED_MESSAGE}")
 
 
+def read_persisted_or_raise[ErrorT: Exception](
+    submitter: GroupSubmitter, graph: str, error_type: type[ErrorT]
+) -> PersistedElements:
+    """Read the node keys, edge keys and log position of `graph`; writes and logs nothing.
+
+    Raises:
+        ErrorT: `graph` could not be read, or answered a row that cannot be classified. The
+            message is `FalkorDB write failed: ...` (the read serves a write) and the cause is
+            chained.
+    """
+    try:
+        return submitter.read_persisted_elements(graph)
+    except _GATEWAY_FAILURES as exc:
+        raise error_type(f"{_WRITE_FAILED_PREFIX}{exc}") from exc
+
+
 def stamp_legacy_edges_before_first_write[ErrorT: Exception](
     submitter: GroupSubmitter, graph: str, audit_event_id: str, error_type: type[ErrorT]
-) -> None:
+) -> EdgeIdentityBackfillOutcome:
     """Run the idempotent edge-identity backfill on `graph` before a writer's first group.
 
     A graph written before the gateway holds edges with no `identity`; the gateway merges edges
@@ -121,11 +142,14 @@ def stamp_legacy_edges_before_first_write[ErrorT: Exception](
     nothing to the graph log; otherwise one stamp group is logged under `audit_event_id`, the
     same audit event as the submit.
 
+    Returns:
+        The backfill outcome: `applied` means one stamp group was logged on `graph`.
+
     Raises:
         ErrorT: the graph could not be read, the stamp group was refused or could not be logged.
             The message is `FalkorDB write failed: <sanitized text>`, the cause is chained.
     """
     try:
-        submitter.stamp_legacy_edge_identity(graph, audit_event_id)
+        return submitter.stamp_legacy_edge_identity(graph, audit_event_id)
     except _GATEWAY_FAILURES as exc:
         raise error_type(f"{_WRITE_FAILED_PREFIX}{exc}") from exc

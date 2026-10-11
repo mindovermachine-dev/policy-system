@@ -46,12 +46,18 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from ps_service.graph_gateway.models import (
+    ExpectedPosition,
     MutationGroup,
     NodeRef,
     UpsertEdge,
     UpsertNode,
 )
 from ps_service.ingestion.adapters.internal_seed.errors import InternalSeedError
+from ps_service.ingestion.adapters.internal_seed.reconcile import (
+    GroupPlan,
+    edge_identity,
+    prepare_group,
+)
 from ps_service.ingestion.graph_submission import (
     stamp_legacy_edges_before_first_write,
     submit_or_raise,
@@ -773,15 +779,6 @@ def _control_properties(node: SeedNode, policy_status: str) -> dict[str, object]
 # --- Graph Write Gateway boundary ---
 
 
-def _edge_identity(edge_type: str, source_id: str, target_id: str) -> str:
-    """`{type}:{source}->{target}`: the gateway identity of an edge, one per (type, endpoints).
-
-    Same-type edges between the same two nodes share an identity, which reproduces the
-    `MERGE (a)-[:T]->(b)` collapse the legacy writer had (the later `SET +=` wins).
-    """
-    return f"{edge_type}:{source_id}->{target_id}"
-
-
 def _unstorable(what: str) -> InternalSeedError:
     return InternalSeedError(
         f"{what} has a property the graph cannot store "
@@ -812,7 +809,7 @@ def _upsert_edge(
     try:
         return UpsertEdge(
             type=edge_type,
-            identity=_edge_identity(edge_type, source[1], target[1]),
+            identity=edge_identity(edge_type, source[1], target[1]),
             source=NodeRef(label=source[0], id=source[1]),
             target=NodeRef(label=target[0], id=target[1]),
             properties=properties,
@@ -868,11 +865,24 @@ def _submit_group(
     *,
     graph_name: str,
     audit_event_id: str,
-    primitives: tuple[Primitive, ...],
+    plan: GroupPlan,
 ) -> None:
-    """Submit `primitives` as one group on `graph_name`; raise `InternalSeedError` on failure."""
-    group = MutationGroup(graph=graph_name, audit_event_id=audit_event_id, primitives=primitives)
-    stamp_legacy_edges_before_first_write(submitter, graph_name, audit_event_id, InternalSeedError)
+    """Submit `plan` as one group on `graph_name`; raise `InternalSeedError` on failure.
+
+    The group requires the log to still be where the plan's read found it (plus the entries the
+    legacy-edge backfill may log first), so a writer that got in between is refused
+    with nothing written instead of being reconciled over.
+    """
+    stamp = stamp_legacy_edges_before_first_write(
+        submitter, graph_name, audit_event_id, InternalSeedError
+    )
+    expected = plan.log_position + stamp.stamped  # a stamp logs one entry per edge it stamps
+    group = MutationGroup(
+        graph=graph_name,
+        audit_event_id=audit_event_id,
+        primitives=plan.primitives,
+        preconditions=(ExpectedPosition(position=expected),),
+    )
     submit_or_raise(submitter, group, InternalSeedError)
 
 
@@ -1129,18 +1139,15 @@ def ingest_internal_regulatory_instrument(
 
     native_primitives = build_native_primitives(seed)
     baseline_primitives = build_baseline_primitives(seed, index, canonical)
-    _submit_group(
-        submitter,
-        graph_name=native_graph_name,
-        audit_event_id=audit_event_id,
-        primitives=native_primitives,
+    targets = (
+        (native_graph_name, native_primitives),
+        (baseline_graph_name, baseline_primitives),
     )
-    _submit_group(
-        submitter,
-        graph_name=baseline_graph_name,
-        audit_event_id=audit_event_id,
-        primitives=baseline_primitives,
-    )
+    # Every read precedes the first write, so a lagging graph or a failed read leaves the log
+    # of both graphs untouched.
+    plans = [prepare_group(submitter, graph, primitives) for graph, primitives in targets]
+    for (graph, _), plan in zip(targets, plans, strict=True):
+        _submit_group(submitter, graph_name=graph, audit_event_id=audit_event_id, plan=plan)
 
     return InternalIngestResult(
         regulatory_instrument_id=canonical.regulatory_instrument_id,

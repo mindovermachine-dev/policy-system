@@ -81,6 +81,9 @@ def test_a_native_group_whose_apply_died_midway_is_completed_by_the_rerun(
     with pytest.raises(InternalSeedError, match=r"^FalkorDB write failed: "):
         run.ingest(full_seed())
     run.native.heal()
+    with pytest.raises(InternalSeedError, match=r"^FalkorDB write failed: "):
+        run.ingest(full_seed())  # the graph still owes its log entries: reconcile refuses (#99)
+    rig.gateway.catch_up(NATIVE_GRAPH)
 
     run.ingest(full_seed())
 
@@ -95,6 +98,7 @@ def test_a_baseline_group_that_failed_leaves_the_native_group_unchanged_on_the_r
     with pytest.raises(InternalSeedError, match=r"^FalkorDB write failed: "):
         run.ingest(full_seed())
     run.baseline.heal()
+    rig.gateway.catch_up(BASELINE_GRAPH)  # a graph behind its log is not reconciled (#99)
     native_groups = [g for g in rig.store.groups if g.graph == NATIVE_GRAPH]
 
     run.ingest(full_seed())

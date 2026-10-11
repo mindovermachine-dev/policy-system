@@ -31,6 +31,7 @@ records are excluded before any gate below is evaluated.
 | DG-005  | Every accepted `Capability` is linked to ≥1 active `PracticeArea` (via `COVERS`) and ≥1 active `RiskPath` (via `MITIGATED_BY`).                                                              |
 | DG-006  | Every accepted `Capability` has exactly one governing `Policy` via `GOVERNED_BY` — code enforces "at most one," this gate additionally requires "at least one," i.e. no orphaned Capability. |
 | DG-007  | No record that failed its per-type rubric (`overall_score < pass_threshold`) appears in the `nodes` or `edges` of the exported/persisted document.                                           |
+| DG-008  | Post-persist (see §4): nothing persisted in the instrument's `{short}_baseline` or `{short}_native` graph is absent from the last submitted document (no node, no edge).                     |
 
 DG-001 through DG-004 and DG-006 close the exact enforcement gaps
 identified in `scoring-model.md` §1: `persist.py` enforces the
@@ -40,7 +41,7 @@ no cardinality at all for `OWNS`/`COVERS`/`MITIGATED_BY`/`VERIFIED_BY`.
 
 ## 2. Failure Handling
 
-If any gate fails, the run status is `FAILED_DATASET_GATE`. Per-record
+If any of DG-001 through DG-007 fails, the run status is `FAILED_DATASET_GATE`. Per-record
 acceptance is not affected — a record can individually pass its rubric and
 still be part of a dataset that fails a gate (e.g. an accepted Policy with
 no accepted Standard beneath it fails DG-003 even though the Policy itself
@@ -55,6 +56,23 @@ scored ≥ 80).
 3. Drop every record with `overall_score < pass_threshold`.
 4. Recompute graph links after dropping records (a dropped Standard can
    orphan its Controls, etc.).
-5. Evaluate DG-001 through DG-007 against the accepted-only graph.
-6. Export/persist only if every gate passes; otherwise `FAILED_DATASET_GATE`
+5. Evaluate DG-001 through DG-007 against the accepted-only graph (DG-008 is
+   post-persist and is not part of this order; see §4).
+6. Export/persist only if every one of those gates passes; otherwise `FAILED_DATASET_GATE`
    and no export.
+
+## 4. Post-Persist Gate (DG-008)
+
+DG-008 is evaluated **after** persist, so it sits outside the pre-export
+order in §3 and outside the accepted-only rule of §1. It compares the
+instrument's `{short}_baseline` and `{short}_native` graphs with the last
+submitted document: every node id and edge the graph holds must be in the
+document. Persist retires what a resubmission no longer contains (a rename
+mints a new id and would otherwise leave the old node and its subtree
+behind), so a violation means retirement failed or something wrote to the
+graph outside the submission.
+
+If DG-008 fails, the run status is `FAILED_POST_PERSIST_GATE`. The
+document was already persisted, so the status reports a graph that needs
+cleanup, not a blocked export; resubmit the document to retire what
+remains.

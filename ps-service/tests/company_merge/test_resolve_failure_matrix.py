@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Literal
 import pytest
 import redis.exceptions
 
-from company_merge._gateway_fakes import POLICY_SYSTEM
+from company_merge._gateway_fakes import POLICY_SYSTEM, RejectingSubmitter
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.graph_submission import GraphWriteTarget
 from ps_service.company_merge.pending_review import resolve_review
@@ -33,8 +33,6 @@ from ps_service.graph_gateway.errors import (
 
 if TYPE_CHECKING:
     from company_merge._gateway_fakes import MergeRig
-    from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
-    from ps_service.graph_gateway.models import GroupOutcome, MutationGroup
 
 _PREFIX = "FalkorDB write failed: "
 _HOST = "Error 111 connecting to 10.0.0.5:6379"
@@ -79,26 +77,6 @@ def _seed_review(rig: MergeRig) -> None:
     graph.seed_legacy_edge(("REQUIRES", "Obligation", "obl_a", "Capability", "cap_incoming"), {})
 
 
-class _RejectingSubmitter:
-    """The rig's gateway, except every submitted group is refused with `error`."""
-
-    def __init__(self, rig: MergeRig, error: Exception) -> None:
-        self._rig = rig
-        self._error = error
-
-    def submit_group(self, group: MutationGroup) -> GroupOutcome:
-        del group
-        raise self._error
-
-    def is_caught_up(self, graph: str) -> bool:
-        return self._rig.gateway.is_caught_up(graph)
-
-    def stamp_legacy_edge_identity(
-        self, graph: str, audit_event_id: str
-    ) -> EdgeIdentityBackfillOutcome:
-        return self._rig.gateway.stamp_legacy_edge_identity(graph, audit_event_id)
-
-
 def _assert_clean(error: CompanyMergePersistenceError) -> None:
     message = str(error)
     assert message.startswith(_PREFIX)
@@ -133,7 +111,7 @@ def test_a_rejected_resolution_group_is_a_persistence_error_and_changes_nothing(
 ) -> None:
     _seed_review(merge_rig)
     target = GraphWriteTarget(
-        _RejectingSubmitter(merge_rig, refusal), POLICY_SYSTEM, merge_rig.audit_event_id
+        RejectingSubmitter(merge_rig, refusal), POLICY_SYSTEM, merge_rig.audit_event_id
     )
 
     with pytest.raises(CompanyMergePersistenceError) as exc_info:

@@ -2,7 +2,7 @@
 
 Every DEFINES, EXPRESSES, HAS, SATISFIED_BY and REQUIRES edge the stages submit carries the
 identity `{type}:{source}->{target}`, the scheme of the internal-seed path (whose
-`_edge_identity` is imported here so the two cannot drift). The gateway merges edges on that
+`edge_identity` is imported here so the two cannot drift). The gateway merges edges on that
 identity, so re-running the stages adds no parallel edge, and a baseline graph written before the
 gateway (edges without an identity) has its edges stamped, not duplicated.
 """
@@ -22,9 +22,7 @@ from ps_service.graph_gateway.label_allow_list import (
     require_allowed_node_label,
     require_allowed_relationship_type,
 )
-from ps_service.ingestion.adapters.internal_seed.persist import (
-    _edge_identity,  # pyright: ignore[reportPrivateUsage]
-)
+from ps_service.ingestion.adapters.internal_seed.reconcile import edge_identity
 
 if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter
@@ -63,7 +61,7 @@ def test_each_edge_type_carries_type_source_arrow_target_identity(
     for entry in edges:
         source_id = _endpoint(entry, "source")["id"]
         target_id = _endpoint(entry, "target")["id"]
-        assert entry.identity == _edge_identity(entry.name, source_id, target_id)
+        assert entry.identity == edge_identity(entry.name, source_id, target_id)
         assert entry.identity == f"{entry.name}:{source_id}->{target_id}"
     stored = {key[5] for key in baseline_rig.baseline.edges}
     assert stored == {entry.identity for entry in edges}
@@ -148,7 +146,7 @@ def test_a_legacy_baseline_graph_has_its_identityless_edges_stamped_not_duplicat
 
     assert len(baseline_rig.baseline.edges) == legacy_edge_count
     assert all(
-        key[5] == _edge_identity(key[0], key[2], key[4]) for key in baseline_rig.baseline.edges
+        key[5] == edge_identity(key[0], key[2], key[4]) for key in baseline_rig.baseline.edges
     )
     stamp_groups = [
         group

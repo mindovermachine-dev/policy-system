@@ -76,6 +76,7 @@ if TYPE_CHECKING:
 
     from domain_mapper._fakes import MakeEmitter
     from domain_mapper._gateway_fakes import BaselineRig
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import MutationGroup
     from ps_service.ingestion.graph_submission import (
         EdgeIdentityBackfillOutcome,
@@ -110,6 +111,9 @@ class _RecordingSubmitter:
         self, graph: str, audit_event_id: str
     ) -> EdgeIdentityBackfillOutcome:
         return self._gateway.stamp_legacy_edge_identity(graph, audit_event_id)
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        return self._gateway.read_persisted_elements(graph)
 
 
 def _facts(submitter: _RecordingSubmitter) -> tuple[Counter[NodeFact], Counter[EdgeFact]]:

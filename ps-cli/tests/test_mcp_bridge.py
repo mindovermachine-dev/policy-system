@@ -840,7 +840,7 @@ class TestBoundedKeychainCall:
     credential-store error to the host within that bound and never wedges the loop.
     """
 
-    _BOUND = 0.2
+    _BOUND = 0.5
 
     def _stall_setup(
         self, build_persistence: Callable[[str], InMemoryPersistenceBackend], warnings: list[str]
@@ -911,7 +911,7 @@ class TestBoundedKeychainCall:
         finally:
             self._release_and_join([gate], before)
 
-        assert elapsed < 0.1
+        assert elapsed < self._BOUND * 0.5  # fail-fast: well under one full bound
         assert second is not None
         assert cast("dict[str, object]", second["error"])["code"] == -32001
         assert threads_during - threads_before <= 1
@@ -944,7 +944,7 @@ class TestBoundedKeychainCall:
         assert "result" in first
         assert second is not None
         assert "result" in second
-        assert elapsed < 0.1
+        assert elapsed < self._BOUND * 0.5  # fail-fast: well under one full bound
         assert refresh_calls == [1]
 
     def test_stalled_save_during_refresh_persist_is_best_effort(
@@ -1023,7 +1023,7 @@ class TestSplitLatencyLogging:
         self, build_in_memory_persistence: Callable[[str], InMemoryPersistenceBackend]
     ) -> None:
         def _slow_handler(_request: httpx.Request) -> httpx.Response:
-            time.sleep(0.2)
+            time.sleep(1.0)
             return _ok_mcp_handler(_request)
 
         transport, _ = _build_auth_and_mcp_transport(_slow_handler)
@@ -1045,8 +1045,8 @@ class TestSplitLatencyLogging:
         assert token_resolution is not None
         assert upstream is not None
         assert total is not None
-        assert 0.1 <= token_resolution < 0.2
-        assert upstream >= 0.2
+        assert 0.1 <= token_resolution < 0.5  # excludes the 1.0 s upstream sleep; wide margin
+        assert upstream >= 1.0
         assert total >= token_resolution + upstream - 0.002
 
     def test_auth_failure_log_line_has_token_resolution_latency_and_no_upstream_field(

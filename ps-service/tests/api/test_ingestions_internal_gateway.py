@@ -24,6 +24,7 @@ from api._gateway_fakes import RecordingSystemAudit, override_gateway
 from ps_service.api.dependencies import provide_graph_write_gateway, provide_pipeline_dependencies
 from ps_service.audit.errors import AuditTrailUnavailableError
 from ps_service.config import ServiceConfig
+from ps_service.domain_mapper.identity import capability_id
 from ps_service.graph_gateway.digest import canonical_digest
 from ps_service.ingestion.adapters.internal_seed.persist import (
     ingest_internal_regulatory_instrument,
@@ -250,3 +251,39 @@ def test_provider_returns_the_gateway_the_app_started_with_and_none_when_it_has_
     app.state.graph_write_gateway = rig.gateway
 
     assert provide_graph_write_gateway(request) is rig.gateway
+
+
+def _document_with_capability(capability_id: str, name: str) -> dict[str, object]:
+    return {
+        "nodes": [
+            *_SEED_NODES,
+            {"label": "Capability", "id": capability_id, "properties": {"name": name}},
+        ],
+        "edges": [],
+    }
+
+
+def test_renaming_a_capability_removes_the_old_node_from_both_graphs(rig: GatewayRig) -> None:
+    """GH #99 over HTTP: a resubmission that renames a Capability retires the old node."""
+    client = _client(
+        _real_ingest_stage(build_fake_pipeline_dependencies()), rig, RecordingSystemAudit(rig)
+    )
+    old_id, new_id = capability_id("Cap One"), capability_id("Cap Two")
+    first = client.post(
+        "/ingestions",
+        json={"source": "internal", "content": _document_with_capability("cap-1", "Cap One")},
+    )
+    assert first.status_code == 200, first.json()
+    assert ("Capability", old_id) in rig.graphs.open("testreg_baseline").nodes
+
+    second = client.post(
+        "/ingestions",
+        json={"source": "internal", "content": _document_with_capability("cap-2", "Cap Two")},
+    )
+
+    assert second.status_code == 200, second.json()
+    native, baseline = rig.graphs.open(_NATIVE_GRAPH), rig.graphs.open("testreg_baseline")
+    assert ("Capability", "cap-1") not in native.nodes
+    assert ("Capability", "cap-2") in native.nodes
+    assert ("Capability", old_id) not in baseline.nodes
+    assert ("Capability", new_id) in baseline.nodes

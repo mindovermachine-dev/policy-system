@@ -97,7 +97,7 @@ content-derived formulas, and rewrites every edge to point at the new id automat
 
 | Label | Your `id` | What PS Service actually stores |
 |---|---|---|
-| `RegulatoryInstrument` | Your own natural key, e.g. `ENGPRAC-3.0` (`{SHORT}-{VERSION}`). **Used as-is** — pick something unique and stable, since re-ingesting under a *different* id creates a second instrument rather than updating this one. | The same id, unchanged |
+| `RegulatoryInstrument` | Your own natural key, e.g. `ENGPRAC-3.0` (`{SHORT}-{VERSION}`). **Used as-is** — pick something unique and stable, since re-ingesting under a *different* id replaces the instrument rather than adding a second one: the graphs are per short name, every submission is the complete document, and anything an earlier submission put in them that the new one does not contain is deleted, including the previous version's nodes and edges (the old version survives only in the mutation log and in exports). | The same id, unchanged |
 | `Role` | Any local string, e.g. `"role-1"` or `"role-security-engineer"` | Minted from the Role's own `name` |
 | `Requirement` | Any local string, e.g. `"req-1"` | Minted from your instrument's id plus this Requirement's `EXPRESSES` edge's `source_ref` |
 | `Obligation` | Any local string, e.g. `"obl-1"` | Minted from the Obligation's own `text` plus the Role that bears it |

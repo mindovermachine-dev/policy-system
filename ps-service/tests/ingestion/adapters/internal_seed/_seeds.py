@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from graph_gateway._fakes import GatewayRig, InMemoryGraph
 
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import GroupOutcome, MutationGroup
     from ps_service.ingestion.graph_submission import GroupSubmitter
 
@@ -123,6 +124,9 @@ class RecordingSubmitter:
         self, graph: str, audit_event_id: str
     ) -> EdgeIdentityBackfillOutcome:
         return self._submitter.stamp_legacy_edge_identity(graph, audit_event_id)
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        return self._submitter.read_persisted_elements(graph)
 
 
 class Run:

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 import redis.exceptions
 
-from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig
+from company_merge._gateway_fakes import POLICY_SYSTEM, MergeRig, RigSubmitter
 from ps_service.company_merge.errors import CompanyMergePersistenceError
 from ps_service.company_merge.graph_submission import GraphWriteTarget, read_rows, submit_group
 from ps_service.dependency_health import FALKORDB, is_healthy
@@ -24,7 +24,6 @@ from ps_service.graph_gateway.models import NodeRef, UpsertEdge, UpsertNode
 if TYPE_CHECKING:
     from ps_service.company_merge.falkordb_client import GraphQueryResult
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
-    from ps_service.graph_gateway.models import GroupOutcome, MutationGroup
 
 _PREFIX = "FalkorDB write failed: "
 _HOST = "Error 111 connecting to 10.0.0.5:6379"
@@ -113,22 +112,19 @@ def test_an_unreachable_log_is_a_persistence_error_chained_to_the_gateway_error(
     assert isinstance(exc_info.value.__cause__, GraphLogUnavailableError)
 
 
-class _CountingSubmitter:
-    """Delegates to the rig's gateway; counts stamps, can refuse them or report a lagging graph."""
+class _CountingSubmitter(RigSubmitter):
+    """Counts stamps; can refuse them or report a lagging graph."""
 
     def __init__(
         self, rig: MergeRig, *, refuse_stamp: bool = False, caught_up: bool = True
     ) -> None:
-        self._rig = rig
+        super().__init__(rig)
         self._caught_up = caught_up
         self._refuse_stamp = refuse_stamp
         self.stamps = 0
 
-    def submit_group(self, group: MutationGroup) -> GroupOutcome:
-        return self._rig.gateway.submit_group(group)
-
     def is_caught_up(self, graph: str) -> bool:
-        return self._caught_up and self._rig.gateway.is_caught_up(graph)
+        return self._caught_up and super().is_caught_up(graph)
 
     def stamp_legacy_edge_identity(
         self, graph: str, audit_event_id: str
@@ -136,7 +132,7 @@ class _CountingSubmitter:
         self.stamps += 1
         if self._refuse_stamp:
             raise GraphLogUnavailableError
-        return self._rig.gateway.stamp_legacy_edge_identity(graph, audit_event_id)
+        return super().stamp_legacy_edge_identity(graph, audit_event_id)
 
 
 def test_the_graph_is_stamped_once_per_target_however_many_groups_follow(

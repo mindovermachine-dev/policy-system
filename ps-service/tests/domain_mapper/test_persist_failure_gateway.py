@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from domain_mapper._fakes import MakeEmitter
     from domain_mapper._gateway_fakes import BaselineRig
     from ps_service.graph_gateway.edge_identity_backfill import EdgeIdentityBackfillOutcome
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import GroupOutcome, MutationGroup
     from ps_service.ingestion.graph_submission import GroupSubmitter
     from ps_service.logging import LogEmitter
@@ -183,6 +184,9 @@ class _OutcomeRecorder:
         self, graph: str, audit_event_id: str
     ) -> EdgeIdentityBackfillOutcome:
         return self._inner.stamp_legacy_edge_identity(graph, audit_event_id)
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        return self._inner.read_persisted_elements(graph)
 
 
 def test_rerunning_extraction_changes_nothing_and_logs_nothing(

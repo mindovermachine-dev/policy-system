@@ -39,6 +39,7 @@ from ps_service.graph_gateway.errors import (
 )
 from ps_service.graph_gateway.gateway_log import emit_gateway_event
 from ps_service.graph_gateway.graph_locks import GraphLockRegistry
+from ps_service.graph_gateway.graph_reader import read_persisted_elements
 from ps_service.graph_gateway.models import (
     CatchUpResult,
     GraphLogGroupDraft,
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
     import psycopg
     from psycopg.rows import TupleRow
 
+    from ps_service.graph_gateway.graph_reader import PersistedElements
     from ps_service.graph_gateway.models import AppendedGroup, MutationGroup, Primitive
     from ps_service.graph_gateway.store import GraphLogStore
     from ps_service.ingestion.falkordb_client import GraphHandle
@@ -176,6 +178,24 @@ class GraphWriteGateway:
         self._gate.require_open(group.graph)
         with self._locks.lock_for(group.graph), self._failure_logged(group.graph):
             return self._submit_locked(group)
+
+    def read_persisted_elements(self, graph: str) -> PersistedElements:
+        """Read the node keys, edge keys and log position of `graph`; writes and logs nothing.
+
+        The position is read first, under the graph's lock, so a caller that submits with an
+        `ExpectedPosition` of it is refused if anything was logged since.
+
+        Raises:
+            GraphUnavailableError: FalkorDB could not be reached for the scan.
+            UnexpectedGraphReplyError: a scan row has an unrecognised shape or cannot be classified.
+        """
+        self._gate.require_open(graph)
+        with self._locks.lock_for(graph):
+            position = self._read_last_position(graph)
+            try:
+                return read_persisted_elements(self._graph_opener(graph), log_position=position)
+            except redis.exceptions.RedisError as exc:
+                raise GraphUnavailableError from exc
 
     def stamp_legacy_edge_identity(
         self, graph: str, audit_event_id: str
