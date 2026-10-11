@@ -151,8 +151,8 @@ The job reads each commit's conventional-commit header
 - `feat!` (or any type with `!` after it), or a `BREAKING CHANGE:` /
   `BREAKING-CHANGE:` footer in the body → **major**
 - `feat` → **minor**
-- `fix` or `perf` → **patch**
-- `docs`, `chore`, `ci`, `test`, `refactor`, `style`, `build` → no bump on their own
+- `fix`, `perf` or `refactor` → **patch** (a refactor ships because releases are the only way to deploy and verify internal changes)
+- `docs`, `chore`, `ci`, `test`, `style`, `build` → no bump on their own
 - a header that doesn't parse as one of those ten allowed types (`feat fix perf docs
 chore ci test refactor style build`) is warned about in the job summary and does
   not bump

@@ -11,8 +11,8 @@
 # does not parse gets a warning row naming its SHA and counts as no bump (AC-BI-010).
 #
 # Rules: the type is read from the header only (PLAN A-32); `!` after type/scope or a body line
-# `BREAKING CHANGE: ` / `BREAKING-CHANGE: ` -> major; feat -> minor; fix|perf -> patch; the
-# other seven allowed types -> none; the highest bump across all commits wins (AC-BI-009).
+# `BREAKING CHANGE: ` / `BREAKING-CHANGE: ` -> major; feat -> minor; fix|perf|refactor -> patch;
+# the other six allowed types -> none; the highest bump across all commits wins (AC-BI-009).
 # Empty input -> bump=none. Exit 0 in every classified case; exit 2 on a usage error.
 set -euo pipefail
 
@@ -64,7 +64,7 @@ bump_size_for() {
     printf 'major'
   elif [[ "$header_type" == "feat" ]]; then
     printf 'minor'
-  elif [[ "$header_type" == "fix" || "$header_type" == "perf" ]]; then
+  elif [[ "$header_type" == "fix" || "$header_type" == "perf" || "$header_type" == "refactor" ]]; then
     printf 'patch'
   else
     printf 'none'

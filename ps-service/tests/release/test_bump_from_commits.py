@@ -7,9 +7,9 @@ row per unparsed SHA goes to `$GITHUB_STEP_SUMMARY`.
 
 Rules under test: type is read from the header only; `!` after type/scope or a body line
 `BREAKING CHANGE: ` yields major (AC-BI-008); `feat` minor (AC-BI-007); `fix`/`perf` patch
-(AC-BI-006); the other seven types none (AC-BI-005); the highest wins (AC-BI-009); a header
-that does not parse counts as none and the summary names its SHA (AC-BI-010). Fixtures a-d of
-AC-BI-011 use the real `main` SHAs and headers recorded in PLAN A-32.
+(AC-BI-006) as does `refactor`; the other six types none (AC-BI-005); the highest wins
+(AC-BI-009); a header that does not parse counts as none and the summary names its SHA
+(AC-BI-010). Fixtures a-d of AC-BI-011 use the real `main` SHAs and headers recorded in PLAN A-32.
 """
 
 from __future__ import annotations
@@ -55,7 +55,6 @@ NO_RELEASE_HEADERS = (
     "chore: tidy the workspace",
     "ci: pin the runner image",
     "test(release): cover the classifier",
-    "refactor(ps-service): extract the readiness gate",
     "style: apply ruff format",
     "build: bump hatchling",
 )
@@ -109,6 +108,7 @@ def test_all_no_release_types_yield_none(release_fixture: ReleaseFixture) -> Non
     [
         pytest.param("fix(release): correct the arithmetic", id="fix"),
         pytest.param("perf(query): cache the readiness probe", id="perf"),
+        pytest.param("refactor(ps-service): extract the readiness gate", id="refactor"),
     ],
 )
 def test_fix_or_perf_yields_patch(release_fixture: ReleaseFixture, header: str) -> None:
