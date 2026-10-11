@@ -251,7 +251,7 @@ def test_an_unexpected_background_exception_is_sanitized_but_logged_server_side(
         and line.get("outcome") == "failed"
     ]
     assert len(failed) == 1
-    assert "RuntimeError" in str(failed[0].get("detail"))
+    assert failed[0].get("exception_type") == "RuntimeError"
     assert "boom" in str(failed[0].get("detail"))
 
 

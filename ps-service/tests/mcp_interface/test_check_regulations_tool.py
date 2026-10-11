@@ -329,7 +329,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     `dependencies.read_tracked_instruments` raising something unclassified,
     with the single-tenant graph already successfully opened) is caught by
     `_run_mcp_action`'s residual safety net -- returned as the fixed,
-    generic message (never the raw exception text), with the full `repr`
+    generic message (never the raw exception text), with the scrubbed message and exception type
     logged server-side only. Mirrors
     `test_ingest_regulation_tool.py`'s identically-named test, proven here
     specifically for `check_regulations`.
@@ -364,7 +364,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
-    assert "ValueError" in str(failed_line.get("detail"))
+    assert failed_line.get("exception_type") == "ValueError"
 
 
 def test_sanitizer_wraps_the_pipeline_baseline_opener_so_a_driver_error_never_leaks() -> None:

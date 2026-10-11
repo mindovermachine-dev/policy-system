@@ -690,20 +690,28 @@ The cause is in the server-side log:
   `Exception in ASGI application` traceback in `kubectl logs` is unchanged and carries no
   `run_id`, so match on the `unhandled_request_error` line next to it.
 - A stage failure entry has `outcome` `failed`, `failing_stage` (for example `merge`),
-  `exception_type` and `detail`; an `unhandled_request_error` entry has the same
-  `exception_type` and `detail` without a stage. `detail` is the exception message with bearer and basic
+  `exception_type` and `detail`; an `unhandled_request_error` entry, and an MCP-action or
+  background-run entry, has the same `exception_type` and `detail` without a stage. `detail` is the exception message with bearer and basic
   tokens, `key`/`token`/`secret`/`password` values, URLs, host:port pairs and file paths
   removed, cut to 300 characters. It is meant to name the cause without leaking secrets;
   if it is too thin, reproduce the call against a test instance.
 - Failures the service names itself (such as `owner_required`, a 401 for a Policy-bearing
   document with no signed-in caller) are returned in the response and do not produce a
   detail entry.
+- **An MCP tool that fails unexpectedly** (the caller sees `error: an unexpected error
+  occurred`) logs one entry with `component` `mcp_interface`, `action` set to the MCP tool name
+  (for example `ingest_regulation` or `start_ingestion`), `outcome` `failed`, `run_id`,
+  `exception_type` and a scrubbed `detail`. These entries do not use `unhandled_request_error`.
+  The tool's `started` and `failed` entries share one `run_id`; find them with
+  `grep <run_id> ps-service.jsonl`, or list a tool's failures with
+  `grep '"action": "<tool name>"' ps-service.jsonl`.
 - `get_ingestion_status` for a run started with `start_ingestion` returns the run's
   `status`, `stage`, `result` and `error`; for the cause behind a generic `error`, use the
   log as above. A failure inside that background run does not reach the HTTP handler: it
-  logs as `component` `mcp_interface`, `outcome` `failed`, under the run id `start_ingestion`
-  returned, with action `background_ingestion_run` (or the submitting action), so
-  `grep <run_id> ps-service.jsonl` finds it.
+  logs as `component` `mcp_interface`, `outcome` `failed`, with `exception_type` and a scrubbed
+  `detail`, under the run id `start_ingestion` returned. The action name is
+  `background_ingestion_run`, so `grep <run_id> ps-service.jsonl` or
+  `grep background_ingestion_run ps-service.jsonl` finds it.
 
 ## Teardown
 

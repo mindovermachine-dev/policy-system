@@ -1810,7 +1810,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     `routes._to_accepted_response` blowing up after a fully successful
     pipeline run) is caught by `_run_mcp_action`'s residual safety net --
     returned as the fixed, generic message (never the raw exception text),
-    with the full `repr` logged server-side only.
+    with the scrubbed message and exception type logged server-side only.
     """
     _configure_complete_llm_env(monkeypatch)
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1844,7 +1844,8 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
-    assert "RuntimeError" in str(failed_line.get("detail"))
+    assert failed_line.get("exception_type") == "RuntimeError"
+    assert "RuntimeError(" not in str(failed_line.get("detail"))
 
 
 # --- Slice 1.4: auth/audit completeness under a real verified bearer token --

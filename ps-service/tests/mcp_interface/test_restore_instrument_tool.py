@@ -1509,7 +1509,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     sanitise (here, `dependencies.fetch_artifact` raising something
     unclassified, not `CuratedSourceFetchError`) is caught by
     `_run_mcp_action`'s residual safety net -- returned as the fixed,
-    generic message (never the raw exception text), with the full `repr`
+    generic message (never the raw exception text), with the scrubbed message and exception type
     logged server-side only.
     """
     monkeypatch.setenv("PS_SERVICE_LOCAL_TEST_BYPASS", "true")
@@ -1535,7 +1535,7 @@ def test_residual_unexpected_exception_returns_generic_error_and_logs_detail(
     failed_line = lines[-1]
     assert failed_line.get("principal") == LOCAL_TEST_PRINCIPAL_ID
     assert "boom -- must never reach the caller" in str(failed_line.get("detail"))
-    assert "ValueError" in str(failed_line.get("detail"))
+    assert failed_line.get("exception_type") == "ValueError"
 
 
 # --- issue #195: instrument.restore audit rows ---------------------------------------

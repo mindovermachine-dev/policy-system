@@ -95,6 +95,7 @@ from ps_service.api.routes import (
     _to_change_check_response,  # pyright: ignore[reportPrivateUsage]  -- D-RESPONSE-SHAPE: same reuse for `check_regulations`, mirrors `_to_accepted_response`'s own precedent immediately above
 )
 from ps_service.api.run_status import get_stage
+from ps_service.api.stage_failure_log import stage_failure_detail
 from ps_service.audit.actor import resolve_audit_actor
 from ps_service.audit.emit import AuditContext
 from ps_service.audit.errors import (
@@ -722,7 +723,11 @@ def _run_mcp_action(
                 outcome="failed",
                 run_id=bound_run_id,
                 entity_id=entity_id,
-                extra={"principal": principal_extra, "detail": repr(exc)},
+                extra={
+                    "principal": principal_extra,
+                    "exception_type": type(exc).__name__,
+                    "detail": stage_failure_detail(exc),
+                },
             )
             return _UNEXPECTED_ERROR_MESSAGE
         if isinstance(result, str) and result.startswith("error:"):
@@ -1183,7 +1188,11 @@ def _execute_background_ingestion(
         )
     except Exception as exc:  # noqa: BLE001 -- AC-BI-014 last-resort net: the row must never stay 'running'
         _emit_best_effort_failure(
-            _BACKGROUND_INGESTION_ACTION, run_id, principal=principal or "unknown", detail=repr(exc)
+            _BACKGROUND_INGESTION_ACTION,
+            run_id,
+            principal=principal or "unknown",
+            exception_type=type(exc).__name__,
+            detail=stage_failure_detail(exc),
         )
         result = _UNEXPECTED_ERROR_MESSAGE
     _record_ingestion_run_outcome(
